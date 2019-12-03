@@ -439,7 +439,7 @@ impl ScalarExpr {
         };
 
         match self {
-            Column(n) => to_doc!("#", n.to_string()),
+            Column(n) => Doc::text("#").append(n.to_string()),
             Literal(..) => self.as_literal().unwrap().into(),
             CallUnary { func, expr } => {
                 let mut doc = Doc::from(func);
@@ -448,38 +448,31 @@ impl ScalarExpr {
                 }
                 doc.append(maybe_wrap(expr))
             }
-            CallBinary { func, expr1, expr2 } => to_doc!(
-                maybe_wrap(expr1).group(),
-                Doc::space(),
-                func,
-                Doc::space(),
-                maybe_wrap(expr2).group()
-            ),
-            CallVariadic { func, exprs } => to_doc!(
-                func,
-                to_tightly_braced_doc(
-                    "(",
-                    Doc::intersperse(exprs, to_doc!(",", Doc::space())),
-                    ")"
-                )
-            ),
-            If { cond, then, els } => to_doc!(
-                "if",
-                to_doc!(Doc::space(), cond.to_doc()).nest(2),
-                Doc::space(),
-                "then",
-                to_doc!(Doc::space(), then.to_doc()).nest(2),
-                Doc::space(),
-                "else",
-                to_doc!(Doc::space(), els.to_doc()).nest(2)
-            ),
-            ScalarExpr::MatchCachedRegex { expr, regex } => to_doc!(
-                maybe_wrap(expr).group(),
-                Doc::space(),
-                &BinaryFunc::MatchRegex,
-                Doc::space(),
-                regex.as_str()
-            ),
+            CallBinary { func, expr1, expr2 } => maybe_wrap(expr1)
+                .group()
+                .append(Doc::space())
+                .append(func)
+                .append(Doc::space())
+                .append(maybe_wrap(expr2).group()),
+            CallVariadic { func, exprs } => Doc::from(func).append(to_tightly_braced_doc(
+                "(",
+                Doc::intersperse(exprs, Doc::text(",").append(Doc::space())),
+                ")",
+            )),
+            If { cond, then, els } => Doc::text("if")
+                .append(Doc::space().append(cond).nest(2))
+                .append(Doc::space())
+                .append("then")
+                .append(Doc::space().append(then).nest(2))
+                .append(Doc::space())
+                .append("else")
+                .append(Doc::space().append(els).nest(2)),
+            ScalarExpr::MatchCachedRegex { expr, regex } => maybe_wrap(expr)
+                .group()
+                .append(Doc::space())
+                .append(&BinaryFunc::MatchRegex)
+                .append(Doc::space())
+                .append(regex.as_str()),
         }
         .group()
     }

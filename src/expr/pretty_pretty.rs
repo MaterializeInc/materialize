@@ -13,33 +13,11 @@
 
 //! Making [`pretty`] Pretty Again
 
-use ore::collections::CollectionExt;
-use pretty::Doc::Space;
-use pretty::{BoxDoc, Doc};
 use std::collections::VecDeque;
 
-/// Convert the arguments into a [`pretty::Doc`], that is, a *document* for
-/// subsequent layout during pretty-printing. This macro makes it
-/// possible to convert a variable number of arguments that also have
-/// different types. Its body simply starts out with an empty document
-/// [`pretty::Doc::nil`] and adds each argument via [`pretty::Doc::append`].
-/// While the latter is declared to accept any argument implementing
-/// `Into<Doc<'a, BoxDoc<'a, A>, A>`, in practice it only accepts instances
-/// of [`pretty::Doc`] (natch), strings via [`pretty::Doc::text`], and relation
-/// expressions via [`RelationExpr::to_doc`] and a specialization of the
-/// `Into` trait. Sadly, `usize` is a foreign  type and `Into` is a foreign
-/// trait, so converting indices inside [`RelationExpr`] into documents is a
-/// tad more involved.
-#[macro_export]
-macro_rules! to_doc {
-    ($($rest: expr),*) => {{
-        let mut doc = ::pretty::Doc::Nil;
-        $(
-            doc = doc.append($rest);
-        )*
-        doc
-    }}
-}
+use pretty::{BoxDoc, Doc};
+
+use ore::collections::CollectionExt;
 
 /// Embrace `doc` as the sequence `left`, `doc`, `right`. The resulting document has one
 /// of two layouts:
@@ -69,7 +47,10 @@ where
     D2: Into<Doc<'a, BoxDoc<'a, ()>, ()>>,
     D3: Into<Doc<'a, BoxDoc<'a, ()>, ()>>,
 {
-    to_doc!(left, Space.append(doc).nest(2), Space, right)
+    left.into()
+        .append(Doc::space().append(doc).nest(2))
+        .append(Doc::space())
+        .append(right)
 }
 
 /// Tightly embrace `doc` as the sequence `left`, `doc`, `right`. The resulting document
@@ -104,12 +85,10 @@ where
     D2: Into<Doc<'a, BoxDoc<'a, ()>, ()>>,
     D3: Into<Doc<'a, BoxDoc<'a, ()>, ()>>,
 {
-    to_doc!(
-        left,
-        Doc::space_().append(doc).nest(2),
-        Doc::space_(),
-        right
-    )
+    left.into()
+        .append(Doc::space_().append(doc).nest(2))
+        .append(Doc::space_())
+        .append(right)
 }
 
 /// Like [`Doc::intersperse`], but with additional breakpoints to allow for a

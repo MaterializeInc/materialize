@@ -8,7 +8,6 @@
 #![allow(clippy::op_ref, clippy::len_zero)]
 
 use failure::ResultExt;
-use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
@@ -636,15 +635,15 @@ impl RelationExpr {
             RelationExpr::Constant { rows, .. } => {
                 let rows = Doc::intersperse(
                     rows.iter().map(|(row, diff)| {
-                        let row = Doc::intersperse(row, to_doc!(",", Space));
+                        let row = Doc::intersperse(row, Doc::text(",").append(Doc::space()));
                         let row = to_tightly_braced_doc("[", row, "]").group();
                         if *diff != 1 {
-                            row.append(to_doc!("*", diff.to_string()))
+                            row.append("*").append(diff.to_string())
                         } else {
                             row
                         }
                     }),
-                    to_doc!(",", Space),
+                    Doc::text(",").append(Doc::space()),
                 );
                 to_tightly_braced_doc("Constant [", rows, "]")
             }
@@ -660,51 +659,81 @@ impl RelationExpr {
                 let body = body.to_doc(id_humanizer);
                 // NB: We don't include the body inside the curly braces, so that recursively
                 // nested Let expressions do *not* increase the indentation.
-                let binding =
-                    to_braced_doc("Let {", to_doc!(id.to_string(), " = ", value), "} in").group();
-                to_doc!(binding, Space, body)
+                let binding = to_braced_doc(
+                    "Let {",
+                    Doc::text(id.to_string()).append(" = ").append(value),
+                    "} in",
+                )
+                .group();
+                binding.append(Doc::space()).append(body)
             }
             RelationExpr::Project { input, outputs } => {
                 let input = input.to_doc(id_humanizer);
-                let outputs =
-                    compact_intersperse_doc(tighten_outputs(outputs), to_doc!(",", Space));
+                let outputs = compact_intersperse_doc(
+                    tighten_outputs(outputs),
+                    Doc::text(",").append(Doc::space()),
+                );
                 let outputs = to_tightly_braced_doc("outputs: [", outputs, "]").group();
-                to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
+                to_braced_doc(
+                    "Project {",
+                    outputs.append(",").append(Doc::space()).append(input),
+                    "}",
+                )
             }
             RelationExpr::Map { input, scalars } => {
                 let input = input.to_doc(id_humanizer);
-                let scalars = Doc::intersperse(scalars.iter(), to_doc!(",", Space));
+                let scalars = Doc::intersperse(scalars.iter(), Doc::text(",").append(Doc::space()));
                 let scalars = to_tightly_braced_doc("scalars: [", scalars, "]").group();
-                to_braced_doc("Map {", to_doc!(scalars, ",", Space, input), "}")
+                to_braced_doc(
+                    "Map {",
+                    scalars.append(",").append(Doc::space()).append(input),
+                    "}",
+                )
             }
             RelationExpr::Filter { input, predicates } => {
                 let input = input.to_doc(id_humanizer);
-                let predicates = Doc::intersperse(predicates, to_doc!(",", Space));
+                let predicates = Doc::intersperse(predicates, Doc::text(",").append(Doc::space()));
                 let predicates = to_tightly_braced_doc("predicates: [", predicates, "]").group();
-                to_braced_doc("Filter {", to_doc!(predicates, ",", Space, input), "}")
+                to_braced_doc(
+                    "Filter {",
+                    predicates.append(",").append(Doc::space()).append(input),
+                    "}",
+                )
             }
             RelationExpr::Join {
                 inputs, variables, ..
             } => {
                 fn pair_to_doc(p: &(usize, usize)) -> Doc<BoxDoc<()>, ()> {
-                    to_doc!("(", p.0.to_string(), ", ", p.1.to_string(), ")")
+                    Doc::text("(")
+                        .append(p.0.to_string())
+                        .append(",")
+                        .append(Doc::space())
+                        .append(p.1.to_string())
+                        .append(")")
                 }
 
                 let variables = Doc::intersperse(
                     variables.iter().map(|ps| {
-                        let ps = Doc::intersperse(ps.iter().map(pair_to_doc), to_doc!(",", Space));
+                        let ps = Doc::intersperse(
+                            ps.iter().map(pair_to_doc),
+                            Doc::text(",").append(Doc::space()),
+                        );
                         to_tightly_braced_doc("[", ps, "]").group()
                     }),
-                    to_doc!(",", Space),
+                    Doc::text(",").append(Doc::space()),
                 );
                 let variables = to_tightly_braced_doc("variables: [", variables, "]").group();
 
                 let inputs = Doc::intersperse(
                     inputs.iter().map(|inp| inp.to_doc(id_humanizer)),
-                    to_doc!(",", Space),
+                    Doc::text(",").append(Doc::space()),
                 );
 
-                to_braced_doc("Join {", to_doc!(variables, ",", Space, inputs), "}")
+                to_braced_doc(
+                    "Join {",
+                    variables.append(",").append(Doc::space()).append(inputs),
+                    "}",
+                )
             }
             RelationExpr::Reduce {
                 input,
@@ -712,19 +741,32 @@ impl RelationExpr {
                 aggregates,
             } => {
                 let input = input.to_doc(id_humanizer);
-                let keys = compact_intersperse_doc(tighten_outputs(group_key), to_doc!(",", Space));
+                let keys = compact_intersperse_doc(
+                    tighten_outputs(group_key),
+                    Doc::text(",").append(Doc::space()),
+                );
                 let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
 
                 if aggregates.is_empty() {
-                    to_braced_doc("Distinct {", to_doc!(keys, ",", Space, input), "}")
+                    to_braced_doc(
+                        "Distinct {",
+                        keys.append(",").append(Doc::space()).append(input),
+                        "}",
+                    )
                 } else {
-                    let aggregates = Doc::intersperse(aggregates, to_doc!(",", Space));
+                    let aggregates =
+                        Doc::intersperse(aggregates, Doc::text(",").append(Doc::space()));
                     let aggregates =
                         to_tightly_braced_doc("aggregates: [", aggregates, "]").group();
 
                     to_braced_doc(
                         "Reduce {",
-                        to_doc!(keys, ",", Space, aggregates, ",", Space, input),
+                        keys.append(",")
+                            .append(Doc::space())
+                            .append(aggregates)
+                            .append(",")
+                            .append(Doc::space())
+                            .append(input),
                         "}",
                     )
                 }
@@ -737,10 +779,13 @@ impl RelationExpr {
                 offset,
             } => {
                 let input = input.to_doc(id_humanizer);
-                let group_keys =
-                    compact_intersperse_doc(tighten_outputs(group_key), to_doc!(",", Space));
+                let group_keys = compact_intersperse_doc(
+                    tighten_outputs(group_key),
+                    Doc::text(",").append(Doc::space()),
+                );
                 let group_keys = to_tightly_braced_doc("group_key: [", group_keys, "]").group();
-                let order_keys = compact_intersperse_doc(order_key, to_doc!(",", Space));
+                let order_keys =
+                    compact_intersperse_doc(order_key, Doc::text(",").append(Doc::space()));
                 let order_keys = to_tightly_braced_doc("order_key: [", order_keys, "]").group();
                 let limit_doc = format!(
                     "limit: {}",
@@ -753,10 +798,19 @@ impl RelationExpr {
                 let offset_doc = format!("offset: {}", offset);
                 to_braced_doc(
                     "TopK {",
-                    to_doc!(
-                        group_keys, ",", Space, order_keys, ",", Space, limit_doc, ",", Space,
-                        offset_doc, ",", Space, input
-                    ),
+                    group_keys
+                        .append(",")
+                        .append(Doc::space())
+                        .append(order_keys)
+                        .append(",")
+                        .append(Doc::space())
+                        .append(limit_doc)
+                        .append(",")
+                        .append(Doc::space())
+                        .append(offset_doc)
+                        .append(",")
+                        .append(Doc::space())
+                        .append(input),
                     "}",
                 )
             }
@@ -769,13 +823,24 @@ impl RelationExpr {
             RelationExpr::Union { left, right } => {
                 let left = left.to_doc(id_humanizer);
                 let right = right.to_doc(id_humanizer);
-                to_braced_doc("Union {", to_doc!(left, ",", Space, right), "}")
+                to_braced_doc(
+                    "Union {",
+                    left.append(",").append(Doc::space()).append(right),
+                    "}",
+                )
             }
             RelationExpr::ArrangeBy { input, keys } => {
                 let input = input.to_doc(id_humanizer);
-                let keys = compact_intersperse_doc(tighten_outputs(keys), to_doc!(",", Space));
+                let keys = compact_intersperse_doc(
+                    tighten_outputs(keys),
+                    Doc::text(",").append(Doc::space()),
+                );
                 let keys = to_tightly_braced_doc("columns: [", keys, "]").group();
-                to_braced_doc("ArrangeBy {", to_doc!(keys, ",", Space, input), "}")
+                to_braced_doc(
+                    "ArrangeBy {",
+                    keys.append(",").append(Doc::space()).append(input),
+                    "}",
+                )
             }
         };
 
@@ -958,12 +1023,14 @@ impl AggregateExpr {
     /// printing. See [`RelationExpr::to_doc`] for details on the approach.
     pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
         let args = if self.distinct {
-            to_doc!("distinct", Doc::space(), &self.expr)
+            Doc::text("distinct")
+                .append(Doc::space())
+                .append(&self.expr)
         } else {
             self.expr.to_doc()
         };
         let call = to_tightly_braced_doc("(", args, ")").group();
-        to_doc!(&self.func, call)
+        Doc::from(&self.func).append(call)
     }
 }
 
