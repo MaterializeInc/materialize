@@ -1,0 +1,2 @@
+show_create_source ::=
+  'SHOW' 'CREATE' 'SOURCE' source_name
