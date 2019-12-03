@@ -63,6 +63,8 @@ pub enum RelationExpr {
         /// The source collection.
         input: Box<RelationExpr>,
         /// Expressions which determine values to append to each row.
+        /// An expression may refer to columns in `input` or
+        /// expressions defined earlier in the vector
         scalars: Vec<ScalarExpr>,
     },
     /// Keep rows from a dataflow where all the predicates are true

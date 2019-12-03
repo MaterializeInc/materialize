@@ -73,14 +73,16 @@ impl ProjectionLifting {
                     outputs,
                 } = &mut **input
                 {
-                    // Rewrite scalar expressions using inner columns.
-                    for scalar in scalars.iter_mut() {
-                        scalar.permute(outputs);
-                    }
                     // Retain projected columns and scalar columns.
                     let mut new_outputs = outputs.clone();
                     let inner_arity = inner.arity();
                     new_outputs.extend(inner_arity..(inner_arity + scalars.len()));
+
+                    // Rewrite scalar expressions using inner columns.
+                    for scalar in scalars.iter_mut() {
+                        scalar.permute(&new_outputs);
+                    }
+
                     *relation = inner
                         .take_dangerous()
                         .map(scalars.clone())
@@ -144,7 +146,9 @@ impl ProjectionLifting {
                     }
                 }
 
-                *relation = relation.take_dangerous().project(projection);
+                if projection.len() != temp_arity || (0..temp_arity).any(|i| projection[i] != i) {
+                    *relation = relation.take_dangerous().project(projection);
+                }
             }
             RelationExpr::Reduce {
                 input,
