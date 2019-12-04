@@ -669,7 +669,7 @@ where
                 self.sources
                     .insert(source_id, (source.clone(), Some(view_id)));
                 let dataflow_name = self.catalog.humanize_id(Id::Global(source_id)).unwrap();
-                let mut desc = DataflowDesc::new(dataflow_name)
+                DataflowDesc::new(dataflow_name)
                     .add_view(
                         view_id,
                         View {
@@ -681,11 +681,7 @@ where
                             desc: source.desc.clone(),
                         },
                     )
-                    .add_source(source_id, source.clone());
-                if let SourceConnector::File(_) = source.connector {
-                    desc = desc.dont_compact();
-                }
-                desc
+                    .add_source(source_id, source.clone())
             })
             .collect();
         broadcast(
@@ -841,6 +837,11 @@ where
     /// issued whenever available.
     pub fn maintenance(&mut self) {
         // Take this opportunity to drain `since_update` commands.
+        // Don't try to compact to an empty frontier. There may be a good reason to do this
+        // in principle, but not in any current Mz use case.
+        // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
+        self.since_updates
+            .retain(|(_, frontier)| !frontier.is_empty());
         if !self.since_updates.is_empty() {
             broadcast(
                 &mut self.broadcast_tx,
@@ -1055,9 +1056,6 @@ where
         for (view_id, view) in dataflow.views.iter() {
             self.remove_view(view_id);
             let mut viewstate = ViewState::from_view(view, self.num_timely_workers);
-            if dataflow.dont_compact {
-                viewstate.set_compaction_latency(None);
-            }
             viewstate.depends_on_source = contains_sources;
             if self.log {
                 for time in viewstate.upper.frontier().iter() {
