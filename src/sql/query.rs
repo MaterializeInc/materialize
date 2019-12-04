@@ -1435,6 +1435,15 @@ fn plan_function<'a>(
                             ColumnType::new(ScalarType::Null), // ignored
                         )),
                     },
+                    // Postgres converts these to doubles when floor is called
+                    ScalarType::Int32 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::CastInt32ToFloat64,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Int64 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::CastInt64ToFloat64,
+                        expr: Box::new(expr),
+                    },
                     _ => bail!("ceil only accepts decimals and floats, not type {:?}", typ),
                 };
                 Ok(expr)
@@ -1485,7 +1494,16 @@ fn plan_function<'a>(
                             ColumnType::new(ScalarType::Null), // ignored
                         )),
                     },
-                    _ => bail!("floor only accepts decimals and floats, not type {:?}", typ),
+                    // Postgres converts these to doubles when floor is called
+                    ScalarType::Int32 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::CastInt32ToFloat64,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Int64 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::CastInt64ToFloat64,
+                        expr: Box::new(expr),
+                    },
+                    _ => bail!("floor only accepts numbers, not type {:?}", typ),
                 };
                 Ok(expr)
             }
