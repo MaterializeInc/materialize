@@ -71,15 +71,22 @@ impl Demand {
             }
             RelationExpr::Map { input, scalars } => {
                 let arity = input.arity();
-                let mut new_columns = HashSet::new();
-                for column in columns {
-                    if column < arity {
-                        new_columns.insert(column);
-                    } else {
-                        new_columns.extend(scalars[column - arity].support());
-                    }
+                // contains columns whose supports have yet to be explored
+                let mut new_columns = columns.clone();
+                new_columns.retain(|c| *c >= arity);
+                while !new_columns.is_empty() {
+                    // explore supports
+                    new_columns = new_columns
+                        .iter()
+                        .flat_map(|c| scalars[*c - arity].support())
+                        .filter(|c| !columns.contains(c))
+                        .collect();
+                    // add those columns to the seen list
+                    columns.extend(new_columns.clone());
+                    new_columns.retain(|c| *c >= arity);
                 }
-                self.action(input, new_columns, gets);
+                columns.retain(|c| *c < arity);
+                self.action(input, columns, gets);
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {

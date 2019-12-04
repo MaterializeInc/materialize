@@ -1208,11 +1208,12 @@ Let {
     Filter { predicates: [#1 = "GERMANY"], Get { nation (u19) } }
   }
 } in
+Let { l4 = Distinct { group_key: [0], Get { l0 } } } in
 Let {
   l3 = Join {
     variables: [[(0, 0), (1, 0)], [(2, 4), (3, 0)]],
-    Get { l0 },
-    Get { l0 },
+    Get { l4 },
+    Get { l4 },
     Filter {
       predicates: [datetots #6 > 2010-05-23 12:00:00],
       Get { orderline (u13) }
@@ -1235,16 +1236,16 @@ Project {
           Filter {
             predicates: [(2 * i32toi64 #3) > i32toi64 #4],
             Reduce {
-              group_key: [0, 32 .. 34],
-              aggregates: [sum(#29)],
+              group_key: [0, 12 .. 14],
+              aggregates: [sum(#9)],
               Join {
-                variables: [[(0, 32), (1, 0)]],
+                variables: [[(0, 12), (1, 0)]],
                 Get { l3 },
                 Map {
                   scalars: [true],
                   Join {
                     variables: [[(0, 0), (1, 0)]],
-                    Distinct { group_key: [32], Get { l3 } },
+                    Distinct { group_key: [12], Get { l3 } },
                     Filter {
                       predicates: [#4 ~ ^co.*$],
                       Get { item (u15) }
@@ -1449,6 +1450,7 @@ Let {
     }
   }
 } in
+Let { l4 = Distinct { group_key: [0 .. 2], Get { l0 } } } in
 Let {
   l3 = Map {
     scalars: [true],
@@ -1461,33 +1463,33 @@ Let {
           [(0, 3), (1, 0)]
         ],
         Get { "order" (u11) },
-        Get { l0 }
+        Get { l4 }
       }
     }
   }
 } in
 Reduce {
   group_key: [29],
-  aggregates: [countall(null), sum(#20)],
+  aggregates: [countall(null), sum(#16)],
   Map {
-    scalars: [substr(#13, 1, 1)],
+    scalars: [substr(#9, 1, 1)],
     Join {
       variables: [
         [(0, 0), (1, 0)],
         [(0, 1), (1, 1)],
         [(0, 2), (1, 2)]
       ],
+      Get { l0 },
       Union {
         Filter { predicates: [!#3], Get { l3 } },
         Map {
           scalars: [false],
           Union {
             Project { outputs: [0 .. 2], Negate { Get { l3 } } },
-            Project { outputs: [0 .. 2], Get { l0 } }
+            Get { l4 }
           }
         }
-      },
-      Get { l0 }
+      }
     }
   }
 }

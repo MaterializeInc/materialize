@@ -246,3 +246,52 @@ Project {
     }
   }
 }
+
+mode cockroach
+# Regression test for materialize#1158
+# The following subquery currently generates a plan with a map with
+# 4 scalars that refer to other scalars in the map. If query planning optimizes away
+# this particular case, replace with another query that generates such a plan
+query T
+EXPLAIN PLAN FOR
+SELECT age, ascii_num * 2 as result FROM (
+  SELECT age, ascii(letter) AS ascii_num FROM (
+    SELECT age, substr(replaced, 2, 1) AS letter FROM (
+      SELECT age, replace(likee, 'o', 'i') AS replaced FROM (
+        SELECT likee, age FROM likes, age WHERE liker=peep
+      )
+    )
+  )
+)
+----
+Project {
+  outputs: [3, 7],
+  Map {
+    scalars: [
+      replace(#1, "o", "i"),
+      substr(#4, 2, 1),
+      ascii #5,
+      i32toi64 #6 * 2
+    ],
+    Join {
+      variables: [[(0, 0), (1, 0)]],
+      Filter { predicates: [!isnull #0], Get { likes (u3) } },
+      Filter { predicates: [!isnull #0], Get { age (u14) } }
+    }
+  }
+}
+
+query II rowsort
+SELECT age, ascii_num * 2 as result FROM (
+  SELECT age, ascii(letter) AS ascii_num FROM (
+    SELECT age, substr(replaced, 2, 1) AS letter FROM (
+      SELECT age, replace(likee, 'o', 'i') AS replaced FROM (
+        SELECT likee, age FROM likes, age WHERE liker=peep
+      )
+    )
+  )
+)
+----
+100  236
+103  210
+103  236
