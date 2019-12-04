@@ -209,7 +209,7 @@ USING SCHEMA '{
 ### Creating CSV source
 
 ```sql
-CREATE SOURCE test FROM 'file:///test.csv' WITH ( format='csv', columns=5 );
+CREATE SOURCE test FROM 'file:///test.csv' WITH (format = 'csv', columns = 5);
 ```
 
 - The prefix for the file is `file://`, which is followed by the absolute path

@@ -14,14 +14,14 @@ CREATE TABLE asciitest (strcol CHAR(15), vccol VARCHAR(15))
 # 1: empty string to each column
 # 2: single space in each column
 statement ok
-INSERT INTO asciitest VALUES ('hello world', 'goodbye moon'), (null, null),
+INSERT INTO asciitest VALUES ('hello world', 'goodbye moon'), (NULL, NULL),
     ('你好', '再见'), ('😀', '👻')
 
 statement error
-select ascii(98)
+SELECT ascii(98)
 
 query II colnames
-select ascii(strcol) as strres, ascii(vccol) as vcres from asciitest order by strres;
+SELECT ascii(strcol) AS strres, ascii(vccol) AS vcres FROM asciitest ORDER BY strres
 ----
 strres  vcres
 NULL    NULL
@@ -30,49 +30,49 @@ NULL    NULL
 128512  128123
 
 query I
-select ascii(null);
+SELECT ascii(NULL)
 ----
 NULL
 
 query I
-select ascii(substr('inside literal', 3, 4));
+SELECT ascii(substr('inside literal', 3, 4))
 ----
 115
 
 ### substr ###
 statement ok
-CREATE TABLE substrtest (strcol CHAR(15), vccol VARCHAR(15), smicol SMALLINT, intcol INT)
+CREATE TABLE substrtest (strcol char(15), vccol varchar(15), smicol smallint, intcol int)
 
 statement ok
-INSERT INTO substrtest VALUES ('Mg', 'Mn', 1, 1), ('magnesium', 'manganese', 3, null),
-    (null, null, 0, 0), ('24.31', '54.94', 2, 3), ('长久不见', '爱不释手', null, 2),
+INSERT INTO substrtest VALUES ('Mg', 'Mn', 1, 1), ('magnesium', 'manganese', 3, NULL),
+    (NULL, NULL, 0, 0), ('24.31', '54.94', 2, 3), ('长久不见', '爱不释手', NULL, 2),
     ('', '', -1, 2)
 
-#invalid input
+# invalid input
 statement error
-select substr(192, 1, 1)
+SELECT substr(192, 1, 1)
 
 statement error
-select substr('from wrong type', 1.5, 2)
+SELECT substr('from wrong type', 1.5, 2)
 
 statement error
-select substr('for wrong type', 2, 1.5)
+SELECT substr('for wrong type', 2, 1.5)
 
 query I
-select substr('for cannot be negative', 1, -3)
+SELECT substr('for cannot be negative', 1, -3)
 ----
 NULL
 
 query I
-select substr('for still cannot be negative', 30, -2)
+SELECT substr('for still cannot be negative', 30, -2)
 ----
 NULL
 
-#standard tests
+# standard tests
 
-#TODO: materialize#589 select strcol from substrtest
+# TODO: materialize#589 SELECT strcol FROM substrtest
 query T colnames
-select substr(vccol, 1, 3) as vcres from substrtest order by vcres;
+SELECT substr(vccol, 1, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -83,7 +83,7 @@ man
 爱不释
 
 query T colnames
-select substr(vccol, 1, 5) as vcres from substrtest order by vcres;
+SELECT substr(vccol, 1, 5) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -94,7 +94,7 @@ manga
 爱不释手
 
 query T colnames
-select substr(vccol, 1) as vcres from substrtest order by vcres;
+SELECT substr(vccol, 1) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -105,7 +105,7 @@ manganese
 爱不释手
 
 query T colnames
-select substr(vccol, 3) as vcres from substrtest order by vcres;
+SELECT substr(vccol, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -116,7 +116,7 @@ nganese
 释手
 
 query T colnames
-select substr(vccol, 3, 1) as vcres from substrtest order by vcres;
+SELECT substr(vccol, 3, 1) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -126,9 +126,9 @@ NULL
 n
 释
 
-#negative start position
+# negative start position
 query T colnames
-select substr(vccol, -1) as vcres from substrtest order by vcres;
+SELECT substr(vccol, -1) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -139,7 +139,7 @@ manganese
 爱不释手
 
 query T colnames
-select substr(vccol, -2, 6) as vcres from substrtest order by vcres;
+SELECT substr(vccol, -2, 6) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -150,7 +150,7 @@ man
 爱不释
 
 query T colnames
-select substr(vccol, -3, 5) as vcres from substrtest order by vcres;
+SELECT substr(vccol, -3, 5) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -161,7 +161,7 @@ m
 爱
 
 query TT colnames
-select substr(strcol, -4, 5) as strres, substr(vccol, -4, 5) as vcres from substrtest order by vcres;
+SELECT substr(strcol, -4, 5) AS strres, substr(vccol, -4, 5) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 NULL    NULL
@@ -172,7 +172,7 @@ NULL    NULL
 (empty) (empty)
 
 query TT colnames
-select substr(strcol, -6, 6) as strres, substr(vccol, -6, 6) as vcres from substrtest order by vcres;
+SELECT substr(strcol, -6, 6) AS strres, substr(vccol, -6, 6) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 NULL    NULL
@@ -183,7 +183,7 @@ NULL    NULL
 (empty) (empty)
 
 query TT colnames
-select substr(strcol, -5, 4) as strres, substr(vccol, -5, 4) as vcres from substrtest order by vcres;
+SELECT substr(strcol, -5, 4) AS strres, substr(vccol, -5, 4) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 NULL    NULL
@@ -193,9 +193,9 @@ NULL    NULL
 (empty) (empty)
 (empty) (empty)
 
-#for or start is zero
+# for or start is zero
 query T colnames
-select substr(vccol, 0) as vcres from substrtest order by vcres;
+SELECT substr(vccol, 0) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -206,7 +206,7 @@ manganese
 爱不释手
 
 query T colnames
-select substr(vccol, 0, 3) as vcres from substrtest order by vcres;
+SELECT substr(vccol, 0, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -217,7 +217,7 @@ ma
 爱不
 
 query TT colnames
-select substr(strcol, 0, 0) as strres, substr(vccol, 0, 0) as vcres from substrtest order by vcres;
+SELECT substr(strcol, 0, 0) AS strres, substr(vccol, 0, 0) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 NULL    NULL
@@ -228,7 +228,7 @@ NULL    NULL
 (empty) (empty)
 
 query TT colnames
-select substr(strcol, 3, 0) as strres, substr(vccol, 3, 0) as vcres from substrtest order by vcres;
+SELECT substr(strcol, 3, 0) AS strres, substr(vccol, 3, 0) AS vcres FROM substrtest ORDER BY vcres
 ----
 strres  vcres
 NULL    NULL
@@ -238,50 +238,50 @@ NULL    NULL
 (empty) (empty)
 (empty) (empty)
 
-#null inputs
+# NULL inputs
 query T
-select substr(null, 1);
+SELECT substr(NULL, 1)
 ----
 NULL
 
 query T
-select substr(null, 1, 3);
+SELECT substr(NULL, 1, 3)
 ----
 NULL
 
 query T
-select substr('text string', null);
+SELECT substr('text string', NULL)
 ----
 NULL
 
 query T
-select substr(null, null);
+SELECT substr(NULL, NULL)
 ----
 NULL
 
 query T
-select substr('foo', null, 3);
+SELECT substr('foo', NULL, 3)
 ----
 NULL
 
 query T
-select substr('bar', null, null);
+SELECT substr('bar', NULL, NULL)
 ----
 NULL
 
 query T
-select substr('baz', 2, null);
+SELECT substr('baz', 2, NULL)
 ----
 NULL
 
 query T
-select substr(null, null, null);
+SELECT substr(NULL, NULL, NULL)
 ----
 NULL
 
-#alternative syntax
+# alternative syntax
 query T colnames
-select substring(vccol, 1, 3) as vcres from substrtest order by vcres;
+SELECT substring(vccol, 1, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
 vcres
 NULL
@@ -291,9 +291,9 @@ Mn
 man
 爱不释
 
-#testing different kinds of int columns and null content in columns
+# testing different kinds of int columns and NULL content in columns
 query T
-select substr(vccol, smicol, smicol) as vcres from substrtest order by vcres;
+SELECT substr(vccol, smicol, smicol) AS vcres FROM substrtest ORDER BY vcres
 ----
 NULL
 NULL
@@ -303,7 +303,7 @@ M
 nga
 
 query T
-select substr(vccol, intcol, intcol) as vcres from substrtest order by vcres;
+SELECT substr(vccol, intcol, intcol) AS vcres FROM substrtest ORDER BY vcres
 ----
 NULL
 NULL
@@ -313,7 +313,7 @@ M
 不释
 
 query T
-select substr(vccol, smicol, intcol) as vcres from substrtest order by vcres;
+SELECT substr(vccol, smicol, intcol) AS vcres FROM substrtest ORDER BY vcres
 ----
 NULL
 NULL
@@ -323,7 +323,7 @@ NULL
 M
 
 query T
-select substr(vccol, intcol, smicol) as vcres from substrtest order by vcres;
+SELECT substr(vccol, intcol, smicol) AS vcres FROM substrtest ORDER BY vcres
 ----
 NULL
 NULL
@@ -333,29 +333,32 @@ NULL
 M
 
 query T
-select substr('subexpression test', ascii(''), 3);
+SELECT substr('subexpression test', ascii(''), 3)
 ----
 su
 
-#TODO: materialize#606 Add tests for the alternate syntax if it is enabled
+# TODO: materialize#606 Add tests for the alternate syntax if it is enabled
 
 ### length ###
 statement ok
-create table lengthtest(strcol CHAR(15), vccol VARCHAR(15));
+CREATE TABLE lengthtest(strcol char(15), vccol varchar(15))
 
 statement ok
-insert into lengthtest values ('str', 'str'), (' str', ' str'), ('str ', 'str '), ('你好', '你好'), ('今日は', '今日は'), ('हेलो', 'हेलो'), (null, null), ('','');
+INSERT INTO lengthtest VALUES
+    ('str', 'str'), (' str', ' str'), ('str ', 'str '), ('你好', '你好'),
+    ('今日は', '今日は'), ('हेलो', 'हेलो'),
+    (NULL, NULL), ('', '')
 
-#invalid input
+# invalid input
 statement error
-select length(99)
+SELECT length(99)
 
 statement error
-select length('str', 99)
+SELECT length('str', 99)
 
-#standard tests
+# standard tests
 query I rowsort
-select length(strcol) from lengthtest;
+SELECT length(strcol) FROM lengthtest
 ----
 15
 15
@@ -367,7 +370,7 @@ select length(strcol) from lengthtest;
 NULL
 
 query I rowsort
-select length(vccol) from lengthtest;
+SELECT length(vccol) FROM lengthtest
 ----
 0
 2
@@ -379,45 +382,45 @@ select length(vccol) from lengthtest;
 NULL
 
 query I
-select length('你好', 'big5');
+SELECT length('你好', 'big5')
 ----
 3
 
 query I
-select length('你好', 'iso-8859-5');
+SELECT length('你好', 'iso-8859-5')
 ----
 6
 
-#encoding name conversion from pg to WHATWG
+# encoding name conversion FROM pg to WHATWG
 query I
-select length('你好', 'ISO_8859_5');
+SELECT length('你好', 'ISO_8859_5')
 ----
 6
 
-#invalid encoding name
+# invalid encoding name
 query I
-select length('你好', 'iso-123');
+SELECT length('你好', 'iso-123')
 ----
 NULL
 
-#null inputs
+# NULL inputs
 query I
-select length(null);
+SELECT length(NULL)
 ----
 NULL
 
 query I
-select length('str', null);
+SELECT length('str', NULL)
 ----
 NULL
 
 query T
-select replace('one', 'one', 'two');
+SELECT replace('one', 'one', 'two')
 ----
 two
 
 query T
-select replace('in a longer string', 'longer', 'shorter')
+SELECT replace('in a longer string', 'longer', 'shorter')
 ----
 in a shorter string
 

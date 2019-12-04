@@ -132,12 +132,12 @@ Project {
 mode cockroach
 
 query R
-SELECT floor(cast(1.1 AS DOUBLE PRECISION))
+SELECT floor(CAST (1.1 AS double precision))
 ----
 1
 
 query R
-SELECT floor(cast(1.1 AS float))
+SELECT floor(CAST (1.1 AS float))
 ----
 1
 
@@ -148,12 +148,12 @@ SELECT floor(1.1), floor(1.111), floor(100.1), floor(100.11), floor(-4.1)
 
 
 query R
-SELECT ceil(cast(1.1 AS DOUBLE PRECISION))
+SELECT ceil(CAST (1.1 AS double precision))
 ----
 2
 
 query R
-SELECT ceil(cast(1.1 AS float))
+SELECT ceil(CAST (1.1 AS float))
 ----
 2
 

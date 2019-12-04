@@ -12,8 +12,8 @@ CREATE TABLE warehouse (
     w_city char(20),
     w_state char(2),
     w_zip char(9),
-    w_tax decimal(4,4),
-    w_ytd decimal(12,2),
+    w_tax decimal(4, 4),
+    w_ytd decimal(12, 2),
     PRIMARY KEY (w_id)
 )
 
@@ -27,8 +27,8 @@ CREATE TABLE district (
     d_city char(20),
     d_state char(2),
     d_zip char(9),
-    d_tax decimal(4,4),
-    d_ytd decimal(12,2),
+    d_tax decimal(4, 4),
+    d_ytd decimal(12, 2),
     d_next_o_id integer,
     PRIMARY KEY (d_w_id, d_id)
 )
@@ -52,10 +52,10 @@ CREATE TABLE customer (
     c_phone char(16),
     c_since DATE,
     c_credit char(2),
-    c_credit_lim decimal(12,2),
-    c_discount decimal(4,4),
-    c_balance decimal(12,2),
-    c_ytd_payment decimal(12,2),
+    c_credit_lim decimal(12, 2),
+    c_discount decimal(4, 4),
+    c_balance decimal(12, 2),
+    c_ytd_payment decimal(12, 2),
     c_payment_cnt smallint,
     c_delivery_cnt smallint,
     c_data text,
@@ -74,7 +74,7 @@ CREATE TABLE history (
     h_d_id smallint,
     h_w_id integer,
     h_date date,
-    h_amount decimal(6,2),
+    h_amount decimal(6, 2),
     h_data char(24)
 )
 
@@ -118,7 +118,7 @@ CREATE TABLE orderline (
     ol_supply_w_id integer,
     ol_delivery_d date,
     ol_quantity smallint,
-    ol_amount decimal(6,2),
+    ol_amount decimal(6, 2),
     ol_dist_info char(24),
     PRIMARY KEY (ol_w_id, ol_d_id, ol_o_id, ol_number)
 )
@@ -134,7 +134,7 @@ CREATE TABLE item (
     i_id integer,
     i_im_id smallint,
     i_name char(24),
-    i_price decimal(5,2),
+    i_price decimal(5, 2),
     i_data char(50),
     PRIMARY KEY (i_id)
 )
@@ -184,7 +184,7 @@ CREATE TABLE supplier (
     su_address char(40) NOT NULL,
     su_nationkey smallint NOT NULL,
     su_phone char(15) NOT NULL,
-    su_acctbal decimal(12,2) NOT NULL,
+    su_acctbal decimal(12, 2) NOT NULL,
     su_comment char(101) NOT NULL,
     PRIMARY KEY (su_suppkey)
 )
@@ -498,7 +498,7 @@ query T multiline
 EXPLAIN PLAN FOR
 SELECT
     su_nationkey AS supp_nation,
-    substr(c_state,1,1) AS cust_nation,
+    substr(c_state, 1, 1) AS cust_nation,
     extract(year FROM o_entry_d) AS l_year,
     sum(ol_amount) AS revenue
 FROM supplier, stock, orderline, "order", customer, nation n1, nation n2

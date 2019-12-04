@@ -25,7 +25,7 @@ _len_ | Int | The length of the substring you want to return.
 ## Examples
 
 ```sql
-SELECT SUBSTRING('abcdefg', 3) AS substr;
+SELECT substring('abcdefg', 3) AS substr;
 ```
 ```bash
  substr
@@ -36,7 +36,7 @@ SELECT SUBSTRING('abcdefg', 3) AS substr;
  <hr/>
 
 ```sql
-SELECT SUBSTRING('abcdefg', 3, 3) AS substr;
+SELECT substring('abcdefg', 3, 3) AS substr;
 ```
 ```bash
  substr

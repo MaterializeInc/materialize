@@ -4,72 +4,72 @@
 # distributed without the express permission of Materialize, Inc.
 
 statement error
-select not 1;
+SELECT NOT 1
 
 statement error
-select 1 and 1;
+SELECT 1 AND 1
 
 statement error
-select 1 or 1;
+SELECT 1 OR 1
 
 statement error
-select 1 or false;
+SELECT 1 OR FALSE
 
 statement error
-select false or 1;
+SELECT FALSE OR 1
 
 statement error
-select 1 and false;
+SELECT 1 AND FALSE
 
 statement error
-select false and 1;
+SELECT FALSE AND 1
 
 query B
-select not true;
+SELECT NOT TRUE
 ----
 false
 
 query B
-select not false;
+SELECT NOT FALSE
 ----
 true
 
 query B
-select true and false;
+SELECT TRUE AND FALSE
 ----
 false
 
 query B
-select true and true;
+SELECT TRUE AND TRUE
 ----
 true
 
 query B
-select false and false;
+SELECT FALSE AND FALSE
 ----
 false
 
 query B
-select true or false;
+SELECT TRUE OR FALSE
 ----
 true
 
 query B
-select true or true;
+SELECT TRUE OR TRUE
 ----
 true
 
 query B
-select false or false;
+SELECT FALSE OR FALSE
 ----
 false
 
 query B
-select true and not true;
+SELECT TRUE AND NOT TRUE
 ----
 false
 
 query B
-select not false or false;
+SELECT NOT FALSE OR FALSE
 ----
 true

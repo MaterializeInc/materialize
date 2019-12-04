@@ -46,7 +46,7 @@ Date | TimestampTZ
 ## Examples
 
 ```sql
-SELECT CAST(CAST(100.21 AS DECIMAL(10,2)) AS FLOAT) AS dec_to_float;
+SELECT CAST (CAST (100.21 AS decimal(10, 2)) AS float) AS dec_to_float;
 ```
 ```bash
  dec_to_float
@@ -56,7 +56,7 @@ SELECT CAST(CAST(100.21 AS DECIMAL(10,2)) AS FLOAT) AS dec_to_float;
 <hr/>
 
 ```sql
-SELECT 100.21::DECIMAL(10,2)::FLOAT AS dec_to_float;
+SELECT 100.21::decimal(10, 2)::float AS dec_to_float;
 ```
 ```bash
  dec_to_float

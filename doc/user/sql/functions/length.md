@@ -50,7 +50,7 @@ You can find any updates on this behavior in [this GitHub issue](https://github.
 ## Examples
 
 ```sql
-SELECT LENGTH('你好') AS len;
+SELECT length('你好') AS len;
 ```
 ```bash
  len
@@ -61,7 +61,7 @@ SELECT LENGTH('你好') AS len;
 <hr/>
 
 ```sql
-SELECT LENGTH('你好', 'big5') AS len;
+SELECT length('你好', 'big5') AS len;
 ```
 ```bash
  len

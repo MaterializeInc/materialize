@@ -134,7 +134,7 @@ b  max
 2  1
 
 > CREATE MATERIALIZED VIEW test5 AS
-  SELECT b, max(a) as c FROM data GROUP BY b;
+  SELECT b, max(a) AS c FROM data GROUP BY b;
 
 > PEEK test5
 b  c
