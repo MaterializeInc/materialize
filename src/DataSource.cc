@@ -300,7 +300,6 @@ void DataSource::addAlphanumeric64(int length, std::ofstream& stream,
     int rand;
     for (int i = 0; i < length; i++) {
         rand = 0;
-        // FIXME (btv): this looks wrong
         while (rand == 0 || (rand > '9' && rand < 63) ||
                (rand > 'Z' && rand < 'a'))
             rand = chRandom::uniformInt('0', 'z');
