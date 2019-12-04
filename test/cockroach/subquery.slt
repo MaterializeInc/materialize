@@ -42,7 +42,7 @@ SELECT 1 + (SELECT 1)
 ----
 2
 
-query error unsupported binary operator: <int> \+ <tuple{int AS a, int AS b}>
+query error unsupported binary operator: <int> \+ <tuple\{int AS a, int AS b\}>
 SELECT 1 + (SELECT 1 AS a, 2 AS b)
 
 query B
@@ -160,10 +160,10 @@ true
 query error pgcode 42601 subquery must return only one column, found 2
 SELECT (SELECT 1, 2)
 
-query error unsupported comparison operator: <int> IN <tuple{tuple{int AS a, int AS b}}>
+query error unsupported comparison operator: <int> IN <tuple\{tuple\{int AS a, int AS b\}\}>
 SELECT 1 IN (SELECT 1 AS a, 2 AS b)
 
-query error unsupported comparison operator: <tuple{int, int}> IN <tuple{int}>
+query error unsupported comparison operator: <tuple\{int, int\}> IN <tuple\{int\}>
 SELECT (1, 2) IN (SELECT 1 AS a)
 
 statement ok
@@ -175,7 +175,7 @@ INSERT INTO abc VALUES (1, 2, 3), (4, 5, 6)
 statement ok
 ALTER TABLE abc SPLIT AT VALUES ((SELECT 1))
 
-query error unsupported comparison operator: <tuple{int, int}> IN <tuple{tuple{int AS a, int AS b, int AS c}}>
+query error unsupported comparison operator: <tuple\{int, int\}> IN <tuple\{tuple\{int AS a, int AS b, int AS c\}\}>
 SELECT (1, 2) IN (SELECT * FROM abc)
 
 query B
@@ -245,7 +245,7 @@ SELECT * FROM xyz
 7 8 10
 10 11 12
 
-statement error value type tuple\{int, int\} doesn't match type int of column "z"
+statement error value type tuple{int, int} doesn't match type int of column "z"
 UPDATE xyz SET z = (SELECT (10, 11)) WHERE x = 7
 
 # HP and CBO return slightly different (but reasonable) errors, so accept both.
