@@ -308,7 +308,11 @@ where
             self.report_frontiers();
 
             // Handle any received commands.
+            let mut cmds = vec![];
             while let Ok(Some(cmd)) = self.command_rx.try_next() {
+                cmds.push(cmd);
+            }
+            for cmd in cmds {
                 if let SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
