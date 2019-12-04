@@ -204,7 +204,7 @@ where
                             coord
                                 .catalog
                                 .humanize_id(expr::Id::Global(log.id()))
-                                .unwrap_or("NO_NAME".to_string()),
+                                .unwrap_or_else(|| "NO_NAME".to_string()),
                             log.id(),
                             key.clone(),
                             index,
@@ -218,12 +218,12 @@ where
                             coord
                                 .catalog
                                 .humanize_id(expr::Id::Global(log.id()))
-                                .unwrap_or("NO_NAME".to_string()),
+                                .unwrap_or_else(|| "NO_NAME".to_string()),
                             log.id(),
                             coord
                                 .catalog
                                 .humanize_id(expr::Id::Global(parent))
-                                .unwrap_or("NO_NAME".to_string()),
+                                .unwrap_or_else(|| "NO_NAME".to_string()),
                             pairs,
                             index,
                         )),
