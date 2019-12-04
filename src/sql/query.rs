@@ -1708,17 +1708,14 @@ fn plan_function<'a>(
                 if typ.scalar_type != ScalarType::String {
                     bail!("date_trunc() can only be formatted with strings");
                 }
-                let to: DateTruncTo = match precision_field {
-                    ScalarExpr::Literal(row, _) => {
-                        let datum = row.unpack_first();
-                        let precision_str = datum.unwrap_str();
-                        precision_str.parse()?
-                    }
-                    _ => bail!(
-                        "Only literal precisions are implemented for date_trunc, got: {:?}",
-                        precision_field
-                    ),
-                };
+
+                // If the precision field happens to be a literal, we can do
+                // some early validation.
+                if let ScalarExpr::Literal(row, _) = &precision_field {
+                    let datum = row.unpack_first();
+                    let precision_str = datum.unwrap_str();
+                    let _ = precision_str.parse::<DateTruncTo>()?;
+                }
 
                 let source_timestamp =
                     plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::Timestamp))?;
@@ -1727,9 +1724,10 @@ fn plan_function<'a>(
                     bail!("date_trunc() is currently only implemented for TIMESTAMPs");
                 }
 
-                let expr = ScalarExpr::CallUnary {
-                    func: UnaryFunc::DateTrunc(to),
-                    expr: Box::new(source_timestamp),
+                let expr = ScalarExpr::CallBinary {
+                    func: BinaryFunc::DateTrunc,
+                    expr1: Box::new(precision_field),
+                    expr2: Box::new(source_timestamp),
                 };
 
                 Ok(expr)

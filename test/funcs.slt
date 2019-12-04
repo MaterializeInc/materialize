@@ -76,6 +76,61 @@ SELECT date_trunc('millennium', TIMESTAMP '2019-11-26 15:56:46.241150')
 ----
 2001-01-01 00:00:00
 
+query error invalid date_trunc precision: bad
+SELECT date_trunc('bad', TIMESTAMP '2019-11-26 15:56:46.241150')
+
+statement ok
+CREATE TABLE date_trunc_fields (
+    field text
+)
+
+statement ok
+INSERT INTO date_trunc_fields VALUES ('day'), ('DaY'), ('month'), ('MoNTH'), ('bad')
+
+query T rowsort
+SELECT date_trunc(field, TIMESTAMP '2019-11-26 15:56:46.241150') FROM date_trunc_fields
+----
+2019-11-26 00:00:00
+2019-11-26 00:00:00
+2019-11-01 00:00:00
+2019-11-01 00:00:00
+NULL
+
+mode standard
+
+statement ok
+CREATE TABLE date_trunc_timestamps (
+    ts timestamp,
+)
+
+query T multiline
+EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
+----
+Project {
+  outputs: [1],
+  Map {
+    scalars: [date_trunc_day #0],
+    Get { date_trunc_timestamps (u4) }
+  }
+}
+
+query T multiline
+EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
+----
+Project {
+  outputs: [2],
+  Map {
+    scalars: [#0 date_trunc #1],
+    Join {
+      variables: [],
+      Get { date_trunc_fields (u1) },
+      Get { date_trunc_timestamps (u4) }
+    }
+  }
+}
+
+mode cockroach
+
 query R
 SELECT floor(cast(1.1 AS DOUBLE PRECISION))
 ----

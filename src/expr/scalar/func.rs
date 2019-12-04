@@ -712,6 +712,26 @@ pub fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(s + ns)
 }
 
+pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    match a.unwrap_str().parse::<DateTruncTo>() {
+        Ok(DateTruncTo::Micros) => date_trunc_microseconds(b),
+        Ok(DateTruncTo::Millis) => date_trunc_milliseconds(b),
+        Ok(DateTruncTo::Second) => date_trunc_second(b),
+        Ok(DateTruncTo::Minute) => date_trunc_minute(b),
+        Ok(DateTruncTo::Hour) => date_trunc_hour(b),
+        Ok(DateTruncTo::Day) => date_trunc_day(b),
+        Ok(DateTruncTo::Week) => date_trunc_week(b),
+        Ok(DateTruncTo::Month) => date_trunc_month(b),
+        Ok(DateTruncTo::Quarter) => date_trunc_quarter(b),
+        Ok(DateTruncTo::Year) => date_trunc_year(b),
+        Ok(DateTruncTo::Decade) => date_trunc_decade(b),
+        Ok(DateTruncTo::Century) => date_trunc_century(b),
+        Ok(DateTruncTo::Millennium) => date_trunc_millennium(b),
+        // TODO: return an error when we support that.
+        _ => Datum::Null,
+    }
+}
+
 fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let time = NaiveTime::from_hms_micro(
@@ -893,6 +913,7 @@ pub enum BinaryFunc {
     Gte,
     MatchRegex,
     ToChar,
+    DateTrunc,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     CastDecimalToString,
@@ -912,7 +933,7 @@ pub enum DateTruncTo {
     Year,
     Decade,
     Century,
-    Millenium,
+    Millennium,
 }
 
 impl FromStr for DateTruncTo {
@@ -944,7 +965,7 @@ impl FromStr for DateTruncTo {
         } else if s == "century" {
             DateTruncTo::Century
         } else if s == "millennium" {
-            DateTruncTo::Millenium
+            DateTruncTo::Millennium
         } else {
             failure::bail!("invalid date_trunc precision: {}", s.into_inner())
         })
@@ -995,6 +1016,7 @@ impl BinaryFunc {
             BinaryFunc::Gte => gte,
             BinaryFunc::MatchRegex => match_regex,
             BinaryFunc::ToChar => to_char,
+            BinaryFunc::DateTrunc => date_trunc,
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
             BinaryFunc::CastDecimalToString => cast_decimal_to_string,
@@ -1094,6 +1116,8 @@ impl BinaryFunc {
             | SubTimestampInterval
             | AddTimestampTzInterval
             | SubTimestampTzInterval => input1_type,
+
+            DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(true),
         }
     }
 
@@ -1150,6 +1174,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Gte => f.write_str(">="),
             BinaryFunc::MatchRegex => f.write_str("~"),
             BinaryFunc::ToChar => f.write_str("to_char"),
+            BinaryFunc::DateTrunc => f.write_str("date_trunc"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::CastDecimalToString => f.write_str("dectostr"),
@@ -1310,7 +1335,7 @@ impl UnaryFunc {
                 DateTruncTo::Year => date_trunc_year,
                 DateTruncTo::Decade => date_trunc_decade,
                 DateTruncTo::Century => date_trunc_century,
-                DateTruncTo::Millenium => date_trunc_millennium,
+                DateTruncTo::Millennium => date_trunc_millennium,
             },
         }
     }
@@ -1487,7 +1512,10 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::ExtractTimestampTzHour => f.write_str("tstzextracthour"),
             UnaryFunc::ExtractTimestampTzMinute => f.write_str("tstzextractminute"),
             UnaryFunc::ExtractTimestampTzSecond => f.write_str("tstzextractsecond"),
-            UnaryFunc::DateTrunc(to) => write!(f, "date_trunc_{:?}", to),
+            UnaryFunc::DateTrunc(to) => {
+                f.write_str("date_trunc_")?;
+                f.write_str(&format!("{:?}", to).to_lowercase())
+            }
         }
     }
 }
