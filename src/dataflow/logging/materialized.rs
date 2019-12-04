@@ -164,7 +164,9 @@ pub fn construct<A: Allocate>(
                                             for k in key {
                                                 primary_session.give((
                                                     packer.pack(&[
-                                                        Datum::String(std::borrow::Cow::Owned(id.to_string())),
+                                                        Datum::String(std::borrow::Cow::Owned(
+                                                            id.to_string(),
+                                                        )),
                                                         Datum::Int64(k as i64),
                                                         Datum::Int64(index as i64),
                                                     ]),
@@ -177,9 +179,13 @@ pub fn construct<A: Allocate>(
                                             for (c, p) in key {
                                                 foreign_session.give((
                                                     packer.pack(&[
-                                                        Datum::String(std::borrow::Cow::Owned(id.to_string())),
+                                                        Datum::String(std::borrow::Cow::Owned(
+                                                            id.to_string(),
+                                                        )),
                                                         Datum::Int64(c as i64),
-                                                        Datum::String(std::borrow::Cow::Owned(parent.to_string())),
+                                                        Datum::String(std::borrow::Cow::Owned(
+                                                            parent.to_string(),
+                                                        )),
                                                         Datum::Int64(p as i64),
                                                         Datum::Int64(number as i64),
                                                     ]),
@@ -222,7 +228,9 @@ pub fn construct<A: Allocate>(
                                 for k in key.iter() {
                                     primary_session.give((
                                         packer.pack(&[
-                                            Datum::String(std::borrow::Cow::Owned(name.to_string())),
+                                            Datum::String(std::borrow::Cow::Owned(
+                                                name.to_string(),
+                                            )),
                                             Datum::Int64(*k as i64),
                                             Datum::Int64(index as i64),
                                         ]),
@@ -240,9 +248,13 @@ pub fn construct<A: Allocate>(
                                 for (c, p) in keys.iter() {
                                     foreign_session.give((
                                         packer.pack(&[
-                                            Datum::String(std::borrow::Cow::Owned(child.to_string())),
+                                            Datum::String(std::borrow::Cow::Owned(
+                                                child.to_string(),
+                                            )),
                                             Datum::Int64(*c as i64),
-                                            Datum::String(std::borrow::Cow::Owned(parent.to_string())),
+                                            Datum::String(std::borrow::Cow::Owned(
+                                                parent.to_string(),
+                                            )),
                                             Datum::Int64(*p as i64),
                                             Datum::Int64(number as i64),
                                         ]),

@@ -102,7 +102,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows".lit(),
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
                 "logs_dataflow_dependency".lit()
-            },
+            }
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers".lit(),
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks".lit(),
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations".lit(),
@@ -253,7 +253,10 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Channels) => vec![],
             LogVariant::Timely(TimelyLog::Elapsed) => vec![],
             LogVariant::Timely(TimelyLog::Histogram) => vec![],
-            LogVariant::Timely(TimelyLog::Addresses) => vec![(LogVariant::Timely(TimelyLog::Operates), vec![(0,0), (1,1)])],
+            LogVariant::Timely(TimelyLog::Addresses) => vec![(
+                LogVariant::Timely(TimelyLog::Operates),
+                vec![(0, 0), (1, 1)],
+            )],
             LogVariant::Timely(TimelyLog::Parks) => vec![],
             LogVariant::Differential(DifferentialLog::Arrangement) => vec![],
             LogVariant::Differential(DifferentialLog::Sharing) => vec![],
@@ -263,7 +266,10 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => vec![],
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => vec![(LogVariant::Materialized(MaterializedLog::PrimaryKeys), vec![(2, 0), (3, 1)])],
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => vec![(
+                LogVariant::Materialized(MaterializedLog::PrimaryKeys),
+                vec![(2, 0), (3, 1)],
+            )],
         }
     }
 }

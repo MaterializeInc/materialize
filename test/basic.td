@@ -85,12 +85,14 @@ logs_channels
 logs_dataflow_dependency
 logs_dataflows
 logs_elapsed
+logs_foreign_keys
 logs_frontiers
 logs_histogram
 logs_operates
 logs_parks
 logs_peek_durations
 logs_peeks
+logs_primary_keys
 logs_sharing
 
 > SHOW TABLES LIKE '%peeks%';
