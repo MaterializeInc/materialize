@@ -6,10 +6,10 @@
 mode cockroach
 
 statement ok
-CREATE TABLE t1 (a int);
+CREATE TABLE t1 (a int)
 
 statement ok
-CREATE TABLE t2 (a int);
+CREATE TABLE t2 (a int)
 
 # This works in MySQL, but not PostgreSQL.
 query I

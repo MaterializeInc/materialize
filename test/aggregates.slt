@@ -12,7 +12,7 @@ statement ok
 INSERT INTO t (a, b) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 
 statement error aggregate functions are not allowed in WHERE clause
-SELECT a FROM t WHERE sum(b) = 3 GROUP BY a;
+SELECT a FROM t WHERE sum(b) = 3 GROUP BY a
 
 query III colnames
 SELECT 1 AS literal, sum(a) as sum_a, sum(b) FROM t
@@ -21,13 +21,13 @@ literal  sum_a  sum
 1        7      7
 
 query I rowsort
-SELECT a FROM t GROUP BY a HAVING sum(b) = 3;
+SELECT a FROM t GROUP BY a HAVING sum(b) = 3
 ----
 1
 2
 
 query I rowsort
-SELECT a+1 FROM t GROUP BY a+1 HAVING sum(b) = 3;
+SELECT a + 1 FROM t GROUP BY a + 1 HAVING sum(b) = 3
 ----
 2
 3
@@ -68,4 +68,4 @@ SELECT avg(NULL)
 NULL
 
 statement error
-SELECT * ORDER BY SUM(fake_column);
+SELECT * ORDER BY SUM(fake_column)

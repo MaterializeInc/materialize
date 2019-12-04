@@ -85,7 +85,7 @@ The following query creates a materialized view representing the total of all pu
 
 ``` sql
 CREATE VIEW mat_view AS
-    SELECT region.id, SUM(purchase.total)
+    SELECT region.id, sum(purchase.total)
     FROM mysql_simple_purchase AS purchase
     JOIN mysql_simple_user AS user
         ON purchase.user_id = user.id
@@ -109,7 +109,7 @@ In this case, Materialized simply returns the results of the dataflow you create
 ### Reading from sources
 
 ```sql
-SELECT region.id, SUM(purchase.total)
+SELECT region.id, sum(purchase.total)
 FROM mysql_simple_purchase AS purchase
 JOIN mysql_simple_user AS user
     ON purchase.user_id = user.id

@@ -7,293 +7,295 @@ mode cockroach
 
 # TODO: The types supported by mod are SMALLINT, BIGINT, INTEGER, DECIMAL, and NUMERIC.
 # Tests all types?
+
 ### mod ###
 
 # positive dividend and divisor
+
 query I
-select mod(34, 7);
+SELECT mod(34, 7)
 ----
 6
 
 query I
-select mod(35, 7);
+SELECT mod(35, 7)
 ----
 0
 
 query I
-select mod(4,4);
+SELECT mod(4, 4)
 ----
 0
 
 query I
-select mod(7, 11);
+SELECT mod(7, 11)
 ----
 7
 
 query R
-select mod(4.3, 2.1);
+SELECT mod(4.3, 2.1)
 ----
 0.1
 
 query R
-select mod(4, 2.1);
+SELECT mod(4, 2.1)
 ----
 1.9
 
 query R
-select mod(0.34, 1.1);
+SELECT mod(0.34, 1.1)
 ----
 0.34
 
 query R
-select mod(4.2, 2.1);
+SELECT mod(4.2, 2.1)
 ----
 0.0
 
 # negative dividend
 query I
-select mod(-3234, 73);
+SELECT mod(-3234, 73)
 ----
 -22
 
 query I
-select mod(-100, 10);
+SELECT mod(-100, 10)
 ----
 0
 
 query I
-select mod(-5,5);
+SELECT mod(-5, 5)
 ----
 0
 
 query I
-select mod(-237, 1100);
+SELECT mod(-237, 1100)
 ----
 -237
 
 query R
-select mod(-2.254, 2.2);
+SELECT mod(-2.254, 2.2)
 ----
 -0.054
 
 query R
-select mod(-4, 1.75);
+SELECT mod(-4, 1.75)
 ----
 -0.50
 
 query R
-select mod(-0.3234, 200);
+SELECT mod(-0.3234, 200)
 ----
 -0.3234
 
 query R
-select mod(-7.5, 1.5);
+SELECT mod(-7.5, 1.5)
 ----
 0.0
 
 # negative divisor
 
 query I
-select mod(23, -5);
+SELECT mod(23, -5)
 ----
 3
 
 query I
-select mod(20, -2);
+SELECT mod(20, -2)
 ----
 0
 
 query I
-select mod(29,-29);
+SELECT mod(29, -29)
 ----
 0
 
 query I
-select mod(7, -11);
+SELECT mod(7, -11)
 ----
 7
 
 query R
-select mod(8.5, -4.6);
+SELECT mod(8.5, -4.6)
 ----
 3.9
 
 query R
-select mod(30, -11.9);
+SELECT mod(30, -11.9)
 ----
 6.2
 
 query R
-select mod(0.0019, -0.013);
+SELECT mod(0.0019, -0.013)
 ----
 0.0019
 
 query R
-select mod(14.4, -0.002);
+SELECT mod(14.4, -0.002)
 ----
 0.000
 
 # negative dividend and negative divisor
 
 query I
-select mod(-121, -17);
+SELECT mod(-121, -17)
 ----
 -2
 
 query I
-select mod(-64, -8);
+SELECT mod(-64, -8)
 ----
 0
 
 query I
-select mod(-344,-344);
+SELECT mod(-344, -344)
 ----
 0
 
 query I
-select mod(-13, -123);
+SELECT mod(-13, -123)
 ----
 -13
 
 query R
-select mod(-5.6, -2.3);
+SELECT mod(-5.6, -2.3)
 ----
 -1.0
 
 query R
-select mod(-10.4, -2);
+SELECT mod(-10.4, -2)
 ----
 -0.4
 
 query R
-select mod(-2.45, -45.6);
+SELECT mod(-2.45, -45.6)
 ----
 -2.45
 
 query R
-select mod(-12.15, -4.05);
+SELECT mod(-12.15, -4.05)
 ----
 0.00
 
-# special values: 0/null dividend and/or divisor
+# special values: 0/NULL dividend and/or divisor
 
 query I
-select mod(0,4);
+SELECT mod(0, 4)
 ----
 0
 
 query R
-select mod(0.000, 2);
+SELECT mod(0.000, 2)
 ----
 0.000
 
 query R
-select mod(0, 1.23);
+SELECT mod(0, 1.23)
 ----
 0.00
 
 query R
-select mod(4, 0.0);
+SELECT mod(4, 0.0)
 ----
 NULL
 
 query I
-select mod(0, 0);
+SELECT mod(0, 0)
 ----
 NULL
 
 query I
-select mod(0, null);
+SELECT mod(0, NULL)
 ----
 NULL
 
 query I
-select mod(null, 0);
+SELECT mod(NULL, 0)
 ----
 NULL
 
 query I
-select mod(-5, null);
+SELECT mod(-5, NULL)
 ----
 NULL
 
 query I
-select mod(null, 0.45);
+SELECT mod(NULL, 0.45)
 ----
 NULL
 
 query I
-select 1 % 0;
+SELECT 1 % 0
 ----
 NULL
 
 query R
-select 1 % 0.0;
+SELECT 1 % 0.0
 ----
 NULL
 
 query R
-select 1.0 % 0;
+SELECT 1.0 % 0
 ----
 NULL
 
 query R
-select 1.0 % 0.0;
+SELECT 1.0 % 0.0
 ----
 NULL
 
 query R
-select 1 % cast(0.0 AS float);
+SELECT 1 % CAST (0.0 AS float)
 ----
 NULL
 
 query I
-select 1 / 0;
+SELECT 1 / 0
 ----
 NULL
 
 query R
-select 1 / 0.0;
+SELECT 1 / 0.0
 ----
 NULL
 
 query R
-select 1.0 / 0;
+SELECT 1.0 / 0
 ----
 NULL
 
 query R
-select 1.0 / 0.0;
+SELECT 1.0 / 0.0
 ----
 NULL
 
 query R
-select 1 / cast(0.0 AS float);
+SELECT 1 / CAST (0.0 AS float)
 ----
 NULL
 
 query I
-select 1 + cast('5' AS DOUBLE PRECISION);
+SELECT 1 + CAST ('5' AS double precision)
 ----
 6
 
 query II
-select cast('+Inf' AS DOUBLE PRECISION), cast('inf' AS DOUBLE PRECISION);
+SELECT CAST ('+Inf' AS double precision), CAST ('inf' AS double precision)
 ----
 inf inf
 
 query T
-select cast(cast(1.1 AS DOUBLE PRECISION) AS TEXT)
+SELECT CAST (CAST (1.1 AS double precision) AS text)
 ----
 1.1
 
 query T
-select cast(cast(1 as int) AS TEXT)
+SELECT CAST (CAST (1 as int) AS text)
 ----
 1
 
 query TT
-SELECT false::text, true::text
+SELECT FALSE::text, TRUE::text
 ----
 false  true
 

@@ -20,18 +20,18 @@ SELECT a FROM dateish
 2019-12-31
 
 query T
-SELECT MAX(a) FROM dateish
+SELECT max(a) FROM dateish
 ----
 2019-12-31
 
 query T
-SELECT MIN(a) FROM dateish
+SELECT min(a) FROM dateish
 ----
 2000-01-01
 
 statement ok
 CREATE TABLE timestampish (
-    b TIMESTAMP
+    b timestamp
 )
 
 statement ok
@@ -49,12 +49,12 @@ SELECT b FROM timestampish
 2020-01-01 01:02:03.789
 
 query T
-SELECT MAX(b) FROM timestampish
+SELECT max(b) FROM timestampish
 ----
 2020-01-01 01:02:03.789
 
 query T
-SELECT MIN(b) FROM timestampish
+SELECT min(b) FROM timestampish
 ----
 1969-06-01 10:10:10.410
 
@@ -80,7 +80,7 @@ SELECT INTERVAL '1' MINUTE
 
 statement ok
 CREATE TABLE iv_ish (
-    b INTERVAL
+    b interval
 )
 
 statement ok
@@ -286,7 +286,7 @@ SELECT * FROM dateish WHERE a != DATE '1999-12-31' + INTERVAL '2' DAY
 
 statement ok
 CREATE TABLE timestamp_compares (
-    c TIMESTAMP
+    c timestamp
 )
 
 statement ok
@@ -380,12 +380,12 @@ SELECT * FROM timestamptzish
 2000-01-01 08:00:00 UTC
 
 query T
-SELECT MAX(t) FROM timestamptzish
+SELECT max(t) FROM timestamptzish
 ----
 2000-01-01 08:00:00 UTC
 
 query T
-SELECT MIN(t) FROM timestamptzish
+SELECT min(t) FROM timestamptzish
 ----
 1999-12-31 06:00:00 UTC
 
@@ -614,12 +614,12 @@ SELECT now() + INTERVAL '100' HOUR > now()
 true
 
 query B
-SELECT current_timestamp() > timestamp '2016-06-13 00:00:00'
+SELECT current_timestamp() > TIMESTAMP '2016-06-13 00:00:00'
 ----
 true
 
 query B
-SELECT current_timestamp > timestamp '2016-06-13 00:00:00'
+SELECT current_timestamp > TIMESTAMP '2016-06-13 00:00:00'
 ----
 true
 

@@ -11,7 +11,7 @@ CREATE TABLE peeps (
 )
 
 statement ok
-INSERT INTO peeps VALUES ('alice'), ('bob'), ('eve');
+INSERT INTO peeps VALUES ('alice'), ('bob'), ('eve')
 
 statement ok
 CREATE TABLE likes (
@@ -20,7 +20,7 @@ CREATE TABLE likes (
 )
 
 statement ok
-INSERT INTO likes VALUES ('alice', 'bob'), ('bob', 'eve'), ('alice', 'eve');
+INSERT INTO likes VALUES ('alice', 'bob'), ('bob', 'eve'), ('alice', 'eve')
 
 query TB rowsort
 SELECT peep, EXISTS(
@@ -102,7 +102,7 @@ statement ok
 CREATE TABLE age (peep text, age int)
 
 statement ok
-INSERT INTO age VALUES ('alice', 103), ('bob', 100), ('eve', 104);
+INSERT INTO age VALUES ('alice', 103), ('bob', 100), ('eve', 104)
 
 # TODO: materialize#489 This test should throw an error because
 # subquery returns more than one row

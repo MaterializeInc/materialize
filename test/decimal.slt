@@ -113,7 +113,7 @@ SELECT 10.01 * 1.1
 11.011
 
 query R
-SELECT 10.001 * 0.001;
+SELECT 10.001 * 0.001
 ----
 0.010001
 
@@ -128,7 +128,7 @@ SELECT 1.0 / 3.0
 0.3333333
 
 query R
-SELECT CAST(2 AS decimal(1, 0)) / CAST(7 AS decimal(1, 0))
+SELECT CAST (2 AS decimal(1, 0)) / CAST (7 AS decimal(1, 0))
 ----
 0.285714
 
@@ -199,9 +199,9 @@ CREATE TABLE casts (
 
 query RRR
 SELECT
-    CAST(0.1 as int),
-    CAST(0.1 AS decimal(15, 2)),
-    CAST(0.1 as float)
+    CAST (0.1 AS int),
+    CAST (0.1 AS decimal(15, 2)),
+    CAST (0.1 AS float)
 ----
 0  0.10  0.1
 
@@ -215,37 +215,37 @@ SELECT 1.0 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1
 ### float64 to decimal ###
 
 query R
-select cast(3.141529::float as decimal(38,6));
+SELECT CAST (3.141529::float AS decimal(38, 6))
 ----
 3.141529
 
 # Truncation
 query R
-select cast(3.141529::float as decimal(38,5));
+SELECT CAST (3.141529::float AS decimal(38, 5))
 ----
 3.14152
 
 # Floating point imprecision
 # Note that this result differs from PostgreSQL
 query R
-select cast(3.141529::float as decimal(38,7));
+SELECT CAST (3.141529::float AS decimal(38, 7))
 ----
 3.1415289
 
 # Expansion with 0s
 query R
-select cast(3.141529::float as decimal(38,8));
+SELECT CAST (3.141529::float AS decimal(38, 8))
 ----
 3.14152900
 
 # Numeric overflow
 query R
-select cast(100::float as decimal(38,37));
+SELECT CAST (100::float AS decimal(38, 37))
 ----
 NULL
 
 # Null input
 query R
-select cast(null::float as decimal(38,7));
+SELECT CAST (null::float AS decimal(38, 7))
 ----
 NULL

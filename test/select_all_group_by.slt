@@ -15,7 +15,7 @@ statement ok
 CREATE TABLE bar (a integer, b integer)
 
 statement ok
-INSERT INTO bar VALUES (37, 42), (37, 42);
+INSERT INTO bar VALUES (37, 42), (37, 42)
 
 query II
 SELECT *, count(*) FROM foo GROUP BY a
@@ -23,7 +23,7 @@ SELECT *, count(*) FROM foo GROUP BY a
 37 1
 
 query II
-SELECT *, count(*) FROM foo GROUP BY a, a, a+1
+SELECT *, count(*) FROM foo GROUP BY a, a, a + 1
 ----
 37 1
 
@@ -33,28 +33,28 @@ SELECT a FROM foo GROUP BY a, foo.a
 37
 
 statement error internal error: unable to resolve scope item
-SELECT *, count(*) FROM bar GROUP BY a;
+SELECT *, count(*) FROM bar GROUP BY a
 
 query II
-SELECT a, count(*) FROM bar GROUP BY a;
+SELECT a, count(*) FROM bar GROUP BY a
 ----
 37 2
 
 query II
-SELECT * FROM bar GROUP BY a, b;
+SELECT * FROM bar GROUP BY a, b
 ----
 37 42
 
 statement ok
-CREATE TABLE quux (a integer);
+CREATE TABLE quux (a integer)
 
 query I
-SELECT count(a) FROM quux WHERE a < 0;
+SELECT count(a) FROM quux WHERE a < 0
 ----
 0
 
 query I
-SELECT count(*) FROM quux WHERE a < 0;
+SELECT count(*) FROM quux WHERE a < 0
 ----
 0
 
@@ -62,7 +62,7 @@ statement ok
 INSERT INTO quux VALUES (37), (NULL)
 
 query I
-SELECT count(*) FROM quux;
+SELECT count(*) FROM quux
 ----
 2
 

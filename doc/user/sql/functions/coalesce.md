@@ -21,7 +21,7 @@ All elements of the parameters for `coalesce` must be of the same type; `coalesc
 ## Examples
 
 ```sql
-SELECT coalesce (NULL, 3, 2, 1) AS coalesce_res;
+SELECT coalesce(NULL, 3, 2, 1) AS coalesce_res;
 ```
 ```bash
  res

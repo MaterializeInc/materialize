@@ -27,7 +27,7 @@ CREATE TABLE part (
     p_type        varchar(25) NOT NULL,
     p_size        integer NOT NULL,
     p_container   char(10) NOT NULL,
-    p_retailprice decimal(15,2) NOT NULL,
+    p_retailprice decimal(15, 2) NOT NULL,
     p_comment     varchar(23) NOT NULL
 )
 
@@ -38,7 +38,7 @@ CREATE TABLE supplier (
     s_address     varchar(40) NOT NULL,
     s_nationkey   integer NOT NULL,
     s_phone       char(15) NOT NULL,
-    s_acctbal     decimal(15,2) NOT NULL,
+    s_acctbal     decimal(15, 2) NOT NULL,
     s_comment     varchar(101) NOT NULL
 )
 
@@ -47,7 +47,7 @@ CREATE TABLE partsupp (
     ps_partkey     integer NOT NULL,
     ps_suppkey     integer NOT NULL,
     ps_availqty    integer NOT NULL,
-    ps_supplycost  decimal(15,2) NOT NULL,
+    ps_supplycost  decimal(15, 2) NOT NULL,
     ps_comment     varchar(199) NOT NULL,
     PRIMARY KEY (ps_partkey, ps_suppkey)
 )
@@ -59,7 +59,7 @@ CREATE TABLE customer (
     c_address     varchar(40) NOT NULL,
     c_nationkey   integer NOT NULL,
     c_phone       char(15) NOT NULL,
-    c_acctbal     decimal(15,2) NOT NULL,
+    c_acctbal     decimal(15, 2) NOT NULL,
     c_mktsegment  char(10) NOT NULL,
     c_comment     varchar(117) NOT NULL
 )
@@ -69,8 +69,8 @@ CREATE TABLE orders (
     o_orderkey       integer PRIMARY KEY,
     o_custkey        integer NOT NULL,
     o_orderstatus    char(1) NOT NULL,
-    o_totalprice     decimal(15,2) NOT NULL,
-    o_orderdate      date NOT NULL,
+    o_totalprice     decimal(15, 2) NOT NULL,
+    o_orderdate      DATE NOT NULL,
     o_orderpriority  char(15) NOT NULL,
     o_clerk          char(15) NOT NULL,
     o_shippriority   integer NOT NULL,
@@ -83,10 +83,10 @@ CREATE TABLE lineitem (
     l_partkey        integer NOT NULL,
     l_suppkey        integer NOT NULL,
     l_linenumber     integer NOT NULL,
-    l_quantity       decimal(15,2) NOT NULL,
-    l_extendedprice  decimal(15,2) NOT NULL,
-    l_discount       decimal(15,2) NOT NULL,
-    l_tax            decimal(15,2) NOT NULL,
+    l_quantity       decimal(15, 2) NOT NULL,
+    l_extendedprice  decimal(15, 2) NOT NULL,
+    l_discount       decimal(15, 2) NOT NULL,
+    l_tax            decimal(15, 2) NOT NULL,
     l_returnflag     char(1) NOT NULL,
     l_linestatus     char(1) NOT NULL,
     l_shipdate       date NOT NULL,
@@ -103,18 +103,18 @@ query T multiline
 EXPLAIN PLAN FOR SELECT
 	l_returnflag,
 	l_linestatus,
-	sum(l_quantity) as sum_qty,
-	sum(l_extendedprice) as sum_base_price,
-	sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
-	sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
-	avg(l_quantity) as avg_qty,
-	avg(l_extendedprice) as avg_price,
-	avg(l_discount) as avg_disc,
-	count(*) as count_order
+	sum(l_quantity) AS sum_qty,
+	sum(l_extendedprice) AS sum_base_price,
+	sum(l_extendedprice * (1 - l_discount)) AS sum_disc_price,
+	sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge,
+	avg(l_quantity) AS avg_qty,
+	avg(l_extendedprice) AS avg_price,
+	avg(l_discount) AS avg_disc,
+	count(*) AS count_order
 FROM
 	lineitem
 WHERE
-	l_shipdate <= date '1998-12-01' -- - interval '60' day (fails with an error)
+	l_shipdate <= DATE '1998-12-01' -- - INTERVAL '60' day (fails with an error)
 GROUP BY
 	l_returnflag,
 	l_linestatus
@@ -168,7 +168,7 @@ FROM
 WHERE
     p_partkey = ps_partkey
     AND s_suppkey = ps_suppkey
-    AND p_size = cast(15 as smallint)
+    AND p_size = CAST (15 AS smallint)
     AND p_type LIKE '%BRASS'
     AND s_nationkey = n_nationkey
     AND n_regionkey = r_regionkey
@@ -187,7 +187,7 @@ WHERE
                     AND r_name = 'EUROPE'
             )
 ORDER BY
-    s_acctbal DESC, n_name, s_name, p_partkey;
+    s_acctbal DESC, n_name, s_name, p_partkey
 ----
 Let {
   l0 = Join {
@@ -241,26 +241,26 @@ query T multiline
 -- Query 03
 EXPLAIN PLAN FOR SELECT
     l_orderkey,
-    sum(l_extendedprice * (1 - l_discount)) as revenue,
+    sum(l_extendedprice * (1 - l_discount)) AS revenue,
     o_orderdate,
     o_shippriority
-from
+FROM
     customer,
     orders,
     lineitem
-where
+WHERE
     c_mktsegment = 'BUILDING'
-    and c_custkey = o_custkey
-    and l_orderkey = o_orderkey
-    and o_orderdate < date '1995-03-15'
-    and l_shipdate > date '1995-03-15'
-group by
+    AND c_custkey = o_custkey
+    AND l_orderkey = o_orderkey
+    AND o_orderdate < DATE '1995-03-15'
+    AND l_shipdate > DATE '1995-03-15'
+GROUP BY
     l_orderkey,
     o_orderdate,
     o_shippriority
-order by
-    revenue desc,
-    o_orderdate;
+ORDER BY
+    revenue DESC,
+    o_orderdate
 ----
 Project {
   outputs: [0, 3, 1, 2],
@@ -287,25 +287,25 @@ query T multiline
 -- Query 04
 EXPLAIN PLAN FOR SELECT
     o_orderpriority,
-    count(*) as order_count
-from
+    count(*) AS order_count
+FROM
     orders
-where
-    o_orderdate >= date '1993-07-01'
-    and o_orderdate < date '1993-07-01' + interval '3' month
-    and exists (
-        select
+WHERE
+    o_orderdate >= DATE '1993-07-01'
+    AND o_orderdate < DATE '1993-07-01' + INTERVAL '3' month
+    AND EXISTS (
+        SELECT
             *
-        from
+        FROM
             lineitem
-        where
+        WHERE
             l_orderkey = o_orderkey
-            and l_commitdate < l_receiptdate
+            AND l_commitdate < l_receiptdate
     )
-group by
+GROUP BY
     o_orderpriority
-order by
-    o_orderpriority;
+ORDER BY
+    o_orderpriority
 ----
 Let {
   l0 = Filter {
@@ -338,28 +338,28 @@ query T multiline
 -- Query 05
 EXPLAIN PLAN FOR SELECT
     n_name,
-    sum(l_extendedprice * (1 - l_discount)) as revenue
-from
+    sum(l_extendedprice * (1 - l_discount)) AS revenue
+FROM
     customer,
     orders,
     lineitem,
     supplier,
     nation,
     region
-where
+WHERE
     c_custkey = o_custkey
-    and l_orderkey = o_orderkey
-    and l_suppkey = s_suppkey
-    and c_nationkey = s_nationkey
-    and s_nationkey = n_nationkey
-    and n_regionkey = r_regionkey
-    and r_name = 'ASIA'
-    and o_orderdate >= date '1994-01-01'
-    and o_orderdate < date '1995-01-01'
-group by
+    AND l_orderkey = o_orderkey
+    AND l_suppkey = s_suppkey
+    AND c_nationkey = s_nationkey
+    AND s_nationkey = n_nationkey
+    AND n_regionkey = r_regionkey
+    AND r_name = 'ASIA'
+    AND o_orderdate >= DATE '1994-01-01'
+    AND o_orderdate < DATE '1995-01-01'
+GROUP BY
     n_name
-order by
-    revenue desc;
+ORDER BY
+    revenue DESC
 ----
 Reduce {
   group_key: [9],
@@ -388,15 +388,14 @@ Reduce {
 query T multiline
 -- Query 06
 EXPLAIN PLAN FOR SELECT
-    sum(l_extendedprice * l_discount) as revenue
-from
+    sum(l_extendedprice * l_discount) AS revenue
+FROM
     lineitem
-where
+WHERE
     l_quantity < 24
-    and l_shipdate >= date '1994-01-01'
-    and l_shipdate < date '1994-01-01' + interval '1' year
-    and l_discount between 0.06 - 0.01 and 0.07
-    ;
+    AND l_shipdate >= DATE '1994-01-01'
+    AND l_shipdate < DATE '1994-01-01' + INTERVAL '1' year
+    AND l_discount BETWEEN 0.06 - 0.01 AND 0.07
 ----
 Let {
   l0 = Reduce {
@@ -432,41 +431,41 @@ EXPLAIN PLAN FOR SELECT
     supp_nation,
     cust_nation,
     l_year,
-    sum(volume) as revenue
-from
+    sum(volume) AS revenue
+FROM
     (
-        select
-            n1.n_name as supp_nation,
-            n2.n_name as cust_nation,
-            extract(year from l_shipdate) as l_year,
-            l_extendedprice * (1 - l_discount) as volume
-        from
+        SELECT
+            n1.n_name AS supp_nation,
+            n2.n_name AS cust_nation,
+            extract(year FROM l_shipdate) AS l_year,
+            l_extendedprice * (1 - l_discount) AS volume
+        FROM
             supplier,
             lineitem,
             orders,
             customer,
             nation n1,
             nation n2
-        where
+        WHERE
             s_suppkey = l_suppkey
-            and o_orderkey = l_orderkey
-            and c_custkey = o_custkey
-            and s_nationkey = n1.n_nationkey
-            and c_nationkey = n2.n_nationkey
-            and (
-                (n1.n_name = 'FRANCE' and n2.n_name = 'GERMANY')
-                or (n1.n_name = 'GERMANY' and n2.n_name = 'FRANCE')
+            AND o_orderkey = l_orderkey
+            AND c_custkey = o_custkey
+            AND s_nationkey = n1.n_nationkey
+            AND c_nationkey = n2.n_nationkey
+            AND (
+                (n1.n_name = 'FRANCE' AND n2.n_name = 'GERMANY')
+                or (n1.n_name = 'GERMANY' AND n2.n_name = 'FRANCE')
             )
-            and l_shipdate between date '1995-01-01' and date '1996-12-31'
-    ) as shipping
-group by
+            AND l_shipdate BETWEEN DATE '1995-01-01' AND DATE '1996-12-31'
+    ) AS shipping
+GROUP BY
     supp_nation,
     cust_nation,
     l_year
-order by
+ORDER BY
     supp_nation,
     cust_nation,
-    l_year;
+    l_year
 ----
 Reduce {
   group_key: [8, 45, 48],
@@ -509,14 +508,14 @@ EXPLAIN PLAN FOR SELECT
     sum(case
         when nation = 'BRAZIL' then volume
         else 0
-    end) / sum(volume) as mkt_share
-from
+    end) / sum(volume) AS mkt_share
+FROM
     (
-        select
-            extract(year from o_orderdate) as o_year,
-            l_extendedprice * (1 - l_discount) as volume,
-            n2.n_name as nation
-        from
+        SELECT
+            extract(year FROM o_orderdate) AS o_year,
+            l_extendedprice * (1 - l_discount) AS volume,
+            n2.n_name AS nation
+        FROM
             part,
             supplier,
             lineitem,
@@ -525,22 +524,22 @@ from
             nation n1,
             nation n2,
             region
-        where
+        WHERE
             p_partkey = l_partkey
-            and s_suppkey = l_suppkey
-            and l_orderkey = o_orderkey
-            and o_custkey = c_custkey
-            and c_nationkey = n1.n_nationkey
-            and n1.n_regionkey = r_regionkey
-            and r_name = 'AMERICA'
-            and s_nationkey = n2.n_nationkey
-            and o_orderdate between date '1995-01-01' and date '1996-12-31'
-            and p_type = 'ECONOMY ANODIZED STEEL'
-    ) as all_nations
-group by
+            AND s_suppkey = l_suppkey
+            AND l_orderkey = o_orderkey
+            AND o_custkey = c_custkey
+            AND c_nationkey = n1.n_nationkey
+            AND n1.n_regionkey = r_regionkey
+            AND r_name = 'AMERICA'
+            AND s_nationkey = n2.n_nationkey
+            AND o_orderdate BETWEEN DATE '1995-01-01' AND DATE '1996-12-31'
+            AND p_type = 'ECONOMY ANODIZED STEEL'
+    ) AS all_nations
+GROUP BY
     o_year
-order by
-    o_year;
+ORDER BY
+    o_year
 ----
 Project {
   outputs: [0, 3],
@@ -593,35 +592,35 @@ query T multiline
 EXPLAIN PLAN FOR SELECT
     nation,
     o_year,
-    sum(amount) as sum_profit
-from
+    sum(amount) AS sum_profit
+FROM
     (
-        select
-            n_name as nation,
-            extract(year from o_orderdate) as o_year,
-            l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
-        from
+        SELECT
+            n_name AS nation,
+            extract(year FROM o_orderdate) AS o_year,
+            l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity AS amount
+        FROM
             part,
             supplier,
             lineitem,
             partsupp,
             orders,
             nation
-        where
+        WHERE
             s_suppkey = l_suppkey
-            and ps_suppkey = l_suppkey
-            and ps_partkey = l_partkey
-            and p_partkey = l_partkey
-            and o_orderkey = l_orderkey
-            and s_nationkey = n_nationkey
-            and p_name like 'green'
-    ) as profit
-group by
+            AND ps_suppkey = l_suppkey
+            AND ps_partkey = l_partkey
+            AND p_partkey = l_partkey
+            AND o_orderkey = l_orderkey
+            AND s_nationkey = n_nationkey
+            AND p_name like 'green'
+    ) AS profit
+GROUP BY
     nation,
     o_year
-order by
+ORDER BY
     nation,
-    o_year desc;
+    o_year DESC
 ----
 Reduce {
   group_key: [47, 50],
@@ -654,26 +653,26 @@ query T multiline
 EXPLAIN PLAN FOR SELECT
     c_custkey,
     c_name,
-    sum(l_extendedprice * (1 - l_discount)) as revenue,
+    sum(l_extendedprice * (1 - l_discount)) AS revenue,
     c_acctbal,
     n_name,
     c_address,
     c_phone,
     c_comment
-from
+FROM
     customer,
     orders,
     lineitem,
     nation
-where
+WHERE
     c_custkey = o_custkey
-    and l_orderkey = o_orderkey
-    and o_orderdate >= date '1993-10-01'
-    and o_orderdate < date '1994-01-01'
-    and o_orderdate < date '1993-10-01' + interval '3' month
-    and l_returnflag = 'R'
-    and c_nationkey = n_nationkey
-group by
+    AND l_orderkey = o_orderkey
+    AND o_orderdate >= DATE '1993-10-01'
+    AND o_orderdate < DATE '1994-01-01'
+    AND o_orderdate < DATE '1993-10-01' + INTERVAL '3' month
+    AND l_returnflag = 'R'
+    AND c_nationkey = n_nationkey
+GROUP BY
     c_custkey,
     c_name,
     c_acctbal,
@@ -681,8 +680,8 @@ group by
     n_name,
     c_address,
     c_comment
-order by
-    revenue desc;
+ORDER BY
+    revenue DESC
 ----
 Project {
   outputs: [0, 1, 7, 2, 4, 5, 3, 6],
@@ -715,31 +714,31 @@ query T multiline
 -- Query 11
 EXPLAIN PLAN FOR SELECT
     ps_partkey,
-    sum(ps_supplycost * ps_availqty) as value
-from
+    sum(ps_supplycost * ps_availqty) AS value
+FROM
     partsupp,
     supplier,
     nation
-where
+WHERE
     ps_suppkey = s_suppkey
-    and s_nationkey = n_nationkey
-    and n_name = 'GERMANY'
-group by
+    AND s_nationkey = n_nationkey
+    AND n_name = 'GERMANY'
+GROUP BY
     ps_partkey having
         sum(ps_supplycost * ps_availqty) > (
-            select
+            SELECT
                 sum(ps_supplycost * ps_availqty) * 0.0001
-            from
+            FROM
                 partsupp,
                 supplier,
                 nation
-            where
+            WHERE
                 ps_suppkey = s_suppkey
-                and s_nationkey = n_nationkey
-                and n_name = 'GERMANY'
+                AND s_nationkey = n_nationkey
+                AND n_name = 'GERMANY'
         )
-order by
-    value desc;
+ORDER BY
+    value DESC
 ----
 Let {
   l0 = Join {
@@ -782,27 +781,27 @@ EXPLAIN PLAN FOR SELECT
             or o_orderpriority = '2-HIGH'
             then 1
         else 0
-    end) as high_line_count,
+    end) AS high_line_count,
     sum(case
         when o_orderpriority <> '1-URGENT'
-            and o_orderpriority <> '2-HIGH'
+            AND o_orderpriority <> '2-HIGH'
             then 1
         else 0
-    end) as low_line_count
-from
+    end) AS low_line_count
+FROM
     orders,
     lineitem
-where
+WHERE
     o_orderkey = l_orderkey
-    and l_shipmode in ('MAIL', 'SHIP')
-    and l_commitdate < l_receiptdate
-    and l_shipdate < l_commitdate
-    and l_receiptdate >= date '1994-01-01'
-    and l_receiptdate < date '1994-01-01' + interval '1' year
-group by
+    AND l_shipmode IN ('MAIL', 'SHIP')
+    AND l_commitdate < l_receiptdate
+    AND l_shipdate < l_commitdate
+    AND l_receiptdate >= DATE '1994-01-01'
+    AND l_receiptdate < DATE '1994-01-01' + INTERVAL '1' year
+GROUP BY
     l_shipmode
-order by
-    l_shipmode;
+ORDER BY
+    l_shipmode
 ----
 Reduce {
   group_key: [23],
@@ -831,24 +830,24 @@ query T multiline
 -- Query 13
 EXPLAIN PLAN FOR SELECT
     c_count,
-    count(*) as custdist
-from
+    count(*) AS custdist
+FROM
     (
-        select
+        SELECT
             c_custkey,
             count(o_orderkey) c_count -- workaround for no column aliases
-        from
-            customer left outer join orders on
+        FROM
+            customer LEFT OUTER JOIN orders ON
                 c_custkey = o_custkey
-                and o_comment not like '%special%requests%'
-        group by
+                AND o_comment NOT LIKE '%special%requests%'
+        GROUP BY
             c_custkey
-    ) as c_orders -- (c_custkey, c_count) -- no column aliases yet
-group by
+    ) AS c_orders -- (c_custkey, c_count) -- no column aliases yet
+GROUP BY
     c_count
-order by
-    custdist desc,
-    c_count desc;
+ORDER BY
+    custdist DESC,
+    c_count DESC
 ----
 Let {
   l0 = Join {
@@ -897,14 +896,14 @@ EXPLAIN PLAN FOR SELECT
         when p_type like 'PROMO%'
             then l_extendedprice * (1 - l_discount)
         else 0
-    end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
-from
+    end) / sum(l_extendedprice * (1 - l_discount)) AS promo_revenue
+FROM
     lineitem,
     part
-where
+WHERE
     l_partkey = p_partkey
-    and l_shipdate >= date '1996-01-01'
-    and l_shipdate < date '1996-01-01' + interval '1' month
+    AND l_shipdate >= DATE '1996-01-01'
+    AND l_shipdate < DATE '1996-01-01' + INTERVAL '1' month
 ----
 Let {
   l0 = Reduce {
@@ -946,17 +945,17 @@ Project {
 
 statement ok
 create view revenue (supplier_no, total_revenue) as
-    select
+    SELECT
         l_suppkey,
         sum(l_extendedprice * (1 - l_discount))
-    from
+    FROM
         lineitem
-    where
-        l_shipdate >= date '1996-01-01'
-        and l_shipdate < date '1996-04-01'
-        and l_shipdate < date '1996-01-01' + interval '3' month
-    group by
-        l_suppkey;
+    WHERE
+        l_shipdate >= DATE '1996-01-01'
+        AND l_shipdate < DATE '1996-04-01'
+        AND l_shipdate < DATE '1996-01-01' + INTERVAL '3' month
+    GROUP BY
+        l_suppkey
 
 query T multiline
 -- Query 15
@@ -966,19 +965,19 @@ EXPLAIN PLAN FOR SELECT
     s_address,
     s_phone,
     total_revenue
-from
+FROM
     supplier,
     revenue
-where
+WHERE
     s_suppkey = supplier_no
-    and total_revenue = (
-        select
+    AND total_revenue = (
+        SELECT
             max(total_revenue)
-        from
+        FROM
             revenue
     )
-order by
-    s_suppkey;
+ORDER BY
+    s_suppkey
 ----
 Project {
   outputs: [0 .. 2, 4, 8],
@@ -998,7 +997,7 @@ Project {
 }
 
 statement ok
-drop view revenue;
+drop view revenue
 
 
 query T multiline
@@ -1007,32 +1006,32 @@ EXPLAIN PLAN FOR SELECT
     p_brand,
     p_type,
     p_size,
-    count(distinct ps_suppkey) as supplier_cnt
-from
+    count(DISTINCT ps_suppkey) AS supplier_cnt
+FROM
     partsupp,
     part
-where
+WHERE
     p_partkey = ps_partkey
-    and p_brand <> 'Brand#45'
-    and p_type not like 'MEDIUM POLISHED%'
-    and p_size in (49, 14, 23, 45, 19, 3, 36, 9)
-    and ps_suppkey not in (
-        select
+    AND p_brand <> 'Brand#45'
+    AND p_type NOT LIKE 'MEDIUM POLISHED%'
+    AND p_size IN (49, 14, 23, 45, 19, 3, 36, 9)
+    AND ps_suppkey NOT IN (
+        SELECT
             s_suppkey
-        from
+        FROM
             supplier
-        where
+        WHERE
             s_comment like '%Customer%Complaints%'
     )
-group by
+GROUP BY
     p_brand,
     p_type,
     p_size
-order by
-    supplier_cnt desc,
+ORDER BY
+    supplier_cnt DESC,
     p_brand,
     p_type,
-    p_size;
+    p_size
 ----
 Let {
   l0 = Join {
@@ -1100,22 +1099,22 @@ Reduce {
 query T multiline
 -- Query 17
 EXPLAIN PLAN FOR SELECT
-  sum(l_extendedprice) / 7.0 as avg_yearly
-from
+  sum(l_extendedprice) / 7.0 AS avg_yearly
+FROM
   lineitem,
   part
-where
+WHERE
   p_partkey = l_partkey
-  and p_brand = 'Brand#23'
-  and p_container = 'MED BOX'
-  and l_quantity < (
-    select
+  AND p_brand = 'Brand#23'
+  AND p_container = 'MED BOX'
+  AND l_quantity < (
+    SELECT
       0.2 * avg(l_quantity)
-    from
+    FROM
       lineitem
-    where
+    WHERE
       l_partkey = p_partkey
-  );
+  )
 ----
 Let {
   l1 = Join {
@@ -1183,31 +1182,31 @@ EXPLAIN PLAN FOR SELECT
     o_orderdate,
     o_totalprice,
     sum(l_quantity)
-from
+FROM
     customer,
     orders,
     lineitem
-where
-    o_orderkey in (
-        select
+WHERE
+    o_orderkey IN (
+        SELECT
             l_orderkey
-        from
+        FROM
             lineitem
-        group by
+        GROUP BY
             l_orderkey having
                 sum(l_quantity) > 300
     )
-    and c_custkey = o_custkey
-    and o_orderkey = l_orderkey
-group by
+    AND c_custkey = o_custkey
+    AND o_orderkey = l_orderkey
+GROUP BY
     c_name,
     c_custkey,
     o_orderkey,
     o_orderdate,
     o_totalprice
-order by
-    o_totalprice desc,
-    o_orderdate;
+ORDER BY
+    o_totalprice DESC,
+    o_orderdate
 ----
 Let {
   l0 = Join {
@@ -1246,40 +1245,40 @@ Reduce {
 query T multiline
 -- Query 19
 EXPLAIN PLAN FOR SELECT
-    sum(l_extendedprice* (1 - l_discount)) as revenue
-from
+    sum(l_extendedprice* (1 - l_discount)) AS revenue
+FROM
     lineitem,
     part
-where
+WHERE
     (
         p_partkey = l_partkey
-        and p_brand = 'Brand#12'
-        and p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
-        and l_quantity >= cast(1 as smallint) and l_quantity <= cast(1 + 10 as smallint)
-        and p_size between cast(1 as smallint) and cast(5 as smallint)
-        and l_shipmode in ('AIR', 'AIR REG')
-        and l_shipinstruct = 'DELIVER IN PERSON'
+        AND p_brand = 'Brand#12'
+        AND p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+        AND l_quantity >= CAST (1 AS smallint) AND l_quantity <= CAST (1 + 10 AS smallint)
+        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (5 AS smallint)
+        AND l_shipmode IN ('AIR', 'AIR REG')
+        AND l_shipinstruct = 'DELIVER IN PERSON'
     )
     or
     (
         p_partkey = l_partkey
-        and p_brand = 'Brand#23'
-        and p_container in ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
-        and l_quantity >= cast(10 as smallint) and l_quantity <= cast(10 + 10 as smallint)
-        and p_size between cast(1 as smallint) and cast(10 as smallint)
-        and l_shipmode in ('AIR', 'AIR REG')
-        and l_shipinstruct = 'DELIVER IN PERSON'
+        AND p_brand = 'Brand#23'
+        AND p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
+        AND l_quantity >= CAST (10 AS smallint) AND l_quantity <= CAST (10 + 10 AS smallint)
+        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (10 AS smallint)
+        AND l_shipmode IN ('AIR', 'AIR REG')
+        AND l_shipinstruct = 'DELIVER IN PERSON'
     )
     or
     (
         p_partkey = l_partkey
-        and p_brand = 'Brand#34'
-        and p_container in ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
-        and l_quantity >= cast(20 as smallint) and l_quantity <= cast(20 + 10 as smallint)
-        and p_size between cast(1 as smallint) and cast(15 as smallint)
-        and l_shipmode in ('AIR', 'AIR REG')
-        and l_shipinstruct = 'DELIVER IN PERSON'
-    );
+        AND p_brand = 'Brand#34'
+        AND p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
+        AND l_quantity >= CAST (20 AS smallint) AND l_quantity <= CAST (20 + 10 AS smallint)
+        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (15 AS smallint)
+        AND l_shipmode IN ('AIR', 'AIR REG')
+        AND l_shipinstruct = 'DELIVER IN PERSON'
+    )
 ----
 Let {
   l0 = Reduce {
@@ -1398,40 +1397,40 @@ query T multiline
 EXPLAIN PLAN FOR SELECT
     s_name,
     s_address
-from
+FROM
     supplier,
     nation
-where
-    s_suppkey in (
-        select
+WHERE
+    s_suppkey IN (
+        SELECT
             ps_suppkey
-        from
+        FROM
             partsupp
-        where
-            ps_partkey in (
-                select
+        WHERE
+            ps_partkey IN (
+                SELECT
                     p_partkey
-                from
+                FROM
                     part
-                where
+                WHERE
                     p_name like 'forest%'
             )
-            and ps_availqty > (
-                select
+            AND ps_availqty > (
+                SELECT
                     0.5 * sum(l_quantity)
-                from
+                FROM
                     lineitem
-                where
+                WHERE
                     l_partkey = ps_partkey
-                    and l_suppkey = ps_suppkey
-                    and l_shipdate >= date '1995-01-01'
-                    and l_shipdate < date '1995-01-01' + interval '1' year
+                    AND l_suppkey = ps_suppkey
+                    AND l_shipdate >= DATE '1995-01-01'
+                    AND l_shipdate < DATE '1995-01-01' + INTERVAL '1' year
             )
     )
-    and s_nationkey = n_nationkey
-    and n_name = 'CANADA'
-order by
-    s_name;
+    AND s_nationkey = n_nationkey
+    AND n_name = 'CANADA'
+ORDER BY
+    s_name
 ----
 Let {
   l0 = Join {
@@ -1504,43 +1503,43 @@ query T multiline
 -- Query 21
 EXPLAIN PLAN FOR SELECT
     s_name,
-    count(*) as numwait
-from
+    count(*) AS numwait
+FROM
     supplier,
     lineitem l1,
     orders,
     nation
-where
+WHERE
     s_suppkey = l1.l_suppkey
-    and o_orderkey = l1.l_orderkey
-    and o_orderstatus = 'F'
-    and l1.l_receiptdate > l1.l_commitdate
-    and exists (
-        select
+    AND o_orderkey = l1.l_orderkey
+    AND o_orderstatus = 'F'
+    AND l1.l_receiptdate > l1.l_commitdate
+    AND EXISTS (
+        SELECT
             *
-        from
+        FROM
             lineitem l2
-        where
+        WHERE
             l2.l_orderkey = l1.l_orderkey
-            and l2.l_suppkey <> l1.l_suppkey
+            AND l2.l_suppkey <> l1.l_suppkey
     )
-    and not exists (
-        select
+    AND not EXISTS (
+        SELECT
             *
-        from
+        FROM
             lineitem l3
-        where
+        WHERE
             l3.l_orderkey = l1.l_orderkey
-            and l3.l_suppkey <> l1.l_suppkey
-            and l3.l_receiptdate > l3.l_commitdate
+            AND l3.l_suppkey <> l1.l_suppkey
+            AND l3.l_receiptdate > l3.l_commitdate
     )
-    and s_nationkey = n_nationkey
-    and n_name = 'SAUDI ARABIA'
-group by
+    AND s_nationkey = n_nationkey
+    AND n_name = 'SAUDI ARABIA'
+GROUP BY
     s_name
-order by
-    numwait desc,
-    s_name;
+ORDER BY
+    numwait DESC,
+    s_name
 ----
 Let {
   l1 = Join {
@@ -1656,7 +1655,7 @@ FROM
 GROUP BY
     cntrycode
 ORDER BY
-    cntrycode;
+    cntrycode
 ----
 Let {
   l0 = Filter {
