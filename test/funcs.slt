@@ -106,3 +106,24 @@ query RRRRR
 SELECT ceil(1.1), ceil(1.111), ceil(100.1), ceil(100.11), ceil(-4.1)
 ----
 2.0 2.000 101.0 101.00 -4.0
+
+# postgres converts ints to floats on floor/ceil
+query R
+SELECT floor(1)
+----
+1
+
+query R
+SELECT floor(1)
+----
+1
+
+query R
+SELECT floor(cast(1 AS bigint))
+----
+1
+
+query R
+SELECT ceil(cast(1 AS bigint))
+----
+1
