@@ -22,7 +22,6 @@ members = [
 debug = true
 
 [patch.crates-io]
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git" }
 avro-rs = { git = "ssh://git@github.com/MaterializeInc/avro-rs.git" }
 futures = { git = "ssh://git@github.com/MaterializeInc/futures-rs.git", branch = "0.1" }
 
