@@ -27,10 +27,10 @@ INSERT INTO t VALUES (1, 99), (2, 98), (3, 97)
 statement ok
 CREATE VIEW v1 AS SELECT a, b FROM t
 
-statement error pgcode 42P07 relation \"v1\" already exists
+statement error pgcode 42P07 relation "v1" already exists
 CREATE VIEW v1 AS SELECT a, b FROM t
 
-statement error pgcode 42P07 relation \"t\" already exists
+statement error pgcode 42P07 relation "t" already exists
 CREATE VIEW t AS SELECT a, b FROM t
 
 statement ok
