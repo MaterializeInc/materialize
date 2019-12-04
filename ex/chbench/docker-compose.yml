@@ -13,6 +13,7 @@ x-port-mappings:
   mysql: &mysql 3306:3306
   kafka-control-center: &control-center 9021:9021
   grafana: &grafana 3000:3000
+  metabase: &metabase 3030:3000
   prometheus: &prometheus 9090:9090
   pushgateway: &pushgateway 9091:9091
 
@@ -136,6 +137,13 @@ services:
   inspect:
     image: ubuntu:bionic
     command: "true"
+
+  # Metabase
+  metabase:
+    image: materialize/metabase:mz-2019-12-04
+    depends_on: [materialized]
+    ports:
+      - *metabase
 
   # All the metrics containers
   #
