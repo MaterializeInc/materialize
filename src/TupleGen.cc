@@ -107,7 +107,7 @@ void TupleGen::genCustomer(int& cId, int& dId, int& wId,
     else
         DataSource::randomCLast(cLast);
 
-    std::string cState = DataSource::randomAlphanumeric62(2);
+    std::string cState = DataSource::randomState();
 
     customerStream << cId << csvDelim;                        // C_ID
     customerStream << dId << csvDelim;                        // C_D_ID

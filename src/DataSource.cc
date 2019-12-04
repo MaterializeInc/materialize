@@ -24,6 +24,7 @@ limitations under the License.
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <assert.h>
 
 const Nation DataSource::nations[] = {
     {48, "ALGERIA", 0},     {49, "ARGENTINA", 1},      {50, "BRAZIL", 1},
@@ -50,6 +51,59 @@ const Nation DataSource::nations[] = {
     {115, "CAMBODIA", 2},   {116, "BELGIUM", 3},       {117, "GREECE", 3},
     {118, "PORTUGAL", 3},   {119, "ISRAEL", 4},        {120, "FINLAND", 3},
     {121, "SINGAPORE", 2},  {122, "NORWAY", 3}};
+
+static const std::vector<const char*> states = {
+    "AL",
+    "AK",
+    "AZ",
+    "AR",
+    "CA",
+    "CO",
+    "CT",
+    "DE",
+    "FL",
+    "GA",
+    "HI",
+    "ID",
+    "IL",
+    "IN",
+    "IA",
+    "KS",
+    "KY",
+    "LA",
+    "ME",
+    "MD",
+    "MA",
+    "MI",
+    "MN",
+    "MS",
+    "MO",
+    "MT",
+    "NE",
+    "NV",
+    "NH",
+    "NJ",
+    "NM",
+    "NY",
+    "NC",
+    "ND",
+    "OH",
+    "OK",
+    "OR",
+    "PA",
+    "RI",
+    "SC",
+    "SD",
+    "TN",
+    "TX",
+    "UT",
+    "VT",
+    "VA",
+    "WA",
+    "WV",
+    "WI",
+    "WY",
+};
 
 const char* DataSource::regions[] = {"AFRICA", "AMERICA", "ASIA", "EUROPE",
                                      "MIDDLE EAST"};
@@ -405,19 +459,6 @@ std::string DataSource::getCurrentTimeString() {
     return std::string(buffer);
 }
 
-std::string DataSource::randomAlphanumeric62(int length) {
-    std::string s;
-    int rand;
-    for (int i = 0; i < length; i++) {
-        rand = 0;
-        while (rand == 0 || (rand > '9' && rand < 'A') ||
-               (rand > 'Z' && rand < 'a'))
-            rand = chRandom::uniformInt('0', 'z');
-        s += (char)rand;
-    }
-    return s;
-}
-
 std::string DataSource::strLeadingZero(int i, int zeros) {
     std::stringstream ss;
     ss << std::setw(zeros) << std::setfill('0') << i;
@@ -427,3 +468,8 @@ std::string DataSource::strLeadingZero(int i, int zeros) {
 Nation DataSource::getNation(int i) { return nations[i]; }
 
 const char* DataSource::getRegion(int i) { return regions[i]; }
+
+std::string DataSource::randomState() {
+    assert(states.size() > 0);
+    return states.at(chRandom::uniformInt(0, states.size() - 1));
+}

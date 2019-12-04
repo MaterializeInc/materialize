@@ -60,7 +60,6 @@ class DataSource {
     static void genCLast(int value, std::string& ret);
     static void randomCLast(std::string& ret);
     static void getRemoteWId(int& currentWId, int& ret);
-    static int nextOrderlineCount();
     static void addNumeric(int length, std::ofstream& stream, bool delimiter);
     static void addAlphanumeric62(int length, std::ofstream& stream,
                                   bool delimiter);
@@ -84,10 +83,11 @@ class DataSource {
     static void addWDCZip(std::ofstream& stream, bool delimiter);
     static void addSuPhone(int& suId, std::ofstream& stream, bool delimiter);
     static std::string getCurrentTimeString();
-    static std::string randomAlphanumeric62(int length);
     static std::string strLeadingZero(int i, int zeros);
     static Nation getNation(int i);
     static const char* getRegion(int i);
+
+    static std::string randomState();
 };
 
 #endif
