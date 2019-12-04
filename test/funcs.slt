@@ -75,3 +75,34 @@ query T
 SELECT date_trunc('millennium', TIMESTAMP '2019-11-26 15:56:46.241150')
 ----
 2001-01-01 00:00:00
+
+query R
+SELECT floor(cast(1.1 AS DOUBLE PRECISION))
+----
+1
+
+query R
+SELECT floor(cast(1.1 AS float))
+----
+1
+
+query RRRRR
+SELECT floor(1.1), floor(1.111), floor(100.1), floor(100.11), floor(-4.1)
+----
+1.0 1.000 100.0 100.00 -5.0
+
+
+query R
+SELECT ceil(cast(1.1 AS DOUBLE PRECISION))
+----
+2
+
+query R
+SELECT ceil(cast(1.1 AS float))
+----
+2
+
+query RRRRR
+SELECT ceil(1.1), ceil(1.111), ceil(100.1), ceil(100.11), ceil(-4.1)
+----
+2.0 2.000 101.0 101.00 -4.0

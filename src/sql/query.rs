@@ -1412,6 +1412,34 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "ceil" => {
+                if sql_func.args.len() != 1 {
+                    bail!("ceil expects 1 argument, got {}", sql_func.args.len());
+                }
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
+                let typ = ecx.column_type(&expr);
+                let expr = match typ.scalar_type {
+                    ScalarType::Float32 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::CeilFloat32,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Float64 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::CeilFloat64,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Decimal(_, scale) => ScalarExpr::CallBinary {
+                        func: BinaryFunc::CeilDecimal,
+                        expr1: Box::new(expr),
+                        expr2: Box::new(ScalarExpr::literal(
+                            Datum::from(scale as i32),
+                            ColumnType::new(ScalarType::Null), // ignored
+                        )),
+                    },
+                    _ => bail!("ceil only accepts decimals and floats, not type {:?}", typ),
+                };
+                Ok(expr)
+            }
+
             "coalesce" => {
                 if sql_func.args.is_empty() {
                     bail!("coalesce requires at least one argument");
@@ -1433,6 +1461,34 @@ fn plan_function<'a>(
                 Row::pack(&[Datum::TimestampTz(ecx.qcx.current_timestamp)]),
                 ColumnType::new(ScalarType::TimestampTz),
             )),
+
+            "floor" => {
+                if sql_func.args.len() != 1 {
+                    bail!("floor expects 1 argument, got {}", sql_func.args.len());
+                }
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
+                let typ = ecx.column_type(&expr);
+                let expr = match typ.scalar_type {
+                    ScalarType::Float32 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::FloorFloat32,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Float64 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::FloorFloat64,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Decimal(_, scale) => ScalarExpr::CallBinary {
+                        func: BinaryFunc::FloorDecimal,
+                        expr1: Box::new(expr),
+                        expr2: Box::new(ScalarExpr::literal(
+                            Datum::from(scale as i32),
+                            ColumnType::new(ScalarType::Null), // ignored
+                        )),
+                    },
+                    _ => bail!("floor only accepts decimals and floats, not type {:?}", typ),
+                };
+                Ok(expr)
+            }
 
             "mod" => {
                 if sql_func.args.len() != 2 {
@@ -2501,13 +2557,13 @@ where
         (Decimal(_, s), Float32) => {
             let factor = 10_f32.powi(i32::from(s));
             let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
-            expr.call_unary(CastDecimalToFloat32)
+            expr.call_unary(CastSignificandToFloat32)
                 .call_binary(factor, BinaryFunc::DivFloat32)
         }
         (Decimal(_, s), Float64) => {
             let factor = 10_f64.powi(i32::from(s));
             let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
-            expr.call_unary(CastDecimalToFloat64)
+            expr.call_unary(CastSignificandToFloat64)
                 .call_binary(factor, BinaryFunc::DivFloat64)
         }
         (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, s1, s2),

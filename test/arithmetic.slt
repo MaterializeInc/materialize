@@ -273,17 +273,17 @@ select 1 / cast(0.0 AS float);
 NULL
 
 query I
-select 1 + cast('5' AS double);
+select 1 + cast('5' AS DOUBLE PRECISION);
 ----
 6
 
 query II
-select cast('+Inf' AS DOUBLE), cast('inf' AS DOUBLE PRECISION);
+select cast('+Inf' AS DOUBLE PRECISION), cast('inf' AS DOUBLE PRECISION);
 ----
 inf inf
 
 query T
-select cast(cast(1.1 as double) AS TEXT)
+select cast(cast(1.1 AS DOUBLE PRECISION) AS TEXT)
 ----
 1.1
 

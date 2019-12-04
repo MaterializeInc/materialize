@@ -298,6 +298,58 @@ impl Decimal {
     pub fn scale(&self) -> u8 {
         self.scale
     }
+
+    /// Floor a decimal number
+    ///
+    /// ```
+    /// use repr::decimal::Decimal;
+    ///
+    /// let d: Decimal = "100.11".parse().unwrap();
+    /// assert_eq!(&d.floor().to_string(), "100.00");
+    ///
+    /// let d: Decimal = "99.0".parse().unwrap();
+    /// assert_eq!(&d.floor().to_string(), "99.0");
+    ///
+    /// let nd: Decimal = "-40.1".parse().unwrap();
+    /// assert_eq!(nd.floor().to_string(), "-41.0");
+    /// ```
+    pub fn floor(&self) -> Decimal {
+        let factor = 10_i128.pow(self.scale as u32);
+        let int = self.significand / factor;
+        let frac = self.significand % factor;
+        let sub = if int < 0 && frac != 0 { 1 } else { 0 };
+
+        Decimal {
+            significand: (int - sub) * factor,
+            scale: self.scale,
+        }
+    }
+
+    /// Ceil a decimal number
+    ///
+    /// ```
+    /// use repr::decimal::Decimal;
+    ///
+    /// let d: Decimal = "100.11".parse().unwrap();
+    /// assert_eq!(&d.ceil().to_string(), "101.00");
+    ///
+    /// let d: Decimal = "99.0".parse().unwrap();
+    /// assert_eq!(&d.ceil().to_string(), "99.0");
+    ///
+    /// let nd: Decimal = "-40.1".parse().unwrap();
+    /// assert_eq!(nd.ceil().to_string(), "-40.0")
+    /// ```
+    pub fn ceil(&self) -> Decimal {
+        let factor = 10_i128.pow(self.scale as u32);
+        let int = self.significand / factor;
+        let frac = self.significand % factor;
+        let add = if int > 0 && frac != 0 { 1 } else { 0 };
+
+        Decimal {
+            significand: (add + int) * factor,
+            scale: self.scale,
+        }
+    }
 }
 
 impl FromStr for Decimal {
@@ -308,12 +360,20 @@ impl FromStr for Decimal {
         let mut precision = 0;
         let mut scale = 0;
         let mut seen_decimal = false;
+        let mut negative = false;
         for c in s.chars() {
             if c == '.' {
                 if seen_decimal {
                     bail!("more than one decimal point in numeric literal: {}", s)
                 }
                 seen_decimal = true;
+                continue;
+            }
+            if c == '-' {
+                if negative {
+                    bail!("negative multiple times in decimal!: {}", s);
+                }
+                negative = true;
                 continue;
             }
 
@@ -331,6 +391,9 @@ impl FromStr for Decimal {
             significand = significand
                 .checked_add(i128::from(digit))
                 .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+        }
+        if negative {
+            significand *= -1;
         }
         if precision > MAX_DECIMAL_PRECISION {
             bail!("numeric literal exceeds maximum precision: {}", s);
@@ -386,6 +449,19 @@ impl fmt::Display for Decimal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_decimal() {
+        let pos = Significand::new(12345).with_scale(2);
+        let parsed: Decimal = "123.45".parse().unwrap();
+        assert_eq!(pos.significand(), parsed.significand());
+        assert_eq!(pos.scale(), parsed.scale());
+
+        let pos = Significand::new(-12345).with_scale(2);
+        let parsed: Decimal = "-123.45".parse().unwrap();
+        assert_eq!(pos.significand(), parsed.significand());
+        assert_eq!(pos.scale(), parsed.scale());
+    }
 
     #[test]
     fn test_format_decimal() {
