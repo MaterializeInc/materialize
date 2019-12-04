@@ -230,16 +230,14 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => RelationDesc::empty()
                 .add_column("name", ScalarType::String)
                 .add_column("column", ScalarType::Int64)
-                .add_column("key_group", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .add_column("key_group", ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => RelationDesc::empty()
                 .add_column("child_name", ScalarType::String)
                 .add_column("child_column", ScalarType::Int64)
                 .add_column("parent_name", ScalarType::String)
                 .add_column("parent_column", ScalarType::Int64)
-                .add_column("key_group", ScalarType::Int64)
-                .add_keys(vec![0, 1, 2, 3]),
+                .add_column("key_group", ScalarType::Int64),
         }
     }
 
