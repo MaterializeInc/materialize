@@ -201,6 +201,10 @@ where
                     broadcast(
                         &mut coord.broadcast_tx,
                         SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
+                            coord
+                                .catalog
+                                .humanize_id(expr::Id::Global(log.id()))
+                                .unwrap_or("NO_NAME".to_string()),
                             log.id(),
                             key.clone(),
                             index,
@@ -211,8 +215,15 @@ where
                     broadcast(
                         &mut coord.broadcast_tx,
                         SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
+                            coord
+                                .catalog
+                                .humanize_id(expr::Id::Global(log.id()))
+                                .unwrap_or("NO_NAME".to_string()),
                             log.id(),
-                            parent,
+                            coord
+                                .catalog
+                                .humanize_id(expr::Id::Global(parent))
+                                .unwrap_or("NO_NAME".to_string()),
                             pairs,
                             index,
                         )),
