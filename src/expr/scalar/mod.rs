@@ -11,7 +11,7 @@ use repr::regex::Regex;
 use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 use serde::{Deserialize, Serialize};
 
-use self::func::{BinaryFunc, UnaryFunc, VariadicFunc};
+use self::func::{BinaryFunc, DateTruncTo, UnaryFunc, VariadicFunc};
 use crate::pretty::DocBuilderExt;
 
 pub mod func;
@@ -240,6 +240,7 @@ impl ScalarExpr {
     /// assert_eq!(test, expr_t);
     /// ```
     pub fn reduce(&mut self) {
+        let null = || ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null));
         let empty = RelationType::new(vec![]);
         let eval = |e: &ScalarExpr| ScalarExpr::literal(e.eval(&[]), e.typ(&empty));
         self.visit_mut(&mut |e| match e {
@@ -255,21 +256,28 @@ impl ScalarExpr {
                 } else if *func == BinaryFunc::MatchRegex && expr2.is_literal() {
                     // we can at least precompile the regex
                     *e = match expr2.eval(&[]) {
-                        Datum::Null => {
-                            ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null))
-                        }
+                        Datum::Null => null(),
                         Datum::String(string) => {
                             match func::build_like_regex_from_string(&string) {
                                 Ok(regex) => ScalarExpr::MatchCachedRegex {
                                     expr: Box::new(expr1.take()),
                                     regex: Regex(regex),
                                 },
-                                Err(_) => ScalarExpr::literal(
-                                    Datum::Null,
-                                    ColumnType::new(ScalarType::Null),
-                                ),
+                                Err(_) => null(),
                             }
                         }
+                        _ => unreachable!(),
+                    }
+                } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
+                    *e = match expr1.eval(&[]) {
+                        Datum::Null => null(),
+                        Datum::String(s) => match s.parse::<DateTruncTo>() {
+                            Ok(to) => ScalarExpr::CallUnary {
+                                func: UnaryFunc::DateTrunc(to),
+                                expr: Box::new(expr2.take()),
+                            },
+                            Err(_) => null(),
+                        },
                         _ => unreachable!(),
                     }
                 } else if *func == BinaryFunc::And && (expr1.is_literal() || expr2.is_literal()) {

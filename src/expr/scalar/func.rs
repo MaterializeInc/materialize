@@ -8,6 +8,7 @@ use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
 use std::fmt::Write;
+use std::str::FromStr;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
@@ -712,113 +713,161 @@ pub fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let precision_field = a.unwrap_str();
-    let source_timestamp = b.unwrap_timestamp();
-
-    match precision_field {
-        "microseconds" => {
-            let time = NaiveTime::from_hms_micro(
-                source_timestamp.hour(),
-                source_timestamp.minute(),
-                source_timestamp.second(),
-                source_timestamp.nanosecond() / 1_000,
-            );
-            Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
-        }
-        "milliseconds" => {
-            let time = NaiveTime::from_hms_milli(
-                source_timestamp.hour(),
-                source_timestamp.minute(),
-                source_timestamp.second(),
-                source_timestamp.nanosecond() / 1_000_000,
-            );
-            Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
-        }
-        "second" => Datum::Timestamp(NaiveDateTime::new(
-            source_timestamp.date(),
-            NaiveTime::from_hms(
-                source_timestamp.hour(),
-                source_timestamp.minute(),
-                source_timestamp.second(),
-            ),
-        )),
-        "minute" => Datum::Timestamp(NaiveDateTime::new(
-            source_timestamp.date(),
-            NaiveTime::from_hms(source_timestamp.hour(), source_timestamp.minute(), 0),
-        )),
-        "hour" => Datum::Timestamp(NaiveDateTime::new(
-            source_timestamp.date(),
-            NaiveTime::from_hms(source_timestamp.hour(), 0, 0),
-        )),
-        "day" => Datum::Timestamp(NaiveDateTime::new(
-            source_timestamp.date(),
-            NaiveTime::from_hms(0, 0, 0),
-        )),
-        "week" => {
-            let num_days_from_monday = source_timestamp.date().weekday().num_days_from_monday();
-            Datum::Timestamp(NaiveDateTime::new(
-                NaiveDate::from_ymd(
-                    source_timestamp.year(),
-                    source_timestamp.month(),
-                    source_timestamp.day() - num_days_from_monday,
-                ),
-                NaiveTime::from_hms(0, 0, 0),
-            ))
-        }
-        "month" => Datum::Timestamp(NaiveDateTime::new(
-            NaiveDate::from_ymd(source_timestamp.year(), source_timestamp.month(), 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )),
-        "quarter" => {
-            let month = source_timestamp.month();
-            let quarter = if month <= 3 {
-                1
-            } else if month <= 6 {
-                4
-            } else if month <= 9 {
-                7
-            } else {
-                10
-            };
-
-            Datum::Timestamp(NaiveDateTime::new(
-                NaiveDate::from_ymd(source_timestamp.year(), quarter, 1),
-                NaiveTime::from_hms(0, 0, 0),
-            ))
-        }
-        "year" => Datum::Timestamp(NaiveDateTime::new(
-            NaiveDate::from_ymd(source_timestamp.year(), 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )),
-        "decade" => Datum::Timestamp(NaiveDateTime::new(
-            NaiveDate::from_ymd(
-                source_timestamp.year() - (source_timestamp.year() % 10),
-                1,
-                1,
-            ),
-            NaiveTime::from_hms(0, 0, 0),
-        )),
-        "century" => {
-            // Expects the first year of the century, meaning 2001 instead of 2000.
-            let century = source_timestamp.year() - ((source_timestamp.year() % 100) - 1);
-            Datum::Timestamp(NaiveDateTime::new(
-                NaiveDate::from_ymd(century, 1, 1),
-                NaiveTime::from_hms(0, 0, 0),
-            ))
-        }
-        "millennium" => {
-            // Expects the first year of the millennium, meaning 2001 instead of 2000.
-            let millennium = source_timestamp.year() - ((source_timestamp.year() % 1000) - 1);
-            Datum::Timestamp(NaiveDateTime::new(
-                NaiveDate::from_ymd(millennium, 1, 1),
-                NaiveTime::from_hms(0, 0, 0),
-            ))
-        }
-        _ => {
-            // TODO: return an error when we support that
-            Datum::Null
-        }
+    match a.unwrap_str().parse::<DateTruncTo>() {
+        Ok(DateTruncTo::Micros) => date_trunc_microseconds(b),
+        Ok(DateTruncTo::Millis) => date_trunc_milliseconds(b),
+        Ok(DateTruncTo::Second) => date_trunc_second(b),
+        Ok(DateTruncTo::Minute) => date_trunc_minute(b),
+        Ok(DateTruncTo::Hour) => date_trunc_hour(b),
+        Ok(DateTruncTo::Day) => date_trunc_day(b),
+        Ok(DateTruncTo::Week) => date_trunc_week(b),
+        Ok(DateTruncTo::Month) => date_trunc_month(b),
+        Ok(DateTruncTo::Quarter) => date_trunc_quarter(b),
+        Ok(DateTruncTo::Year) => date_trunc_year(b),
+        Ok(DateTruncTo::Decade) => date_trunc_decade(b),
+        Ok(DateTruncTo::Century) => date_trunc_century(b),
+        Ok(DateTruncTo::Millennium) => date_trunc_millennium(b),
+        // TODO: return an error when we support that.
+        _ => Datum::Null,
     }
+}
+
+fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    let time = NaiveTime::from_hms_micro(
+        source_timestamp.hour(),
+        source_timestamp.minute(),
+        source_timestamp.second(),
+        source_timestamp.nanosecond() / 1_000,
+    );
+    Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+}
+
+fn date_trunc_milliseconds<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    let time = NaiveTime::from_hms_milli(
+        source_timestamp.hour(),
+        source_timestamp.minute(),
+        source_timestamp.second(),
+        source_timestamp.nanosecond() / 1_000_000,
+    );
+    Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+}
+
+fn date_trunc_second<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    Datum::Timestamp(NaiveDateTime::new(
+        source_timestamp.date(),
+        NaiveTime::from_hms(
+            source_timestamp.hour(),
+            source_timestamp.minute(),
+            source_timestamp.second(),
+        ),
+    ))
+}
+
+fn date_trunc_minute<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    Datum::Timestamp(NaiveDateTime::new(
+        source_timestamp.date(),
+        NaiveTime::from_hms(source_timestamp.hour(), source_timestamp.minute(), 0),
+    ))
+}
+
+fn date_trunc_hour<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    Datum::Timestamp(NaiveDateTime::new(
+        source_timestamp.date(),
+        NaiveTime::from_hms(source_timestamp.hour(), 0, 0),
+    ))
+}
+
+fn date_trunc_day<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    Datum::Timestamp(NaiveDateTime::new(
+        source_timestamp.date(),
+        NaiveTime::from_hms(0, 0, 0),
+    ))
+}
+
+fn date_trunc_week<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    let num_days_from_monday = source_timestamp.date().weekday().num_days_from_monday();
+    Datum::Timestamp(NaiveDateTime::new(
+        NaiveDate::from_ymd(
+            source_timestamp.year(),
+            source_timestamp.month(),
+            source_timestamp.day() - num_days_from_monday,
+        ),
+        NaiveTime::from_hms(0, 0, 0),
+    ))
+}
+
+fn date_trunc_month<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    Datum::Timestamp(NaiveDateTime::new(
+        NaiveDate::from_ymd(source_timestamp.year(), source_timestamp.month(), 1),
+        NaiveTime::from_hms(0, 0, 0),
+    ))
+}
+
+fn date_trunc_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    let month = source_timestamp.month();
+    let quarter = if month <= 3 {
+        1
+    } else if month <= 6 {
+        4
+    } else if month <= 9 {
+        7
+    } else {
+        10
+    };
+
+    Datum::Timestamp(NaiveDateTime::new(
+        NaiveDate::from_ymd(source_timestamp.year(), quarter, 1),
+        NaiveTime::from_hms(0, 0, 0),
+    ))
+}
+
+fn date_trunc_year<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    Datum::Timestamp(NaiveDateTime::new(
+        NaiveDate::from_ymd(source_timestamp.year(), 1, 1),
+        NaiveTime::from_hms(0, 0, 0),
+    ))
+}
+
+fn date_trunc_decade<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    Datum::Timestamp(NaiveDateTime::new(
+        NaiveDate::from_ymd(
+            source_timestamp.year() - (source_timestamp.year() % 10),
+            1,
+            1,
+        ),
+        NaiveTime::from_hms(0, 0, 0),
+    ))
+}
+
+fn date_trunc_century<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    // Expects the first year of the century, meaning 2001 instead of 2000.
+    let century = source_timestamp.year() - ((source_timestamp.year() % 100) - 1);
+    Datum::Timestamp(NaiveDateTime::new(
+        NaiveDate::from_ymd(century, 1, 1),
+        NaiveTime::from_hms(0, 0, 0),
+    ))
+}
+
+fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
+    let source_timestamp = a.unwrap_timestamp();
+    // Expects the first year of the millennium, meaning 2001 instead of 2000.
+    let millennium = source_timestamp.year() - ((source_timestamp.year() % 1000) - 1);
+    Datum::Timestamp(NaiveDateTime::new(
+        NaiveDate::from_ymd(millennium, 1, 1),
+        NaiveTime::from_hms(0, 0, 0),
+    ))
 }
 
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -868,6 +917,59 @@ pub enum BinaryFunc {
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     CastDecimalToString,
+}
+
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DateTruncTo {
+    Micros,
+    Millis,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Quarter,
+    Year,
+    Decade,
+    Century,
+    Millennium,
+}
+
+impl FromStr for DateTruncTo {
+    type Err = failure::Error;
+    fn from_str(s: &str) -> Result<DateTruncTo, Self::Err> {
+        let s = unicase::Ascii::new(s);
+        Ok(if s == "microseconds" {
+            DateTruncTo::Micros
+        } else if s == "milliseconds" {
+            DateTruncTo::Millis
+        } else if s == "second" {
+            DateTruncTo::Second
+        } else if s == "minute" {
+            DateTruncTo::Minute
+        } else if s == "hour" {
+            DateTruncTo::Hour
+        } else if s == "day" {
+            DateTruncTo::Day
+        } else if s == "week" {
+            DateTruncTo::Week
+        } else if s == "month" {
+            DateTruncTo::Month
+        } else if s == "quarter" {
+            DateTruncTo::Quarter
+        } else if s == "year" {
+            DateTruncTo::Year
+        } else if s == "decade" {
+            DateTruncTo::Decade
+        } else if s == "century" {
+            DateTruncTo::Century
+        } else if s == "millennium" {
+            DateTruncTo::Millennium
+        } else {
+            failure::bail!("invalid date_trunc precision: {}", s.into_inner())
+        })
+    }
 }
 
 impl BinaryFunc {
@@ -1015,7 +1117,7 @@ impl BinaryFunc {
             | AddTimestampTzInterval
             | SubTimestampTzInterval => input1_type,
 
-            DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(false),
+            DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(true),
         }
     }
 
@@ -1150,6 +1252,7 @@ pub enum UnaryFunc {
     ExtractTimestampTzHour,
     ExtractTimestampTzMinute,
     ExtractTimestampTzSecond,
+    DateTrunc(DateTruncTo),
 }
 
 impl UnaryFunc {
@@ -1219,6 +1322,21 @@ impl UnaryFunc {
             UnaryFunc::ExtractTimestampTzHour => extract_timestamptz_hour,
             UnaryFunc::ExtractTimestampTzMinute => extract_timestamptz_minute,
             UnaryFunc::ExtractTimestampTzSecond => extract_timestamptz_second,
+            UnaryFunc::DateTrunc(to) => match to {
+                DateTruncTo::Micros => date_trunc_microseconds,
+                DateTruncTo::Millis => date_trunc_milliseconds,
+                DateTruncTo::Second => date_trunc_second,
+                DateTruncTo::Minute => date_trunc_minute,
+                DateTruncTo::Hour => date_trunc_hour,
+                DateTruncTo::Day => date_trunc_day,
+                DateTruncTo::Week => date_trunc_week,
+                DateTruncTo::Month => date_trunc_month,
+                DateTruncTo::Quarter => date_trunc_quarter,
+                DateTruncTo::Year => date_trunc_year,
+                DateTruncTo::Decade => date_trunc_decade,
+                DateTruncTo::Century => date_trunc_century,
+                DateTruncTo::Millennium => date_trunc_millennium,
+            },
         }
     }
 
@@ -1313,6 +1431,8 @@ impl UnaryFunc {
             | ExtractTimestampTzSecond => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
+
+            DateTrunc(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
         }
     }
 
@@ -1392,6 +1512,10 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::ExtractTimestampTzHour => f.write_str("tstzextracthour"),
             UnaryFunc::ExtractTimestampTzMinute => f.write_str("tstzextractminute"),
             UnaryFunc::ExtractTimestampTzSecond => f.write_str("tstzextractsecond"),
+            UnaryFunc::DateTrunc(to) => {
+                f.write_str("date_trunc_")?;
+                f.write_str(&format!("{:?}", to).to_lowercase())
+            }
         }
     }
 }

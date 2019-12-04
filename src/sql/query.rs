@@ -34,7 +34,7 @@ use sqlparser::ast::{
 };
 use uuid::Uuid;
 
-use ::expr::Id;
+use ::expr::{DateTruncTo, Id};
 use catalog::{Catalog, CatalogEntry};
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
@@ -1725,6 +1725,14 @@ fn plan_function<'a>(
                 let typ = ecx.column_type(&precision_field);
                 if typ.scalar_type != ScalarType::String {
                     bail!("date_trunc() can only be formatted with strings");
+                }
+
+                // If the precision field happens to be a literal, we can do
+                // some early validation.
+                if let ScalarExpr::Literal(row, _) = &precision_field {
+                    let datum = row.unpack_first();
+                    let precision_str = datum.unwrap_str();
+                    let _ = precision_str.parse::<DateTruncTo>()?;
                 }
 
                 let source_timestamp =

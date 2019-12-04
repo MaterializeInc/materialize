@@ -18,5 +18,5 @@ pub mod transform;
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId};
 pub use relation::func::AggregateFunc;
 pub use relation::{AggregateExpr, ColumnOrder, IdGen, RelationExpr};
-pub use scalar::func::{BinaryFunc, UnaryFunc, VariadicFunc};
+pub use scalar::func::{BinaryFunc, DateTruncTo, UnaryFunc, VariadicFunc};
 pub use scalar::ScalarExpr;
