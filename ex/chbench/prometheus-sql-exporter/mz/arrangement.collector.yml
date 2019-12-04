@@ -84,7 +84,7 @@ metrics:
     help: evolving histogram of peek durations
     type: gauge
     values:
-      - sum
+      - count
     key_labels:
       - worker
 
