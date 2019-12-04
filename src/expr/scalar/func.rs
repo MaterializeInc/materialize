@@ -230,6 +230,10 @@ pub fn cast_timestamp_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::String(Cow::Owned(a.unwrap_timestamp().to_string()))
 }
 
+pub fn cast_timestamptz_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::Timestamp(a.unwrap_timestamptz().naive_utc())
+}
+
 pub fn cast_timestamptz_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::String(Cow::Owned(a.unwrap_timestamptz().to_string()))
 }
@@ -1082,6 +1086,7 @@ pub enum UnaryFunc {
     CastDateToString,
     CastTimestampToTimestampTz,
     CastTimestampToString,
+    CastTimestampTzToTimestamp,
     CastTimestampTzToString,
     CastIntervalToString,
     CastBytesToString,
@@ -1147,6 +1152,7 @@ impl UnaryFunc {
             UnaryFunc::CastDateToString => cast_date_to_string,
             UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz,
             UnaryFunc::CastTimestampToString => cast_timestamp_to_string,
+            UnaryFunc::CastTimestampTzToTimestamp => cast_timestamptz_to_timestamp,
             UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string,
             UnaryFunc::CastIntervalToString => cast_interval_to_string,
             UnaryFunc::CastBytesToString => cast_bytes_to_string,
@@ -1230,7 +1236,9 @@ impl UnaryFunc {
             CastInt32ToDecimal => ColumnType::new(ScalarType::Decimal(10, 0)).nullable(in_nullable),
             CastInt64ToDecimal => ColumnType::new(ScalarType::Decimal(20, 0)).nullable(in_nullable),
 
-            CastDateToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(in_nullable),
+            CastDateToTimestamp | CastTimestampTzToTimestamp => {
+                ColumnType::new(ScalarType::Timestamp).nullable(in_nullable)
+            }
 
             CastDateToTimestampTz | CastTimestampToTimestampTz => {
                 ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
@@ -1312,6 +1320,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDateToString => f.write_str("datetostr"),
             UnaryFunc::CastTimestampToTimestampTz => f.write_str("tstotstz"),
             UnaryFunc::CastTimestampToString => f.write_str("tstostr"),
+            UnaryFunc::CastTimestampTzToTimestamp => f.write_str("tstztots"),
             UnaryFunc::CastTimestampTzToString => f.write_str("tstztostr"),
             UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),

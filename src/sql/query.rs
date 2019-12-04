@@ -2520,6 +2520,7 @@ where
         (Date, String) => expr.call_unary(CastDateToString),
         (Timestamp, TimestampTz) => expr.call_unary(CastTimestampToTimestampTz),
         (Timestamp, String) => expr.call_unary(CastTimestampToString),
+        (TimestampTz, Timestamp) => expr.call_unary(CastTimestampTzToTimestamp),
         (TimestampTz, String) => expr.call_unary(CastTimestampTzToString),
         (Interval, String) => expr.call_unary(CastIntervalToString),
         (String, Bytes) => expr.call_unary(CastStringToBytes),
