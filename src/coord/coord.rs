@@ -194,6 +194,32 @@ where
             }
         }
 
+        // Announce primary and foreign key relationships.
+        if let Some(logging_config) = config.logging {
+            for log in logging_config.active_logs().iter() {
+                for (index, key) in log.schema().typ().keys.iter().enumerate() {
+                    broadcast(
+                        &mut coord.broadcast_tx,
+                        SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
+                            log.id(),
+                            key.clone(),
+                            index,
+                        )),
+                    );
+                }
+                for (index, (parent, pairs)) in log.foreign_keys().into_iter().enumerate() {
+                    broadcast(
+                        &mut coord.broadcast_tx,
+                        SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
+                            log.id(),
+                            parent,
+                            pairs,
+                            index,
+                        )),
+                    );
+                }
+            }
+        }
         Ok(coord)
     }
 

@@ -247,14 +247,14 @@ impl LogVariant {
     ///
     /// The result is a list of other variants, and for each a list of local
     /// and other column identifiers that can be equated.
-    pub fn foreign_keys(&self) -> Vec<(LogVariant, Vec<(usize, usize)>)> {
+    pub fn foreign_keys(&self) -> Vec<(GlobalId, Vec<(usize, usize)>)> {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => vec![],
             LogVariant::Timely(TimelyLog::Channels) => vec![],
             LogVariant::Timely(TimelyLog::Elapsed) => vec![],
             LogVariant::Timely(TimelyLog::Histogram) => vec![],
             LogVariant::Timely(TimelyLog::Addresses) => vec![(
-                LogVariant::Timely(TimelyLog::Operates),
+                LogVariant::Timely(TimelyLog::Operates).id(),
                 vec![(0, 0), (1, 1)],
             )],
             LogVariant::Timely(TimelyLog::Parks) => vec![],
@@ -267,7 +267,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => vec![],
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => vec![(
-                LogVariant::Materialized(MaterializedLog::PrimaryKeys),
+                LogVariant::Materialized(MaterializedLog::PrimaryKeys).id(),
                 vec![(2, 0), (3, 1)],
             )],
         }
