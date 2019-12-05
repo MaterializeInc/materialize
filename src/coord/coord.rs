@@ -478,9 +478,7 @@ where
                     // Choose a timestamp for all workers to use in the peek.
                     // We minimize over all participating views, to ensure that the query will not
                     // need to block on the arrival of further input data.
-                    let timestamp = self.determine_timestamp(&source, when);
-
-                    let timestamp = timestamp.expect("Failed to find an appropriate timestamp");
+                    let timestamp = self.determine_timestamp(&source, when)?;
 
                     let (project, filter) = Self::plan_peek(&mut source);
 
@@ -935,18 +933,31 @@ where
         &mut self,
         source: &RelationExpr,
         when: PeekWhen,
-    ) -> Result<Timestamp, String> {
+    ) -> Result<Timestamp, failure::Error> {
         if self.symbiosis.is_some() {
             // In symbiosis mode, we enforce serializability by forcing all
             // PEEKs to peek at the latest input time.
             // TODO(benesch): should this be saturating subtraction, and what should happen
             // when `self.local_input_time` is zero?
+            assert!(self.local_input_time > 0);
             return Ok(self.local_input_time - 1);
         }
 
-        match when {
-            // Explicitly requested timestamps should be respected.
-            PeekWhen::AtTimestamp(timestamp) => Ok(timestamp),
+        // The plan is to first determine a timestamp, based on the requested
+        // timestamp policy, and then determine if it can be satisfied using
+        // the compacted arrangements we have at hand. It remains unresolved
+        // what to do if it cannot be satisfied (perhaps the query should use
+        // a larger timestamp and block, perhaps the user should intervene).
+        let mut uses_ids = Vec::new();
+        source.global_uses(&mut uses_ids);
+        uses_ids.sort();
+        uses_ids.dedup();
+
+        let timestamp = match when {
+            // Explicitly requested timestamps should be respected,
+            // unless they do not respect the `since` compaction
+            // frontier.
+            PeekWhen::AtTimestamp(timestamp) => timestamp,
 
             // Each involved trace has a validity interval `[since, upper)`.
             // The contents of a trace are only guaranteed to be correct when
@@ -966,22 +977,18 @@ where
             // harvest the `since` and `upper` from the determining traces.
             PeekWhen::EarliestSource | PeekWhen::Immediately => {
                 // Collect global identifiers in `source`.
-                let mut uses_ids = Vec::new();
-                source.global_uses(&mut uses_ids);
-                uses_ids.sort();
-                uses_ids.dedup();
 
                 let mut sources = HashSet::new();
                 let mut reached = HashSet::new();
 
                 match when {
                     PeekWhen::EarliestSource => {
-                        for id in uses_ids {
-                            self.sources_frontier(id, &mut sources, &mut reached);
+                        for id in uses_ids.iter() {
+                            self.sources_frontier(*id, &mut sources, &mut reached);
                         }
                     }
                     PeekWhen::Immediately => {
-                        for mut id in uses_ids {
+                        for mut id in uses_ids.iter().cloned() {
                             if let Some((_source, rename)) = &self.sources.get(&id) {
                                 if let Some(rename) = rename {
                                     id = *rename;
@@ -995,22 +1002,14 @@ where
 
                 // Form lower bound on available times.
                 let mut upper = Antichain::new();
-                let mut since = Antichain::from_elem(0);
 
                 for id in sources {
                     let view_upper = self.upper_of(&id).expect("Name missing at coordinator");
-                    let view_since = self.since_of(&id).expect("Name missing at coordinator");
+                    // let view_since = self.since_of(&id).expect("Name missing at coordinator");
                     // To track the meet of `upper` we just extend with the upper frontier.
                     upper.extend(view_upper.iter().cloned());
                     // To track the join of `since` we should replace with the pointwise
                     // join of each element of `since` and `view_since`.
-                    let old_since = std::mem::replace(&mut since, Antichain::new());
-                    for new_element in view_since.elements() {
-                        for old_element in old_since.elements() {
-                            use differential_dataflow::lattice::Lattice;
-                            since.insert(new_element.join(old_element));
-                        }
-                    }
                 }
 
                 // We peek at the largest element not in advance of `upper`, which
@@ -1019,13 +1018,36 @@ where
                 // we should just return empty results, or perhaps we should return
                 // a response analogous to failing to find a non-blocking time.
                 if let Some(candidate) = upper.elements().get(0) {
-                    assert!(since.less_equal(&candidate));
-                    Ok(candidate.saturating_sub(1))
+                    // assert!(since.less_equal(&candidate));
+                    candidate.saturating_sub(1)
                 } else {
                     // A closed trace can be read in its final form with this time.
-                    Ok(Timestamp::max_value())
+                    Timestamp::max_value()
                 }
             }
+        };
+
+        // Determine the valid lower bound of times that can produce correct outputs.
+        // This bound is determined by the arrangements contributing to the query,
+        // and do not depend on the transitive sources.
+        let mut since = Antichain::from_elem(0);
+        for id in uses_ids {
+            let prior_since = std::mem::replace(&mut since, Antichain::new());
+            let view_since = self.since_of(&id).expect("Name missing at coordinator");
+            for new_element in view_since.elements() {
+                for old_element in prior_since.elements() {
+                    use differential_dataflow::lattice::Lattice;
+                    since.insert(new_element.join(old_element));
+                }
+            }
+        }
+
+        // If the timestamp is greater or equal to some element in `since` we are
+        // assured that the answer will be correct.
+        if since.less_equal(&timestamp) {
+            Ok(timestamp)
+        } else {
+            bail!("Candidate timestamp is not greater than compaction frontier");
         }
     }
 
