@@ -3,13 +3,13 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::RelationExpr;
+use crate::{EvalEnv, RelationExpr};
 
 #[derive(Debug)]
 pub struct Project;
 
 impl crate::transform::Transform for Project {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

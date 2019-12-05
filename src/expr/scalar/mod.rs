@@ -6,12 +6,13 @@
 use std::collections::HashSet;
 use std::mem;
 
+use chrono::{DateTime, Utc};
 use pretty::{DocAllocator, DocBuilder};
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, PackableRow, RelationType, Row, RowPacker, ScalarType};
 use serde::{Deserialize, Serialize};
 
-use self::func::{BinaryFunc, DateTruncTo, UnaryFunc, VariadicFunc};
+use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 use crate::pretty::DocBuilderExt;
 
 pub mod func;
@@ -24,6 +25,8 @@ pub enum ScalarExpr {
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
     Literal(Row, ColumnType),
+    /// A function call that takes no arguments.
+    CallNullary(NullaryFunc),
     /// A function call that takes one expression as an argument.
     CallUnary {
         func: UnaryFunc,
@@ -93,6 +96,7 @@ impl ScalarExpr {
         match self {
             ScalarExpr::Column(_) => (),
             ScalarExpr::Literal(_, _) => (),
+            ScalarExpr::CallNullary(_) => (),
             ScalarExpr::CallUnary { expr, .. } => {
                 f(expr);
             }
@@ -131,6 +135,7 @@ impl ScalarExpr {
         match self {
             ScalarExpr::Column(_) => (),
             ScalarExpr::Literal(_, _) => (),
+            ScalarExpr::CallNullary(_) => (),
             ScalarExpr::CallUnary { expr, .. } => {
                 f(expr);
             }
@@ -223,7 +228,7 @@ impl ScalarExpr {
     /// Reduces a complex expression where possible.
     ///
     /// ```rust
-    /// use expr::{BinaryFunc, ScalarExpr};
+    /// use expr::{BinaryFunc, EvalEnv, ScalarExpr};
     /// use repr::{ColumnType, Datum, ScalarType};
     ///
     /// let expr_0 = ScalarExpr::Column(0);
@@ -236,18 +241,24 @@ impl ScalarExpr {
     ///     .call_binary(expr_f.clone(), BinaryFunc::And)
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// test.reduce();
+    /// test.reduce(&EvalEnv::default());
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self) {
+    pub fn reduce(&mut self, env: &EvalEnv) {
         let null = || ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null));
         let empty = RelationType::new(vec![]);
         let mut temp_storage = RowPacker::new();
         let mut eval = move |e: &ScalarExpr| {
-            ScalarExpr::literal(e.eval(&mut temp_storage.packable(), &[]), e.typ(&empty))
+            ScalarExpr::literal(
+                e.eval(&[], env, &mut temp_storage.packable()),
+                e.typ(&empty),
+            )
         };
         self.visit_mut(&mut |e| match e {
             ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => (),
+            ScalarExpr::CallNullary(_) => {
+                *e = eval(e);
+            }
             ScalarExpr::CallUnary { expr, .. } => {
                 if expr.is_literal() {
                     *e = eval(e);
@@ -260,7 +271,7 @@ impl ScalarExpr {
                     // we can at least precompile the regex
                     let mut temp_storage = RowPacker::new();
                     let temp_storage = &mut temp_storage.packable();
-                    *e = match expr2.eval(temp_storage, &[]) {
+                    *e = match expr2.eval(&[], env, temp_storage) {
                         Datum::Null => null(),
                         Datum::String(string) => {
                             match func::build_like_regex_from_string(&string) {
@@ -276,7 +287,7 @@ impl ScalarExpr {
                 } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
                     let mut temp_storage = RowPacker::new();
                     let temp_storage = &mut temp_storage.packable();
-                    *e = match expr1.eval(temp_storage, &[]) {
+                    *e = match expr1.eval(&[], env, temp_storage) {
                         Datum::Null => null(),
                         Datum::String(s) => match s.parse::<DateTruncTo>() {
                             Ok(to) => ScalarExpr::CallUnary {
@@ -312,7 +323,7 @@ impl ScalarExpr {
                 if cond.is_literal() {
                     let mut temp_storage = RowPacker::new();
                     let temp_storage = &mut temp_storage.packable();
-                    match cond.eval(temp_storage, &[]) {
+                    match cond.eval(&[], env, temp_storage) {
                         Datum::True if then.is_literal() => *e = eval(then),
                         Datum::False | Datum::Null if els.is_literal() => *e = eval(els),
                         Datum::True | Datum::False | Datum::Null => (),
@@ -335,6 +346,7 @@ impl ScalarExpr {
                 columns.insert(*col);
             }
             ScalarExpr::Literal(..) => {}
+            ScalarExpr::CallNullary(_) => (),
             ScalarExpr::CallUnary { func, expr } => {
                 if func != &UnaryFunc::IsNull {
                     expr.non_null_requirements(columns);
@@ -370,6 +382,7 @@ impl ScalarExpr {
         match self {
             ScalarExpr::Column(i) => relation_type.column_types[*i],
             ScalarExpr::Literal(_, typ) => *typ,
+            ScalarExpr::CallNullary(func) => func.output_type(),
             ScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(relation_type)),
             ScalarExpr::CallBinary { expr1, expr2, func } => {
                 func.output_type(expr1.typ(relation_type), expr2.typ(relation_type))
@@ -396,47 +409,49 @@ impl ScalarExpr {
 
     pub fn eval<'a>(
         &'a self,
-        temp_storage: &mut PackableRow<'a>,
         datums: &[Datum<'a>],
+        env: &EvalEnv,
+        temp_storage: &mut PackableRow<'a>,
     ) -> Datum<'a> {
         match self {
             ScalarExpr::Column(index) => datums[*index].clone(),
             ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
+            ScalarExpr::CallNullary(func) => (func.func())(env, temp_storage),
             ScalarExpr::CallUnary { func, expr } => {
-                let eval = expr.eval(temp_storage, datums);
+                let eval = expr.eval(datums, env, temp_storage);
                 if func.propagates_nulls() && eval.is_null() {
                     Datum::Null
                 } else {
-                    (func.func())(temp_storage, eval)
+                    (func.func())(eval, env, temp_storage)
                 }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let eval1 = expr1.eval(temp_storage, datums);
-                let eval2 = expr2.eval(temp_storage, datums);
+                let eval1 = expr1.eval(datums, env, temp_storage);
+                let eval2 = expr2.eval(datums, env, temp_storage);
                 if func.propagates_nulls() && (eval1.is_null() || eval2.is_null()) {
                     Datum::Null
                 } else {
-                    (func.func())(temp_storage, eval1, eval2)
+                    (func.func())(eval1, eval2, env, temp_storage)
                 }
             }
             ScalarExpr::CallVariadic { func, exprs } => {
                 let evals = exprs
                     .iter()
-                    .map(|e| e.eval(temp_storage, datums))
+                    .map(|e| e.eval(datums, env, temp_storage))
                     .collect::<Vec<_>>();
                 if func.propagates_nulls() && evals.iter().any(|e| e.is_null()) {
                     Datum::Null
                 } else {
-                    (func.func())(temp_storage, &evals)
+                    (func.func())(&evals, env, temp_storage)
                 }
             }
-            ScalarExpr::If { cond, then, els } => match cond.eval(temp_storage, datums) {
-                Datum::True => then.eval(temp_storage, datums),
-                Datum::False | Datum::Null => els.eval(temp_storage, datums),
+            ScalarExpr::If { cond, then, els } => match cond.eval(datums, env, temp_storage) {
+                Datum::True => then.eval(datums, env, temp_storage),
+                Datum::False | Datum::Null => els.eval(datums, env, temp_storage),
                 d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
             },
             ScalarExpr::MatchCachedRegex { expr, regex } => {
-                let eval = expr.eval(temp_storage, datums);
+                let eval = expr.eval(datums, env, temp_storage);
                 func::match_cached_regex(eval, regex)
             }
         }
@@ -453,7 +468,9 @@ impl ScalarExpr {
         use ScalarExpr::*;
 
         let needs_wrap = |expr: &ScalarExpr| match expr {
-            Column(_) | Literal(_, _) | CallUnary { .. } | CallVariadic { .. } => false,
+            Column(_) | Literal(_, _) | CallUnary { .. } | CallVariadic { .. } | CallNullary(_) => {
+                false
+            }
             CallBinary { .. } | If { .. } | MatchCachedRegex { .. } => true,
         };
 
@@ -468,6 +485,7 @@ impl ScalarExpr {
         match self {
             Column(n) => alloc.text("#").append(n.to_string()),
             Literal(..) => alloc.text(self.as_literal().unwrap().to_string()),
+            CallNullary(func) => alloc.text(func.to_string()),
             CallUnary { func, expr } => {
                 let mut doc = alloc.text(func.to_string());
                 if !func.display_is_symbolic() && !needs_wrap(expr) {
@@ -507,6 +525,14 @@ impl ScalarExpr {
         }
         .group()
     }
+}
+
+/// An evaluation environment. Stores state that controls how certain
+/// expressions are evaluated.
+#[derive(Default, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct EvalEnv {
+    pub logical_time: Option<u64>,
+    pub wall_time: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]

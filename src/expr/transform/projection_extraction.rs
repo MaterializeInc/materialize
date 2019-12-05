@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{RelationExpr, ScalarExpr};
+use crate::{EvalEnv, RelationExpr, ScalarExpr};
 
 /// Extracts simple projections from the scalar expressions in a `Map` operator
 /// into a `Project`, so they can be subjected to other optimizations.
@@ -11,7 +11,7 @@ use crate::{RelationExpr, ScalarExpr};
 pub struct ProjectionExtraction;
 
 impl super::Transform for ProjectionExtraction {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

@@ -3,14 +3,13 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::BinaryFunc;
-use crate::{RelationExpr, ScalarExpr};
+use crate::{BinaryFunc, EvalEnv, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct SplitPredicates;
 
 impl super::Transform for SplitPredicates {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         relation.visit_mut(&mut |expr| {
             if let RelationExpr::Filter { predicates, .. } = expr {
                 let mut pending_predicates = predicates.drain(..).collect::<Vec<_>>();

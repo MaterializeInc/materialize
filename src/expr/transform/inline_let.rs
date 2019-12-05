@@ -3,13 +3,13 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{Id, LocalId, RelationExpr};
+use crate::{EvalEnv, Id, LocalId, RelationExpr};
 
 #[derive(Debug)]
 pub struct InlineLet;
 
 impl super::Transform for InlineLet {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

@@ -33,13 +33,13 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::{RelationExpr, ScalarExpr};
+use crate::{EvalEnv, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct Filter;
 
 impl crate::transform::Transform for Filter {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

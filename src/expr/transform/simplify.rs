@@ -55,14 +55,16 @@
 //!
 //! assert_eq!(relation, expected_relation);
 //! ```
-use crate::{BinaryFunc, RelationExpr, ScalarExpr};
+
 use std::mem;
+
+use crate::{BinaryFunc, EvalEnv, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct SimplifyFilterPredicates;
 
 impl super::Transform for SimplifyFilterPredicates {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation);
     }
 }

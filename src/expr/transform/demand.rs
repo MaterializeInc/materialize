@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{Id, RelationExpr};
+use crate::{EvalEnv, Id, RelationExpr};
 
 /// Drive demand from the root through operators.
 ///
@@ -21,7 +21,7 @@ use crate::{Id, RelationExpr};
 pub struct Demand;
 
 impl crate::transform::Transform for Demand {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

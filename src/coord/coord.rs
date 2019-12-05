@@ -35,7 +35,7 @@ use dataflow_types::{
     DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source, SourceConnector,
     TailSinkConnector, Timestamp, Update, View,
 };
-use expr::{GlobalId, Id, IdHumanizer, RelationExpr};
+use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::option::OptionExt;
@@ -451,6 +451,7 @@ where
                 mut source,
                 when,
                 finishing,
+                mut eval_env,
             } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
                 //
@@ -458,7 +459,14 @@ where
                 // also to ensure that there is a view in place to query, if the source of data
                 // for the peek is not a base relation.
 
-                self.optimizer.optimize(&mut source);
+                // Choose a timestamp for all workers to use in the peek.
+                // We minimize over all participating views, to ensure that the query will not
+                // need to block on the arrival of further input data.
+                let timestamp = self.determine_timestamp(&source, when)?;
+                eval_env.wall_time = Some(chrono::Utc::now());
+                eval_env.logical_time = Some(timestamp);
+
+                self.optimizer.optimize(&mut source, &eval_env);
 
                 // If this optimizes to a constant expression, we can immediately return the result.
                 if let RelationExpr::Constant { rows, typ: _ } = source {
@@ -477,11 +485,6 @@ where
                     send_immediate_rows(results)
                 } else {
                     let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-
-                    // Choose a timestamp for all workers to use in the peek.
-                    // We minimize over all participating views, to ensure that the query will not
-                    // need to block on the arrival of further input data.
-                    let timestamp = self.determine_timestamp(&source, when)?;
 
                     let (project, filter) = Self::plan_peek(&mut source);
 
@@ -509,6 +512,7 @@ where
                                 finishing: finishing.clone(),
                                 project,
                                 filter,
+                                eval_env,
                             },
                         );
                     } else {
@@ -534,6 +538,7 @@ where
                             raw_sql: "<none>".into(),
                             relation_expr: source,
                             desc,
+                            eval_env: eval_env.clone(),
                         };
                         let dataflow = DataflowDesc::new(format!("temp-view-{}", view_id))
                             .add_view(view_id, view)
@@ -550,6 +555,7 @@ where
                                 finishing: finishing.clone(),
                                 project: None,
                                 filter: Vec::new(),
+                                eval_env,
                             },
                         );
                         broadcast(
@@ -621,8 +627,8 @@ where
 
             Plan::SendRows(rows) => send_immediate_rows(rows),
 
-            Plan::ExplainPlan(mut relation_expr) => {
-                self.optimizer.optimize(&mut relation_expr);
+            Plan::ExplainPlan(mut relation_expr, eval_env) => {
+                self.optimizer.optimize(&mut relation_expr, &eval_env);
                 let pretty = relation_expr.pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
                 send_immediate_rows(rows)
@@ -719,6 +725,7 @@ where
                             },
                             raw_sql: "<created by CREATE SOURCE>".to_string(),
                             desc: source.desc.clone(),
+                            eval_env: EvalEnv::default(),
                         },
                     )
                     .add_source(source_id, source.clone())
@@ -805,7 +812,8 @@ where
 
             // Now optimize the query expression.
             for (_id, view) in dataflow.views.iter_mut() {
-                self.optimizer.optimize(&mut view.relation_expr);
+                self.optimizer
+                    .optimize(&mut view.relation_expr, &view.eval_env);
             }
         }
         broadcast(

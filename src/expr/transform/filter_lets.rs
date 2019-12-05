@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{Id, LocalId, RelationExpr, ScalarExpr};
+use crate::{EvalEnv, Id, LocalId, RelationExpr, ScalarExpr};
 
 /// Pushes common filter predicates on gets into the let binding.
 ///
@@ -16,7 +16,7 @@ use crate::{Id, LocalId, RelationExpr, ScalarExpr};
 pub struct FilterLets;
 
 impl super::Transform for FilterLets {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

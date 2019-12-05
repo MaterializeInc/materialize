@@ -56,10 +56,13 @@
 //! binding currently being processed. Also, the reversed pre-order of a tree
 //! does *not* result in the post-order.
 
-use crate::{Id, LocalId, RelationExpr};
-use indexmap::IndexMap;
-use repr::RelationType;
 use std::collections::HashMap;
+
+use indexmap::IndexMap;
+
+use repr::RelationType;
+
+use crate::{EvalEnv, Id, LocalId, RelationExpr};
 
 // -----------------------------------------------------------------------------
 
@@ -212,7 +215,7 @@ impl Hoist {
 
 impl super::Transform for Hoist {
     /// Hoist all bindings to the top of a dataflow graph.
-    fn transform(&self, expr: &mut RelationExpr) {
+    fn transform(&self, expr: &mut RelationExpr, _: &EvalEnv) {
         Hoist::hoist(expr);
     }
 }
@@ -274,7 +277,7 @@ impl Unbind {
 
 impl super::Transform for Unbind {
     /// Perform the unbind optimization.
-    fn transform(&self, expr: &mut RelationExpr) {
+    fn transform(&self, expr: &mut RelationExpr, _: &EvalEnv) {
         Unbind::unbind(expr);
     }
 }
@@ -449,7 +452,7 @@ impl Deduplicate {
 
 impl super::Transform for Deduplicate {
     /// Deduplicate repeated subgraphs.
-    fn transform(&self, expr: &mut RelationExpr) {
+    fn transform(&self, expr: &mut RelationExpr, _: &EvalEnv) {
         Deduplicate::deduplicate(expr);
     }
 }

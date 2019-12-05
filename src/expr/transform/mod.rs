@@ -5,6 +5,7 @@
 
 #![deny(missing_debug_implementations)]
 
+use crate::EvalEnv;
 use crate::RelationExpr;
 
 pub mod binding;
@@ -31,9 +32,7 @@ pub mod update_let;
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
-    ///
-    /// Arguably the metadata *shouldn't* change, but we're new here.
-    fn transform(&self, relation: &mut RelationExpr);
+    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv);
 }
 
 #[derive(Debug)]
@@ -42,11 +41,11 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
         for _ in 0..100 {
             let original = relation.clone();
             for transform in self.transforms.iter() {
-                transform.transform(relation);
+                transform.transform(relation, env);
             }
             if *relation == original {
                 return;
@@ -69,9 +68,9 @@ pub struct Optimizer {
 
 impl Transform for Optimizer {
     /// Optimizes the supplied relation expression.
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
         for transform in self.transforms.iter() {
-            transform.transform(relation);
+            transform.transform(relation, env);
         }
     }
 }
@@ -140,9 +139,10 @@ impl Default for Optimizer {
 
 impl Optimizer {
     /// Optimizes the supplied relation expression.
-    pub fn optimize(&mut self, relation: &mut RelationExpr) {
-        self.transform(relation);
+    pub fn optimize(&mut self, relation: &mut RelationExpr, env: &EvalEnv) {
+        self.transform(relation, env);
     }
+
     /// Simple fusion and elision transformations to render the query readable.
     pub fn pre_optimization() -> Self {
         let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![

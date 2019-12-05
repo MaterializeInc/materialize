@@ -21,7 +21,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, RelationExpr};
+use expr::{EvalEnv, GlobalId, Id, RelationExpr};
 use repr::{Datum, Row, RowPacker, RowUnpacker};
 
 use super::sink;
@@ -147,7 +147,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                 // Capture both the tokens of imported traces and those of sources.
                 let tokens = Rc::new((tokens, source_tokens.clone()));
 
-                context.ensure_rendered(&view.relation_expr, region, worker_index);
+                context.ensure_rendered(&view.relation_expr, &view.eval_env, region, worker_index);
 
                 // Having ensured that `view.relation_expr` is rendered, we can now extract it
                 // or re-arrange it by other keys. The only information we have at the moment
@@ -226,6 +226,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                 };
                 context.ensure_rendered(
                     &to_arrange.clone().arrange_by(&idx.keys),
+                    &idx.eval_env,
                     region,
                     worker_index,
                 );
@@ -287,6 +288,7 @@ where
     pub fn ensure_rendered(
         &mut self,
         relation_expr: &RelationExpr,
+        env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
     ) {
@@ -329,15 +331,15 @@ where
                     if self.has_collection(&bind) {
                         panic!("Inappropriate to re-bind name: {:?}", bind);
                     } else {
-                        self.ensure_rendered(value, scope, worker_index);
+                        self.ensure_rendered(value, env, scope, worker_index);
                         self.clone_from_to(value, &bind);
-                        self.ensure_rendered(body, scope, worker_index);
+                        self.ensure_rendered(body, env, scope, worker_index);
                         self.clone_from_to(body, relation_expr);
                     }
                 }
 
                 RelationExpr::Project { input, outputs } => {
-                    self.ensure_rendered(input, scope, worker_index);
+                    self.ensure_rendered(input, env, scope, worker_index);
                     let outputs = outputs.clone();
                     let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
@@ -350,7 +352,8 @@ where
                 }
 
                 RelationExpr::Map { input, scalars } => {
-                    self.ensure_rendered(input, scope, worker_index);
+                    self.ensure_rendered(input, env, scope, worker_index);
+                    let env = env.clone();
                     let scalars = scalars.clone();
                     let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
@@ -359,7 +362,7 @@ where
                         let mut datums = unpacker.unpack(&input_row);
                         let temp_storage = &mut temp_storage.packable();
                         for scalar in &scalars {
-                            let datum = scalar.eval(temp_storage, &datums);
+                            let datum = scalar.eval(&datums, &env, temp_storage);
                             // Scalar is allowed to see the outputs of previous scalars.
                             // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
                             // Note that this doesn't mutate input_row.
@@ -372,7 +375,8 @@ where
                 }
 
                 RelationExpr::Filter { input, predicates } => {
-                    self.ensure_rendered(input, scope, worker_index);
+                    self.ensure_rendered(input, env, scope, worker_index);
+                    let env = env.clone();
                     let predicates = predicates.clone();
                     let mut unpacker = RowUnpacker::new();
                     let mut temp_storage = RowPacker::new();
@@ -380,7 +384,7 @@ where
                         let datums = unpacker.unpack(input_row);
                         predicates.iter().all(|predicate| {
                             let temp_storage = &mut temp_storage.packable();
-                            match predicate.eval(temp_storage, &datums) {
+                            match predicate.eval(&datums, &env, temp_storage) {
                                 Datum::True => true,
                                 Datum::False | Datum::Null => false,
                                 _ => unreachable!(),
@@ -393,30 +397,30 @@ where
                 }
 
                 RelationExpr::Join { .. } => {
-                    self.render_join(relation_expr, scope, worker_index);
+                    self.render_join(relation_expr, env, scope, worker_index);
                 }
 
                 RelationExpr::Reduce { .. } => {
-                    self.render_reduce(relation_expr, scope, worker_index);
+                    self.render_reduce(relation_expr, env, scope, worker_index);
                 }
 
                 RelationExpr::TopK { .. } => {
-                    self.render_topk(relation_expr, scope, worker_index);
+                    self.render_topk(relation_expr, env, scope, worker_index);
                 }
 
                 RelationExpr::Negate { input } => {
-                    self.ensure_rendered(input, scope, worker_index);
+                    self.ensure_rendered(input, env, scope, worker_index);
                     let collection = self.collection(input).unwrap().negate();
                     self.collections.insert(relation_expr.clone(), collection);
                 }
 
                 RelationExpr::Threshold { .. } => {
-                    self.render_threshold(relation_expr, scope, worker_index);
+                    self.render_threshold(relation_expr, env, scope, worker_index);
                 }
 
                 RelationExpr::Union { left, right } => {
-                    self.ensure_rendered(left, scope, worker_index);
-                    self.ensure_rendered(right, scope, worker_index);
+                    self.ensure_rendered(left, env, scope, worker_index);
+                    self.ensure_rendered(right, env, scope, worker_index);
 
                     let input1 = self.collection(left).unwrap();
                     let input2 = self.collection(right).unwrap();
@@ -427,7 +431,7 @@ where
 
                 RelationExpr::ArrangeBy { input, keys } => {
                     if self.arrangement(&input, &keys[..]).is_none() {
-                        self.ensure_rendered(input, scope, worker_index);
+                        self.ensure_rendered(input, env, scope, worker_index);
                         let built = self.collection(input).unwrap();
                         let keys2 = keys.clone();
                         let mut unpacker = RowUnpacker::new();
@@ -447,7 +451,13 @@ where
         }
     }
 
-    fn render_join(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
+    fn render_join(
+        &mut self,
+        relation_expr: &RelationExpr,
+        env: &EvalEnv,
+        scope: &mut G,
+        worker_index: usize,
+    ) {
         if let RelationExpr::Join {
             inputs,
             variables,
@@ -476,7 +486,7 @@ where
                 .collect::<Vec<_>>();
 
             for input in inputs.iter() {
-                self.ensure_rendered(input, scope, worker_index);
+                self.ensure_rendered(input, env, scope, worker_index);
             }
 
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -696,7 +706,13 @@ where
         }
     }
 
-    fn render_reduce(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
+    fn render_reduce(
+        &mut self,
+        relation_expr: &RelationExpr,
+        env: &EvalEnv,
+        scope: &mut G,
+        worker_index: usize,
+    ) {
         if let RelationExpr::Reduce {
             input,
             group_key,
@@ -708,7 +724,7 @@ where
 
             let keys_clone = group_key.clone();
 
-            self.ensure_rendered(input, scope, worker_index);
+            self.ensure_rendered(input, env, scope, worker_index);
             let input = self.collection(input).unwrap();
 
             use expr::AggregateFunc;
@@ -749,6 +765,7 @@ where
             // to one structured as `((keys, vals), time, aggs)`
             let exploded = input
                 .map({
+                    let env = env.clone();
                     let group_key = group_key.clone();
                     let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
@@ -771,7 +788,7 @@ where
                             // data and then use a non-distinctness-requiring aggregation.
 
                             let temp_storage = &mut temp_storage.packable();
-                            let eval = aggregate.expr.eval(temp_storage, &datums);
+                            let eval = aggregate.expr.eval(&datums, &env, temp_storage);
 
                             // Non-Abelian values cannot be accumulated, and just need to
                             // be passed along.
@@ -843,6 +860,7 @@ where
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
                         "Reduce",
                         {
+                            let env = env.clone();
                             let mut packer = RowPacker::new();
                             let mut temp_storage = RowPacker::new();
                             move |key, source, target| {
@@ -945,7 +963,7 @@ where
                                                 })
                                                 .collect::<HashSet<_>>();
                                             let temp_storage = &mut temp_storage.packable();
-                                            result.push((agg.func.func())(temp_storage, iter));
+                                            result.push((agg.func.func())(iter, &env, temp_storage));
                                         } else {
                                             let iter = source.iter().flat_map(|(v, w)| {
                                                 // let eval = agg.expr.eval(v);
@@ -953,7 +971,7 @@ where
                                                     .take(std::cmp::max(w[0], 0) as usize)
                                             });
                                             let temp_storage = &mut temp_storage.packable();
-                                            result.push((agg.func.func())(temp_storage, iter));
+                                            result.push((agg.func.func())(iter, &env, temp_storage));
                                         }
                                         non_abelian_pos += 1;
                                     }
@@ -968,7 +986,13 @@ where
         }
     }
 
-    fn render_topk(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
+    fn render_topk(
+        &mut self,
+        relation_expr: &RelationExpr,
+        env: &EvalEnv,
+        scope: &mut G,
+        worker_index: usize,
+    ) {
         if let RelationExpr::TopK {
             input,
             group_key,
@@ -982,7 +1006,7 @@ where
             let group_clone = group_key.clone();
             let order_clone = order_key.clone();
 
-            self.ensure_rendered(input, scope, worker_index);
+            self.ensure_rendered(input, env, scope, worker_index);
             let input = self.collection(input).unwrap();
 
             let limit = *limit;
@@ -1059,6 +1083,7 @@ where
     fn render_threshold(
         &mut self,
         relation_expr: &RelationExpr,
+        env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
     ) {
@@ -1069,7 +1094,7 @@ where
 
             // TODO: easier idioms for detecting, re-using, and stashing.
             if self.arrangement(&input, &keys[..]).is_none() {
-                self.ensure_rendered(input, scope, worker_index);
+                self.ensure_rendered(input, env, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
                 let mut unpacker = RowUnpacker::new();

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
-use expr::{ColumnOrder, GlobalId, RelationExpr, ScalarExpr};
+use expr::{ColumnOrder, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 use repr::{Datum, RelationDesc, RelationType, Row};
 
 /// System-wide update type.
@@ -248,6 +248,7 @@ pub struct Sink {
 pub struct View {
     pub raw_sql: String,
     pub relation_expr: RelationExpr,
+    pub eval_env: EvalEnv,
     pub desc: RelationDesc,
 }
 
@@ -310,6 +311,8 @@ pub struct Index {
     pub keys: Vec<usize>,
     /// Functions of the columns to evaluate and arrange on.
     pub funcs: Vec<ScalarExpr>,
+    /// The evaluation environment for the expressions in `funcs`.
+    pub eval_env: EvalEnv,
 }
 
 #[cfg(test)]
@@ -358,6 +361,7 @@ mod tests {
                 desc: RelationDesc::empty()
                     .add_column("name", ScalarType::String)
                     .add_column("quantity", ScalarType::String),
+                eval_env: EvalEnv::default(),
             },
         );
 

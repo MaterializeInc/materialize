@@ -6,7 +6,7 @@
 // Whatever clippy...
 #![allow(clippy::clone_on_copy)]
 
-use crate::RelationExpr;
+use crate::{EvalEnv, RelationExpr};
 
 /// Removes `Reduce` when the input has (compatible) keys.
 ///
@@ -17,7 +17,7 @@ use crate::RelationExpr;
 pub struct ReduceElision;
 
 impl super::Transform for ReduceElision {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

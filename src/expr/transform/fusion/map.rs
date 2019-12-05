@@ -3,14 +3,14 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::RelationExpr;
+use crate::{EvalEnv, RelationExpr};
 use std::mem;
 
 #[derive(Debug)]
 pub struct Map;
 
 impl crate::transform::Transform for Map {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }
