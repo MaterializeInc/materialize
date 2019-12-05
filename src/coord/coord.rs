@@ -943,6 +943,12 @@ where
             return Ok(self.local_input_time - 1);
         }
 
+        // Each involved trace has a validity interval `[since, upper)`.
+        // The contents of a trace are only guaranteed to be correct when
+        // accumulated at a time greater or equal to `since`, and they
+        // are only guaranteed to be currently present for times not
+        // greater or equal to `upper`.
+        //
         // The plan is to first determine a timestamp, based on the requested
         // timestamp policy, and then determine if it can be satisfied using
         // the compacted arrangements we have at hand. It remains unresolved
@@ -953,31 +959,17 @@ where
         uses_ids.sort();
         uses_ids.dedup();
 
+        // First determine the candidate timestamp, which is either the explicitly requested
+        // timestamp, or the latest timestamp known to be immediately available.
         let timestamp = match when {
-            // Explicitly requested timestamps should be respected,
-            // unless they do not respect the `since` compaction
-            // frontier.
+            // Explicitly requested timestamps should be respected.
             PeekWhen::AtTimestamp(timestamp) => timestamp,
 
-            // Each involved trace has a validity interval `[since, upper)`.
-            // The contents of a trace are only guaranteed to be correct when
-            // accumulated at a time greater or equal to `since`, and they
-            // are only guaranteed to be currently present for times not
-            // greater or equal to `upper`.
-            //
-            // Our plan is to intersect these validity intervals for key traces,
-            // from which we can read out times that are both valid and available.
-            // For this to be correct, we need to track the "join" of the `since`
-            // frontiers and the "meet" of the `upper` frontiers. In one-dimensional
-            // terms, these are "max" and "min", respectively.
-            //
-            // These two strategies vary on in terms of which traces drive the
+            // These two strategies vary in terms of which traces drive the
             // timestamp determination process: either the trace itself or the
-            // original sources on which they depend. In either case, we want to
-            // harvest the `since` and `upper` from the determining traces.
+            // original sources on which they depend.
             PeekWhen::EarliestSource | PeekWhen::Immediately => {
                 // Collect global identifiers in `source`.
-
                 let mut sources = HashSet::new();
                 let mut reached = HashSet::new();
 
@@ -1009,12 +1001,15 @@ where
                 }
 
                 // We peek at the largest element not in advance of `upper`, which
-                // involves a subtraction. It is unclear what we should do if `upper`
-                // contains a zero timestamp, as there is no "prior" answer. Perhaps
-                // we should just return empty results, or perhaps we should return
-                // a response analogous to failing to find a non-blocking time.
+                // involves a subtraction. If `upper` contains a zero timestamp there
+                // is no "prior" answer, and we do not want to peek at it as it risks
+                // hanging awaiting the response to data that may never arrive.
                 if let Some(candidate) = upper.elements().get(0) {
-                    candidate.saturating_sub(1)
+                    if candidate > 0 {
+                        candidate.saturating_sub(1)
+                    } else {
+                        bail!("At least one input has no complete timestamps yet.");
+                    }
                 } else {
                     // A complete trace can be read in its final form with this time.
                     Timestamp::max_value()
@@ -1024,7 +1019,7 @@ where
 
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
-        // and do not depend on the transitive sources.
+        // and does not depend on the transitive sources.
         let mut since = Antichain::from_elem(0);
         for mut id in uses_ids {
             if let Some((_source, rename)) = &self.sources.get(&id) {
@@ -1049,7 +1044,10 @@ where
         if since.less_equal(&timestamp) {
             Ok(timestamp)
         } else {
-            bail!("Candidate timestamp is not greater than compaction frontier");
+            bail!(
+                "Latest available timestamp ({}) is not valid for all inputs",
+                timestamp
+            );
         }
     }
 
