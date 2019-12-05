@@ -17,4 +17,4 @@ serde_json = "1.0.42"
 [dev-dependencies]
 hyper = "0.12"
 lazy_static = "1.4"
-tokio = "0.1"
+tokio = "0.2"
