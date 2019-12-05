@@ -27,4 +27,5 @@ target_link_libraries(chbenchmark
         odbc
         pthread
         pq
-        pqxx)
+        pqxx
+        config)
