@@ -1002,14 +1002,10 @@ where
 
                 // Form lower bound on available times.
                 let mut upper = Antichain::new();
-
                 for id in sources {
-                    let view_upper = self.upper_of(&id).expect("Name missing at coordinator");
-                    // let view_since = self.since_of(&id).expect("Name missing at coordinator");
+                    let view_upper = self.upper_of(&id).expect("Upper missing at coordinator");
                     // To track the meet of `upper` we just extend with the upper frontier.
                     upper.extend(view_upper.iter().cloned());
-                    // To track the join of `since` we should replace with the pointwise
-                    // join of each element of `since` and `view_since`.
                 }
 
                 // We peek at the largest element not in advance of `upper`, which
@@ -1018,10 +1014,9 @@ where
                 // we should just return empty results, or perhaps we should return
                 // a response analogous to failing to find a non-blocking time.
                 if let Some(candidate) = upper.elements().get(0) {
-                    // assert!(since.less_equal(&candidate));
                     candidate.saturating_sub(1)
                 } else {
-                    // A closed trace can be read in its final form with this time.
+                    // A complete trace can be read in its final form with this time.
                     Timestamp::max_value()
                 }
             }
@@ -1031,9 +1026,16 @@ where
         // This bound is determined by the arrangements contributing to the query,
         // and do not depend on the transitive sources.
         let mut since = Antichain::from_elem(0);
-        for id in uses_ids {
+        for mut id in uses_ids {
+            if let Some((_source, rename)) = &self.sources.get(&id) {
+                if let Some(rename) = rename {
+                    id = *rename;
+                }
+            }
             let prior_since = std::mem::replace(&mut since, Antichain::new());
-            let view_since = self.since_of(&id).expect("Name missing at coordinator");
+            let view_since = self.since_of(&id).expect("Since missing at coordinator");
+            // To track the join of `since` we should replace with the pointwise
+            // join of each element of `since` and `view_since`.
             for new_element in view_since.elements() {
                 for old_element in prior_since.elements() {
                     use differential_dataflow::lattice::Lattice;
