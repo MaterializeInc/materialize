@@ -20,6 +20,7 @@ pub mod mpmc;
 pub mod netio;
 pub mod option;
 pub mod panic;
+pub mod prometheus_util;
 pub mod sync;
 pub mod thread;
 pub mod tokio;

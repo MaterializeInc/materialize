@@ -16,7 +16,8 @@ use futures::sync::mpsc::UnboundedSender;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use lazy_static::lazy_static;
 use log::{debug, trace};
-use prometheus::IntCounterVec;
+use prometheus::{Histogram, HistogramTimer};
+use prometheus_static_metric::make_static_metric;
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
 use tokio::codec::Framed;
@@ -36,18 +37,36 @@ use crate::message::{
 };
 use crate::secrets::SecretManager;
 
+make_static_metric! {
+    struct CommandDurations: Histogram {
+        "command" => {
+            bind,
+            bind_error,
+            close_portal,
+            close_statement,
+            describe_portal,
+            describe_statement,
+            describe_statement_error,
+            execute,
+            parse,
+            portal_continue,
+            simple_query,
+            peek_response,
+            set_variable,
+            fatal_error,
+        }
+    }
+}
+
 lazy_static! {
-    /// The number of responses that we have ever sent to clients
-    ///
-    /// TODO: consider using prometheus-static-metric or a variation on its
-    /// precompilation pattern to improve perf?
-    /// https://github.com/pingcap/rust-prometheus/tree/master/static-metric
-    static ref RESPONSES_SENT_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "mz_responses_sent_total",
-        "Number of times we have have sent rows or errors back to clients",
-        &["status", "kind"]
+    static ref COMMAND_DURATIONS_VEC: prometheus::HistogramVec = register_histogram_vec!(
+        "mz_command_durations",
+        "how long individual commands took",
+        &["command"],
+        ore::prometheus_util::HISTOGRAM_BUCKETS.to_vec()
     )
     .unwrap();
+    static ref COMMAND_DURATIONS: CommandDurations = CommandDurations::from(&COMMAND_DURATIONS_VEC);
 }
 
 pub struct Context {
@@ -156,6 +175,7 @@ pub enum StateMachine<A: Conn + 'static> {
         extended: bool,
         max_rows: Option<i32>,
         portal_name: String,
+        timer: Option<HistogramTimer>,
     },
 
     #[state_machine_future(transitions(SendSimpleComplete, HandleQuery, SendError))]
@@ -163,6 +183,7 @@ pub enum StateMachine<A: Conn + 'static> {
         conn: A,
         rx: futures::sync::oneshot::Receiver<coord::Response<()>>,
         extended: bool,
+        timer: Option<HistogramTimer>,
     },
 
     /// Wait for the dataflow layer to send us rows
@@ -176,6 +197,7 @@ pub enum StateMachine<A: Conn + 'static> {
         field_formats: Option<Vec<FieldFormat>>,
         extended: bool,
         portal_name: String,
+        timer: Option<HistogramTimer>,
     },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
@@ -186,6 +208,7 @@ pub enum StateMachine<A: Conn + 'static> {
         rows_rx: coord::RowsFuture,
         max_rows: Option<i32>,
         portal_name: String,
+        timer: Option<HistogramTimer>,
     },
 
     /// Send something to the client, and transition to `RecvQuery`
@@ -194,8 +217,8 @@ pub enum StateMachine<A: Conn + 'static> {
         send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
         session: Session,
         extended: bool,
-        /// Labels for prometheus. These provide the `kind` label value in [`RESPONSES_SENT_COUNTER`]
-        label: &'static str,
+        /// Timer to end when the command is complete
+        timer: Option<HistogramTimer>,
     },
 
     // Extended-only query flow.
@@ -203,16 +226,25 @@ pub enum StateMachine<A: Conn + 'static> {
     ///
     /// e.g. `ParseComplete`, `BindComplete`, `CloseComplete`
     #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
-    SendSimpleComplete { send: SinkSend<A>, session: Session },
+    SendSimpleComplete {
+        send: SinkSend<A>,
+        session: Session,
+        timer: Option<HistogramTimer>,
+    },
 
     #[state_machine_future(transitions(RecvQuery, Error))]
-    SendDescribeResponse { send: SinkSend<A>, session: Session },
+    SendDescribeResponse {
+        send: SinkSend<A>,
+        session: Session,
+        timer: Option<HistogramTimer>,
+    },
 
     #[state_machine_future(transitions(SendDescribeResponse, SendFatalError, Error))]
     SendParameterDescription {
         send: SinkSend<A>,
         session: Session,
         name: String,
+        timer: Option<HistogramTimer>,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, DrainUntilSync))]
@@ -252,6 +284,7 @@ pub enum StateMachine<A: Conn + 'static> {
         send: SinkSend<A>,
         session: Session,
         extended: bool,
+        timer: Option<HistogramTimer>,
     },
 
     // Errors and termination.
@@ -260,10 +293,14 @@ pub enum StateMachine<A: Conn + 'static> {
         send: SinkSend<A>,
         session: Session,
         extended: bool,
+        timer: Option<HistogramTimer>,
     },
 
     #[state_machine_future(transitions(Done, Error))]
-    SendFatalError { send: SinkSend<A> },
+    SendFatalError {
+        send: SinkSend<A>,
+        timer: Option<HistogramTimer>,
+    },
 
     #[state_machine_future(ready)]
     Done(()),
@@ -327,18 +364,24 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 transition!(Done(()))
             }
 
-            _ => transition!(send_fatal_error(
-                conn,
-                "08P01",
-                "invalid frontend message flow at startup"
-            )),
+            _ => {
+                let timer = start_timer(&cx, &COMMAND_DURATIONS.fatal_error);
+                transition!(send_fatal_error(
+                    conn,
+                    "08P01",
+                    "invalid frontend message flow at startup",
+                    timer,
+                ))
+            }
         };
 
         if version != VERSION_3 {
+            let timer = start_timer(&cx, &COMMAND_DURATIONS.fatal_error);
             transition!(send_fatal_error(
                 conn,
                 "08004",
-                "server does not support SSL"
+                "server does not support SSL",
+                timer
             ));
         }
 
@@ -391,6 +434,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         match msg {
             FrontendMessage::Query { sql } => {
                 debug!("query sql: {}", sql);
+                let timer = start_timer(&cx, &COMMAND_DURATIONS.simple_query);
                 let (tx, rx) = futures::sync::oneshot::channel();
                 cx.cmdq_tx.unbounded_send(coord::Command::Parse {
                     name: "".into(),
@@ -401,11 +445,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 transition!(HandleParse {
                     conn,
                     rx,
+                    timer,
                     extended: false,
                 })
             }
             FrontendMessage::Parse { name, sql, .. } => {
                 debug!("parse sql: {}", sql);
+                let timer = start_timer(&cx, &COMMAND_DURATIONS.parse);
                 let (tx, rx) = futures::sync::oneshot::channel();
                 cx.cmdq_tx.unbounded_send(coord::Command::Parse {
                     name,
@@ -416,35 +462,45 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 transition!(HandleParse {
                     conn,
                     rx,
+                    timer,
                     extended: true
                 })
             }
             FrontendMessage::CloseStatement { name } => {
+                let timer = start_timer(&cx, &COMMAND_DURATIONS.close_statement);
                 state.session.remove_prepared_statement(&name);
                 transition!(send_simple_complete(
                     conn,
                     state.session,
-                    BackendMessage::CloseComplete
+                    BackendMessage::CloseComplete,
+                    timer,
                 ));
             }
             FrontendMessage::ClosePortal { name } => {
+                let timer = start_timer(&cx, &COMMAND_DURATIONS.close_portal);
                 state.session.remove_portal(&name);
                 transition!(send_simple_complete(
                     conn,
                     state.session,
-                    BackendMessage::CloseComplete
+                    BackendMessage::CloseComplete,
+                    timer,
                 ));
             }
-            FrontendMessage::DescribePortal { name } => Ok(Async::Ready(send_describe_response(
-                conn,
-                state.session,
-                name,
-                DescribeKind::Portal,
-                cx.conn_id,
-            ))),
+            FrontendMessage::DescribePortal { name } => {
+                let timer = start_timer(&cx, &COMMAND_DURATIONS.describe_portal);
+                Ok(Async::Ready(send_describe_response(
+                    conn,
+                    state.session,
+                    name,
+                    DescribeKind::Portal,
+                    cx.conn_id,
+                    timer,
+                )))
+            }
             FrontendMessage::DescribeStatement { name } => {
                 match state.session.get_prepared_statement(&name) {
                     Some(stmt) => {
+                        let timer = start_timer(&cx, &COMMAND_DURATIONS.describe_statement);
                         transition!(SendParameterDescription {
                             send: conn.send(BackendMessage::ParameterDescription(
                                 stmt.param_types()
@@ -454,13 +510,18 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             )),
                             session: state.session,
                             name,
+                            timer,
                         });
                     }
-                    None => transition!(send_fatal_error(
-                        conn,
-                        "26000",
-                        "prepared statement does not exist"
-                    )),
+                    None => {
+                        let timer = start_timer(&cx, &COMMAND_DURATIONS.describe_statement_error);
+                        transition!(send_fatal_error(
+                            conn,
+                            "26000",
+                            "prepared statement does not exist",
+                            timer
+                        ))
+                    }
                 }
             }
             FrontendMessage::Bind {
@@ -475,6 +536,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let param_types = stmt.param_types();
                 match raw_parameter_bytes.decode_parameters(param_types) {
                     Ok(parameters) => {
+                        let timer = start_timer(&cx, &COMMAND_DURATIONS.bind);
                         trace!(
                             "cid={} handle bind statement={:?} portal={:?} parameters={:?} return_field_formats={:?}",
                             cx.conn_id,
@@ -487,10 +549,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         transition!(send_simple_complete(
                             conn,
                             session,
-                            BackendMessage::BindComplete
+                            BackendMessage::BindComplete,
+                            timer,
                         ));
                     }
                     Err(err) => {
+                        let timer = start_timer(&cx, &COMMAND_DURATIONS.bind_error);
                         trace!(
                             "cid={} handle bind err={:?} statement={:?} portal={:?} return_field_formats={:?}",
                             cx.conn_id,
@@ -499,7 +563,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             portal_name,
                             return_field_formats
                         );
-                        transition!(send_fatal_error(conn, "08P01", err.to_string()))
+                        transition!(send_fatal_error(conn, "08P01", err.to_string(), timer))
                     }
                 }
             }
@@ -507,7 +571,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 portal_name,
                 max_rows,
             } => {
-                let (tx, rx) = futures::sync::oneshot::channel();
                 {
                     let portal = state
                         .session
@@ -535,6 +598,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         .collect(),
                 );
                 if portal.remaining_rows.is_some() {
+                    let timer = start_timer(&cx, &COMMAND_DURATIONS.portal_continue);
                     // If the portal contains some rows then we return those instead of
                     // requesting new ones from the dataflow layer
                     let rows = portal.remaining_rows.take().unwrap();
@@ -547,8 +611,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         field_formats,
                         true,
                         cx.conn_id,
+                        timer,
                     )?)
                 } else {
+                    let timer = start_timer(&cx, &COMMAND_DURATIONS.execute);
+                    let (tx, rx) = futures::sync::oneshot::channel();
                     cx.cmdq_tx.unbounded_send(coord::Command::Execute {
                         portal_name: portal_name.clone(),
                         session: state.session,
@@ -563,16 +630,21 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         extended: true,
                         max_rows: Some(max_rows),
                         portal_name,
+                        timer,
                     })
                 }
             }
             FrontendMessage::Sync => transition!(send_ready_for_query(conn, state.session)),
             FrontendMessage::Terminate => transition!(Done(())),
-            _ => transition!(send_fatal_error(
-                conn,
-                "08P01",
-                "invalid frontend message flow"
-            )),
+            _ => {
+                let timer = start_timer(&cx, &COMMAND_DURATIONS.fatal_error);
+                transition!(send_fatal_error(
+                    conn,
+                    "08P01",
+                    "invalid frontend message flow",
+                    timer
+                ))
+            }
         }
     }
 
@@ -590,7 +662,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let state = state.take();
 
                 macro_rules! command_complete {
-                    ($cmd:expr, $label:tt) => {
+                    ($cmd:expr) => {
                         transition!(SendCommandComplete {
                             send: Box::new(
                                 state
@@ -599,37 +671,29 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             ),
                             session,
                             extended: state.extended,
-                            label: $label
+                            timer: state.timer,
                         })
                     };
                 }
 
                 match response {
-                    ExecuteResponse::CreatedIndex => {
-                        command_complete!("CREATE INDEX", "create_index")
-                    }
-                    ExecuteResponse::CreatedSource => {
-                        command_complete!("CREATE SOURCE", "create_source")
-                    }
-                    ExecuteResponse::CreatedSink => command_complete!("CREATE SINK", "create_sink"),
-                    ExecuteResponse::CreatedTable => {
-                        command_complete!("CREATE TABLE", "create_sink")
-                    }
-                    ExecuteResponse::CreatedView => command_complete!("CREATE VIEW", "create_view"),
+                    ExecuteResponse::CreatedIndex => command_complete!("CREATE INDEX"),
+                    ExecuteResponse::CreatedSource => command_complete!("CREATE SOURCE"),
+                    ExecuteResponse::CreatedSink => command_complete!("CREATE SINK"),
+                    ExecuteResponse::CreatedTable => command_complete!("CREATE TABLE"),
+                    ExecuteResponse::CreatedView => command_complete!("CREATE VIEW"),
                     ExecuteResponse::Deleted(n) => {
-                        command_complete!(format!("DELETE {}", n), "delete");
+                        command_complete!(format!("DELETE {}", n));
                     }
-                    ExecuteResponse::DroppedSource => {
-                        command_complete!("DROP SOURCE", "drop_source")
-                    }
-                    ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX", "drop_index"),
-                    ExecuteResponse::DroppedTable => command_complete!("DROP TABLE", "drop_table"),
-                    ExecuteResponse::DroppedView => command_complete!("DROP VIEW", "drop_view"),
+                    ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
+                    ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
+                    ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
+                    ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
                     ExecuteResponse::EmptyQuery => transition!(SendCommandComplete {
                         send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
                         session,
                         extended: state.extended,
-                        label: "empty",
+                        timer: state.timer,
                     }),
                     ExecuteResponse::Inserted(n) => {
                         // "On successful completion, an INSERT command returns a
@@ -639,7 +703,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         // OIDs are a PostgreSQL-specific historical quirk, but we
                         // can return a 0 OID to indicate that the table does not
                         // have OIDs.
-                        command_complete!(format!("INSERT 0 {}", n), "insert");
+                        command_complete!(format!("INSERT 0 {}", n));
                     }
                     ExecuteResponse::SendRows(rx) => {
                         let row_desc = state
@@ -656,7 +720,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                 max_rows: state.max_rows,
                                 portal_name,
                                 field_formats: state.field_formats,
-                                extended: true
+                                extended: true,
+                                timer: state.timer
                             })
                         } else {
                             transition!(SendRowDescription {
@@ -668,6 +733,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                 max_rows: state.max_rows,
                                 portal_name,
                                 rows_rx: rx,
+                                timer: state.timer,
                             })
                         }
                     }
@@ -675,35 +741,33 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         let qn = name.to_string();
                         if let Some(var) = session.notify_vars().iter().find(|v| v.name() == qn) {
                             trace!("cid={} sending parameter status for {}", cx.conn_id, name);
+                            let timer = start_timer(&cx, &COMMAND_DURATIONS.set_variable);
                             transition!(SendParameterStatus {
                                 send: state
                                     .conn
                                     .send(BackendMessage::ParameterStatus(var.name(), var.value())),
                                 session,
                                 extended: state.extended,
+                                timer,
                             })
                         } else {
-                            command_complete!("SET", "set")
+                            command_complete!("SET")
                         }
                     }
                     ExecuteResponse::StartTransaction => {
                         // PgJDBC expects "BEGIN", not "START TRANSACTION".
                         // The two actions are equivalent in PostgreSQL.
-                        command_complete!("BEGIN", "transaction_start")
+                        command_complete!("BEGIN")
                     }
-                    ExecuteResponse::Commit => {
-                        command_complete!("COMMIT TRANSACTION", "transaction_commit")
-                    }
-                    ExecuteResponse::Rollback => {
-                        command_complete!("ROLLBACK TRANSACTION", "transaction_rollback")
-                    }
+                    ExecuteResponse::Commit => command_complete!("COMMIT TRANSACTION"),
+                    ExecuteResponse::Rollback => command_complete!("ROLLBACK TRANSACTION"),
                     ExecuteResponse::Tailing { rx } => transition!(StartCopyOut {
                         send: state.conn.send(BackendMessage::CopyOutResponse),
                         session,
                         rx,
                     }),
                     ExecuteResponse::Updated(n) => {
-                        command_complete!(format!("UPDATE {}", n), "update");
+                        command_complete!(format!("UPDATE {}", n));
                     }
                 }
             }
@@ -717,7 +781,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     session,
                     state.extended,
                     "99999",
-                    err.to_string()
+                    err.to_string(),
+                    state.timer,
                 ));
             }
             Err(futures::sync::oneshot::Canceled) => {
@@ -741,6 +806,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         state.conn,
                         session,
                         BackendMessage::ParseComplete,
+                        state.timer,
                     ))
                 } else {
                     let statement_name = String::from("");
@@ -769,6 +835,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         max_rows: None,
                         extended: false,
                         portal_name,
+                        timer: state.timer,
                     })
                 }
             }
@@ -782,7 +849,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     session,
                     state.extended,
                     "99999",
-                    err.to_string()
+                    err.to_string(),
+                    state.timer,
                 ));
             }
         }
@@ -800,12 +868,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     state.session,
                     state.extended,
                     "57014",
-                    "canceling statement due to user request"
+                    "canceling statement due to user request",
+                    state.timer,
                 ));
             }
             PeekResponse::Rows(rows) => {
                 let state = state.take();
                 let extended = state.extended;
+                let timer = start_timer(&cx, &COMMAND_DURATIONS.peek_response);
                 trace!(
                     "cid={} wait for rows: count={} max={:?} extended={}",
                     cx.conn_id,
@@ -822,6 +892,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     state.field_formats.clone(),
                     state.extended,
                     cx.conn_id,
+                    timer,
                 )?)
             }
         }
@@ -843,6 +914,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             max_rows: state.max_rows,
             extended: false,
             portal_name: state.portal_name,
+            timer: state.timer,
         })
     }
 
@@ -852,6 +924,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
+        drop(state.timer);
         let extended = state.extended;
         let in_transaction = state.session.transaction();
         trace!(
@@ -860,11 +933,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             extended,
             in_transaction,
         );
-        if cx.gather_metrics {
-            RESPONSES_SENT_COUNTER
-                .with_label_values(&["success", state.label])
-                .inc();
-        }
         if extended {
             transition!(recv_query(conn, state.session))
         } else {
@@ -881,7 +949,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         trace!("cid={} send cmd complete", cx.conn_id);
         let state = state.take();
-        trace!("cid={} transition to recv extended", cx.conn_id);
+        drop(state.timer);
         transition!(recv_query(conn, state.session))
     }
 
@@ -891,6 +959,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendDescribeResponse<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
+        drop(state.timer);
         trace!("cid={} sent extended row description", cx.conn_id);
         transition!(recv_query(conn, state.session))
     }
@@ -907,6 +976,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             state.name,
             DescribeKind::Statement,
             cx.conn_id,
+            state.timer,
         )))
     }
 
@@ -988,7 +1058,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             send: Box::new(conn.send(BackendMessage::CommandComplete { tag: "SET".into() })),
             session: state.session,
             extended: state.extended,
-            label: "set",
+            timer: state.timer,
         })
     }
 
@@ -998,15 +1068,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendError<A>>,
         cx: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendError<A>, failure::Error> {
-        trace!("cid={} send error extended={}", cx.conn_id, state.extended);
         let conn = try_ready!(state.send.poll());
+        trace!("cid={} send error extended={}", cx.conn_id, state.extended);
         let mut state = state.take();
         state.session.fail_transaction();
-        if cx.gather_metrics {
-            RESPONSES_SENT_COUNTER
-                .with_label_values(&["error", ""])
-                .inc();
-        }
+        drop(state.timer);
         if state.extended {
             transition!(DrainUntilSync {
                 recv: conn.recv(),
@@ -1023,11 +1089,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendFatalError, failure::Error> {
         try_ready!(state.send.poll());
         trace!("cid={} send fatal error", cx.conn_id);
-        if cx.gather_metrics {
-            RESPONSES_SENT_COUNTER
-                .with_label_values(&["error", ""])
-                .inc();
-        }
+        let state = state.take();
+        drop(state.timer);
         transition!(Done(()))
     }
 }
@@ -1052,13 +1115,19 @@ where
     }
 }
 
-fn send_simple_complete<A>(conn: A, session: Session, cmd: BackendMessage) -> SendSimpleComplete<A>
+fn send_simple_complete<A>(
+    conn: A,
+    session: Session,
+    cmd: BackendMessage,
+    timer: Option<HistogramTimer>,
+) -> SendSimpleComplete<A>
 where
     A: Conn + 'static,
 {
     SendSimpleComplete {
         send: conn.send(cmd),
         session,
+        timer,
     }
 }
 
@@ -1093,6 +1162,7 @@ fn send_rows<A>(
     field_formats: Option<Vec<FieldFormat>>,
     extended: bool,
     conn_id: u32,
+    timer: Option<HistogramTimer>,
 ) -> Result<SendCommandComplete<A>, failure::Error>
 where
     A: Conn + 'static,
@@ -1105,59 +1175,51 @@ where
 
     // if we have more that u32's worth of rows I hope that there's a cap
     let row_count: u32 = rows.len().try_into().unwrap_or(u32::max_value());
-    let (send, label): (
-        Box<dyn futures::Future<Item = _, Error = _> + std::marker::Send + 'static>,
-        _,
-    ) = match portal.max_rows {
-        Some(max_rows) if max_rows.get() < row_count => {
-            // TODO: once we get async/await this should be possible to do without the intermediate vec
-            let max_rows = max_rows.get() as usize;
-            let send: Vec<_> = rows.drain(..max_rows).collect();
-            session
-                .get_portal_mut(&portal_name)
-                .ok_or_else(|| {
-                    failure::format_err!("portal missing after partial send: {:?}", portal_name)
-                })?
-                .set_remaining_rows(rows);
+    let send: Box<dyn futures::Future<Item = _, Error = _> + std::marker::Send + 'static> =
+        match portal.max_rows {
+            Some(max_rows) if max_rows.get() < row_count => {
+                // TODO: once we get async/await this should be possible to do without the intermediate vec
+                let max_rows = max_rows.get() as usize;
+                let send: Vec<_> = rows.drain(..max_rows).collect();
+                session
+                    .get_portal_mut(&portal_name)
+                    .ok_or_else(|| {
+                        failure::format_err!("portal missing after partial send: {:?}", portal_name)
+                    })?
+                    .set_remaining_rows(rows);
 
-            let send = send
-                .into_iter()
-                .map(move |row| {
-                    BackendMessage::DataRow(
-                        message::field_values_from_row(row, row_desc.typ()),
-                        formats.fresh(),
-                    )
-                })
-                .chain(iter::once(BackendMessage::PortalSuspended));
-            (
-                Box::new(stream::iter_ok(send).forward(conn).map(|(_, conn)| conn)),
-                "select_partial",
-            )
-        }
-        _ => {
-            let send = rows
-                .into_iter()
-                .map(move |row| {
-                    BackendMessage::DataRow(
-                        message::field_values_from_row(row, row_desc.typ()),
-                        formats.fresh(),
-                    )
-                })
-                .chain(iter::once(BackendMessage::CommandComplete {
-                    tag: "SELECT".into(),
-                }));
-            (
-                Box::new(stream::iter_ok(send).forward(conn).map(|(_, conn)| conn)),
-                "select",
-            )
-        }
-    };
+                let send = send
+                    .into_iter()
+                    .map(move |row| {
+                        BackendMessage::DataRow(
+                            message::field_values_from_row(row, row_desc.typ()),
+                            formats.fresh(),
+                        )
+                    })
+                    .chain(iter::once(BackendMessage::PortalSuspended));
+                Box::new(stream::iter_ok(send).forward(conn).map(|(_, conn)| conn))
+            }
+            _ => {
+                let send = rows
+                    .into_iter()
+                    .map(move |row| {
+                        BackendMessage::DataRow(
+                            message::field_values_from_row(row, row_desc.typ()),
+                            formats.fresh(),
+                        )
+                    })
+                    .chain(iter::once(BackendMessage::CommandComplete {
+                        tag: "SELECT".into(),
+                    }));
+                Box::new(stream::iter_ok(send).forward(conn).map(|(_, conn)| conn))
+            }
+        };
 
     Ok(SendCommandComplete {
         send,
         session,
         extended,
-        label,
+        timer,
     })
 }
 
@@ -1173,6 +1235,7 @@ fn send_describe_response<A, R>(
     name: String,
     kind: DescribeKind,
     conn_id: u32,
+    timer: Option<HistogramTimer>,
 ) -> R
 where
     A: Conn + 'static,
@@ -1192,8 +1255,13 @@ where
     let stmt = match stmt {
         Some(stmt) => stmt,
         None => {
-            return send_fatal_error(conn, "26000", "portal or prepared statement does not exist")
-                .into();
+            return send_fatal_error(
+                conn,
+                "26000",
+                "portal or prepared statement does not exist",
+                timer,
+            )
+            .into();
         }
     };
     match stmt.desc() {
@@ -1203,6 +1271,7 @@ where
             SendDescribeResponse {
                 send: conn.send(BackendMessage::RowDescription(desc)),
                 session,
+                timer,
             }
             .into()
         }
@@ -1211,6 +1280,7 @@ where
             SendDescribeResponse {
                 send: conn.send(BackendMessage::NoData),
                 session,
+                timer,
             }
             .into()
         }
@@ -1223,6 +1293,7 @@ fn send_error<A>(
     extended: bool,
     code: &'static str,
     message: impl Into<String>,
+    timer: Option<HistogramTimer>,
 ) -> SendError<A>
 where
     A: Conn + 'static,
@@ -1236,10 +1307,16 @@ where
         }),
         session,
         extended,
+        timer,
     }
 }
 
-fn send_fatal_error<A>(conn: A, code: &'static str, message: impl Into<String>) -> SendFatalError<A>
+fn send_fatal_error<A>(
+    conn: A,
+    code: &'static str,
+    message: impl Into<String>,
+    timer: Option<HistogramTimer>,
+) -> SendFatalError<A>
 where
     A: Conn + 'static,
 {
@@ -1250,5 +1327,14 @@ where
             message: message.into(),
             detail: None,
         }),
+        timer,
+    }
+}
+
+fn start_timer(cx: &Context, hist: &Histogram) -> Option<HistogramTimer> {
+    if cx.gather_metrics {
+        Some(Histogram::start_timer(hist))
+    } else {
+        None
     }
 }

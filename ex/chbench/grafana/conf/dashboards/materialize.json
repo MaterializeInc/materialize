@@ -15,6 +15,7 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
+  "iteration": 1575574512310,
   "links": [],
   "panels": [
     {
@@ -210,9 +211,9 @@
       "color": {
         "cardColor": "#77e04c",
         "colorScale": "sqrt",
-        "colorScheme": "interpolatePurples",
+        "colorScheme": "interpolateGreens",
         "exponent": 0.5,
-        "mode": "opacity"
+        "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
       "gridPos": {
@@ -225,6 +226,183 @@
       "hideZeroBuckets": true,
       "highlightCards": true,
       "id": 26,
+      "legend": {
+        "show": false
+      },
+      "options": {},
+      "reverseYBuckets": false,
+      "targets": [
+        {
+          "expr": "rate(mz_command_durations_bucket{command=\"$command\"}[30s])",
+          "format": "time_series",
+          "instant": false,
+          "interval": "10s",
+          "intervalFactor": 1,
+          "legendFormat": "{{le}}",
+          "refId": "A"
+        }
+      ],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "command: $command pgwire heatmap",
+      "tooltip": {
+        "show": true,
+        "showHistogram": true
+      },
+      "type": "heatmap",
+      "xAxis": {
+        "show": true
+      },
+      "xBucketNumber": null,
+      "xBucketSize": null,
+      "yAxis": {
+        "decimals": null,
+        "format": "s",
+        "logBase": 1,
+        "max": null,
+        "min": null,
+        "show": true,
+        "splitFactor": null
+      },
+      "yBucketBound": "auto",
+      "yBucketNumber": null,
+      "yBucketSize": null
+    },
+    {
+      "aliasColors": {
+        "max": "purple",
+        "median": "blue",
+        "p001": "green",
+        "p95": "orange",
+        "p99": "red"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "description": "the view of how long things took, from inside pgwire",
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 25,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "max",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "p99",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "p95",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "median",
+          "refId": "D"
+        },
+        {
+          "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "p001",
+          "refId": "E"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "command: $command pgwire latencies",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 2,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "cards": {
+        "cardPadding": null,
+        "cardRound": null
+      },
+      "color": {
+        "cardColor": "#77e04c",
+        "colorScale": "sqrt",
+        "colorScheme": "interpolatePurples",
+        "exponent": 0.5,
+        "mode": "opacity"
+      },
+      "dataFormat": "tsbuckets",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "heatmap": {},
+      "hideZeroBuckets": true,
+      "highlightCards": true,
+      "id": 27,
       "legend": {
         "show": false
       },
@@ -285,9 +463,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 16
       },
-      "id": 25,
+      "id": 28,
       "legend": {
         "avg": false,
         "current": false,
@@ -390,7 +568,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 16
+        "y": 24
       },
       "id": 6,
       "legend": {
@@ -475,7 +653,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 24
       },
       "id": 20,
       "legend": {
@@ -567,7 +745,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 32
       },
       "id": 22,
       "legend": {
@@ -653,7 +831,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 24
+        "y": 32
       },
       "id": 2,
       "legend": {
@@ -681,9 +859,9 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(mz_responses_sent_total[2s])",
+          "expr": "rate(mz_command_durations_count[2s])",
           "hide": false,
-          "legendFormat": "{{kind}}={{status}}",
+          "legendFormat": "{{command}}",
           "refId": "A"
         }
       ],
@@ -691,10 +869,10 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Queries/sec",
+      "title": "Events/sec",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -739,7 +917,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 40
       },
       "id": 10,
       "legend": {
@@ -824,7 +1002,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 40
       },
       "id": 12,
       "legend": {
@@ -908,7 +1086,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 48
       },
       "id": 16,
       "legend": {
@@ -993,7 +1171,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 48
       },
       "id": 24,
       "legend": {
@@ -1078,7 +1256,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 56
       },
       "id": 18,
       "legend": {
@@ -1170,7 +1348,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 56
       },
       "heatmap": {},
       "hideZeroBuckets": false,
@@ -1222,7 +1400,105 @@
   "style": "dark",
   "tags": [],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": null,
+        "current": {
+          "tags": [],
+          "text": "execute",
+          "value": "execute"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_command_durations_bucket, command)",
+        "hide": 0,
+        "includeAll": false,
+        "label": null,
+        "multi": false,
+        "name": "command",
+        "options": [
+          {
+            "selected": false,
+            "text": "bind",
+            "value": "bind"
+          },
+          {
+            "selected": false,
+            "text": "bind_error",
+            "value": "bind_error"
+          },
+          {
+            "selected": false,
+            "text": "close_portal",
+            "value": "close_portal"
+          },
+          {
+            "selected": false,
+            "text": "close_statement",
+            "value": "close_statement"
+          },
+          {
+            "selected": false,
+            "text": "describe_portal",
+            "value": "describe_portal"
+          },
+          {
+            "selected": false,
+            "text": "describe_statement",
+            "value": "describe_statement"
+          },
+          {
+            "selected": false,
+            "text": "describe_statement_error",
+            "value": "describe_statement_error"
+          },
+          {
+            "selected": true,
+            "text": "execute",
+            "value": "execute"
+          },
+          {
+            "selected": false,
+            "text": "fatal_error",
+            "value": "fatal_error"
+          },
+          {
+            "selected": false,
+            "text": "parse",
+            "value": "parse"
+          },
+          {
+            "selected": false,
+            "text": "peek_response",
+            "value": "peek_response"
+          },
+          {
+            "selected": false,
+            "text": "portal_continue",
+            "value": "portal_continue"
+          },
+          {
+            "selected": false,
+            "text": "set_variable",
+            "value": "set_variable"
+          },
+          {
+            "selected": false,
+            "text": "simple_query",
+            "value": "simple_query"
+          }
+        ],
+        "query": "label_values(mz_command_durations_bucket, command)",
+        "refresh": 0,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      }
+    ]
   },
   "time": {
     "from": "now-30m",
@@ -1245,5 +1521,5 @@
   "timezone": "",
   "title": "Materialize Metrics",
   "uid": "mz",
-  "version": 13
+  "version": 11
 }
