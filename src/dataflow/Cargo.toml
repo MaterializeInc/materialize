@@ -23,7 +23,7 @@ ore = { path = "../ore" }
 pdqselect = "0.1.0"
 prometheus = { version = "0.7", default-features = false }
 prometheus-static-metric = "0.2"
-rdkafka = { version = "0.21", features = ["cmake_build"] }
+rdkafka = { version = "0.22", features = ["cmake_build"] }
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.42"
