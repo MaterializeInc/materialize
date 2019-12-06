@@ -26,6 +26,12 @@ SELECT DISTINCT
   JOIN mz_view_frontiers lf_source ON ldd.source = lf_source.name
   JOIN mz_view_frontiers lf_df ON ldd.dataflow=lf_df.name;'
 
+# operator operator is due to issue #1217
+exec_sql 'CREATE VIEW mz_perf_arrangement_records AS
+ SELECT mas.worker, name, records, operator operator
+ FROM mz_arrangement_sizes mas
+ JOIN mz_dataflow_operators mdo ON mdo.id = mas.operator'
+
 # There are three steps required for a prometheus histogram from the mz_peek_durations
 # logs:
 #

@@ -1155,7 +1155,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "fill": 8,
+      "fill": 1,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
@@ -1174,7 +1174,7 @@
         "values": false
       },
       "lines": true,
-      "linewidth": 0,
+      "linewidth": 1,
       "nullPointMode": "null",
       "options": {
         "dataLinks": []
@@ -1185,7 +1185,7 @@
       "renderer": "flot",
       "seriesOverrides": [],
       "spaceLength": 10,
-      "stack": true,
+      "stack": false,
       "steppedLine": false,
       "targets": [
         {
@@ -1240,21 +1240,22 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "description": "Uncompacted records in each arrangement",
       "fill": 1,
-      "fillGradient": 1,
+      "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 59
       },
-      "id": 18,
+      "id": 35,
       "legend": {
         "avg": false,
         "current": false,
         "max": false,
         "min": false,
-        "show": true,
+        "show": false,
         "total": false,
         "values": false
       },
@@ -1274,8 +1275,8 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mysql_tpcch_table_rows",
-          "legendFormat": "{{table_name}}",
+          "expr": "mz_perf_arrangement_records",
+          "legendFormat": "w={{worker}} op={{operator}} name={{name}}",
           "refId": "A"
         }
       ],
@@ -1283,10 +1284,10 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "MySQL TPCCH Table Row Counts",
+      "title": "Arrangement Records",
       "tooltip": {
         "shared": true,
-        "sort": 2,
+        "sort": 0,
         "value_type": "individual"
       },
       "type": "graph",
@@ -1407,6 +1408,91 @@
       }
     },
     {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "fill": 1,
+      "fillGradient": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 67
+      },
+      "id": 18,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "mysql_tpcch_table_rows",
+          "legendFormat": "{{table_name}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "MySQL TPCCH Table Row Counts",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
       "cards": {
         "cardPadding": null,
         "cardRound": null
@@ -1424,7 +1510,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 75
       },
       "heatmap": {},
       "hideZeroBuckets": false,
@@ -1577,7 +1663,7 @@
     ]
   },
   "time": {
-    "from": "now-1h",
+    "from": "now-30m",
     "to": "now"
   },
   "timepicker": {
