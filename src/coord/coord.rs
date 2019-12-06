@@ -478,7 +478,7 @@ where
                     // Choose a timestamp for all workers to use in the peek.
                     // We minimize over all participating views, to ensure that the query will not
                     // need to block on the arrival of further input data.
-                    let timestamp = self.determine_timestamp(&source, when);
+                    let timestamp = self.determine_timestamp(&source, when)?;
 
                     let (project, filter) = Self::plan_peek(&mut source);
 
@@ -924,65 +924,130 @@ where
     }
 
     /// A policy for determining the timestamp for a peek.
-    fn determine_timestamp(&mut self, source: &RelationExpr, when: PeekWhen) -> Timestamp {
+    ///
+    /// The result may be `None` in the case that the `when` policy cannot be satisfied,
+    /// which is possible due to the restricted validity of traces (each has a `since`
+    /// and `upper` frontier, and are only valid after `since` and sure to be available
+    /// not after `upper`).
+    fn determine_timestamp(
+        &mut self,
+        source: &RelationExpr,
+        when: PeekWhen,
+    ) -> Result<Timestamp, failure::Error> {
         if self.symbiosis.is_some() {
             // In symbiosis mode, we enforce serializability by forcing all
             // PEEKs to peek at the latest input time.
-            return self.local_input_time - 1;
+            // TODO(benesch): should this be saturating subtraction, and what should happen
+            // when `self.local_input_time` is zero?
+            assert!(self.local_input_time > 0);
+            return Ok(self.local_input_time - 1);
         }
 
-        match when {
+        // Each involved trace has a validity interval `[since, upper)`.
+        // The contents of a trace are only guaranteed to be correct when
+        // accumulated at a time greater or equal to `since`, and they
+        // are only guaranteed to be currently present for times not
+        // greater or equal to `upper`.
+        //
+        // The plan is to first determine a timestamp, based on the requested
+        // timestamp policy, and then determine if it can be satisfied using
+        // the compacted arrangements we have at hand. It remains unresolved
+        // what to do if it cannot be satisfied (perhaps the query should use
+        // a larger timestamp and block, perhaps the user should intervene).
+        let mut uses_ids = Vec::new();
+        source.global_uses(&mut uses_ids);
+        uses_ids.sort();
+        uses_ids.dedup();
+
+        // First determine the candidate timestamp, which is either the explicitly requested
+        // timestamp, or the latest timestamp known to be immediately available.
+        let timestamp = match when {
             // Explicitly requested timestamps should be respected.
             PeekWhen::AtTimestamp(timestamp) => timestamp,
 
-            // We should produce the minimum accepted time among inputs sources that
-            // `source` depends on transitively, ignoring the accepted times of
-            // intermediate views.
+            // These two strategies vary in terms of which traces drive the
+            // timestamp determination process: either the trace itself or the
+            // original sources on which they depend.
             PeekWhen::EarliestSource | PeekWhen::Immediately => {
                 // Collect global identifiers in `source`.
-                let mut ids = Vec::new();
-                source.global_uses(&mut ids);
-                ids.sort();
-                ids.dedup();
+                let mut sources = HashSet::new();
+                let mut reached = HashSet::new();
 
-                // Form lower bound on available times.
-                let mut bound = Antichain::new();
                 match when {
                     PeekWhen::EarliestSource => {
-                        for id in ids {
-                            let mut reached = HashSet::new();
-                            self.sources_frontier(id, &mut bound, &mut reached);
+                        for id in uses_ids.iter() {
+                            self.sources_frontier(*id, &mut sources, &mut reached);
                         }
                     }
                     PeekWhen::Immediately => {
-                        for mut id in ids {
+                        for mut id in uses_ids.iter().cloned() {
                             if let Some((_source, rename)) = &self.sources.get(&id) {
                                 if let Some(rename) = rename {
                                     id = *rename;
                                 }
                             }
-                            bound.extend(
-                                self.upper_of(&id)
-                                    .expect("Upper bound missing")
-                                    .iter()
-                                    .cloned(),
-                            );
+                            sources.insert(id);
                         }
                     }
                     _ => unreachable!(),
                 }
 
-                // Pick the first time strictly less than `bound` to ensure that the
-                // peek can respond without further input advances.
-                // TODO : the subtraction saturates to not wrap zero around, but if
-                // we get this far with a zero we are at risk of a peek that may not
-                // immediately return.
-                if let Some(bound) = bound.elements().get(0) {
-                    bound.saturating_sub(1)
+                // Form lower bound on available times.
+                let mut upper = Antichain::new();
+                for id in sources {
+                    let view_upper = self.upper_of(&id).expect("Upper missing at coordinator");
+                    // To track the meet of `upper` we just extend with the upper frontier.
+                    upper.extend(view_upper.iter().cloned());
+                }
+
+                // We peek at the largest element not in advance of `upper`, which
+                // involves a subtraction. If `upper` contains a zero timestamp there
+                // is no "prior" answer, and we do not want to peek at it as it risks
+                // hanging awaiting the response to data that may never arrive.
+                if let Some(candidate) = upper.elements().get(0) {
+                    if *candidate > 0 {
+                        candidate.saturating_sub(1)
+                    } else {
+                        bail!("At least one input has no complete timestamps yet.");
+                    }
                 } else {
+                    // A complete trace can be read in its final form with this time.
                     Timestamp::max_value()
                 }
             }
+        };
+
+        // Determine the valid lower bound of times that can produce correct outputs.
+        // This bound is determined by the arrangements contributing to the query,
+        // and does not depend on the transitive sources.
+        let mut since = Antichain::from_elem(0);
+        for mut id in uses_ids {
+            if let Some((_source, rename)) = &self.sources.get(&id) {
+                if let Some(rename) = rename {
+                    id = *rename;
+                }
+            }
+            let prior_since = std::mem::replace(&mut since, Antichain::new());
+            let view_since = self.since_of(&id).expect("Since missing at coordinator");
+            // To track the join of `since` we should replace with the pointwise
+            // join of each element of `since` and `view_since`.
+            for new_element in view_since.elements() {
+                for old_element in prior_since.elements() {
+                    use differential_dataflow::lattice::Lattice;
+                    since.insert(new_element.join(old_element));
+                }
+            }
+        }
+
+        // If the timestamp is greater or equal to some element in `since` we are
+        // assured that the answer will be correct.
+        if since.less_equal(&timestamp) {
+            Ok(timestamp)
+        } else {
+            bail!(
+                "Latest available timestamp ({}) is not valid for all inputs",
+                timestamp
+            );
         }
     }
 
@@ -994,12 +1059,12 @@ where
     fn sources_frontier(
         &self,
         id: GlobalId,
-        bound: &mut Antichain<Timestamp>,
+        sources: &mut HashSet<GlobalId>,
         reached: &mut HashSet<GlobalId>,
     ) {
         if let Some((_source, rename)) = self.sources.get(&id) {
             if let Some(rename) = rename {
-                self.sources_frontier(*rename, bound, reached);
+                self.sources_frontier(*rename, sources, reached);
             } else {
                 panic!("sources_frontier called on bare source");
             }
@@ -1007,15 +1072,11 @@ where
             reached.insert(id);
             if let Some(view) = self.views.get(&id) {
                 if view.depends_on_source {
-                    // Views that depend on a source should propose their own frontiers,
-                    // which means we need not investigate their input frontiers (which
-                    // should be at least as far along).
-                    let upper = self.upper_of(&id).expect("Name missing at coordinator");
-                    bound.extend(upper.iter().cloned());
+                    sources.insert(id);
                 } else {
                     for id in view.uses.iter() {
                         if !reached.contains(id) {
-                            self.sources_frontier(*id, bound, reached);
+                            self.sources_frontier(*id, sources, reached);
                         }
                     }
                 }
