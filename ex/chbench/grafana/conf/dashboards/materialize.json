@@ -15,8 +15,200 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
+  "iteration": 1575574512326,
   "links": [],
   "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 34,
+      "panels": [],
+      "title": "Latencies from different perspectives",
+      "type": "row"
+    },
+    {
+      "cards": {
+        "cardPadding": null,
+        "cardRound": null
+      },
+      "color": {
+        "cardColor": "#77e04c",
+        "colorScale": "sqrt",
+        "colorScheme": "interpolateGreens",
+        "exponent": 0.5,
+        "mode": "spectrum"
+      },
+      "dataFormat": "tsbuckets",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "heatmap": {},
+      "hideZeroBuckets": true,
+      "highlightCards": true,
+      "id": 26,
+      "legend": {
+        "show": false
+      },
+      "options": {},
+      "reverseYBuckets": false,
+      "targets": [
+        {
+          "expr": "rate(mz_command_durations_bucket{command=\"$command\"}[30s])",
+          "format": "time_series",
+          "instant": false,
+          "interval": "10s",
+          "intervalFactor": 1,
+          "legendFormat": "{{le}}",
+          "refId": "A"
+        }
+      ],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "command=$command pgwire latency heatmap",
+      "tooltip": {
+        "show": true,
+        "showHistogram": true
+      },
+      "tooltipDecimals": 0,
+      "type": "heatmap",
+      "xAxis": {
+        "show": true
+      },
+      "xBucketNumber": null,
+      "xBucketSize": null,
+      "yAxis": {
+        "decimals": 0,
+        "format": "s",
+        "logBase": 1,
+        "max": null,
+        "min": null,
+        "show": true,
+        "splitFactor": null
+      },
+      "yBucketBound": "auto",
+      "yBucketNumber": null,
+      "yBucketSize": null
+    },
+    {
+      "aliasColors": {
+        "max": "purple",
+        "median": "blue",
+        "p001": "green",
+        "p95": "orange",
+        "p99": "red"
+      },
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "description": "the view of how long things took, from inside pgwire",
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "id": 25,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "max",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "p99",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "p95",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "median",
+          "refId": "D"
+        },
+        {
+          "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "legendFormat": "p001",
+          "refId": "E"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "command=$command pgwire latency quantiles",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 2,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
     {
       "cards": {
         "cardPadding": null,
@@ -36,7 +228,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 0
+        "y": 9
       },
       "heatmap": {},
       "hideZeroBuckets": true,
@@ -59,7 +251,7 @@
       ],
       "timeFrom": null,
       "timeShift": null,
-      "title": "Peek Latencies, server side heatmap",
+      "title": "dataflow internal latency heatmap",
       "tooltip": {
         "show": true,
         "showHistogram": true
@@ -101,7 +293,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 0
+        "y": 9
       },
       "id": 14,
       "legend": {
@@ -165,7 +357,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Peek latencies, server side",
+      "title": "dataflow internal latency quantiles",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -210,21 +402,21 @@
       "color": {
         "cardColor": "#77e04c",
         "colorScale": "sqrt",
-        "colorScheme": "interpolatePurples",
+        "colorScheme": "interpolateGreens",
         "exponent": 0.5,
-        "mode": "opacity"
+        "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 8
+        "y": 17
       },
       "heatmap": {},
       "hideZeroBuckets": true,
       "highlightCards": true,
-      "id": 26,
+      "id": 27,
       "legend": {
         "show": false
       },
@@ -243,11 +435,12 @@
       ],
       "timeFrom": null,
       "timeShift": null,
-      "title": "Peek latencies, client side heatmap",
+      "title": "client side latency heatmap",
       "tooltip": {
         "show": true,
         "showHistogram": true
       },
+      "tooltipDecimals": 0,
       "type": "heatmap",
       "xAxis": {
         "show": true
@@ -255,7 +448,7 @@
       "xBucketNumber": null,
       "xBucketSize": null,
       "yAxis": {
-        "decimals": null,
+        "decimals": 0,
         "format": "s",
         "logBase": 1,
         "max": null,
@@ -285,9 +478,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 17
       },
-      "id": 25,
+      "id": 28,
       "legend": {
         "avg": false,
         "current": false,
@@ -342,7 +535,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Peek latencies, client side",
+      "title": "client side latency quantiles",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -390,12 +583,13 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 16
+        "y": 25
       },
       "id": 6,
       "legend": {
         "avg": false,
         "current": false,
+        "hideEmpty": true,
         "max": false,
         "min": false,
         "show": true,
@@ -465,182 +659,17 @@
       }
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "fill": 1,
-      "fillGradient": 0,
+      "collapsed": false,
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 16
-      },
-      "id": 20,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "rate(process_cpu_seconds_total{job=\"materialized\"}[2s])",
-          "hide": false,
-          "legendFormat": "{{job}}",
-          "refId": "B"
-        },
-        {
-          "expr": "rate(process_cpu_seconds_total{job=\"mz_client_peek\"}[30s])",
-          "hide": false,
-          "legendFormat": "{{job}} (doesn't show subprocesses)",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "materialized: CPU usage",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 1,
+        "w": 24,
         "x": 0,
-        "y": 24
+        "y": 33
       },
-      "id": 22,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "process_open_fds{job=\"materialized\"}",
-          "legendFormat": "{{job}}",
-          "refId": "B"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "materialized: open fds",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": null,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "id": 32,
+      "panels": [],
+      "title": "Input and Output event rates",
+      "type": "row"
     },
     {
       "aliasColors": {},
@@ -652,13 +681,15 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 24
+        "x": 6,
+        "y": 34
       },
       "id": 2,
       "legend": {
         "avg": false,
         "current": false,
+        "hideEmpty": true,
+        "hideZero": true,
         "max": false,
         "min": false,
         "show": true,
@@ -681,9 +712,9 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(mz_responses_sent_total[2s])",
+          "expr": "rate(mz_command_durations_count[2s])",
           "hide": false,
-          "legendFormat": "{{kind}}={{status}}",
+          "legendFormat": "{{command}}",
           "refId": "A"
         }
       ],
@@ -691,10 +722,10 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Queries/sec",
+      "title": "postgres requests/second",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -739,12 +770,14 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 42
       },
       "id": 10,
       "legend": {
         "avg": false,
         "current": false,
+        "hideEmpty": true,
+        "hideZero": true,
         "max": false,
         "min": false,
         "show": true,
@@ -761,7 +794,16 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "seriesOverrides": [],
+      "seriesOverrides": [
+        {
+          "alias": "events total error",
+          "yaxis": 2
+        },
+        {
+          "alias": "events total success",
+          "yaxis": 2
+        }
+      ],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
@@ -770,6 +812,12 @@
           "expr": "rate(mz_kafka_events_read_total[2s])",
           "legendFormat": "events {{status}}",
           "refId": "A"
+        },
+        {
+          "expr": "mz_kafka_events_read_total",
+          "instant": false,
+          "legendFormat": "events total {{status}}",
+          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -824,7 +872,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 42
       },
       "id": 12,
       "legend": {
@@ -846,14 +894,29 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "seriesOverrides": [],
+      "seriesOverrides": [
+        {
+          "alias": "mz_kafka_bytes_read_total{instance=\"materialized:6875\",job=\"materialized\"}",
+          "yaxis": 2
+        },
+        {
+          "alias": "total",
+          "yaxis": 2
+        }
+      ],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
           "expr": "rate(mz_kafka_bytes_read_total[2s])",
+          "legendFormat": "rate",
           "refId": "A"
+        },
+        {
+          "expr": "mz_kafka_bytes_read_total",
+          "legendFormat": "total",
+          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -884,7 +947,7 @@
           "show": true
         },
         {
-          "format": "short",
+          "format": "decbytes",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -898,89 +961,17 @@
       }
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "fill": 8,
-      "fillGradient": 0,
+      "collapsed": false,
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 1,
+        "w": 24,
         "x": 0,
-        "y": 40
+        "y": 50
       },
-      "id": 16,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": false,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 0,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": true,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "mz_perf_arrangements_batches",
-          "legendFormat": "w={{worker}} op={{operator}}",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Arrangement Batches",
-      "tooltip": {
-        "shared": true,
-        "sort": 2,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "id": 30,
+      "panels": [],
+      "title": "Resource Consumption",
+      "type": "row"
     },
     {
       "aliasColors": {},
@@ -992,8 +983,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 40
+        "x": 0,
+        "y": 51
       },
       "id": 24,
       "legend": {
@@ -1073,12 +1064,189 @@
       "dashLength": 10,
       "dashes": false,
       "fill": 1,
-      "fillGradient": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "id": 20,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "rate(process_cpu_seconds_total{job=\"materialized\"}[2s])",
+          "hide": false,
+          "legendFormat": "{{job}}",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(process_cpu_seconds_total{job=\"mz_client_peek\"}[30s])",
+          "hide": false,
+          "legendFormat": "{{job}} (doesn't show subprocesses)",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "materialized: CPU usage",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "percentunit",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "fill": 8,
+      "fillGradient": 0,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 59
+      },
+      "id": 16,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": false,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 0,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": true,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "mz_perf_arrangements_batches",
+          "legendFormat": "w={{worker}} op={{operator}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Arrangement Batches",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "fill": 1,
+      "fillGradient": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 59
       },
       "id": 18,
       "legend": {
@@ -1153,6 +1321,92 @@
       }
     },
     {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 67
+      },
+      "id": 22,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "process_open_fds{job=\"materialized\"}",
+          "legendFormat": "{{job}}",
+          "refId": "B"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "materialized: open fds",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "decimals": null,
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
       "cards": {
         "cardPadding": null,
         "cardRound": null
@@ -1170,7 +1424,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 67
       },
       "heatmap": {},
       "hideZeroBuckets": false,
@@ -1222,10 +1476,108 @@
   "style": "dark",
   "tags": [],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": null,
+        "current": {
+          "tags": [],
+          "text": "execute",
+          "value": "execute"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_command_durations_bucket, command)",
+        "hide": 0,
+        "includeAll": false,
+        "label": null,
+        "multi": false,
+        "name": "command",
+        "options": [
+          {
+            "selected": false,
+            "text": "bind",
+            "value": "bind"
+          },
+          {
+            "selected": false,
+            "text": "bind_error",
+            "value": "bind_error"
+          },
+          {
+            "selected": false,
+            "text": "close_portal",
+            "value": "close_portal"
+          },
+          {
+            "selected": false,
+            "text": "close_statement",
+            "value": "close_statement"
+          },
+          {
+            "selected": false,
+            "text": "describe_portal",
+            "value": "describe_portal"
+          },
+          {
+            "selected": false,
+            "text": "describe_statement",
+            "value": "describe_statement"
+          },
+          {
+            "selected": false,
+            "text": "describe_statement_error",
+            "value": "describe_statement_error"
+          },
+          {
+            "selected": true,
+            "text": "execute",
+            "value": "execute"
+          },
+          {
+            "selected": false,
+            "text": "fatal_error",
+            "value": "fatal_error"
+          },
+          {
+            "selected": false,
+            "text": "parse",
+            "value": "parse"
+          },
+          {
+            "selected": false,
+            "text": "peek_response",
+            "value": "peek_response"
+          },
+          {
+            "selected": false,
+            "text": "portal_continue",
+            "value": "portal_continue"
+          },
+          {
+            "selected": false,
+            "text": "set_variable",
+            "value": "set_variable"
+          },
+          {
+            "selected": false,
+            "text": "simple_query",
+            "value": "simple_query"
+          }
+        ],
+        "query": "label_values(mz_command_durations_bucket, command)",
+        "refresh": 0,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      }
+    ]
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-1h",
     "to": "now"
   },
   "timepicker": {
@@ -1245,5 +1597,5 @@
   "timezone": "",
   "title": "Materialize Metrics",
   "uid": "mz",
-  "version": 13
+  "version": 11
 }

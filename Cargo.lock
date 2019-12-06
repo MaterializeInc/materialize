@@ -1972,6 +1972,7 @@ dependencies = [
  "ordered-float",
  "ore",
  "prometheus",
+ "prometheus-static-metric",
  "rand 0.7.2",
  "repr",
  "sql",
