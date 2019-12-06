@@ -80,7 +80,7 @@ sum   YES      int8
 > SHOW TABLES;
 data
 mz_arrangement_sharing
-mz_arrangement_size
+mz_arrangement_sizes
 mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators
@@ -89,19 +89,21 @@ mz_peek_durations
 mz_scheduling_elapsed
 mz_scheduling_histogram
 mz_scheduling_parks
-mz_view_dependency
+mz_view_dependencies
 mz_view_foreign_keys
-mz_view_frontier
+mz_view_frontiers
 mz_view_keys
 mz_views
 
-> SHOW TABLES LIKE '%peeks%';
-logs_peeks
+> SHOW TABLES LIKE '%peek%';
+mz_peek_active
+mz_peek_durations
 
 > SHOW TABLES LIKE '%data%';
 data
-logs_dataflow_dependency
-logs_dataflows
+mz_dataflow_channels
+mz_dataflow_operator_addresses
+mz_dataflow_operators
 
 > SHOW CREATE VIEW test1
 View   Create View

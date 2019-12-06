@@ -14,7 +14,8 @@ menu:
 
 ## Details
 
-Materialize maintains a number of views on your behalf, all of which begin with the name `logs_`, e.g. `logs_channels`.
+Materialize maintains a number of views on your behalf, all of which begin with the name
+`mz_`, e.g. `mz_dataflow_channels`.
 
 All other sources that display are sources you added to your instances.
 
@@ -24,9 +25,9 @@ All other sources that display are sources you added to your instances.
 SHOW SOURCES;
 ```
 ```bash
-logs_channels
-logs_dataflow_dependency
-logs_dataflows
+mz_dataflow_channels
+mz_view_dependencies
+mz_views
 ...
 my_source
 ```

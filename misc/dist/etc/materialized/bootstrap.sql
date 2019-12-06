@@ -3,56 +3,56 @@
 -- This file is part of Materialize. Materialize may not be used or
 -- distributed without the express permission of Materialize, Inc.
 
--- Stores all addresses that only have one slot (0) in logs_addresses
+-- Stores all addresses that only have one slot (0) in mz_dataflow_operator_addresses
 -- The resulting addresses are either channels or dataflows
 CREATE VIEW logs_unit_length_addresses as
 SELECT
-    logs_addresses.id,
-    logs_addresses.worker
+    mz_dataflow_operator_addresses.id,
+    mz_dataflow_operator_addresses.worker
 FROM
-    logs_addresses
+    mz_dataflow_operator_addresses
 GROUP BY
-    logs_addresses.id,
-    logs_addresses.worker
+    mz_dataflow_operator_addresses.id,
+    mz_dataflow_operator_addresses.worker
 HAVING count(*) = 1;
 
 -- Maintains a list of the current dataflow operator ids, and their corresponding operator names and local ids (per worker)
 CREATE VIEW logs_dataflow_names AS
 SELECT
-    logs_addresses.id,
-    logs_addresses.worker,
-    logs_addresses.value as local_id,
-    logs_operates.name
+    mz_dataflow_operator_addresses.id,
+    mz_dataflow_operator_addresses.worker,
+    mz_dataflow_operator_addresses.value as local_id,
+    mz_dataflow_operators.name
 FROM
-    logs_addresses,
-    logs_operates,
+    mz_dataflow_operator_addresses,
+    mz_dataflow_operators,
     logs_unit_length_addresses
 WHERE
-    logs_addresses.id = logs_operates.id AND
-    logs_addresses.worker = logs_operates.worker AND
-    logs_addresses.id = logs_unit_length_addresses.id AND
-    logs_addresses.worker = logs_unit_length_addresses.worker AND
-    logs_addresses.slot = 0;
+    mz_dataflow_operator_addresses.id = mz_dataflow_operators.id AND
+    mz_dataflow_operator_addresses.worker = mz_dataflow_operators.worker AND
+    mz_dataflow_operator_addresses.id = logs_unit_length_addresses.id AND
+    mz_dataflow_operator_addresses.worker = logs_unit_length_addresses.worker AND
+    mz_dataflow_operator_addresses.slot = 0;
 
 -- Maintains a list of all operators bound to a dataflow and their corresponding names and dataflow names and ids (per worker)
 -- Keeping this as a separate view instead of rolling it into logs_records_per_dataflow_operator to simplify logic
 CREATE VIEW logs_dataflow_operators AS
 SELECT
-    logs_operates.id,
-    logs_operates.name,
-    logs_operates.worker,
+    mz_dataflow_operators.id,
+    mz_dataflow_operators.name,
+    mz_dataflow_operators.worker,
     logs_dataflow_names.id as dataflow_id,
     logs_dataflow_names.name as dataflow_name
 FROM
-    logs_operates,
-    logs_addresses,
+    mz_dataflow_operators,
+    mz_dataflow_operator_addresses,
     logs_dataflow_names
 WHERE
-    logs_operates.id = logs_addresses.id AND
-    logs_operates.worker = logs_addresses.worker AND
-    logs_addresses.slot = 0 AND
-    logs_dataflow_names.local_id = logs_addresses.value AND
-    logs_dataflow_names.worker = logs_addresses.worker;
+    mz_dataflow_operators.id = mz_dataflow_operator_addresses.id AND
+    mz_dataflow_operators.worker = mz_dataflow_operator_addresses.worker AND
+    mz_dataflow_operator_addresses.slot = 0 AND
+    logs_dataflow_names.local_id = mz_dataflow_operator_addresses.value AND
+    logs_dataflow_names.worker = mz_dataflow_operator_addresses.worker;
 
 -- Maintains the number of records used by each operator in a dataflow (per worker)
 -- Operators not using any records are not shown
@@ -62,13 +62,13 @@ SELECT
     logs_dataflow_operators.name,
     logs_dataflow_operators.worker,
     logs_dataflow_operators.dataflow_id,
-    logs_arrangement.records
+    mz_arrangement_sizes.records
 FROM
-    logs_arrangement,
+    mz_arrangement_sizes,
     logs_dataflow_operators
 WHERE
-    logs_dataflow_operators.id = logs_arrangement.operator AND
-    logs_dataflow_operators.worker = logs_arrangement.worker;
+    logs_dataflow_operators.id = mz_arrangement_sizes.operator AND
+    logs_dataflow_operators.worker = mz_arrangement_sizes.worker;
 
 -- Maintains the number of records used by each dataflow (per worker)
 CREATE VIEW logs_records_per_dataflow AS

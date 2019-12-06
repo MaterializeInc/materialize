@@ -31,7 +31,7 @@
         "mode": "opacity"
       },
       "dataFormat": "tsbuckets",
-      "description": "from logs_peek_durations",
+      "description": "from mz_peek_durations",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -94,7 +94,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "description": "from logs_peek_durations",
+      "description": "from mz_peek_durations",
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {

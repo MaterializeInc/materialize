@@ -22,11 +22,11 @@ SELECT DISTINCT
        ldd.dataflow as dataflow, lf_source.name as source,
        lf_source.time - lf_df.time as lag_ms
   FROM
-       logs_dataflow_dependency ldd
-  JOIN logs_frontiers lf_source ON ldd.source = lf_source.name
-  JOIN logs_frontiers lf_df ON ldd.dataflow=lf_df.name;'
+       mz_view_dependencies ldd
+  JOIN mz_view_frontiers lf_source ON ldd.source = lf_source.name
+  JOIN mz_view_frontiers lf_df ON ldd.dataflow=lf_df.name;'
 
-# There are three steps required for a prometheus histogram from the logs_peek_durations
+# There are three steps required for a prometheus histogram from the mz_peek_durations
 # logs:
 #
 #   1. Create some values that all represent everything in them and below (_core)
@@ -38,8 +38,8 @@ SELECT
     CAST(d_upper.duration_ns AS TEXT) AS le,
     sum(d_summed.count) AS count
 FROM
-    logs_peek_durations AS d_upper,
-    logs_peek_durations AS d_summed
+    mz_peek_durations AS d_upper,
+    mz_peek_durations AS d_summed
 WHERE
     d_upper.worker = d_summed.worker
   AND
@@ -55,5 +55,5 @@ exec_sql "CREATE VIEW mz_perf_peek_durations_bucket AS
 )"
 exec_sql 'CREATE VIEW mz_perf_peek_durations_aggregates AS
 SELECT worker, sum(duration_ns * count) AS sum, sum(count) AS count
-FROM logs_peek_durations lpd
+FROM mz_peek_durations lpd
 GROUP BY worker'

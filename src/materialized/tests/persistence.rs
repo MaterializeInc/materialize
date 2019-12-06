@@ -25,7 +25,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         // populated Kafka source here is too annoying.
         conn.execute("CREATE VIEW constant AS SELECT 1", &[])?;
         conn.execute(
-            "CREATE VIEW logging_derived AS SELECT * FROM logs_arrangement",
+            "CREATE VIEW logging_derived AS SELECT * FROM mz_arrangement_sizes",
             &[],
         )?;
     }

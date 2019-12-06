@@ -42,9 +42,11 @@ pub enum LogVariant {
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub enum TimelyLog {
+    /// The operators and their names
     Operates,
     Channels,
     Elapsed,
+    /// Histogram of operator execution durations
     Histogram,
     Addresses,
     Parks,
@@ -97,13 +99,13 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Elapsed) => "mz_scheduling_elapsed".lit(),
             LogVariant::Timely(TimelyLog::Histogram) => "mz_scheduling_histogram".lit(),
             LogVariant::Timely(TimelyLog::Parks) => "mz_scheduling_parks".lit(),
-            LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_size".lit(),
+            LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_sizes".lit(),
             LogVariant::Differential(DifferentialLog::Sharing) => "mz_arrangement_sharing".lit(),
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_views".lit(),
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
-                "mz_view_dependency".lit()
+                "mz_view_dependencies".lit()
             }
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontier".lit(),
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontiers".lit(),
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active".lit(),
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations".lit(),
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys".lit(),

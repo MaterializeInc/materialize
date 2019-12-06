@@ -22,7 +22,7 @@
 > SELECT count(*) FROM count_histogram;
 1
 
-> CREATE VIEW count_arrangement AS SELECT count(*) FROM mz_arrangement_size;
+> CREATE VIEW count_arrangement AS SELECT count(*) FROM mz_arrangement_sizes;
 > SELECT count(*) FROM count_arrangement;
 1
 
@@ -30,7 +30,7 @@
 > SELECT count(*) FROM count_dataflows;
 1
 
-> CREATE VIEW count_frontiers AS SELECT count(*) FROM mz_view_frontier;
+> CREATE VIEW count_frontiers AS SELECT count(*) FROM mz_view_frontiers;
 > SELECT count(*) FROM count_frontiers;
 1
 
