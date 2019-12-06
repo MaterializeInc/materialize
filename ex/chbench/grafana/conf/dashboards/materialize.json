@@ -776,6 +776,8 @@
       "legend": {
         "avg": false,
         "current": false,
+        "hideEmpty": true,
+        "hideZero": true,
         "max": false,
         "min": false,
         "show": true,
@@ -792,7 +794,16 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "seriesOverrides": [],
+      "seriesOverrides": [
+        {
+          "alias": "events total error",
+          "yaxis": 2
+        },
+        {
+          "alias": "events total success",
+          "yaxis": 2
+        }
+      ],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
@@ -801,6 +812,12 @@
           "expr": "rate(mz_kafka_events_read_total[2s])",
           "legendFormat": "events {{status}}",
           "refId": "A"
+        },
+        {
+          "expr": "mz_kafka_events_read_total",
+          "instant": false,
+          "legendFormat": "events total {{status}}",
+          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -877,14 +894,29 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "seriesOverrides": [],
+      "seriesOverrides": [
+        {
+          "alias": "mz_kafka_bytes_read_total{instance=\"materialized:6875\",job=\"materialized\"}",
+          "yaxis": 2
+        },
+        {
+          "alias": "total",
+          "yaxis": 2
+        }
+      ],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
           "expr": "rate(mz_kafka_bytes_read_total[2s])",
+          "legendFormat": "rate",
           "refId": "A"
+        },
+        {
+          "expr": "mz_kafka_bytes_read_total",
+          "legendFormat": "total",
+          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -915,7 +947,7 @@
           "show": true
         },
         {
-          "format": "short",
+          "format": "decbytes",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -1097,7 +1129,7 @@
       },
       "yaxes": [
         {
-          "format": "short",
+          "format": "percentunit",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -1545,7 +1577,7 @@
     ]
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-1h",
     "to": "now"
   },
   "timepicker": {
