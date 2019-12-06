@@ -1,0 +1,276 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+statement ok
+CREATE TABLE warehouse (
+    w_id integer,
+    w_name char(10),
+    w_street_1 char(20),
+    w_street_2 char(20),
+    w_city char(20),
+    w_state char(2),
+    w_zip char(9),
+    w_tax decimal(4, 4),
+    w_ytd decimal(12, 2),
+    PRIMARY KEY (w_id)
+)
+
+statement ok
+CREATE TABLE district (
+    d_id smallint,
+    d_w_id integer,
+    d_name char(10),
+    d_street_1 char(20),
+    d_street_2 char(20),
+    d_city char(20),
+    d_state char(2),
+    d_zip char(9),
+    d_tax decimal(4, 4),
+    d_ytd decimal(12, 2),
+    d_next_o_id integer,
+    PRIMARY KEY (d_w_id, d_id)
+)
+
+statement ok
+CREATE INDEX fk_district_warehouse ON district (d_w_id ASC)
+
+statement ok
+CREATE TABLE customer (
+    c_id smallint,
+    c_d_id smallint,
+    c_w_id integer,
+    c_first char(16),
+    c_middle char(2),
+    c_last char(16),
+    c_street_1 char(20),
+    c_street_2 char(20),
+    c_city char(20),
+    c_state char(2),
+    c_zip char(9),
+    c_phone char(16),
+    c_since DATE,
+    c_credit char(2),
+    c_credit_lim decimal(12, 2),
+    c_discount decimal(4, 4),
+    c_balance decimal(12, 2),
+    c_ytd_payment decimal(12, 2),
+    c_payment_cnt smallint,
+    c_delivery_cnt smallint,
+    c_data text,
+    c_n_nationkey integer,
+    PRIMARY KEY(c_w_id, c_d_id, c_id)
+)
+
+statement ok
+CREATE INDEX fk_customer_district ON customer(c_w_id ASC, c_d_id ASC)
+
+statement ok
+CREATE TABLE history (
+    h_c_id smallint,
+    h_c_d_id smallint,
+    h_c_w_id integer,
+    h_d_id smallint,
+    h_w_id integer,
+    h_date date,
+    h_amount decimal(6, 2),
+    h_data char(24)
+)
+
+statement ok
+CREATE INDEX fk_history_customer ON history (h_c_w_id ASC, h_c_d_id ASC, h_c_id ASC)
+
+statement ok
+CREATE INDEX fk_history_district ON history (h_w_id ASC, h_d_id ASC)
+
+statement ok
+CREATE TABLE neworder (
+    no_o_id integer,
+    no_d_id smallint,
+    no_w_id integer,
+    PRIMARY KEY (no_w_id, no_d_id, no_o_id)
+)
+
+statement ok
+CREATE TABLE "order" (
+    o_id integer,
+    o_d_id smallint,
+    o_w_id integer,
+    o_c_id smallint,
+    o_entry_d date,
+    o_carrier_id smallint,
+    o_ol_cnt smallint,
+    o_all_local smallint,
+    PRIMARY KEY (o_w_id, o_d_id, o_id)
+)
+
+statement ok
+CREATE INDEX fk_order_customer ON order (o_w_id ASC, o_d_id ASC, o_c_id ASC)
+
+statement ok
+CREATE TABLE orderline (
+    ol_o_id integer,
+    ol_d_id smallint,
+    ol_w_id integer,
+    ol_number smallint,
+    ol_i_id integer,
+    ol_supply_w_id integer,
+    ol_delivery_d date,
+    ol_quantity smallint,
+    ol_amount decimal(6, 2),
+    ol_dist_info char(24),
+    PRIMARY KEY (ol_w_id, ol_d_id, ol_o_id, ol_number)
+)
+
+statement ok
+CREATE INDEX fk_orderline_order ON orderline (ol_w_id ASC, ol_d_id ASC, ol_o_id ASC)
+
+statement ok
+CREATE INDEX fk_orderline_stock ON orderline (ol_supply_w_id ASC, ol_i_id ASC)
+
+statement ok
+CREATE TABLE item (
+    i_id integer,
+    i_im_id smallint,
+    i_name char(24),
+    i_price decimal(5, 2),
+    i_data char(50),
+    PRIMARY KEY (i_id)
+)
+
+statement ok
+CREATE TABLE stock (
+    s_i_id integer,
+    s_w_id integer,
+    s_quantity smallint,
+    s_dist_01 char(24),
+    s_dist_02 char(24),
+    s_dist_03 char(24),
+    s_dist_04 char(24),
+    s_dist_05 char(24),
+    s_dist_06 char(24),
+    s_dist_07 char(24),
+    s_dist_08 char(24),
+    s_dist_09 char(24),
+    s_dist_10 char(24),
+    s_ytd integer,
+    s_order_cnt smallint,
+    s_remote_cnt smallint,
+    s_data char(50),
+    s_su_suppkey integer,
+    PRIMARY KEY (s_w_id, s_i_id)
+)
+
+statement ok
+CREATE INDEX fk_stock_warehouse ON stock (s_w_id ASC)
+
+statement ok
+CREATE INDEX fk_stock_item ON stock (s_i_id ASC)
+
+statement ok
+CREATE TABLE nation (
+    n_nationkey smallint NOT NULL,
+    n_name char(25) NOT NULL,
+    n_regionkey smallint NOT NULL,
+    n_comment char(152) NOT NULL,
+    PRIMARY KEY (n_nationkey)
+)
+
+statement ok
+CREATE TABLE supplier (
+    su_suppkey smallint NOT NULL,
+    su_name char(25) NOT NULL,
+    su_address char(40) NOT NULL,
+    su_nationkey smallint NOT NULL,
+    su_phone char(15) NOT NULL,
+    su_acctbal decimal(12, 2) NOT NULL,
+    su_comment char(101) NOT NULL,
+    PRIMARY KEY (su_suppkey)
+)
+
+statement ok
+CREATE TABLE region (
+    r_regionkey smallint NOT NULL,
+    r_name char(55) NOT NULL,
+    r_comment char(152) NOT NULL,
+    PRIMARY KEY (r_regionkey)
+)
+
+# Query 20
+query T multiline
+EXPLAIN PLAN FOR
+SELECT su_name, su_address
+FROM supplier, nation
+WHERE su_suppkey IN (
+    SELECT mod(s_i_id * s_w_id, 10000)
+    FROM stock, orderline
+    WHERE s_i_id IN (SELECT i_id FROM item WHERE i_data LIKE 'co%')
+    AND ol_i_id = s_i_id
+    AND ol_delivery_d > TIMESTAMP '2010-05-23 12:00:00'
+    GROUP BY s_i_id, s_w_id, s_quantity
+    HAVING 2 * s_quantity > sum(ol_quantity)
+)
+AND su_nationkey = n_nationkey
+AND n_name = 'GERMANY'
+ORDER BY su_name
+----
+Let {
+  l0 = Join {
+    variables: [[(0, 3), (1, 0)]],
+    Get { supplier (u21) },
+    Filter { predicates: [#1 = "GERMANY"], Get { nation (u19) } }
+  }
+} in
+Let { l4 = Distinct { group_key: [0], Get { l0 } } } in
+Let {
+  l3 = Join {
+    variables: [[(0, 0), (1, 0)], [(2, 4), (3, 0)]],
+    Get { l4 },
+    Get { l4 },
+    Filter {
+      predicates: [datetots #6 > 2010-05-23 12:00:00],
+      Get { orderline (u13) }
+    },
+    Get { stock (u17) }
+  }
+} in
+Project {
+  outputs: [1, 2],
+  Join {
+    variables: [[(0, 0), (1, 0)]],
+    Get { l0 },
+    Reduce {
+      group_key: [0],
+      aggregates: [any(true)],
+      Filter {
+        predicates: [#5 = i32toi64 #0],
+        Map {
+          scalars: [(#1 * #2) % 10000],
+          Filter {
+            predicates: [(2 * i32toi64 #3) > i32toi64 #4],
+            Reduce {
+              group_key: [0, 12 .. 14],
+              aggregates: [sum(#9)],
+              Join {
+                variables: [[(0, 12), (1, 0)]],
+                Get { l3 },
+                Map {
+                  scalars: [true],
+                  Join {
+                    variables: [[(0, 0), (1, 0)]],
+                    Distinct { group_key: [12], Get { l3 } },
+                    Filter {
+                      predicates: [#4 ~ ^co.*$],
+                      Get { item (u15) }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
