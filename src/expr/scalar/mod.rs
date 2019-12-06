@@ -8,7 +8,7 @@ use std::mem;
 
 use pretty::{DocAllocator, DocBuilder};
 use repr::regex::Regex;
-use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
+use repr::{ColumnType, Datum, PackableRow, RelationType, Row, RowPacker, ScalarType};
 use serde::{Deserialize, Serialize};
 
 use self::func::{BinaryFunc, DateTruncTo, UnaryFunc, VariadicFunc};
@@ -242,7 +242,10 @@ impl ScalarExpr {
     pub fn reduce(&mut self) {
         let null = || ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null));
         let empty = RelationType::new(vec![]);
-        let eval = |e: &ScalarExpr| ScalarExpr::literal(e.eval(&[]), e.typ(&empty));
+        let mut temp_storage = RowPacker::new();
+        let mut eval = move |e: &ScalarExpr| {
+            ScalarExpr::literal(e.eval(&mut temp_storage.packable(), &[]), e.typ(&empty))
+        };
         self.visit_mut(&mut |e| match e {
             ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => (),
             ScalarExpr::CallUnary { expr, .. } => {
@@ -255,7 +258,9 @@ impl ScalarExpr {
                     *e = eval(e);
                 } else if *func == BinaryFunc::MatchRegex && expr2.is_literal() {
                     // we can at least precompile the regex
-                    *e = match expr2.eval(&[]) {
+                    let mut temp_storage = RowPacker::new();
+                    let temp_storage = &mut temp_storage.packable();
+                    *e = match expr2.eval(temp_storage, &[]) {
                         Datum::Null => null(),
                         Datum::String(string) => {
                             match func::build_like_regex_from_string(&string) {
@@ -267,9 +272,11 @@ impl ScalarExpr {
                             }
                         }
                         _ => unreachable!(),
-                    }
+                    };
                 } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
-                    *e = match expr1.eval(&[]) {
+                    let mut temp_storage = RowPacker::new();
+                    let temp_storage = &mut temp_storage.packable();
+                    *e = match expr1.eval(temp_storage, &[]) {
                         Datum::Null => null(),
                         Datum::String(s) => match s.parse::<DateTruncTo>() {
                             Ok(to) => ScalarExpr::CallUnary {
@@ -303,7 +310,9 @@ impl ScalarExpr {
             }
             ScalarExpr::If { cond, then, els } => {
                 if cond.is_literal() {
-                    match cond.eval(&[]) {
+                    let mut temp_storage = RowPacker::new();
+                    let temp_storage = &mut temp_storage.packable();
+                    match cond.eval(temp_storage, &[]) {
                         Datum::True if then.is_literal() => *e = eval(then),
                         Datum::False | Datum::Null if els.is_literal() => *e = eval(els),
                         Datum::True | Datum::False | Datum::Null => (),
@@ -385,42 +394,49 @@ impl ScalarExpr {
         }
     }
 
-    pub fn eval<'a>(&'a self, datums: &[Datum<'a>]) -> Datum<'a> {
+    pub fn eval<'a>(
+        &'a self,
+        temp_storage: &mut PackableRow<'a>,
+        datums: &[Datum<'a>],
+    ) -> Datum<'a> {
         match self {
             ScalarExpr::Column(index) => datums[*index].clone(),
             ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
             ScalarExpr::CallUnary { func, expr } => {
-                let eval = expr.eval(datums);
+                let eval = expr.eval(temp_storage, datums);
                 if func.propagates_nulls() && eval.is_null() {
                     Datum::Null
                 } else {
-                    (func.func())(eval)
+                    (func.func())(temp_storage, eval)
                 }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let eval1 = expr1.eval(datums);
-                let eval2 = expr2.eval(datums);
+                let eval1 = expr1.eval(temp_storage, datums);
+                let eval2 = expr2.eval(temp_storage, datums);
                 if func.propagates_nulls() && (eval1.is_null() || eval2.is_null()) {
                     Datum::Null
                 } else {
-                    (func.func())(eval1, eval2)
+                    (func.func())(temp_storage, eval1, eval2)
                 }
             }
             ScalarExpr::CallVariadic { func, exprs } => {
-                let evals = exprs.iter().map(|e| e.eval(datums)).collect::<Vec<_>>();
+                let evals = exprs
+                    .iter()
+                    .map(|e| e.eval(temp_storage, datums))
+                    .collect::<Vec<_>>();
                 if func.propagates_nulls() && evals.iter().any(|e| e.is_null()) {
                     Datum::Null
                 } else {
-                    (func.func())(&evals)
+                    (func.func())(temp_storage, &evals)
                 }
             }
-            ScalarExpr::If { cond, then, els } => match cond.eval(datums) {
-                Datum::True => then.eval(datums),
-                Datum::False | Datum::Null => els.eval(datums),
+            ScalarExpr::If { cond, then, els } => match cond.eval(temp_storage, datums) {
+                Datum::True => then.eval(temp_storage, datums),
+                Datum::False | Datum::Null => els.eval(temp_storage, datums),
                 d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
             },
             ScalarExpr::MatchCachedRegex { expr, regex } => {
-                let eval = expr.eval(datums);
+                let eval = expr.eval(temp_storage, datums);
                 func::match_cached_regex(eval, regex)
             }
         }
@@ -514,11 +530,10 @@ mod tests {
         let plus_expr = int64_lit(1).call_binary(int64_lit(2), BinaryFunc::AddInt64);
         assert_eq!(plus_expr.into_doc().pretty(72).to_string(), "1 + 2");
 
-        let regex_expr = ScalarExpr::literal(Datum::cow_from_str("foo"), col_type(String))
-            .call_binary(
-                ScalarExpr::literal(Datum::cow_from_str("f?oo"), col_type(String)),
-                BinaryFunc::MatchRegex,
-            );
+        let regex_expr = ScalarExpr::literal(Datum::String("foo"), col_type(String)).call_binary(
+            ScalarExpr::literal(Datum::String("f?oo"), col_type(String)),
+            BinaryFunc::MatchRegex,
+        );
         assert_eq!(
             regex_expr.into_doc().pretty(72).to_string(),
             r#""foo" ~ "f?oo""#

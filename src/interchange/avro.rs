@@ -3,7 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
@@ -423,8 +422,8 @@ impl Decoder {
                 Value::Decimal { unscaled, .. } => Ok(Datum::Decimal(
                     Significand::from_twos_complement_be(&unscaled)?,
                 )),
-                Value::Bytes(b) => Ok(Datum::Bytes(Cow::from(b))),
-                Value::String(s) => Ok(Datum::cow_from_str(s)),
+                Value::Bytes(b) => Ok(Datum::Bytes(b)),
+                Value::String(s) => Ok(Datum::String(s)),
                 Value::Union(v) => value_to_datum(v),
                 other @ Value::Fixed(..)
                 | other @ Value::Enum(..)

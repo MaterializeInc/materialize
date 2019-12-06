@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::fmt;
 use std::mem::{size_of, transmute};
 
@@ -101,17 +101,25 @@ pub struct UnpackedRow<'a> {
 ///
 /// ```
 /// # use repr::{Row, Datum, RowPacker};
-/// # use std::borrow::Cow;
 /// let mut packer = RowPacker::new();
-/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String(Cow::from("one"))]);
-/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String(Cow::from("two"))]);
+/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String("one")]);
+/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String("two")]);
 /// ```
 #[derive(Debug)]
 pub struct RowPacker {
     data: Vec<u8>,
 }
 
-/// `PackableRow` is a temporary storage used for building a `Row`. It is created by `RowPacker::packable`.
+/// `PackableRow` is a builder struct used for building a `Row`. It is usually used via `RowPacker::pack`, but sometimes awkward control flow might require using `PackableRow` directly.
+///
+/// ```
+/// # use repr::{Row, Datum, RowPacker};
+/// let mut packer = RowPacker::new();
+/// let mut packable = packer.packable();
+/// packable.push(Datum::Int32(2));
+/// packable.push(Datum::String("two"));
+/// let row = packable.finish();
+/// ```
 #[derive(Debug)]
 pub struct PackableRow<'a> {
     data: &'a mut Vec<u8>,
@@ -243,7 +251,7 @@ impl Row {
                 let bytes =
                     std::slice::from_raw_parts(self.data.as_ptr().add(*offset), len as usize);
                 *offset += len;
-                Datum::Bytes(Cow::from(bytes))
+                Datum::Bytes(bytes)
             }
             Tag::String => {
                 let len = self.read_copy::<usize>(offset);
@@ -251,7 +259,7 @@ impl Row {
                     std::slice::from_raw_parts(self.data.as_ptr().add(*offset), len as usize);
                 let string = std::str::from_utf8_unchecked(bytes);
                 *offset += len;
-                Datum::cow_from_str(string)
+                Datum::String(string)
             }
         }
     }
@@ -298,6 +306,8 @@ impl RowPacker {
     ///
     /// There are some awkward cases where this function is needed, but prefer `RowPacker::pack` where possible
     pub fn packable(&mut self) -> PackableRow {
+        // we could clear on Drop instead, but having a custom Drop impl disables NLL which makes PackableRow unpleasant to use
+        self.data.clear();
         PackableRow {
             data: &mut self.data,
         }
@@ -305,6 +315,56 @@ impl RowPacker {
 }
 
 impl<'a> PackableRow<'a> {
+    /// Push `Datum::Bytes(bytes)` onto the end of `self` and return a reference to the stored bytes
+    ///
+    /// ```compile_fail
+    /// use repr::RowPacker;
+    /// let mut packer = RowPacker::new();
+    /// let mut packable = packer.packable();
+    /// let s = packable.push_bytes(&[1,2,3]);
+    /// packer.packable(); // clears the storage for s
+    /// println!("{:?}", s);
+    /// ```
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> &'a [u8] {
+        let data = &mut self.data;
+        data.push(Tag::Bytes as u8);
+        let start = data.len();
+        data.extend(&bytes.len().to_le_bytes());
+        data.extend(bytes);
+        unsafe {
+            let backed_bytes =
+                std::slice::from_raw_parts(data.as_ptr().add(start), bytes.len() as usize);
+            // it's safe to return &'a because so long as this PackableRow exists we will only every append to self.data
+            transmute::<&[u8], &'a [u8]>(backed_bytes)
+        }
+    }
+
+    /// Push `Datum::String(string)` onto the end of `self` and return a reference to the stored string
+    ///
+    /// ```compile_fail
+    /// use repr::RowPacker;
+    /// let mut packer = RowPacker::new();
+    /// let mut packable = packer.packable();
+    /// let s = packable.push_string("foo");
+    /// packer.packable(); // clears the storage for s
+    /// println!("{}", s);
+    /// ```
+    pub fn push_string(&mut self, string: &str) -> &'a str {
+        let data = &mut self.data;
+        data.push(Tag::String as u8);
+        let start = data.len();
+        let bytes = string.as_bytes();
+        data.extend(&bytes.len().to_le_bytes());
+        data.extend(bytes);
+        unsafe {
+            let backed_bytes =
+                std::slice::from_raw_parts(data.as_ptr().add(start), bytes.len() as usize);
+            let backed_string = std::str::from_utf8_unchecked(backed_bytes);
+            // it's safe to return &'a because so long as this PackableRow exists we will only every append to self.data
+            transmute::<&str, &'a str>(backed_string)
+        }
+    }
+
     /// Push `datum` onto the end of `self`
     pub fn push(&mut self, datum: Datum) {
         let data = &mut self.data;
@@ -355,15 +415,10 @@ impl<'a> PackableRow<'a> {
                 });
             }
             Datum::Bytes(bytes) => {
-                data.push(Tag::Bytes as u8);
-                data.extend(&bytes.len().to_le_bytes());
-                data.extend(&*bytes);
+                self.push_bytes(bytes);
             }
             Datum::String(string) => {
-                data.push(Tag::String as u8);
-                let bytes = string.as_bytes();
-                data.extend(&bytes.len().to_le_bytes());
-                data.extend(bytes);
+                self.push_string(string);
             }
         }
     }
@@ -374,7 +429,7 @@ impl<'a> PackableRow<'a> {
         D: Borrow<Datum<'b>>,
     {
         for datum in iter {
-            self.push(datum.borrow().clone());
+            self.push(*datum.borrow());
         }
     }
 
@@ -382,12 +437,6 @@ impl<'a> PackableRow<'a> {
         Row {
             data: self.data.clone().into_boxed_slice(),
         }
-    }
-}
-
-impl Drop for PackableRow<'_> {
-    fn drop(&mut self) {
-        self.data.clear()
     }
 }
 
@@ -412,7 +461,7 @@ impl RowUnpacker {
                 transmute::<&'a mut Vec<Datum<'static>>, &'a mut Vec<Datum<'a>>>(inner)
             },
         };
-        unpacked.extend(iter.into_iter().map(|d| d.borrow().clone()));
+        unpacked.extend(iter.into_iter().map(|d| *d.borrow()));
         unpacked
     }
 }
@@ -496,10 +545,10 @@ mod tests {
                 is_positive: true,
                 duration: std::time::Duration::from_nanos(1012312),
             }),
-            Datum::Bytes(Cow::from(&[][..])),
-            Datum::Bytes(Cow::from(&[0, 2, 1][..])),
-            Datum::cow_from_str(""),
-            Datum::cow_from_str("العَرَبِيَّة"),
+            Datum::Bytes(&[]),
+            Datum::Bytes(&[0, 2, 1]),
+            Datum::String(""),
+            Datum::String("العَرَبِيَّة"),
         ]);
     }
 }

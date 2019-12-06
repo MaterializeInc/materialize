@@ -3,7 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::borrow::Cow;
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
@@ -21,7 +20,7 @@ pub mod regex;
 
 /// A literal value.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum Datum<'a> {
     /// An unknown value.
     Null,
@@ -51,9 +50,9 @@ pub enum Datum<'a> {
     /// to 38 digits of precision.
     Decimal(Significand),
     /// A sequence of untyped bytes.
-    Bytes(Cow<'a, [u8]>),
+    Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
-    String(Cow<'a, str>),
+    String(&'a str),
 }
 
 impl<'a> Datum<'a> {
@@ -141,10 +140,6 @@ impl<'a> Datum<'a> {
         )))
     }
 
-    pub fn cow_from_str(str: &'a str) -> Datum<'a> {
-        Datum::String(Cow::from(str))
-    }
-
     pub fn unwrap_bool(&self) -> bool {
         match self {
             Datum::False => false,
@@ -230,14 +225,14 @@ impl<'a> Datum<'a> {
         }
     }
 
-    pub fn unwrap_str(&'a self) -> &'a str {
+    pub fn unwrap_str(&self) -> &'a str {
         match self {
             Datum::String(s) => s,
             _ => panic!("Datum::unwrap_string called on {:?}", self),
         }
     }
 
-    pub fn unwrap_bytes(&'a self) -> &'a [u8] {
+    pub fn unwrap_bytes(&self) -> &'a [u8] {
         match self {
             Datum::Bytes(b) => b,
             _ => panic!("Datum::unwrap_bytes called on {:?}", self),
@@ -357,13 +352,13 @@ impl From<SqlInterval> for Datum<'static> {
 
 impl<'a> From<&'a str> for Datum<'a> {
     fn from(s: &'a str) -> Datum<'a> {
-        Datum::cow_from_str(s)
+        Datum::String(s)
     }
 }
 
 impl<'a> From<&'a [u8]> for Datum<'a> {
     fn from(b: &'a [u8]) -> Datum<'a> {
-        Datum::Bytes(Cow::from(b))
+        Datum::Bytes(b)
     }
 }
 
@@ -493,8 +488,8 @@ impl<'a> ScalarType {
                 Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc))
             }
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
-            ScalarType::Bytes => Datum::Bytes(Cow::from(&b""[..])),
-            ScalarType::String => Datum::cow_from_str(""),
+            ScalarType::Bytes => Datum::Bytes(&[]),
+            ScalarType::String => Datum::String(""),
         }
     }
 }

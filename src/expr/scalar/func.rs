@@ -3,7 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::borrow::Cow;
 use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
@@ -18,9 +17,9 @@ use serde::{Deserialize, Serialize};
 pub use crate::like::build_like_regex_from_string;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
-use repr::{ColumnType, Datum, Interval, ScalarType};
+use repr::{ColumnType, Datum, Interval, PackableRow, ScalarType};
 
-pub fn and<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn and<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     match (a, b) {
         (Datum::False, _) => Datum::False,
         (_, Datum::False) => Datum::False,
@@ -31,7 +30,7 @@ pub fn and<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn or<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn or<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     match (a, b) {
         (Datum::True, _) => Datum::True,
         (_, Datum::True) => Datum::True,
@@ -42,56 +41,56 @@ pub fn or<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn not<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn not<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(!a.unwrap_bool())
 }
 
-pub fn abs_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn abs_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32().abs())
 }
 
-pub fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn abs_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64().abs())
 }
 
-pub fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn abs_float32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().abs())
 }
 
-pub fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn abs_float64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().abs())
 }
 
-pub fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_bool_to_string<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_bool() {
         true => Datum::from("true"),
         false => Datum::from("false"),
     }
 }
 
-pub fn cast_int32_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(Cow::Owned(a.unwrap_int32().to_string()))
+pub fn cast_int32_to_string<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(&a.unwrap_int32().to_string()))
 }
 
-pub fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_int32_to_float32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int32() as f32)
 }
 
-pub fn cast_int32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_int32_to_float64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_int32()))
 }
 
-pub fn cast_int32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_int32_to_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(i64::from(a.unwrap_int32()))
 }
 
-pub fn cast_int32_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_int32_to_decimal<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(i128::from(a.unwrap_int32()))
 }
 
-pub fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_int64_to_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): we need to do something better than panicking if the
     // datum doesn't fit in an int32, but what? Poison the whole dataflow?
     // The SQL standard says this an error, but runtime errors are complicated
@@ -99,36 +98,40 @@ pub fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(i32::try_from(a.unwrap_int64()).unwrap())
 }
 
-pub fn cast_int64_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_int64_to_decimal<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(i128::from(a.unwrap_int64()))
 }
 
-pub fn cast_int64_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_int64_to_float32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f32)
 }
 
-pub fn cast_int64_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_int64_to_float64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f64)
 }
 
-pub fn cast_int64_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(Cow::Owned(a.unwrap_int64().to_string()))
+pub fn cast_int64_to_string<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(&a.unwrap_int64().to_string()))
 }
 
-pub fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_float32_to_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float32() as i64)
 }
 
-pub fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_float32_to_float64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_float32()))
 }
 
-pub fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn cast_float32_to_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let f = a.unwrap_float32();
     let scale = b.unwrap_int32();
 
@@ -144,17 +147,21 @@ pub fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from((f * 10_f32.powi(scale)) as i128)
 }
 
-pub fn cast_float32_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(Cow::Owned(a.unwrap_float32().to_string()))
+pub fn cast_float32_to_string<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(&a.unwrap_float32().to_string()))
 }
 
-pub fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_float64_to_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float64() as i64)
 }
 
-pub fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn cast_float64_to_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let f = a.unwrap_float64();
     let scale = b.unwrap_int32();
 
@@ -170,115 +177,152 @@ pub fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from((f * 10_f64.powi(scale)) as i128)
 }
 
-pub fn cast_float64_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(Cow::Owned(a.unwrap_float64().to_string()))
+pub fn cast_float64_to_string<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(&a.unwrap_float64().to_string()))
 }
 
-pub fn cast_decimal_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_decimal_to_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as i32)
 }
 
-pub fn cast_decimal_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_decimal_to_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as i64)
 }
 
-pub fn cast_significand_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_significand_to_float32<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f32)
 }
 
-pub fn cast_significand_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_significand_to_float64<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f64)
 }
 
-pub fn cast_decimal_to_string<'a>(decimal: Datum<'a>, scale: Datum<'a>) -> Datum<'a> {
+pub fn cast_decimal_to_string<'a>(
+    temp_storage: &mut PackableRow<'a>,
+    decimal: Datum<'a>,
+    scale: Datum<'a>,
+) -> Datum<'a> {
     // TODO(benesch): a better way to pass the scale into the dataflow layer.
     let scale = scale.unwrap_int32() as u8;
-    Datum::String(Cow::Owned(
-        decimal.unwrap_decimal().with_scale(scale as u8).to_string(),
-    ))
+    Datum::String(
+        temp_storage.push_string(&decimal.unwrap_decimal().with_scale(scale as u8).to_string()),
+    )
 }
 
-pub fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_string_to_float64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let val: Result<f64, _> = a.unwrap_str().to_lowercase().parse();
     Datum::from(val.ok())
 }
 
-pub fn cast_string_to_bytes<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Bytes(Cow::Owned(a.unwrap_str().as_bytes().to_vec()))
+pub fn cast_string_to_bytes<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
+    Datum::Bytes(&temp_storage.push_bytes(&a.unwrap_str().as_bytes().to_vec()))
 }
 
-pub fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_date_to_timestamp<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
 }
 
-pub fn cast_date_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_date_to_timestamptz<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(
         a.unwrap_date().and_hms(0, 0, 0),
         Utc,
     ))
 }
 
-pub fn cast_date_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(Cow::Owned(a.unwrap_date().to_string()))
+pub fn cast_date_to_string<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(&a.unwrap_date().to_string()))
 }
 
-pub fn cast_timestamp_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_timestamp_to_date<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::Date(a.unwrap_timestamp().date())
 }
 
-pub fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_timestamp_to_timestamptz<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(a.unwrap_timestamp(), Utc))
 }
 
-pub fn cast_timestamp_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(Cow::Owned(a.unwrap_timestamp().to_string()))
+pub fn cast_timestamp_to_string<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(&a.unwrap_timestamp().to_string()))
 }
 
-pub fn cast_timestamptz_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_timestamptz_to_date<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::Date(a.unwrap_timestamptz().naive_utc().date())
 }
 
-pub fn cast_timestamptz_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_timestamptz_to_timestamp<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_timestamptz().naive_utc())
 }
 
-pub fn cast_timestamptz_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(Cow::Owned(a.unwrap_timestamptz().to_string()))
+pub fn cast_timestamptz_to_string<'a>(
+    temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(&a.unwrap_timestamptz().to_string()))
 }
 
-pub fn cast_interval_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(Cow::Owned(a.unwrap_interval().to_string()))
+pub fn cast_interval_to_string<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(&a.unwrap_interval().to_string()))
 }
 
-pub fn cast_bytes_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_bytes_to_string<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let bytes = a.unwrap_bytes();
     let mut out = String::from("\\x");
     out.reserve(bytes.len() * 2);
     for byte in bytes {
         write!(&mut out, "{:x}", byte).expect("writing to string cannot fail");
     }
-    Datum::String(Cow::Owned(out))
+    Datum::String(temp_storage.push_string(&out))
 }
 
-pub fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn add_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() + b.unwrap_int32())
 }
 
-pub fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn add_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() + b.unwrap_int64())
 }
 
-pub fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn add_float32<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_float32() + b.unwrap_float32())
 }
 
-pub fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn add_float64<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_float64() + b.unwrap_float64())
 }
 
-pub fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn add_timestamp_interval<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let dt = a.unwrap_timestamp();
     Datum::Timestamp(match b {
         Datum::Interval(Interval::Months(months)) => add_timestamp_months(dt, months),
@@ -290,7 +334,11 @@ pub fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     })
 }
 
-pub fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn add_timestamptz_interval<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let dt = a.unwrap_timestamptz().naive_utc();
 
     let new_ndt = match b {
@@ -305,23 +353,27 @@ pub fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
 }
 
-pub fn ceil_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn ceil_float32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().ceil())
 }
 
-pub fn ceil_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn ceil_float64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().ceil())
 }
 
-pub fn floor_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn floor_float32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().floor())
 }
 
-pub fn floor_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn floor_float64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().floor())
 }
 
-pub fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn sub_timestamp_interval<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let inverse = match b {
         Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
         Datum::Interval(Interval::Duration {
@@ -336,10 +388,14 @@ pub fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             b
         ),
     };
-    add_timestamp_interval(a, inverse)
+    add_timestamp_interval(_temp_storage, a, inverse)
 }
 
-pub fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn sub_timestamptz_interval<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let inverse = match b {
         Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
         Datum::Interval(Interval::Duration {
@@ -354,7 +410,7 @@ pub fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             b
         ),
     };
-    add_timestamptz_interval(a, inverse)
+    add_timestamptz_interval(_temp_storage, a, inverse)
 }
 
 fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
@@ -408,53 +464,81 @@ fn add_timestamp_duration(
     }
 }
 
-pub fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn add_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
-pub fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn sub_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() - b.unwrap_int32())
 }
 
-pub fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn sub_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() - b.unwrap_int64())
 }
 
-pub fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn sub_float32<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_float32() - b.unwrap_float32())
 }
 
-pub fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn sub_float64<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_float64() - b.unwrap_float64())
 }
 
-pub fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn sub_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
 }
 
-pub fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mul_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() * b.unwrap_int32())
 }
 
-pub fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mul_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() * b.unwrap_int64())
 }
 
-pub fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mul_float32<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_float32() * b.unwrap_float32())
 }
 
-pub fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mul_float64<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_float64() * b.unwrap_float64())
 }
 
-pub fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mul_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
 // TODO(jamii) we don't currently have any way of reporting errors from functions, so for now we just adopt sqlite's approach 1/0 = null
 
-pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn div_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int32();
     if b == 0 {
         Datum::Null
@@ -463,7 +547,7 @@ pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn div_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int64();
     if b == 0 {
         Datum::Null
@@ -472,7 +556,11 @@ pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn div_float32<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let b = b.unwrap_float32();
     if b == 0.0 {
         Datum::Null
@@ -481,7 +569,11 @@ pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn div_float64<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let b = b.unwrap_float64();
     if b == 0.0 {
         Datum::Null
@@ -490,7 +582,11 @@ pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn div_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let b = b.unwrap_decimal();
     if b == 0 {
         Datum::Null
@@ -499,7 +595,11 @@ pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn ceil_decimal<'a>(sig: Datum<'a>, scale: Datum<'a>) -> Datum<'a> {
+pub fn ceil_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    sig: Datum<'a>,
+    scale: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(
         sig.unwrap_decimal()
             .with_scale(scale.unwrap_int32() as u8)
@@ -508,7 +608,11 @@ pub fn ceil_decimal<'a>(sig: Datum<'a>, scale: Datum<'a>) -> Datum<'a> {
     )
 }
 
-pub fn floor_decimal<'a>(sig: Datum<'a>, scale: Datum<'a>) -> Datum<'a> {
+pub fn floor_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    sig: Datum<'a>,
+    scale: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(
         sig.unwrap_decimal()
             .with_scale(scale.unwrap_int32() as u8)
@@ -517,7 +621,7 @@ pub fn floor_decimal<'a>(sig: Datum<'a>, scale: Datum<'a>) -> Datum<'a> {
     )
 }
 
-pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mod_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int32();
     if b == 0 {
         Datum::Null
@@ -526,7 +630,7 @@ pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mod_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int64();
     if b == 0 {
         Datum::Null
@@ -535,7 +639,11 @@ pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mod_float32<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let b = b.unwrap_float32();
     if b == 0.0 {
         Datum::Null
@@ -544,7 +652,11 @@ pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mod_float64<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let b = b.unwrap_float64();
     if b == 0.0 {
         Datum::Null
@@ -553,7 +665,11 @@ pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn mod_decimal<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let b = b.unwrap_decimal();
     if b == 0 {
         Datum::Null
@@ -562,51 +678,51 @@ pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-pub fn neg_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn neg_int32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_int32())
 }
 
-pub fn neg_int64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn neg_int64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_int64())
 }
 
-pub fn neg_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn neg_float32<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_float32())
 }
 
-pub fn neg_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn neg_float64<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_float64())
 }
 
-pub fn neg_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn neg_decimal<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_decimal())
 }
 
-pub fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn eq<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
 
-pub fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn not_eq<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a != b)
 }
 
-pub fn lt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn lt<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a < b)
 }
 
-pub fn lte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn lte<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a <= b)
 }
 
-pub fn gt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn gt<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a > b)
 }
 
-pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn gte<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a >= b)
 }
 
-pub fn to_char<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn to_char<'a>(temp_storage: &mut PackableRow<'a>, a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let datetime = a.unwrap_timestamptz();
     let format_string = b.unwrap_str();
     // PostgreSQL parses this weird format string, hand-interpret for now
@@ -614,15 +730,19 @@ pub fn to_char<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // other versions of to_char() in the future.
     if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
         let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
-        Datum::String(Cow::Owned(
-            datetime.format(interpreted_format_string).to_string(),
-        ))
+        Datum::String(
+            temp_storage.push_string(&datetime.format(interpreted_format_string).to_string()),
+        )
     } else {
         Datum::Null
     }
 }
 
-pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn match_regex<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     let haystack = a.unwrap_str();
     match build_like_regex_from_string(b.unwrap_str()) {
         Ok(needle) => Datum::from(needle.is_match(haystack)),
@@ -639,112 +759,137 @@ pub fn match_cached_regex<'a>(a: Datum<'a>, needle: &Regex) -> Datum<'a> {
     Datum::from(needle.is_match(haystack))
 }
 
-pub fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn ascii<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_str().chars().next() {
         None => Datum::Int32(0),
         Some(v) => Datum::Int32(v as i32),
     }
 }
 
-pub fn extract_interval_year<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_interval_year<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().years())
 }
 
-pub fn extract_interval_month<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_interval_month<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().months())
 }
 
-pub fn extract_interval_day<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_interval_day<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().days())
 }
 
-pub fn extract_interval_hour<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_interval_hour<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().hours())
 }
 
-pub fn extract_interval_minute<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_interval_minute<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().minutes())
 }
 
-pub fn extract_interval_second<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_interval_second<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().seconds())
 }
 
-pub fn extract_timestamp_year<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamp_year<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().year()))
 }
 
-pub fn extract_timestamptz_year<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_year<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().year()))
 }
 
-pub fn extract_timestamp_month<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamp_month<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().month()))
 }
 
-pub fn extract_timestamptz_month<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_month<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().month()))
 }
 
-pub fn extract_timestamp_day<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamp_day<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().day()))
 }
 
-pub fn extract_timestamptz_day<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_day<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().day()))
 }
 
-pub fn extract_timestamp_hour<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamp_hour<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().hour()))
 }
 
-pub fn extract_timestamptz_hour<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_hour<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().hour()))
 }
 
-pub fn extract_timestamp_minute<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamp_minute<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().minute()))
 }
 
-pub fn extract_timestamptz_minute<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_minute<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().minute()))
 }
 
-pub fn extract_timestamp_second<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamp_second<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
     Datum::from(s + ns)
 }
 
-pub fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_second<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
     Datum::from(s + ns)
 }
 
-pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn date_trunc<'a>(
+    _temp_storage: &mut PackableRow<'a>,
+    a: Datum<'a>,
+    b: Datum<'a>,
+) -> Datum<'a> {
     match a.unwrap_str().parse::<DateTruncTo>() {
-        Ok(DateTruncTo::Micros) => date_trunc_microseconds(b),
-        Ok(DateTruncTo::Millis) => date_trunc_milliseconds(b),
-        Ok(DateTruncTo::Second) => date_trunc_second(b),
-        Ok(DateTruncTo::Minute) => date_trunc_minute(b),
-        Ok(DateTruncTo::Hour) => date_trunc_hour(b),
-        Ok(DateTruncTo::Day) => date_trunc_day(b),
-        Ok(DateTruncTo::Week) => date_trunc_week(b),
-        Ok(DateTruncTo::Month) => date_trunc_month(b),
-        Ok(DateTruncTo::Quarter) => date_trunc_quarter(b),
-        Ok(DateTruncTo::Year) => date_trunc_year(b),
-        Ok(DateTruncTo::Decade) => date_trunc_decade(b),
-        Ok(DateTruncTo::Century) => date_trunc_century(b),
-        Ok(DateTruncTo::Millennium) => date_trunc_millennium(b),
+        Ok(DateTruncTo::Micros) => date_trunc_microseconds(_temp_storage, b),
+        Ok(DateTruncTo::Millis) => date_trunc_milliseconds(_temp_storage, b),
+        Ok(DateTruncTo::Second) => date_trunc_second(_temp_storage, b),
+        Ok(DateTruncTo::Minute) => date_trunc_minute(_temp_storage, b),
+        Ok(DateTruncTo::Hour) => date_trunc_hour(_temp_storage, b),
+        Ok(DateTruncTo::Day) => date_trunc_day(_temp_storage, b),
+        Ok(DateTruncTo::Week) => date_trunc_week(_temp_storage, b),
+        Ok(DateTruncTo::Month) => date_trunc_month(_temp_storage, b),
+        Ok(DateTruncTo::Quarter) => date_trunc_quarter(_temp_storage, b),
+        Ok(DateTruncTo::Year) => date_trunc_year(_temp_storage, b),
+        Ok(DateTruncTo::Decade) => date_trunc_decade(_temp_storage, b),
+        Ok(DateTruncTo::Century) => date_trunc_century(_temp_storage, b),
+        Ok(DateTruncTo::Millennium) => date_trunc_millennium(_temp_storage, b),
         // TODO: return an error when we support that.
         _ => Datum::Null,
     }
 }
 
-fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_microseconds<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let time = NaiveTime::from_hms_micro(
         source_timestamp.hour(),
@@ -755,7 +900,7 @@ fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
 }
 
-fn date_trunc_milliseconds<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_milliseconds<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let time = NaiveTime::from_hms_milli(
         source_timestamp.hour(),
@@ -766,7 +911,7 @@ fn date_trunc_milliseconds<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
 }
 
-fn date_trunc_second<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_second<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -778,7 +923,7 @@ fn date_trunc_second<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_minute<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_minute<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -786,7 +931,7 @@ fn date_trunc_minute<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_hour<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_hour<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -794,7 +939,7 @@ fn date_trunc_hour<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_day<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_day<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -802,7 +947,7 @@ fn date_trunc_day<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_week<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_week<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let num_days_from_monday = source_timestamp.date().weekday().num_days_from_monday();
     Datum::Timestamp(NaiveDateTime::new(
@@ -815,7 +960,7 @@ fn date_trunc_week<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_month<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_month<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(source_timestamp.year(), source_timestamp.month(), 1),
@@ -823,7 +968,7 @@ fn date_trunc_month<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_quarter<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let month = source_timestamp.month();
     let quarter = if month <= 3 {
@@ -842,7 +987,7 @@ fn date_trunc_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_year<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_year<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(source_timestamp.year(), 1, 1),
@@ -850,7 +995,7 @@ fn date_trunc_year<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_decade<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_decade<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(
@@ -862,7 +1007,7 @@ fn date_trunc_decade<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_century<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_century<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     // Expects the first year of the century, meaning 2001 instead of 2000.
     let century = source_timestamp.year() - ((source_timestamp.year() % 100) - 1);
@@ -872,7 +1017,7 @@ fn date_trunc_century<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
+fn date_trunc_millennium<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     // Expects the first year of the millennium, meaning 2001 instead of 2000.
     let millennium = source_timestamp.year() - ((source_timestamp.year() % 1000) - 1);
@@ -985,7 +1130,7 @@ impl FromStr for DateTruncTo {
 }
 
 impl BinaryFunc {
-    pub fn func(self) -> for<'a> fn(Datum<'a>, Datum<'a>) -> Datum<'a> {
+    pub fn func(self) -> for<'a> fn(&mut PackableRow<'a>, Datum<'a>, Datum<'a>) -> Datum<'a> {
         match self {
             BinaryFunc::And => and,
             BinaryFunc::Or => or,
@@ -1194,7 +1339,7 @@ impl fmt::Display for BinaryFunc {
     }
 }
 
-pub fn is_null<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn is_null<'a>(_temp_storage: &mut PackableRow<'a>, a: Datum<'a>) -> Datum<'a> {
     Datum::from(a == Datum::Null)
 }
 
@@ -1271,7 +1416,7 @@ pub enum UnaryFunc {
 }
 
 impl UnaryFunc {
-    pub fn func(self) -> for<'a> fn(Datum<'a>) -> Datum<'a> {
+    pub fn func(self) -> for<'a> fn(&mut PackableRow<'a>, Datum<'a>) -> Datum<'a> {
         match self {
             UnaryFunc::Not => not,
             UnaryFunc::IsNull => is_null,
@@ -1547,7 +1692,7 @@ impl fmt::Display for UnaryFunc {
     }
 }
 
-pub fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+pub fn coalesce<'a>(_temp_storage: &mut PackableRow<'a>, datums: &[Datum<'a>]) -> Datum<'a> {
     datums
         .iter()
         .find(|d| !d.is_null())
@@ -1555,8 +1700,8 @@ pub fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
-pub fn substr<'a, 'b>(datums: &'b [Datum<'a>]) -> Datum<'a> {
-    let string = datums[0].unwrap_str();
+pub fn substr<'a>(_temp_storage: &mut PackableRow<'a>, datums: &[Datum<'a>]) -> Datum<'a> {
+    let string: &'a str = datums[0].unwrap_str();
     let mut chars = string.chars();
 
     let start_in_chars = datums[1].unwrap_int64() - 1;
@@ -1577,15 +1722,13 @@ pub fn substr<'a, 'b>(datums: &'b [Datum<'a>]) -> Datum<'a> {
         for _ in 0..cmp::max(length_in_chars, 0) {
             length_in_bytes += chars.next().map(|char| char.len_utf8()).unwrap_or(0);
         }
-        Datum::String(Cow::Owned(
-            (string[start_in_bytes..start_in_bytes + length_in_bytes]).to_string(),
-        ))
+        Datum::String(&string[start_in_bytes..start_in_bytes + length_in_bytes])
     } else {
-        Datum::String(Cow::from((&string[start_in_bytes..]).to_string()))
+        Datum::String(&string[start_in_bytes..])
     }
 }
 
-pub fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+pub fn length<'a>(_temp_storage: &mut PackableRow<'a>, datums: &[Datum<'a>]) -> Datum<'a> {
     let string = datums[0].unwrap_str();
 
     if datums.len() == 2 {
@@ -1620,12 +1763,14 @@ pub fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     }
 }
 
-pub fn replace<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    Datum::String(Cow::Owned(
-        datums[0]
-            .unwrap_str()
-            .replace(datums[1].unwrap_str(), datums[2].unwrap_str()),
-    ))
+pub fn replace<'a>(temp_storage: &mut PackableRow<'a>, datums: &[Datum<'a>]) -> Datum<'a> {
+    Datum::String(
+        temp_storage.push_string(
+            &datums[0]
+                .unwrap_str()
+                .replace(datums[1].unwrap_str(), datums[2].unwrap_str()),
+        ),
+    )
 }
 
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -1637,7 +1782,7 @@ pub enum VariadicFunc {
 }
 
 impl VariadicFunc {
-    pub fn func(self) -> for<'a> fn(&[Datum<'a>]) -> Datum<'a> {
+    pub fn func(self) -> for<'a> fn(&mut PackableRow<'a>, &[Datum<'a>]) -> Datum<'a> {
         match self {
             VariadicFunc::Coalesce => coalesce,
             VariadicFunc::Substr => substr,

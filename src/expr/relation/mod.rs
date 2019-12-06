@@ -938,7 +938,7 @@ impl RelationExpr {
                     // potential predicate pushdown and elision in the
                     // optimizer.
                     .product(RelationExpr::constant(
-                        vec![default.iter().map(|(datum, _)| datum.clone()).collect()],
+                        vec![default.iter().map(|(datum, _)| *datum).collect()],
                         RelationType::new(default.iter().map(|(_, typ)| *typ).collect()),
                     )))
             })

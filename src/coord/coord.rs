@@ -40,8 +40,8 @@ use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::option::OptionExt;
 use repr::{ColumnName, Datum, QualName, RelationDesc, Row};
-use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
+use sql::{Params, PreparedStatement};
 
 use crate::{Command, ExecuteResponse, Response};
 
@@ -182,7 +182,10 @@ where
             // the first connection ID used is 1. As long as that remains the case,
             // 0 is safe to use here.
             let conn_id = 0;
-            let params = vec![];
+            let params = Params {
+                datums: Row::pack(&[]),
+                types: vec![],
+            };
             let mut session = sql::Session::default();
             // TODO(benesch): these bootstrap statements should be run in a
             // single transaction, so that we don't leave the catalog in a
@@ -347,7 +350,7 @@ where
                 send_immediate_rows(
                     sources
                         .iter()
-                        .map(|s| Row::pack(&[Datum::cow_from_str(&s.0.to_string())]))
+                        .map(|s| Row::pack(&[Datum::String(&s.0.to_string())]))
                         .collect(),
                 )
             }
@@ -621,7 +624,7 @@ where
             Plan::ExplainPlan(mut relation_expr) => {
                 self.optimizer.optimize(&mut relation_expr);
                 let pretty = relation_expr.pretty_humanized(&self.catalog);
-                let rows = vec![Row::pack(vec![Datum::from(&*pretty)])];
+                let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
                 send_immediate_rows(rows)
             }
 
