@@ -91,23 +91,23 @@ impl LogVariant {
     pub fn name(&self) -> QualName {
         // Bind all names in one place to avoid accidental clashes.
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => "logs_operates".lit(),
-            LogVariant::Timely(TimelyLog::Channels) => "logs_channels".lit(),
-            LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed".lit(),
-            LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram".lit(),
-            LogVariant::Timely(TimelyLog::Addresses) => "logs_addresses".lit(),
-            LogVariant::Timely(TimelyLog::Parks) => "logs_parks".lit(),
-            LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement".lit(),
-            LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing".lit(),
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows".lit(),
+            LogVariant::Timely(TimelyLog::Operates) => "mz_dataflow_operators".lit(),
+            LogVariant::Timely(TimelyLog::Addresses) => "mz_dataflow_operator_addresses".lit(),
+            LogVariant::Timely(TimelyLog::Channels) => "mz_dataflow_channels".lit(),
+            LogVariant::Timely(TimelyLog::Elapsed) => "mz_scheduling_elapsed".lit(),
+            LogVariant::Timely(TimelyLog::Histogram) => "mz_scheduling_histogram".lit(),
+            LogVariant::Timely(TimelyLog::Parks) => "mz_scheduling_parks".lit(),
+            LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_size".lit(),
+            LogVariant::Differential(DifferentialLog::Sharing) => "mz_arrangement_sharing".lit(),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_views".lit(),
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
-                "logs_dataflow_dependency".lit()
+                "mz_view_dependency".lit()
             }
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers".lit(),
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks".lit(),
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations".lit(),
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "logs_primary_keys".lit(),
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => "logs_foreign_keys".lit(),
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontier".lit(),
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active".lit(),
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations".lit(),
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys".lit(),
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys".lit(),
         }
     }
 
