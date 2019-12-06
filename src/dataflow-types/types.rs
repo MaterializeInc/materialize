@@ -65,7 +65,16 @@ pub struct Update {
     pub diff: isize,
 }
 
-pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -> Ordering {
+/// Compare `left` and `right` using `order`. If that doesn't produce a strict ordering, call `tiebreaker`.
+pub fn compare_columns<F>(
+    order: &[ColumnOrder],
+    left: &[Datum],
+    right: &[Datum],
+    tiebreaker: F,
+) -> Ordering
+where
+    F: Fn() -> Ordering,
+{
     for order in order {
         let (lval, rval) = (&left[order.column], &right[order.column]);
         let cmp = if order.desc {
@@ -77,7 +86,7 @@ pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -
             return cmp;
         }
     }
-    Ordering::Equal
+    tiebreaker()
 }
 
 /// Instructions for finishing the result of a query.
@@ -115,6 +124,7 @@ impl RowSetFinishing {
                 &self.order_by,
                 &left_unpacker.unpack(left),
                 &right_unpacker.unpack(right),
+                || left.cmp(right),
             )
         };
         let offset = self.offset;
