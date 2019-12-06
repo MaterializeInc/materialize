@@ -1005,7 +1005,7 @@ where
                 // is no "prior" answer, and we do not want to peek at it as it risks
                 // hanging awaiting the response to data that may never arrive.
                 if let Some(candidate) = upper.elements().get(0) {
-                    if candidate > &0 {
+                    if *candidate > 0 {
                         candidate.saturating_sub(1)
                     } else {
                         bail!("At least one input has no complete timestamps yet.");
