@@ -5,8 +5,6 @@
 
 use std::collections::HashMap;
 
-// use crate::relation::AggregateExpr;
-// use crate::AggregateFunc;
 use crate::UnaryFunc;
 use crate::{RelationExpr, ScalarExpr};
 use repr::Datum;
@@ -14,18 +12,18 @@ use repr::{ColumnType, ScalarType};
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
-pub struct Rake;
+pub struct ColumnKnowledge;
 
-impl super::Transform for Rake {
+impl super::Transform for ColumnKnowledge {
     fn transform(&self, expr: &mut RelationExpr) {
         self.transform(expr)
     }
 }
 
-impl Rake {
+impl ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
     pub fn transform(&self, expr: &mut RelationExpr) {
-        Rake::harvest(expr, &mut HashMap::new());
+        ColumnKnowledge::harvest(expr, &mut HashMap::new());
     }
 
     /// Harvest per-column knowledge.
@@ -34,7 +32,7 @@ impl Rake {
         knowledge: &mut HashMap<crate::id::Id, Vec<DatumKnowledge>>,
     ) -> Vec<DatumKnowledge> {
         match expr {
-            RelationExpr::ArrangeBy { input, .. } => Rake::harvest(input, knowledge),
+            RelationExpr::ArrangeBy { input, .. } => ColumnKnowledge::harvest(input, knowledge),
             RelationExpr::Get { id, typ } => knowledge.get(id).cloned().unwrap_or_else(|| {
                 typ.column_types
                     .iter()
@@ -66,10 +64,10 @@ impl Rake {
                 }
             }
             RelationExpr::Let { id, value, body } => {
-                let value_knowledge = Rake::harvest(value, knowledge);
+                let value_knowledge = ColumnKnowledge::harvest(value, knowledge);
                 let prior_knowledge =
                     knowledge.insert(crate::Id::Local(id.clone()), value_knowledge);
-                let body_knowledge = Rake::harvest(body, knowledge);
+                let body_knowledge = ColumnKnowledge::harvest(body, knowledge);
                 knowledge.remove(&crate::Id::Local(id.clone()));
                 if let Some(prior_knowledge) = prior_knowledge {
                     knowledge.insert(crate::Id::Local(id.clone()), prior_knowledge);
@@ -77,14 +75,14 @@ impl Rake {
                 body_knowledge
             }
             RelationExpr::Project { input, outputs } => {
-                let input_knowledge = Rake::harvest(input, knowledge);
+                let input_knowledge = ColumnKnowledge::harvest(input, knowledge);
                 outputs
                     .iter()
                     .map(|i| input_knowledge[*i].clone())
                     .collect()
             }
             RelationExpr::Map { input, scalars } => {
-                let mut input_knowledge = Rake::harvest(input, knowledge);
+                let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge);
                 for scalar in scalars.iter_mut() {
                     let know = optimize(scalar, &input_knowledge[..]);
                     input_knowledge.push(know);
@@ -92,7 +90,7 @@ impl Rake {
                 input_knowledge
             }
             RelationExpr::Filter { input, predicates } => {
-                let input_knowledge = Rake::harvest(input, knowledge);
+                let input_knowledge = ColumnKnowledge::harvest(input, knowledge);
                 for predicate in predicates.iter_mut() {
                     optimize(predicate, &input_knowledge[..]);
                 }
@@ -105,7 +103,7 @@ impl Rake {
             } => {
                 let mut knowledges = inputs
                     .iter_mut()
-                    .map(|i| Rake::harvest(i, knowledge))
+                    .map(|i| ColumnKnowledge::harvest(i, knowledge))
                     .collect::<Vec<_>>();
 
                 for variable in variables.iter() {
@@ -127,7 +125,7 @@ impl Rake {
                 group_key,
                 aggregates,
             } => {
-                let input_knowledge = Rake::harvest(input, knowledge);
+                let input_knowledge = ColumnKnowledge::harvest(input, knowledge);
                 let mut output = group_key
                     .iter()
                     .map(|k| input_knowledge[*k].clone())
@@ -141,12 +139,12 @@ impl Rake {
                 }
                 output
             }
-            RelationExpr::TopK { input, .. } => Rake::harvest(input, knowledge),
-            RelationExpr::Negate { input } => Rake::harvest(input, knowledge),
-            RelationExpr::Threshold { input } => Rake::harvest(input, knowledge),
+            RelationExpr::TopK { input, .. } => ColumnKnowledge::harvest(input, knowledge),
+            RelationExpr::Negate { input } => ColumnKnowledge::harvest(input, knowledge),
+            RelationExpr::Threshold { input } => ColumnKnowledge::harvest(input, knowledge),
             RelationExpr::Union { left, right } => {
-                let know1 = Rake::harvest(left, knowledge);
-                let know2 = Rake::harvest(right, knowledge);
+                let know1 = ColumnKnowledge::harvest(left, knowledge);
+                let know2 = ColumnKnowledge::harvest(right, knowledge);
 
                 know1
                     .into_iter()

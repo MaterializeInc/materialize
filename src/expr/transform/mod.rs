@@ -25,7 +25,7 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod simplify;
 pub mod split_predicates;
-pub mod the_rake;
+pub mod column_knowledge;
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
@@ -121,7 +121,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::projection_lifting::ProjectionLifting),
                     Box::new(crate::transform::filter_lets::FilterLets),
                     Box::new(crate::transform::nonnull_requirements::NonNullRequirements),
-                    Box::new(crate::transform::the_rake::Rake),
+                    Box::new(crate::transform::column_knowledge::ColumnKnowledge),
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.
