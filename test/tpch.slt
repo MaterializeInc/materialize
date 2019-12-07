@@ -1571,36 +1571,38 @@ Let {
   }
 } in
 Let { l5 = Distinct { group_key: [11, 0], Get { l0 } } } in
-Let {
-  l4 = Map {
-    scalars: [true],
-    Distinct {
-      group_key: [0, 1],
-      Filter {
-        predicates: [#4 != #1],
-        Join {
-          variables: [[(0, 0), (1, 0)]],
-          Get { l5 },
-          Filter { predicates: [#12 > #11], Get { lineitem (u15) } }
-        }
-      }
-    }
-  }
-} in
 Reduce {
   group_key: [1],
   aggregates: [countall(null)],
-  Join {
-    variables: [[(0, 11), (1, 0)], [(0, 0), (1, 1)]],
-    Get { l0 },
-    Union {
-      Filter { predicates: [!#2], Get { l4 } },
-      Map {
-        scalars: [false],
-        Union {
-          Project { outputs: [0, 1], Negate { Get { l4 } } },
-          Get { l5 }
-        }
+  Map {
+    scalars: [false],
+    Join {
+      variables: [[(0, 11), (1, 0)], [(0, 0), (1, 1)]],
+      Get { l0 },
+      Union {
+        Project {
+          outputs: [0, 1],
+          Negate {
+            Map {
+              scalars: [true],
+              Distinct {
+                group_key: [0, 1],
+                Filter {
+                  predicates: [#4 != #1],
+                  Join {
+                    variables: [[(0, 0), (1, 0)]],
+                    Get { l5 },
+                    Filter {
+                      predicates: [#12 > #11],
+                      Get { lineitem (u15) }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        Get { l5 }
       }
     }
   }
@@ -1732,35 +1734,34 @@ Let {
   }
 } in
 Let { l4 = Distinct { group_key: [0], Get { l0 } } } in
-Let {
-  l3 = Map {
-    scalars: [true],
-    Distinct {
-      group_key: [9],
-      Join {
-        variables: [[(0, 1), (1, 0)]],
-        Get { orders (u13) },
-        Get { l4 }
-      }
-    }
-  }
-} in
 Reduce {
   group_key: [13],
   aggregates: [countall(null), sum(#5)],
   Map {
     scalars: [substr(#4, 1, 2)],
-    Join {
-      variables: [[(0, 0), (1, 0)]],
-      Get { l0 },
-      Union {
-        Filter { predicates: [!#1], Get { l3 } },
-        Map {
-          scalars: [false],
-          Union {
-            Project { outputs: [0], Negate { Get { l3 } } },
-            Get { l4 }
-          }
+    Map {
+      scalars: [false],
+      Join {
+        variables: [[(0, 0), (1, 0)]],
+        Get { l0 },
+        Union {
+          Project {
+            outputs: [0],
+            Negate {
+              Map {
+                scalars: [true],
+                Distinct {
+                  group_key: [9],
+                  Join {
+                    variables: [[(0, 1), (1, 0)]],
+                    Get { orders (u13) },
+                    Get { l4 }
+                  }
+                }
+              }
+            }
+          },
+          Get { l4 }
         }
       }
     }
