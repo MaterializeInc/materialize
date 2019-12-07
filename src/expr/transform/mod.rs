@@ -8,6 +8,7 @@
 use crate::RelationExpr;
 
 pub mod binding;
+pub mod column_knowledge;
 pub mod constant_join;
 pub mod demand;
 pub mod empty_map;
@@ -25,7 +26,6 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod simplify;
 pub mod split_predicates;
-pub mod column_knowledge;
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
