@@ -177,6 +177,13 @@ disabled_lints=(
     # harm from calling `clone()` and some line-noise as types become or cease
     # being Copy.
     clippy::clone-on-copy
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#flat_map_identity
+    #
+    # Clippy asks that you replace `flat_map(|x| x)` with `flatten()` which
+    # while cute requires someone go read about what `flatten()` does instead
+    # of doing something more productive with their time.
+    clippy::flat-map-identity
 )
 
 extra_lints=(
