@@ -26,6 +26,7 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod simplify;
 pub mod split_predicates;
+pub mod update_let;
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
@@ -117,6 +118,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::join_elision::JoinElision),
                     Box::new(crate::transform::reduce_elision::ReduceElision),
                     Box::new(crate::transform::inline_let::InlineLet),
+                    Box::new(crate::transform::update_let::UpdateLet),
                     Box::new(crate::transform::projection_extraction::ProjectionExtraction),
                     Box::new(crate::transform::projection_lifting::ProjectionLifting),
                     Box::new(crate::transform::filter_lets::FilterLets),
