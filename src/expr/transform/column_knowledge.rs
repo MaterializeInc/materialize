@@ -212,7 +212,11 @@ pub fn optimize(expr: &mut ScalarExpr, column_knowledge: &[DatumKnowledge]) -> D
                 }
             }
         }
-        ScalarExpr::CallBinary { func: _, expr1, expr2 } => {
+        ScalarExpr::CallBinary {
+            func: _,
+            expr1,
+            expr2,
+        } => {
             let knowledge1 = optimize(expr1, column_knowledge);
             let knowledge2 = optimize(expr2, column_knowledge);
             if knowledge1.value.is_some() && knowledge2.value.is_some() {
