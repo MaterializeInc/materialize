@@ -8,6 +8,7 @@
 use crate::RelationExpr;
 
 pub mod binding;
+pub mod column_knowledge;
 pub mod constant_join;
 pub mod demand;
 pub mod empty_map;
@@ -120,6 +121,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::projection_lifting::ProjectionLifting),
                     Box::new(crate::transform::filter_lets::FilterLets),
                     Box::new(crate::transform::nonnull_requirements::NonNullRequirements),
+                    Box::new(crate::transform::column_knowledge::ColumnKnowledge),
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.
