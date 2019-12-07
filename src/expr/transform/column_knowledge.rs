@@ -196,14 +196,8 @@ pub fn optimize(expr: &mut ScalarExpr, column_knowledge: &[DatumKnowledge]) -> D
         },
         ScalarExpr::CallUnary { func, expr: inner } => {
             let knowledge = optimize(inner, column_knowledge);
-            if let Some((datum, typ)) = knowledge.value {
-                let unpacked = datum.unpack_first();
-                let evald = if func.propagates_nulls() && unpacked.is_null() {
-                    Datum::Null
-                } else {
-                    (func.func())(unpacked)
-                };
-                *expr = ScalarExpr::Literal(repr::Row::pack(Some(evald)), func.output_type(typ));
+            if knowledge.value.is_some() {
+                expr.reduce();
                 optimize(expr, column_knowledge)
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
                 *expr = ScalarExpr::Literal(
@@ -218,51 +212,27 @@ pub fn optimize(expr: &mut ScalarExpr, column_knowledge: &[DatumKnowledge]) -> D
                 }
             }
         }
-        ScalarExpr::CallBinary { func, expr1, expr2 } => {
+        ScalarExpr::CallBinary { func: _, expr1, expr2 } => {
             let knowledge1 = optimize(expr1, column_knowledge);
             let knowledge2 = optimize(expr2, column_knowledge);
-            match (knowledge1.value, knowledge2.value) {
-                (Some((v1, t1)), Some((v2, t2))) => {
-                    let unpacked1 = v1.unpack_first();
-                    let unpacked2 = v2.unpack_first();
-                    let value = if func.propagates_nulls()
-                        && (unpacked1.is_null() || unpacked2.is_null())
-                    {
-                        Datum::Null
-                    } else {
-                        (func.func())(unpacked1, unpacked2)
-                    };
-                    let typ = func.output_type(t1, t2);
-                    *expr = ScalarExpr::Literal(repr::Row::pack(Some(value)), typ);
-                    optimize(expr, column_knowledge)
-                }
-                _ => DatumKnowledge {
+            if knowledge1.value.is_some() && knowledge2.value.is_some() {
+                expr.reduce();
+                optimize(expr, column_knowledge)
+            } else {
+                DatumKnowledge {
                     value: None,
                     nullable: true,
-                },
+                }
             }
         }
-        ScalarExpr::CallVariadic { func, exprs } => {
+        ScalarExpr::CallVariadic { func: _, exprs } => {
             let mut knows = Vec::new();
             for expr in exprs.iter_mut() {
                 knows.push(optimize(expr, column_knowledge));
             }
 
             if knows.iter().all(|k| k.value.is_some()) {
-                let mut values = Vec::new();
-                let mut types = Vec::new();
-                for k in knows.iter() {
-                    let (value, typ) = k.value.as_ref().unwrap();
-                    values.push(value.unpack_first());
-                    types.push(typ.clone());
-                }
-                let value = if func.propagates_nulls() && values.iter().any(|e| e.is_null()) {
-                    Datum::Null
-                } else {
-                    (func.func())(&values)
-                };
-                let typ = func.output_type(types);
-                *expr = ScalarExpr::Literal(repr::Row::pack(Some(value)), typ);
+                expr.reduce();
                 optimize(expr, column_knowledge)
             } else {
                 DatumKnowledge {
