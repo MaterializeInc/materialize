@@ -197,7 +197,12 @@ pub fn optimize(expr: &mut ScalarExpr, column_knowledge: &[DatumKnowledge]) -> D
         ScalarExpr::CallUnary { func, expr: inner } => {
             let knowledge = optimize(inner, column_knowledge);
             if let Some((datum, typ)) = knowledge.value {
-                let evald = (func.func())(datum.unpack_first());
+                let unpacked = datum.unpack_first();
+                let evald = if func.propagates_nulls() && unpacked.is_null() {
+                    Datum::Null
+                } else {
+                    (func.func())(unpacked)
+                };
                 *expr = ScalarExpr::Literal(repr::Row::pack(Some(evald)), func.output_type(typ));
                 optimize(expr, column_knowledge)
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
@@ -218,7 +223,15 @@ pub fn optimize(expr: &mut ScalarExpr, column_knowledge: &[DatumKnowledge]) -> D
             let knowledge2 = optimize(expr2, column_knowledge);
             match (knowledge1.value, knowledge2.value) {
                 (Some((v1, t1)), Some((v2, t2))) => {
-                    let value = (func.func())(v1.unpack_first(), v2.unpack_first());
+                    let unpacked1 = v1.unpack_first();
+                    let unpacked2 = v2.unpack_first();
+                    let value = if func.propagates_nulls()
+                        && (unpacked1.is_null() || unpacked2.is_null())
+                    {
+                        Datum::Null
+                    } else {
+                        (func.func())(unpacked1, unpacked2)
+                    };
                     let typ = func.output_type(t1, t2);
                     *expr = ScalarExpr::Literal(repr::Row::pack(Some(value)), typ);
                     optimize(expr, column_knowledge)
@@ -243,7 +256,11 @@ pub fn optimize(expr: &mut ScalarExpr, column_knowledge: &[DatumKnowledge]) -> D
                     values.push(value.unpack_first());
                     types.push(typ.clone());
                 }
-                let value = (func.func())(&values);
+                let value = if func.propagates_nulls() && values.iter().any(|e| e.is_null()) {
+                    Datum::Null
+                } else {
+                    (func.func())(&values)
+                };
                 let typ = func.output_type(types);
                 *expr = ScalarExpr::Literal(repr::Row::pack(Some(value)), typ);
                 optimize(expr, column_knowledge)
@@ -258,7 +275,7 @@ pub fn optimize(expr: &mut ScalarExpr, column_knowledge: &[DatumKnowledge]) -> D
             if let Some((value, _typ)) = optimize(cond, column_knowledge).value {
                 match value.unpack_first() {
                     Datum::True => *expr = (**then).clone(),
-                    Datum::False => *expr = (**els).clone(),
+                    Datum::False | Datum::Null => *expr = (**els).clone(),
                     d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
                 }
                 optimize(expr, column_knowledge)
