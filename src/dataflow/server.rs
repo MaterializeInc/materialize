@@ -680,6 +680,7 @@ impl PendingPeek {
                         &self.finishing.order_by,
                         &left_unpacker.unpack(left.iter()),
                         &right_unpacker.unpack(right.iter()),
+                        || left.cmp(right),
                     )
                 });
                 results.truncate(offset_plus_limit);

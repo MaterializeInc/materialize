@@ -1001,6 +1001,7 @@ where
                                     &order_clone,
                                     &*left_unpacker.unpack(&left.0),
                                     &*right_unpacker.unpack(&right.0),
+                                    || left.cmp(right),
                                 )
                             };
                             target.sort_by(sort_by);
