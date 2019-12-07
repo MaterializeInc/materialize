@@ -6,12 +6,16 @@
 //! Management of arrangements across dataflows.
 
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use std::collections::{BTreeMap, HashMap};
 
 use dataflow_types::{Diff, Timestamp};
 use expr::GlobalId;
 use repr::Row;
+
+use differential_dataflow::trace::implementations::ord::OrdValBatch;
+use differential_dataflow::trace::implementations::spine_fueled_neu::Spine;
+use std::rc::Rc;
+pub type OrdValSpine<K, V, T, R, O = usize> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R, O>>>;
 
 #[allow(dead_code)]
 pub type KeysValsSpine = OrdValSpine<Row, Row, Timestamp, Diff>;

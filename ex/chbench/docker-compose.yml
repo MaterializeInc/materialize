@@ -28,6 +28,12 @@ services:
     environment:
       # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
       - MZ_LOG=info
+      # We want this to eventually count up to the size of the largest batch in an
+      # arrangement. This number represents a tradeoff between proactive merging (which
+      # takes time) and low latency.
+      #
+      # 1000 was chosen by fair dice roll
+      - DIFFERENTIAL_EAGER_MERGE=1000
   mysql:
     image: debezium/example-mysql:0.9
     ports:

@@ -12,7 +12,6 @@ path = "main.rs"
 path = "lib.rs"
 
 [dependencies]
-byteorder = "*"
 chrono = "0.4"
 comm = { path = "../comm" }
 coord = { path = "../coord" }
