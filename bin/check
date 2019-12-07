@@ -169,6 +169,14 @@ disabled_lints=(
     # Lifetime elision sometimes gives surprising results, and especially in unsafe code it's useful to
     # spell out lifetimes explicitly to be sure
     clippy::needless-lifetimes
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#clone_on_copy
+    #
+    # Several types happen to be Copy, but might change in the future. A call
+    # to `clone()` compiles to a copy for Copy types, so there is no specific
+    # harm from calling `clone()` and some line-noise as types become or cease
+    # being Copy.
+    clippy::clone-on-copy
 )
 
 extra_lints=(
