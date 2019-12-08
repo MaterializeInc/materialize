@@ -328,8 +328,8 @@ impl<'a> PackableRow<'a> {
     pub fn push_bytes(&mut self, bytes: &[u8]) -> &'a [u8] {
         let data = &mut self.data;
         data.push(Tag::Bytes as u8);
-        let start = data.len();
         data.extend(&bytes.len().to_le_bytes());
+        let start = data.len();
         data.extend(bytes);
         unsafe {
             let backed_bytes =
@@ -352,9 +352,9 @@ impl<'a> PackableRow<'a> {
     pub fn push_string(&mut self, string: &str) -> &'a str {
         let data = &mut self.data;
         data.push(Tag::String as u8);
-        let start = data.len();
         let bytes = string.as_bytes();
         data.extend(&bytes.len().to_le_bytes());
+        let start = data.len();
         data.extend(bytes);
         unsafe {
             let backed_bytes =
@@ -512,6 +512,19 @@ mod tests {
     }
 
     #[test]
+    fn miri_test_push() {
+        let mut packer = RowPacker::new();
+        let mut packable = packer.packable();
+        assert_eq!(packable.push_string(""), "");
+        assert_eq!(
+            packable.push_string("العَرَبِيَّة"),
+            "العَرَبِيَّة"
+        );
+        assert_eq!(packable.push_bytes(&[]), &[]);
+        assert_eq!(packable.push_bytes(&[0, 2, 1, 255]), &[0, 2, 1, 255]);
+    }
+
+    #[test]
     fn miri_test_round_trip() {
         fn round_trip(datums: Vec<Datum>) {
             let row = Row::pack(datums.clone());
@@ -546,7 +559,7 @@ mod tests {
                 duration: std::time::Duration::from_nanos(1012312),
             }),
             Datum::Bytes(&[]),
-            Datum::Bytes(&[0, 2, 1]),
+            Datum::Bytes(&[0, 2, 1, 255]),
             Datum::String(""),
             Datum::String("العَرَبِيَّة"),
         ]);
