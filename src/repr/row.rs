@@ -516,10 +516,7 @@ mod tests {
         let mut packer = RowPacker::new();
         let mut packable = packer.packable();
         assert_eq!(packable.push_string(""), "");
-        assert_eq!(
-            packable.push_string("العَرَبِيَّة"),
-            "العَرَبِيَّة"
-        );
+        assert_eq!(packable.push_string("العَرَبِيَّة"), "العَرَبِيَّة");
         assert_eq!(packable.push_bytes(&[]), &[]);
         assert_eq!(packable.push_bytes(&[0, 2, 1, 255]), &[0, 2, 1, 255]);
     }
