@@ -6,7 +6,7 @@
 #![allow(clippy::cognitive_complexity)]
 
 use crate::RelationExpr;
-use repr::{Datum, Row};
+use repr::{Datum, Row, RowPacker};
 use std::collections::BTreeMap;
 
 pub use demorgans::DeMorgans;
@@ -59,10 +59,12 @@ impl FoldConstants {
                             .iter()
                             .map(|i| datums[*i].clone())
                             .collect::<Vec<_>>();
+                        let mut temp_storage = RowPacker::new();
+                        let temp_storage = &mut temp_storage.packable();
+                        let mut packer = RowPacker::new();
                         let val = aggregates
                             .iter()
-                            .rev()
-                            .map(|agg| agg.expr.eval(&datums))
+                            .map(|agg| packer.pack(&[agg.expr.eval(temp_storage, &datums)]))
                             .collect::<Vec<_>>();
                         let entry = groups.entry(key).or_insert_with(|| Vec::new());
                         for _ in 0..*diff {
@@ -77,16 +79,17 @@ impl FoldConstants {
                     // result of the nth aggregate function for that group.
                     let new_rows = groups
                         .into_iter()
-                        .map(|(key, mut vals)| {
-                            let row =
-                                Row::pack(key.into_iter().chain(aggregates.iter().map(|agg| {
-                                    // Aggregate inputs are in reverse order so that
-                                    // the input for each aggregate function can be
-                                    // efficiently popped off the end of each `val`
-                                    // in `vals`.
-                                    let input = vals.iter_mut().map(|val| val.pop().unwrap());
-                                    (agg.func.func())(input)
-                                })));
+                        .map(|(key, vals)| {
+                            let mut temp_storage = RowPacker::new();
+                            let temp_storage = &mut temp_storage.packable();
+                            let row = Row::pack(key.into_iter().chain(
+                                aggregates.iter().enumerate().map(|(i, agg)| {
+                                    (agg.func.func())(
+                                        temp_storage,
+                                        vals.iter().map(|val| val[i].unpack_first()),
+                                    )
+                                }),
+                            ));
                             (row, 1)
                         })
                         .collect();
@@ -127,8 +130,10 @@ impl FoldConstants {
                         .cloned()
                         .map(|(input_row, diff)| {
                             let mut unpacked = input_row.unpack();
+                            let mut temp_storage = RowPacker::new();
+                            let temp_storage = &mut temp_storage.packable();
                             for scalar in scalars.iter() {
-                                unpacked.push(scalar.eval(&unpacked))
+                                unpacked.push(scalar.eval(temp_storage, &unpacked))
                             }
                             (Row::pack(unpacked), diff)
                         })
@@ -157,7 +162,11 @@ impl FoldConstants {
                         .cloned()
                         .filter(|(row, _diff)| {
                             let datums = row.unpack();
-                            predicates.iter().all(|p| p.eval(&datums) == Datum::True)
+                            let mut temp_storage = RowPacker::new();
+                            let temp_storage = &mut temp_storage.packable();
+                            predicates
+                                .iter()
+                                .all(|p| p.eval(temp_storage, &datums) == Datum::True)
                         })
                         .collect();
                     *relation = RelationExpr::Constant {

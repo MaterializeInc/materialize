@@ -7,7 +7,6 @@ use dataflow_types::{Diff, Timestamp};
 use differential_dataflow::Hashable;
 use futures::{Future, Stream};
 use repr::{Datum, Row};
-use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use timely::dataflow::channels::pact::Exchange;
@@ -96,7 +95,7 @@ where
                                 continue;
                             }
                             session.give((
-                                Row::pack(record.iter().map(|s| Datum::String(Cow::from(s)))),
+                                Row::pack(record.iter().map(|s| Datum::String(s))),
                                 *cap.time(),
                                 1,
                             ));

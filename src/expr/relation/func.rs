@@ -12,12 +12,12 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, ScalarType};
+use repr::{ColumnType, Datum, PackableRow, ScalarType};
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
-pub fn max_int32<'a, I>(datums: I) -> Datum<'a>
+pub fn max_int32<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -29,7 +29,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_int64<'a, I>(datums: I) -> Datum<'a>
+pub fn max_int64<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -41,7 +41,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_float32<'a, I>(datums: I) -> Datum<'a>
+pub fn max_float32<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -53,7 +53,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_float64<'a, I>(datums: I) -> Datum<'a>
+pub fn max_float64<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -65,7 +65,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_decimal<'a, I>(datums: I) -> Datum<'a>
+pub fn max_decimal<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -77,7 +77,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_bool<'a, I>(datums: I) -> Datum<'a>
+pub fn max_bool<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -89,7 +89,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_string<'a, I>(datums: I) -> Datum<'a>
+pub fn max_string<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -103,7 +103,7 @@ where
     }
 }
 
-pub fn max_date<'a, I>(datums: I) -> Datum<'a>
+pub fn max_date<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -115,7 +115,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_timestamp<'a, I>(datums: I) -> Datum<'a>
+pub fn max_timestamp<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -127,7 +127,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_timestamptz<'a, I>(datums: I) -> Datum<'a>
+pub fn max_timestamptz<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -139,14 +139,14 @@ where
     Datum::from(x)
 }
 
-pub fn max_null<'a, I>(_datums: I) -> Datum<'a>
+pub fn max_null<'a, I>(__temp_storage: &mut PackableRow<'a>, _datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn min_int32<'a, I>(datums: I) -> Datum<'a>
+pub fn min_int32<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -158,7 +158,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_int64<'a, I>(datums: I) -> Datum<'a>
+pub fn min_int64<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -170,7 +170,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_float32<'a, I>(datums: I) -> Datum<'a>
+pub fn min_float32<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -182,7 +182,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_float64<'a, I>(datums: I) -> Datum<'a>
+pub fn min_float64<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -194,7 +194,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_decimal<'a, I>(datums: I) -> Datum<'a>
+pub fn min_decimal<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -206,7 +206,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_bool<'a, I>(datums: I) -> Datum<'a>
+pub fn min_bool<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -218,7 +218,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_string<'a, I>(datums: I) -> Datum<'a>
+pub fn min_string<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -232,7 +232,7 @@ where
     }
 }
 
-pub fn min_date<'a, I>(datums: I) -> Datum<'a>
+pub fn min_date<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -244,7 +244,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_timestamp<'a, I>(datums: I) -> Datum<'a>
+pub fn min_timestamp<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -256,7 +256,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_timestamptz<'a, I>(datums: I) -> Datum<'a>
+pub fn min_timestamptz<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -268,14 +268,14 @@ where
     Datum::from(x)
 }
 
-pub fn min_null<'a, I>(_datums: I) -> Datum<'a>
+pub fn min_null<'a, I>(__temp_storage: &mut PackableRow<'a>, _datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn sum_int32<'a, I>(datums: I) -> Datum<'a>
+pub fn sum_int32<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -288,7 +288,7 @@ where
     }
 }
 
-pub fn sum_int64<'a, I>(datums: I) -> Datum<'a>
+pub fn sum_int64<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -301,7 +301,7 @@ where
     }
 }
 
-pub fn sum_float32<'a, I>(datums: I) -> Datum<'a>
+pub fn sum_float32<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -314,7 +314,7 @@ where
     }
 }
 
-pub fn sum_float64<'a, I>(datums: I) -> Datum<'a>
+pub fn sum_float64<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -327,7 +327,7 @@ where
     }
 }
 
-pub fn sum_decimal<'a, I>(datums: I) -> Datum<'a>
+pub fn sum_decimal<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -340,14 +340,14 @@ where
     }
 }
 
-pub fn sum_null<'a, I>(_datums: I) -> Datum<'a>
+pub fn sum_null<'a, I>(__temp_storage: &mut PackableRow<'a>, _datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn count<'a, I>(datums: I) -> Datum<'a>
+pub fn count<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -355,7 +355,7 @@ where
     Datum::from(x)
 }
 
-pub fn count_all<'a, I>(datums: I) -> Datum<'a>
+pub fn count_all<'a, I>(_temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -363,22 +363,22 @@ where
     Datum::from(x)
 }
 
-pub fn any<'a, I>(datums: I) -> Datum<'a>
+pub fn any<'a, I>(temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    datums
-        .into_iter()
-        .fold(Datum::False, crate::scalar::func::or)
+    datums.into_iter().fold(Datum::False, |a, b| {
+        crate::scalar::func::or(temp_storage, a, b)
+    })
 }
 
-pub fn all<'a, I>(datums: I) -> Datum<'a>
+pub fn all<'a, I>(temp_storage: &mut PackableRow<'a>, datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    datums
-        .into_iter()
-        .fold(Datum::True, crate::scalar::func::and)
+    datums.into_iter().fold(Datum::True, |a, b| {
+        crate::scalar::func::and(temp_storage, a, b)
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -418,7 +418,7 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    pub fn func<'a, I>(self) -> fn(I) -> Datum<'a>
+    pub fn func<'a, I>(self) -> fn(&mut PackableRow<'a>, I) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
     {

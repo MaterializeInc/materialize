@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use crate::Params;
 use expr as dataflow_expr;
 use ore::collections::CollectionExt;
 use repr::*;
@@ -500,7 +501,7 @@ impl RelationExpr {
 
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `parameters`.
-    pub fn bind_parameters(&mut self, parameters: &[(Datum<'static>, ScalarType)]) {
+    pub fn bind_parameters(&mut self, parameters: &Params) {
         self.visit_mut(&mut |e| match e {
             RelationExpr::Join { on, .. } => on.bind_parameters(parameters),
             RelationExpr::Map { scalars, .. } => {
@@ -746,12 +747,13 @@ impl ScalarExpr {
 
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `parameters`.
-    pub fn bind_parameters(&mut self, parameters: &[(Datum<'static>, ScalarType)]) {
+    pub fn bind_parameters(&mut self, parameters: &Params) {
         match self {
             ScalarExpr::Literal(_, _) | ScalarExpr::Column(_) => (),
             ScalarExpr::Parameter(n) => {
-                let (datum, scalar_type) = &parameters[*n - 1];
-                let row = Row::pack(vec![datum]);
+                let datum = parameters.datums.iter().nth(*n - 1).unwrap();
+                let scalar_type = &parameters.types[*n - 1];
+                let row = Row::pack(&[datum]);
                 let column_type = ColumnType::new(*scalar_type).nullable(datum.is_null());
                 mem::replace(self, ScalarExpr::Literal(row, column_type));
             }
@@ -956,7 +958,7 @@ impl AggregateExpr {
 
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `parameters`.
-    pub fn bind_parameters(&mut self, parameters: &[(Datum<'static>, ScalarType)]) {
+    pub fn bind_parameters(&mut self, parameters: &Params) {
         self.expr.bind_parameters(parameters);
     }
 }

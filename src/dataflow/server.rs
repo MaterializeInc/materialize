@@ -625,15 +625,17 @@ impl PendingPeek {
         let mut unpacker = RowUnpacker::new();
         let mut left_unpacker = RowUnpacker::new();
         let mut right_unpacker = RowUnpacker::new();
+        let mut temp_storage = RowPacker::new();
         while let Some(_key) = cur.get_key(&storage) {
             while let Some(row) = cur.get_val(&storage) {
                 let datums = unpacker.unpack(row);
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
+                let temp_storage = &mut temp_storage.packable();
                 if self
                     .filter
                     .iter()
-                    .all(|predicate| predicate.eval(&datums) == Datum::True)
+                    .all(|predicate| predicate.eval(temp_storage, &datums) == Datum::True)
                 {
                     // Differential dataflow represents collections with binary counts,
                     // but our output representation is unary (as many rows as reported
@@ -695,7 +697,7 @@ impl PendingPeek {
                     let mut packer = RowPacker::new();
                     move |row| {
                         let datums = unpacker.unpack(*row);
-                        packer.pack(columns.iter().map(|i| &datums[*i]))
+                        packer.pack(columns.iter().map(|i| datums[*i]))
                     }
                 })
                 .collect()

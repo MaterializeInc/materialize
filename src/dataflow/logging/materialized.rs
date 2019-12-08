@@ -164,9 +164,7 @@ pub fn construct<A: Allocate>(
                                             for k in key {
                                                 primary_session.give((
                                                     packer.pack(&[
-                                                        Datum::String(std::borrow::Cow::Owned(
-                                                            id.to_string(),
-                                                        )),
+                                                        Datum::String(&id.to_string()),
                                                         Datum::Int64(k as i64),
                                                         Datum::Int64(index as i64),
                                                     ]),
@@ -179,13 +177,9 @@ pub fn construct<A: Allocate>(
                                             for (c, p) in key {
                                                 foreign_session.give((
                                                     packer.pack(&[
-                                                        Datum::String(std::borrow::Cow::Owned(
-                                                            id.to_string(),
-                                                        )),
+                                                        Datum::String(&id.to_string()),
                                                         Datum::Int64(c as i64),
-                                                        Datum::String(std::borrow::Cow::Owned(
-                                                            parent.to_string(),
-                                                        )),
+                                                        Datum::String(&parent.to_string()),
                                                         Datum::Int64(p as i64),
                                                         Datum::Int64(number as i64),
                                                     ]),
@@ -217,7 +211,7 @@ pub fn construct<A: Allocate>(
                             MaterializedEvent::Frontier(name, logical, delta) => {
                                 frontier_session.give((
                                     packer.pack(&[
-                                        Datum::String(std::borrow::Cow::Owned(name.to_string())),
+                                        Datum::String(&name.to_string()),
                                         Datum::Int64(logical as i64),
                                     ]),
                                     time_ms,
@@ -228,9 +222,7 @@ pub fn construct<A: Allocate>(
                                 for k in key.iter() {
                                     primary_session.give((
                                         packer.pack(&[
-                                            Datum::String(std::borrow::Cow::Owned(
-                                                name.to_string(),
-                                            )),
+                                            Datum::String(&name.to_string()),
                                             Datum::Int64(*k as i64),
                                             Datum::Int64(index as i64),
                                         ]),
@@ -254,13 +246,9 @@ pub fn construct<A: Allocate>(
                                 for (c, p) in keys.iter() {
                                     foreign_session.give((
                                         packer.pack(&[
-                                            Datum::String(std::borrow::Cow::Owned(
-                                                child.to_string(),
-                                            )),
+                                            Datum::String(&child.to_string()),
                                             Datum::Int64(*c as i64),
-                                            Datum::String(std::borrow::Cow::Owned(
-                                                parent.to_string(),
-                                            )),
+                                            Datum::String(&parent.to_string()),
                                             Datum::Int64(*p as i64),
                                             Datum::Int64(number as i64),
                                         ]),
@@ -291,7 +279,7 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(name, worker)| {
                     packer.pack(&[
-                        Datum::cow_from_str(&name.to_string()),
+                        Datum::String(&name.to_string()),
                         Datum::Int64(worker as i64),
                     ])
                 }
@@ -309,8 +297,8 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(dataflow, source, worker)| {
                     packer.pack(&[
-                        Datum::cow_from_str(&dataflow.to_string()),
-                        Datum::cow_from_str(&source.to_string()),
+                        Datum::String(&dataflow.to_string()),
+                        Datum::String(&source.to_string()),
                         Datum::Int64(worker as i64),
                     ])
                 }
@@ -328,9 +316,9 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(peek, worker)| {
                     packer.pack(&[
-                        Datum::cow_from_str(&format!("{}", peek.conn_id)),
+                        Datum::String(&format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
-                        Datum::cow_from_str(&peek.id.to_string()),
+                        Datum::String(&peek.id.to_string()),
                         Datum::Int64(peek.time as i64),
                     ])
                 }
@@ -445,7 +433,7 @@ pub fn construct<A: Allocate>(
                         let mut packer = RowPacker::new();
                         move |row| {
                             let datums = unpacker.unpack(&row);
-                            let key_row = packer.pack(key.iter().map(|k| &datums[*k]));
+                            let key_row = packer.pack(key.iter().map(|k| datums[*k]));
                             drop(datums);
                             (key_row, row)
                         }

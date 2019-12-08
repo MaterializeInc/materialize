@@ -11,7 +11,7 @@ use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
 use ::expr::GlobalId;
 use catalog::{Catalog, CatalogEntry};
-use repr::{Datum, QualName, RelationDesc, Row, ScalarType};
+use repr::{QualName, RelationDesc, Row, ScalarType};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
 
@@ -85,7 +85,11 @@ pub enum MutationKind {
 }
 
 /// A vector of values to which parameter references should be bound.
-pub type Params = [(Datum<'static>, ScalarType)];
+#[derive(Debug)]
+pub struct Params {
+    pub datums: Row,
+    pub types: Vec<ScalarType>,
+}
 
 /// Parses a raw SQL string into a [`Statement`].
 pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {

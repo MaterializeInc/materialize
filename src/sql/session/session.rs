@@ -24,7 +24,8 @@ use crate::session::var::{
     APPLICATION_NAME, CLIENT_ENCODING, DATABASE, DATE_STYLE, EXTRA_FLOAT_DIGITS, SERVER_VERSION,
     SQL_SAFE_UPDATES,
 };
-use repr::{Datum, ScalarType};
+use crate::Params;
+use repr::{Datum, Row, ScalarType};
 
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
@@ -258,11 +259,11 @@ impl Session {
     /// Ensure that the given portal exists
     ///
     /// **Errors** if the statement name has not be set
-    pub fn set_portal(
+    pub fn set_portal<'a>(
         &mut self,
         portal_name: String,
         statement_name: String,
-        parameters: Vec<(Datum<'static>, ScalarType)>,
+        parameters: Vec<(Datum<'a>, ScalarType)>,
         return_field_formats: Vec<bool>,
     ) -> Result<(), failure::Error> {
         if self.prepared_statements.contains_key(&statement_name) {
@@ -270,7 +271,10 @@ impl Session {
                 portal_name,
                 Portal {
                     statement_name,
-                    parameters,
+                    parameters: Params {
+                        datums: Row::pack(parameters.iter().map(|(d, _t)| d)),
+                        types: parameters.into_iter().map(|(_d, t)| t).collect(),
+                    },
                     return_field_formats,
                     max_rows: None,
                     remaining_rows: None,

@@ -179,7 +179,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                             .expect("Render failed to produce collection")
                             .map(move |row| {
                                 let datums = unpacker.unpack(&row);
-                                let key_row = packer.pack(key.iter().map(|k| &datums[*k]));
+                                let key_row = packer.pack(key.iter().map(|k| datums[*k]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -343,7 +343,7 @@ where
                     let mut packer = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |row| {
                         let datums = unpacker.unpack(&row);
-                        packer.pack(outputs.iter().map(|i| &datums[*i]))
+                        packer.pack(outputs.iter().map(|i| datums[*i]))
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -354,10 +354,12 @@ where
                     let scalars = scalars.clone();
                     let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
+                    let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |input_row| {
                         let mut datums = unpacker.unpack(&input_row);
+                        let temp_storage = &mut temp_storage.packable();
                         for scalar in &scalars {
-                            let datum = scalar.eval(&datums);
+                            let datum = scalar.eval(temp_storage, &datums);
                             // Scalar is allowed to see the outputs of previous scalars.
                             // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
                             // Note that this doesn't mutate input_row.
@@ -373,15 +375,17 @@ where
                     self.ensure_rendered(input, scope, worker_index);
                     let predicates = predicates.clone();
                     let mut unpacker = RowUnpacker::new();
+                    let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().filter(move |input_row| {
                         let datums = unpacker.unpack(input_row);
-                        predicates
-                            .iter()
-                            .all(|predicate| match predicate.eval(&datums) {
+                        predicates.iter().all(|predicate| {
+                            let temp_storage = &mut temp_storage.packable();
+                            match predicate.eval(temp_storage, &datums) {
                                 Datum::True => true,
                                 Datum::False | Datum::Null => false,
                                 _ => unreachable!(),
-                            })
+                            }
+                        })
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -431,7 +435,7 @@ where
                         let keyed = built
                             .map(move |row| {
                                 let datums = unpacker.unpack(&row);
-                                let key_row = packer.pack(keys2.iter().map(|i| &datums[*i]));
+                                let key_row = packer.pack(keys2.iter().map(|i| datums[*i]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -574,7 +578,7 @@ where
                     let old_keyed = joined
                         .map(move |row| {
                             let datums = unpacker.unpack(&row);
-                            let key_row = packer.pack(old_keys.iter().map(|i| &datums[*i]));
+                            let key_row = packer.pack(old_keys.iter().map(|i| datums[*i]));
                             drop(datums);
                             (key_row, row)
                         })
@@ -589,7 +593,7 @@ where
                         let new_keyed = built
                             .map(move |row| {
                                 let datums = unpacker.unpack(&row);
-                                let key_row = packer.pack(new_keys2.iter().map(|i| &datums[*i]));
+                                let key_row = packer.pack(new_keys2.iter().map(|i| datums[*i]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -677,10 +681,10 @@ where
                         packer.pack(outputs.iter().zip(dummy_data.iter()).map(
                             |(new_col, dummy)| {
                                 if let Some(new_col) = new_col {
-                                    &datums[*new_col]
+                                    datums[*new_col]
                                 } else {
                                     // Regenerate any columns ignored during join with dummy data
-                                    dummy
+                                    *dummy
                                 }
                             },
                         ))
@@ -748,10 +752,11 @@ where
                     let group_key = group_key.clone();
                     let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
+                    let mut temp_storage = RowPacker::new();
                     move |row| {
                         let datums = unpacker.unpack(&row);
 
-                        let keys = packer.pack(group_key.iter().map(|i| &datums[*i]));
+                        let keys = packer.pack(group_key.iter().map(|i| datums[*i]));
 
                         let mut vals = packer.packable();
                         let mut aggs = vec![1i128];
@@ -765,7 +770,8 @@ where
                             // consider restructuring the plan to pre-distinct the right
                             // data and then use a non-distinctness-requiring aggregation.
 
-                            let eval = aggregate.expr.eval(&datums);
+                            let temp_storage = &mut temp_storage.packable();
+                            let eval = aggregate.expr.eval(temp_storage, &datums);
 
                             // Non-Abelian values cannot be accumulated, and just need to
                             // be passed along.
@@ -838,6 +844,7 @@ where
                         "Reduce",
                         {
                             let mut packer = RowPacker::new();
+                            let mut temp_storage = RowPacker::new();
                             move |key, source, target| {
                                 sums.clear();
                                 sums.extend(&source[0].1[..]);
@@ -937,14 +944,16 @@ where
                                                     }
                                                 })
                                                 .collect::<HashSet<_>>();
-                                            result.push((agg.func.func())(iter));
+                                            let temp_storage = &mut temp_storage.packable();
+                                            result.push((agg.func.func())(temp_storage, iter));
                                         } else {
                                             let iter = source.iter().flat_map(|(v, w)| {
                                                 // let eval = agg.expr.eval(v);
                                                 std::iter::repeat(v.iter().nth(non_abelian_pos).unwrap())
                                                     .take(std::cmp::max(w[0], 0) as usize)
                                             });
-                                            result.push((agg.func.func())(iter));
+                                            let temp_storage = &mut temp_storage.packable();
+                                            result.push((agg.func.func())(temp_storage, iter));
                                         }
                                         non_abelian_pos += 1;
                                     }
@@ -984,7 +993,7 @@ where
                     let mut packer = RowPacker::new();
                     move |row| {
                         let datums = unpacker.unpack(&row);
-                        let group_row = packer.pack(group_clone.iter().map(|i| &datums[*i]));
+                        let group_row = packer.pack(group_clone.iter().map(|i| datums[*i]));
                         drop(datums);
                         (group_row, row)
                     }
@@ -1068,7 +1077,7 @@ where
                 let keyed = built
                     .map(move |row| {
                         let datums = unpacker.unpack(&row);
-                        let key_row = packer.pack(keys2.iter().map(|i| &datums[*i]));
+                        let key_row = packer.pack(keys2.iter().map(|i| datums[*i]));
                         drop(datums);
                         (key_row, row)
                     })

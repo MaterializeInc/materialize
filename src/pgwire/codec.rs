@@ -599,19 +599,19 @@ impl RawParameterBytes {
         }
     }
 
-    pub fn decode_parameters(
-        self,
+    pub fn decode_parameters<'a>(
+        &'a self,
         typs: &[ScalarType],
-    ) -> Result<Vec<(Datum<'static>, ScalarType)>, failure::Error> {
+    ) -> Result<Vec<(Datum<'a>, ScalarType)>, failure::Error> {
         let mut parameters = Vec::new();
-        for (i, parameter) in self.parameters.into_iter().enumerate() {
+        for (i, parameter) in self.parameters.iter().enumerate() {
             let datum = match parameter {
                 Some(bytes) => match self.parameter_format_codes[i] {
                     FieldFormat::Binary => {
-                        RawParameterBytes::generate_datum_from_bytes(bytes, typs[i])?
+                        RawParameterBytes::generate_datum_from_bytes(&bytes, typs[i])?
                     }
                     FieldFormat::Text => {
-                        RawParameterBytes::generate_datum_from_text(bytes, typs[i])?
+                        RawParameterBytes::generate_datum_from_text(&bytes, typs[i])?
                     }
                 },
                 None => Datum::Null,
@@ -621,10 +621,10 @@ impl RawParameterBytes {
         Ok(parameters)
     }
 
-    fn generate_datum_from_bytes(
-        bytes: Vec<u8>,
+    fn generate_datum_from_bytes<'a>(
+        bytes: &'a [u8],
         typ: ScalarType,
-    ) -> Result<Datum<'static>, failure::Error> {
+    ) -> Result<Datum<'a>, failure::Error> {
         Ok(match typ {
             ScalarType::Null => Datum::Null,
             ScalarType::Bool => match bytes[0] {
@@ -636,8 +636,8 @@ impl RawParameterBytes {
             ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(&bytes)),
             ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(&bytes).into()),
             ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(&bytes).into()),
-            ScalarType::Bytes => Datum::Bytes(Cow::Owned(bytes)),
-            ScalarType::String => Datum::String(Cow::Owned(String::from_utf8(bytes)?)),
+            ScalarType::Bytes => Datum::Bytes(&bytes),
+            ScalarType::String => Datum::String(str::from_utf8(bytes)?),
             _ => {
                 // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
                 failure::bail!(
@@ -648,11 +648,11 @@ impl RawParameterBytes {
         })
     }
 
-    fn generate_datum_from_text(
-        bytes: Vec<u8>,
+    fn generate_datum_from_text<'a>(
+        bytes: &'a [u8],
         typ: ScalarType,
-    ) -> Result<Datum<'static>, failure::Error> {
-        let as_str = String::from_utf8(bytes)?;
+    ) -> Result<Datum<'a>, failure::Error> {
+        let as_str = str::from_utf8(bytes)?;
         Ok(match typ {
             ScalarType::Null => Datum::Null,
             ScalarType::Bool => match &*as_str {
@@ -663,8 +663,8 @@ impl RawParameterBytes {
             ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>()?),
             ScalarType::Float32 => Datum::Float32(OrderedFloat::from(as_str.parse::<f32>()?)),
             ScalarType::Float64 => Datum::Float64(OrderedFloat::from(as_str.parse::<f64>()?)),
-            ScalarType::Bytes => Datum::Bytes(Cow::Owned(as_str.into_bytes())),
-            ScalarType::String => Datum::String(Cow::Owned(as_str)),
+            ScalarType::Bytes => Datum::Bytes(as_str.as_bytes()),
+            ScalarType::String => Datum::String(as_str),
             _ => {
                 // todo(jldlaughlin): implement Decimal, Date, Time, Timestamp, Interval
                 failure::bail!(
