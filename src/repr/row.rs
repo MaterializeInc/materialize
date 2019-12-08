@@ -300,11 +300,11 @@ impl RowPacker {
         packable.finish()
     }
 
-    /// Borrows the internal buffer from `self`.
+    /// Clears and then borrows the internal buffer from `self`.
     ///
-    /// You can mutate this buffer in the same way as a row, and clone it to make a new row. When the buffer is dropped it will be reset to empty.
+    /// You can mutate this buffer in the same way as a row, and clone it to make a new row.
     ///
-    /// There are some awkward cases where this function is needed, but prefer `RowPacker::pack` where possible
+    /// There are some awkward cases where this function is needed, but prefer `RowPacker::pack` where possible.
     pub fn packable(&mut self) -> PackableRow {
         // we could clear on Drop instead, but having a custom Drop impl disables NLL which makes PackableRow unpleasant to use
         self.data.clear();
