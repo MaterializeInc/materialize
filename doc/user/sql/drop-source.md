@@ -38,14 +38,14 @@ it.
 ```sql
 SHOW SOURCES;
 ```
-```bash
+```nofmt
 ...
 my_source
 ```
 ```sql
 DROP SOURCE my_source;
 ```
-```bash
+```nofmt
 DROP SOURCE
 ```
 

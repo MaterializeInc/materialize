@@ -1,2 +1,2 @@
 func_coalesce ::=
-  'COALESCE' '(' val ( ',' val )* ')'
+  'coalesce' '(' val ( ',' val )* ')'

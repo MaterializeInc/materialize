@@ -1,12 +1,12 @@
 ---
-title: "BOOLEAN Data Type"
+title: "boolean Data Type"
 description: "Expresses TRUE or FALSE"
 menu:
   main:
     parent: 'sql-types'
 ---
 
-`BOOLEAN` data expresses a binary value of either `TRUE` or `FALSE`.
+`boolean` data expresses a binary value of either `TRUE` or `FALSE`.
 
 Detail | Info
 -------|------
@@ -17,12 +17,24 @@ Detail | Info
 
 {{< diagram "type-bool.html" >}}
 
+## Details
+
+### Valid casts
+
+#### From `boolean`
+
+You cannot cast `boolean` to any other type.
+
+#### To `boolean`
+
+You cannot cast any other type to `boolean`.
+
 ## Examples
 
 ```sql
 SELECT TRUE AS t_val;
 ```
-```shell
+```nofmt
  t_val
 -------
  t
@@ -31,7 +43,7 @@ SELECT TRUE AS t_val;
 ```sql
 SELECT FALSE AS f_val;
 ```
-```shell
+```nofmt
  f_val
 -------
  f

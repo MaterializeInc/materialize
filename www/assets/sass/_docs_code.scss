@@ -3,8 +3,19 @@ li,
 th,
 td {
   code {
-    color: #a90d91;
+    color: #3f6e75;
     font-family: "Roboto Mono", monospace;
+  }
+}
+
+// Coloring of code overrides link coloring;
+// instead insert border-bottom to indicate
+// hyperlink on code element. This is very
+// prevalent in our docs, especially among
+// type references.
+a:not(.headline-hash) {
+  code {
+    border-bottom: 1px dotted #6832d840;
   }
 }
 

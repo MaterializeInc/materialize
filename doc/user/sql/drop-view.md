@@ -32,13 +32,13 @@ _view&lowbar;name_ | The view you want to drop. You can find available view name
 ```sql
 SHOW VIEWS;
 ```
-```bash
+```nofmt
 my_view
 ```
 ```sql
 DROP VIEW my_view;
 ```
-```bash
+```nofmt
 DROP VIEW
 ```
 

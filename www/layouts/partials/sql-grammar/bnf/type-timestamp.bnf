@@ -1,2 +1,2 @@
-type_timestamptz ::=
-  'TIMESTAMPTZ' "'" yyyy-mm-dd hh-mm-ss "'"
+type_timestamp ::=
+  'TIMESTAMP' "'" yyyy-mm-dd hh-mm-ss "'"

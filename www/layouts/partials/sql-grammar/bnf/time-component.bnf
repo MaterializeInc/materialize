@@ -1,2 +1,0 @@
-time_component ::=
-  ( 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' )

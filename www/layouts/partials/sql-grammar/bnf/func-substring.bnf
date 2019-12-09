@@ -1,2 +1,2 @@
 func_substr ::=
-  'SUBSTRING' '(' str ',' start_pos (',' len)? ')'
+  'substring' '(' str ',' start_pos (',' len)? ')'

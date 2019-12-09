@@ -1,2 +1,2 @@
 type_decimal_val ::=
-  'DECIMAL' ( '(' precision ',' scale ')' )?
+  'decimal' ( '(' precision ',' scale ')' )?

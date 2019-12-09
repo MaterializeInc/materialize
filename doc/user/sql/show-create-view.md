@@ -21,7 +21,7 @@ _view&lowbar;name_ | The view you want to use. You can find available view names
 ```sql
 SHOW CREATE VIEW my_view;
 ```
-```bash
+```nofmt
   View   |                  Create View
 ---------+------------------------------------------------
  my_view | CREATE VIEW my_view AS SELECT * FROM my_source

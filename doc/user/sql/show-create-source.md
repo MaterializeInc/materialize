@@ -30,7 +30,7 @@ Prefix | Type
 ```sql
 SHOW CREATE SOURCE my_source;
 ```
-```bash
+```nofmt
     Source   |        Source URL
 -------------+--------------------------
  my_source   | file:///static-source.csv

@@ -1,12 +1,14 @@
 ---
-title: "TIMESTAMP Data Type"
+title: "timestamp Data Type"
 description: "Expresses a date and time"
+aliases:
+    - /docs/sql/types/timestamptz
 menu:
   main:
     parent: 'sql-types'
 ---
 
-`TIMESTAMP` and `TIMESTAMPTZ` data expresses a date and time in UTC.
+`timestamp` and `timestamptz` data expresses a date and time in UTC.
 
 Detail | Info
 -------|------
@@ -32,16 +34,30 @@ _tz&lowbar;offset_ | The timezone's distance, in hours, from UTC.
 
 ## Details
 
-- `TIMESTAMP` and `TIMESTAMPTZ` store data in [UTC](https://en.wikipedia.org/wiki/Coordinated_Universal_Time).
-- The difference between the two types is that `TIMESTAMPTZ` displays the UTC time with the offset specified by the timezone. Importantly, `TIMESTAMPTZ` itself doesn't store any timezone data; it merely enables displaying its values in a time other than UTC.
+- `timestamp` and `timestamptz` store data in [UTC](https://en.wikipedia.org/wiki/Coordinated_Universal_Time).
+- The difference between the two types is that `timestamptz` can read or write timestamps with the offset specified by the timezone. Importantly, `timestamptz` itself doesn't store any timezone data; Materialize simply performs the conversion from the time provided and UTC.
 - Materialize assumes all clients expect UTC time, and does not currently support any other timezones.
+
+### Valid casts
+
+#### From `timestamp`
+
+You can [cast](../../functions/cast) `timestamp` or `timestamptz` to:
+
+- [`string`](../string)
+
+#### To `timestamp`
+
+You cannot cast `timestamp` or `timestamptz` to any other type.
+
+Notably, you also cannot cast between `timestamp` and `timestamptz`.
 
 ## Examples
 
 ```sql
 SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
 ```
-```shell
+```nofmt
         ts_v
 ---------------------
  2007-02-01 15:04:05
@@ -52,7 +68,7 @@ SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
 ```sql
 SELECT TIMESTAMPTZ '2007-02-01 15:04:05+06' AS tstz_v;
 ```
-```shell
+```nofmt
          tstz_v
 -------------------------
  2007-02-01 09:04:05 UTC

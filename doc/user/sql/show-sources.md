@@ -24,7 +24,7 @@ All other sources that display are sources you added to your instances.
 ```sql
 SHOW SOURCES;
 ```
-```bash
+```nofmt
 mz_dataflow_channels
 mz_view_dependencies
 mz_views

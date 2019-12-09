@@ -8,26 +8,26 @@ menu:
 
 `SUBSTRING` returns a specified substring of a string.
 
-## Parameters
+## Signatures
 
 {{< diagram "func-substring.html" >}}
 
 Parameter | Type | Description
 ----------|------|------------
-_str_ | String | The base string.
-_start&lowbar;pos_ | Int | The starting position for the substring; counting starts at 1.
-_len_ | Int | The length of the substring you want to return.
+_str_ | [`string`](../../types/string) | The base string.
+_start&lowbar;pos_ | [`int`](../../types/int) | The starting position for the substring; counting starts at 1.
+_len_ | [`int`](../../types/int) | The length of the substring you want to return.
 
-## Return value
+### Return value
 
-`substring` returns a String.
+`substring` returns a [`string`](../../types/string).
 
 ## Examples
 
 ```sql
 SELECT substring('abcdefg', 3) AS substr;
 ```
-```bash
+```nofmt
  substr
 --------
  cdefg
@@ -38,7 +38,7 @@ SELECT substring('abcdefg', 3) AS substr;
 ```sql
 SELECT substring('abcdefg', 3, 3) AS substr;
 ```
-```bash
+```nofmt
  substr
 --------
  cde

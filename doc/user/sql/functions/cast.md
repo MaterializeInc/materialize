@@ -8,7 +8,7 @@ menu:
 
 The `cast` function and operator return a value converted to the specified type.
 
-## Parameters
+## Signatures
 
 {{< diagram "func-cast.html" >}}
 
@@ -16,10 +16,10 @@ The `cast` function and operator return a value converted to the specified type.
 
 Parameter | Type | Description
 ----------|------|------------
-_val_ | Any | The value you want to convert.
-_type_ | Typename | The return value's type.
+_val_ | [Any](../../types) | The value you want to convert.
+_type_ | [Typename](../../types) | The return value's type.
 
-## Return value
+### Return value
 
 `cast` returns the value with the type specified by the _type_ parameter.
 
@@ -29,26 +29,27 @@ _type_ | Typename | The return value's type.
 
 Source type | Return type
 ------------|------------
-Int | Int
-Int | Float
-Int | Decimal
-Float | Float
-Float | Int
-Float | Decimal<sup>1</sup>
-Decimal | Decimal
-Decimal | Int
-Decimal | Float
-Date | Timestamp
-Date | TimestampTZ
+`int` | `float`
+`int` | `decimal`
+`int` | `string`
+`float`| `int`
+`float`| `decimal`<sup>1</sup>
+`float`| `string`
+`decimal` | `int`
+`decimal` | `float`
+`decimal` | `string`
+`date` | `timestamp`
+`date` | `timestamptz`
+`date` | `string`
 
-<sup>1</sup> Casting a `FLOAT` to a `DECIMAL` can yield an imprecise result due to the floating point arithmetic involved in the conversion.
+<sup>1</sup> Casting a `float` to a `decimal` can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 
 ## Examples
 
 ```sql
 SELECT CAST (CAST (100.21 AS decimal(10, 2)) AS float) AS dec_to_float;
 ```
-```bash
+```nofmt
  dec_to_float
 --------------
        100.21
@@ -58,7 +59,7 @@ SELECT CAST (CAST (100.21 AS decimal(10, 2)) AS float) AS dec_to_float;
 ```sql
 SELECT 100.21::decimal(10, 2)::float AS dec_to_float;
 ```
-```bash
+```nofmt
  dec_to_float
 --------------
        100.21
