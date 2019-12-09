@@ -408,11 +408,11 @@ where
     TS: IntoIterator<Item = T>,
     F: Fn(&mut fmt::Formatter, T) -> fmt::Result,
 {
-    let mut iter = things.into_iter().enumerate().peekable();
-    while let Some((_i, thing)) = iter.next() {
+    let mut iter = things.into_iter().peekable();
+    while let Some(thing) = iter.next() {
         write(f, thing)?;
-        if let Some(_) = iter.peek() {
-            write!(f, "{}", delimiter)?;
+        if iter.peek().is_some() {
+            f.write_str(delimiter)?;
         }
     }
     Ok(())
