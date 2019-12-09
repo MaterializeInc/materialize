@@ -10,7 +10,7 @@
 collector_name: arrangements_meta
 metrics:
   - metric_name: mz_perf_dependency_frontiers
-    query: |
+    query: >-
       SELECT
           dataflow, source, lag_ms
       FROM
@@ -23,7 +23,7 @@ metrics:
       - dataflow
       - source
   - metric_name: mz_perf_arrangements_batches
-    query: |
+    query: >-
       SELECT
           operator, worker, batches
       FROM
@@ -50,7 +50,7 @@ metrics:
   # durations histogram
   # histogram_quantile(1.0, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le, worker))
   - metric_name: mz_perf_peek_durations_bucket
-    query: |
+    query: >-
       SELECT
           worker, le, count
       FROM
@@ -63,7 +63,7 @@ metrics:
       - worker
       - le
   - metric_name: mz_perf_peek_durations
-    query: |
+    query: >-
       SELECT
           worker, duration_ns, count
       FROM
@@ -76,7 +76,7 @@ metrics:
       - worker
       - duration_ns
   - metric_name: mz_perf_peek_durations_sum
-    query: |
+    query: >-
       SELECT
           worker, sum
       FROM
@@ -88,7 +88,7 @@ metrics:
     key_labels:
       - worker
   - metric_name: mz_perf_peek_durations_count
-    query: |
+    query: >-
       SELECT
           worker, count
       FROM
@@ -103,7 +103,7 @@ metrics:
   # Share Arrangements
   - metric_name: mz_perf_shared_arrangements
     help: how many operators are using each arrangement
-    query: |
+    query: >-
       SELECT
           operator, worker, count
       FROM
