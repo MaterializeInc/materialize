@@ -56,7 +56,7 @@ class DataSource {
     static void initialize(int warehouseCount);
     static bool randomTrue(double probability);
     static int permute(int value, int low, int high);
-    static void getCurrentTimestamp(SQL_TIMESTAMP_STRUCT& ret);
+    static void getCurrentTimestamp(SQL_TIMESTAMP_STRUCT& ret, int64_t offset = 0);
     static void genCLast(int value, std::string& ret);
     static void randomCLast(std::string& ret);
     static void getRemoteWId(int& currentWId, int& ret);
@@ -79,10 +79,11 @@ class DataSource {
                        bool delimiter);
     static void addDouble(double minValue, double maxValue, int decimals,
                           std::ofstream& stream, bool delimiter);
+    static void writeDouble(double d, std::ofstream& stream, bool delimiter);
     static void addNId(std::ofstream& stream, bool delimiter);
     static void addWDCZip(std::ofstream& stream, bool delimiter);
     static void addSuPhone(int& suId, std::ofstream& stream, bool delimiter);
-    static std::string getCurrentTimeString();
+    static std::string getCurrentTimeString(int64_t offset = 0);
     static std::string strLeadingZero(int i, int zeros);
     static Nation getNation(int i);
     static const char* getRegion(int i);

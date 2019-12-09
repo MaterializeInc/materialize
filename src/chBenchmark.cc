@@ -46,6 +46,7 @@ limitations under the License.
 #include <assert.h>
 #include <future>
 #include <cinttypes>
+#include <libconfig.h++>
 
 
 enum class RunState {
@@ -63,6 +64,7 @@ typedef struct {
     int warehouseCount;
     useconds_t sleepMin;
     useconds_t sleepMax;
+    mz::Config* cfg;
 } threadParameters;
 
 static void* analyticalThread(void* args) {
@@ -122,7 +124,7 @@ static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *p
     size_t size = config.hQueries.size();
     while (runState == RunState::warmup) {
         const auto& q = config.hQueries[iQuery];
-        mz::peekView(c, q.first, q.second.order, q.second.limit);
+        mz::peekView(c, q->first, q->second.order, q->second.limit);
         iQuery = (iQuery + 1) % size;
         auto sleepTime = chRandom::uniformInt(sleepMin, sleepMax);
         usleep(sleepTime);
@@ -131,7 +133,7 @@ static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *p
     hists.resize(size);
     while (runState == RunState::run) {
         const auto& q = config.hQueries[iQuery];
-        auto latency = mz::peekView(c, q.first, q.second.order, q.second.limit).latency;
+        auto latency = mz::peekView(c, q->first, q->second.order, q->second.limit).latency;
         hists[iQuery].increment(latency.count());
         iQuery = (iQuery + 1) % size;
         auto sleepTime = chRandom::uniformInt(sleepMin, sleepMax);
@@ -180,8 +182,8 @@ static void materializeThread(mz::Config config, std::promise<std::vector<Histog
     }
     std::cout << "Done creating expected sources" << std::endl;
     for (const auto& vp: config.hQueries) {
-        std::cout << "Creating query " << vp.first << std::endl;
-        mz::createMaterializedView(c, vp.first, vp.second.query);
+        std::cout << "Creating query " << vp->first << std::endl;
+        mz::createMaterializedView(c, vp->first, vp->second.query);
     }
     if (flushSleepTime) {
         std::thread(flushThread, flushSleepTime.value(), pRunState).detach();
@@ -218,6 +220,8 @@ static void* transactionalThread(void* args) {
 
     bool b;
 
+    auto& cfg = *prm->cfg;
+
     if (DbcTools::autoCommitOff(prm->hDBC)) {
 
         pthread_barrier_wait(prm->barStart);
@@ -230,12 +234,12 @@ static void* transactionalThread(void* args) {
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
-                transactions.executeNewOrder(prm->hDBC);
+                transactions.executeNewOrder(prm->hDBC, cfg);
             }
             else if (decision <= 88) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
-                transactions.executePayment(prm->hDBC);
+                transactions.executePayment(prm->hDBC, cfg);
             }
             else if (decision <= 92) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
@@ -245,7 +249,7 @@ static void* transactionalThread(void* args) {
             else if (decision <= 96) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
-                transactions.executeDelivery(prm->hDBC);
+                transactions.executeDelivery(prm->hDBC, cfg);
             }
             else {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
@@ -263,13 +267,13 @@ static void* transactionalThread(void* args) {
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
-                b = transactions.executeNewOrder(prm->hDBC);
+                b = transactions.executeNewOrder(prm->hDBC, cfg);
                 tStat->executeTPCCSuccess(1, b);
             }
             else if (decision <= 88) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
-                b = transactions.executePayment(prm->hDBC);
+                b = transactions.executePayment(prm->hDBC, cfg);
                 tStat->executeTPCCSuccess(2, b);
             }
             else if (decision <= 92) {
@@ -281,7 +285,7 @@ static void* transactionalThread(void* args) {
             else if (decision <= 96) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
-                b = transactions.executeDelivery(prm->hDBC);
+                b = transactions.executeDelivery(prm->hDBC, cfg);
                 tStat->executeTPCCSuccess(4, b);
             }
             else {
@@ -362,6 +366,7 @@ enum LongOnlyOpts {
     MZ_URL,
     KAFKA_URL,
     SCHEMA_REGISTRY_URL,
+    CONFIG_FILE_PATH,
 };
 
 static int run(int argc, char* argv[]) {
@@ -387,6 +392,7 @@ static int run(int argc, char* argv[]) {
         {"mz-url", required_argument, &longopt_idx, MZ_URL},
         {"kafka-url", required_argument, &longopt_idx, KAFKA_URL},
         {"schema-registry-url", required_argument, &longopt_idx, SCHEMA_REGISTRY_URL},
+        {"config-file-path", required_argument, &longopt_idx, CONFIG_FILE_PATH},
         {nullptr, 0, nullptr, 0}};
 
     int c;
@@ -407,8 +413,9 @@ static int run(int argc, char* argv[]) {
     bool createSources = false;
     std::vector<std::string> mzViews;
     double flushSleepTime = 0;
+    std::optional<std::string> materializedUrl, kafkaUrl, schemaRegistryUrl;
+    std::optional<mz::Config> config;
 
-    mz::Config mzCfg = mz::defaultConfig();
     while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:l:", longOpts,
                             nullptr)) != -1) {
         if (c == 0) switch (longopt_idx) {
@@ -437,14 +444,20 @@ static int run(int argc, char* argv[]) {
             flushSleepTime = parseDouble("Interval to run flush-tables hack (s)", optarg);
             break;
         case MZ_URL:
-            mzCfg.materializedUrl = optarg;
+            materializedUrl = optarg;
             break;
         case KAFKA_URL:
-            mzCfg.kafkaUrl = optarg;
+            kafkaUrl = optarg;
             break;
         case SCHEMA_REGISTRY_URL:
-            mzCfg.schemaRegistryUrl = optarg;
+            schemaRegistryUrl = optarg;
             break;
+        case CONFIG_FILE_PATH: {
+            libconfig::Config lc_config;
+            lc_config.readFile(optarg);
+            config = Config::get_config(lc_config);
+            break;
+        }
         default:
             return 1;
         }
@@ -480,6 +493,19 @@ static int run(int argc, char* argv[]) {
             return 1;
         }
     }
+    if (!config) {
+        config = mz::defaultConfig();
+    }
+    mz::Config mzCfg = std::move(*config);
+    if (materializedUrl) {
+        mzCfg.materializedUrl = *materializedUrl;
+    }
+    if (kafkaUrl) {
+        mzCfg.kafkaUrl = *kafkaUrl;
+    }
+    if (schemaRegistryUrl) {
+        mzCfg.schemaRegistryUrl = *schemaRegistryUrl;
+    }
     argc -= optind;
     argv += optind;
 
@@ -503,8 +529,8 @@ static int run(int argc, char* argv[]) {
         errx(1, "--mz-views requires --mz-sources");
     if (peekConns < 0)
         errx(1, "peek threads cannot be negative");
-    if (mzViews.empty() && peekConns)
-        errx(1, "--peek-conns requires --mz-views and --mz-sources");
+    if (mzCfg.hQueries.empty() && peekConns)
+        errx(1, "--peek-conns requires --mz-sources and configured views");
 
     if (logFile)
         Log::open(logFile);
@@ -573,7 +599,7 @@ static int run(int argc, char* argv[]) {
     for (int i = 0; i < analyticThreads; i++) {
         aStat[i] = new AnalyticalStatistic();
         aprm.push_back(
-            {&barStart, runState, i + 1, 0, (void*) aStat[i], warehouseCount, (unsigned)(minDelay * 1'000'000), (unsigned)(maxDelay * 1'000'000)});
+            {&barStart, runState, i + 1, 0, (void*) aStat[i], warehouseCount, (unsigned)(minDelay * 1'000'000), (unsigned)(maxDelay * 1'000'000), &mzCfg});
         if (!DbcTools::connect(hEnv, aprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
@@ -589,7 +615,7 @@ static int run(int argc, char* argv[]) {
     for (int i = 0; i < transactionalThreads; i++) {
         tStat[i] = new TransactionalStatistic();
         tprm.push_back(
-            {&barStart, runState, i + 1, 0, (void*) tStat[i], warehouseCount, (unsigned)(minDelay * 1'000'000), (unsigned)(maxDelay * 1'000'000)});
+            {&barStart, runState, i + 1, 0, (void*) tStat[i], warehouseCount, (unsigned)(minDelay * 1'000'000), (unsigned)(maxDelay * 1'000'000), &mzCfg});
         if (!DbcTools::connect(hEnv, tprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
@@ -599,10 +625,9 @@ static int run(int argc, char* argv[]) {
     auto futHist = promHist.get_future();
     runState = RunState::warmup;
     if (createSources) {
-        const auto& allHQueries = mz::allHQueries();
         for (const auto& view: mzViews) {
-            if (auto i = allHQueries.find(view); i != allHQueries.end()) {
-                mzCfg.hQueries.emplace_back(*i);
+            if (auto i = mzCfg.allQueries.find(view); i != mzCfg.allQueries.end()) {
+                mzCfg.hQueries.emplace_back(&*i);
             } else {
                 errx(1, "No such view: %s", view.c_str());
             }
@@ -665,7 +690,7 @@ static int run(int argc, char* argv[]) {
         // for thousands separator in printf output
         setlocale(LC_NUMERIC, "en_US.UTF-8");
         for (size_t i = 0; i < hists.size(); ++i) {
-            printf("\n%s:\ncount\t|\tlatency (ns)\n----------------------------\n", mzCfg.hQueries[i].first.c_str());
+            printf("\n%s:\ncount\t|\tlatency (ns)\n----------------------------\n", mzCfg.hQueries[i]->first.c_str());
             uint64_t nanos = 1;
             bool printed_first = false;
             for (auto bucketCount : hists[i].getCounts()) {
@@ -695,26 +720,42 @@ static int run(int argc, char* argv[]) {
 }
 
 static int gen(int argc, char* argv[]) {
+    int longopt_idx;
     static struct option longOpts[] = {
         {"warehouses", required_argument, nullptr, 'w'},
         {"out-dir", required_argument, nullptr, 'o'},
+        {"config-file-path", required_argument, &longopt_idx, CONFIG_FILE_PATH},
         {nullptr, 0, nullptr, 0}};
 
     int c;
     int warehouseCount = 1;
     const char* outDir = "gen";
+    std::optional<mz::Config> config;
     while ((c = getopt_long(argc, argv, "w:o:", longOpts, nullptr)) != -1) {
-        switch (c) {
+        if (c == 0) switch (longopt_idx) {
+        case CONFIG_FILE_PATH: {
+            libconfig::Config lc_config;
+            lc_config.readFile(optarg);
+            config = Config::get_config(lc_config);
+            break;
+        }
+        default:
+            return 1;
+        } else switch (c) {
         case 'w':
             warehouseCount = parseInt("warehouse count", optarg);
             break;
-        case 'o':
-            outDir = optarg;
-            break;
-        default:
-            return 1;
+            case 'o':
+                outDir = optarg;
+                break;
+                default:
+                    return 1;
         }
     }
+    if (!config) {
+        config = mz::defaultConfig();
+    }
+    mz::Config mzCfg = std::move(*config);
     argc -= optind;
     argv += optind;
 
@@ -727,7 +768,7 @@ static int gen(int argc, char* argv[]) {
 
     for (int iId = 1; iId <= 100000; iId++) {
         // Item
-        TupleGen::genItem(iId);
+        TupleGen::genItem(iId, mzCfg);
     }
 
     std::string customerTime = "";
@@ -752,7 +793,7 @@ static int gen(int argc, char* argv[]) {
                 TupleGen::genCustomer(cId, dId, wId, customerTime);
 
                 // History
-                TupleGen::genHistory(cId, dId, wId);
+                TupleGen::genHistory(cId, dId, wId, mzCfg);
 
                 // Order
                 int oId = DataSource::permute(cId, 1, 3000);
@@ -764,7 +805,7 @@ static int gen(int argc, char* argv[]) {
                     olCount = nextOlCount;
                     nextOlCount = -1;
                 }
-                orderTime = DataSource::getCurrentTimeString();
+                orderTime = DataSource::getCurrentTimeString(mzCfg.order_entry_date_offset_millis(chRandom::rng) / 1000);
                 TupleGen::genOrder(oId, dId, wId, cId, olCount, orderTime);
 
                 for (int olNumber = 1; olNumber <= olCount; olNumber++) {

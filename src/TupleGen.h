@@ -22,6 +22,7 @@ limitations under the License.
 
 #include <fstream>
 #include <string>
+#include "mz-config.h"
 
 class TupleGen {
 
@@ -46,13 +47,13 @@ class TupleGen {
     static void genDistrict(int& dId, int& wId);
     static void genCustomer(int& cId, int& dId, int& wId,
                             std::string& customerTime);
-    static void genHistory(int& cId, int& dId, int& wId);
+    static void genHistory(int& cId, int& dId, int& wId, mz::Config& cfg);
     static void genNeworder(int& oId, int& dId, int& wId);
     static void genOrder(int& oId, int& dId, int& wId, int& cId, int& olCount,
                          std::string& orderTime);
     static void genOrderline(int& oId, int& dId, int& wId, int& olNumber,
                              std::string& orderTime);
-    static void genItem(int& iId);
+    static void genItem(int& iId, mz::Config& cfg);
     static void genStock(int& iId, int& wId);
     static void genNation(const Nation& n);
     static void genSupplier(int& suId);

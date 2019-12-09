@@ -21,6 +21,7 @@ limitations under the License.
 #include <sql.h>
 #include <sqlext.h>
 #include <sqltypes.h>
+#include "mz-config.h"
 
 class Transactions {
 
@@ -73,10 +74,10 @@ class Transactions {
     Transactions(int wc) : warehouseCount(wc) {}
     bool prepareStatements(SQLHDBC& hDBC);
 
-    bool executeNewOrder(SQLHDBC& hDBC);
-    bool executePayment(SQLHDBC& hDBC);
+    bool executeNewOrder(SQLHDBC& hDBC, mz::Config& cfg);
+    bool executePayment(SQLHDBC& hDBC, mz::Config& cfg);
     bool executeOrderStatus(SQLHDBC& hDBC);
-    bool executeDelivery(SQLHDBC& hDBC);
+    bool executeDelivery(SQLHDBC& hDBC, mz::Config& cfg);
     bool executeStockLevel(SQLHDBC& hDBC);
 };
 

@@ -22,6 +22,7 @@ limitations under the License.
 #include "Log.h"
 #include "Random.h"
 #include "dialect/DialectStrategy.h"
+#include "mz-config.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -231,7 +232,7 @@ bool Transactions::prepareStatements(SQLHDBC& hDBC) {
     return true;
 }
 
-bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
+bool Transactions::executeNewOrder(SQLHDBC& hDBC, mz::Config& cfg) {
 
     struct OrderLine {
         int olIId;
@@ -272,7 +273,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     }
     // 2.4.1.6
     SQL_TIMESTAMP_STRUCT oEntryD;
-    DataSource::getCurrentTimestamp(oEntryD);
+    DataSource::getCurrentTimestamp(oEntryD, cfg.order_entry_date_offset_millis(chRandom::rng) / 1000);
 
     SQLLEN nIdicator = 0;
     SQLCHAR buf[1024] = {0};
@@ -442,7 +443,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     return false;
 }
 
-bool Transactions::executePayment(SQLHDBC& hDBC) {
+bool Transactions::executePayment(SQLHDBC& hDBC, mz::Config& cfg) {
 
     // 2.5.1.1
     int wId = chRandom::uniformInt(1, warehouseCount);
@@ -470,7 +471,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     }
 
     // 2.5.1.3
-    double hAmount = chRandom::uniformDouble(1.00, 5000.00, 2);
+    double hAmount = cfg.payment_amount_cents(chRandom::rng) / 100.0;
 
     // 2.5.1.4
     SQL_TIMESTAMP_STRUCT hDate;
@@ -759,7 +760,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
     return false;
 }
 
-bool Transactions::executeDelivery(SQLHDBC& hDBC) {
+bool Transactions::executeDelivery(SQLHDBC& hDBC, mz::Config& cfg) {
 
     // 2.7.1.1
     int wId = chRandom::uniformInt(1, warehouseCount);
@@ -767,7 +768,7 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
     int oCarrierId = chRandom::uniformInt(1, 10);
     // 2.7.1.3
     SQL_TIMESTAMP_STRUCT olDeliveryD;
-    DataSource::getCurrentTimestamp(olDeliveryD);
+    DataSource::getCurrentTimestamp(olDeliveryD, cfg.orderline_delivery_date_offset_millis(chRandom::rng));
 
     SQLLEN nIdicator = 0;
     SQLCHAR buf[1024] = {0};

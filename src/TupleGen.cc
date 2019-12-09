@@ -18,8 +18,11 @@ limitations under the License.
 #include "TupleGen.h"
 
 #include "Defines.h"
+#include "mz-config.h"
 
 #include <err.h>
+#include <iostream>
+#include "Random.h"
 
 std::ofstream TupleGen::warehouseStream;
 std::ofstream TupleGen::districtStream;
@@ -137,13 +140,13 @@ void TupleGen::genCustomer(int& cId, int& dId, int& wId,
     customerStream << std::endl;
 }
 
-void TupleGen::genHistory(int& cId, int& dId, int& wId) {
+void TupleGen::genHistory(int& cId, int& dId, int& wId, mz::Config& cfg) {
     historyStream << cId << csvDelim; // H_C_ID
     historyStream << dId << csvDelim; // H_C_D_ID
     historyStream << wId << csvDelim; // H_C_W_ID
     historyStream << dId << csvDelim; // H_D_ID
     historyStream << wId << csvDelim; // H_W_ID
-    historyStream << DataSource::getCurrentTimeString()
+    historyStream << DataSource::getCurrentTimeString(cfg.hist_date_offset_millis(chRandom::rng) / 1000)
                   << csvDelim;            // H_DATE - current date and time
     historyStream << "10.00" << csvDelim; // H_AMOUNT
     DataSource::addAlphanumeric64(12, 24, historyStream, false); // H_DATA
@@ -196,11 +199,12 @@ void TupleGen::genOrderline(int& oId, int& dId, int& wId, int& olNumber,
     orderlineStream << std::endl;
 }
 
-void TupleGen::genItem(int& iId) {
+void TupleGen::genItem(int& iId, mz::Config& cfg) {
     itemStream << iId << csvDelim;                        // I_ID
     DataSource::addInt(1, 10000, itemStream, true);          // I_IM_ID
     DataSource::addAlphanumeric64(14, 24, itemStream, true); // I_NAME
-    DataSource::addDouble(1.0, 100.0, 2, itemStream, true);  // I_PRICE
+
+    DataSource::writeDouble(cfg.item_price_cents(chRandom::rng) / 100.0, itemStream, true);  // I_PRICE
     if (DataSource::randomTrue(0.1))                      // I_DATA
         DataSource::addAlphanumeric64Original(26, 50, itemStream, false);
     else

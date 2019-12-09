@@ -284,9 +284,10 @@ int DataSource::permute(int value, int low, int high) {
     return ((value * 9973) % range) + low;
 }
 
-void DataSource::getCurrentTimestamp(SQL_TIMESTAMP_STRUCT& ret) {
+void DataSource::getCurrentTimestamp(SQL_TIMESTAMP_STRUCT& ret, int64_t offset) {
     time_t rawtime;
     time(&rawtime);
+    rawtime += offset;
     tm* timeinfo = localtime(&rawtime);
 
     ret.year = timeinfo->tm_year + 1900;
@@ -412,12 +413,16 @@ void DataSource::addInt(int minValue, int maxValue, std::ofstream& stream,
         stream << csvDelim;
 }
 
-void DataSource::addDouble(double minValue, double maxValue, int decimals,
-                           std::ofstream& stream, bool delimiter) {
-    double d = chRandom::uniformDouble(minValue, maxValue, decimals);
+void DataSource::writeDouble(double d, std::ofstream& stream, bool delimiter) {
     stream << d;
     if (delimiter)
         stream << csvDelim;
+}
+
+void DataSource::addDouble(double minValue, double maxValue, int decimals,
+                           std::ofstream& stream, bool delimiter) {
+    double d = chRandom::uniformDouble(minValue, maxValue, decimals);
+    writeDouble(d, stream, delimiter);
 }
 
 void DataSource::addNId(std::ofstream& stream, bool delimiter) {
@@ -449,11 +454,12 @@ void DataSource::addSuPhone(int& suId, std::ofstream& stream, bool delimiter) {
         stream << csvDelim;
 }
 
-std::string DataSource::getCurrentTimeString() {
+std::string DataSource::getCurrentTimeString(int64_t offset) {
     time_t rawtime;
     struct tm* timeinfo;
     char buffer[24];
     time(&rawtime);
+    rawtime += offset;
     timeinfo = localtime(&rawtime);
     strftime(buffer, 80, "%F %X", timeinfo);
     return std::string(buffer);
