@@ -27,7 +27,7 @@ lazy_static = "1.4.0"
 ore = { path = "../ore" }
 pg_interval = "0.3"
 postgres = "0.15"
-serde_json = { version = "1.0.42", features = ["preserve_order"] }
+serde_json = { version = "1.0.44", features = ["preserve_order"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rand = "0.7.2"
 rdkafka = { version = "0.22", features = ["cmake_build"] }

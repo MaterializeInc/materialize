@@ -20,4 +20,4 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"
-serde_json = "1.0.42"
+serde_json = "1.0.44"
