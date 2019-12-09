@@ -35,6 +35,18 @@ metrics:
     key_labels:
       - operator
       - worker
+  - metric_name: mz_perf_arrangement_records
+    query: >-
+      SELECT * FROM mz_perf_arrangement_records
+      ORDER BY operator
+    help: How many records each arrangement has
+    type: gauge
+    values:
+      - records
+    key_labels:
+      - worker
+      - name
+      - operator
   # durations histogram
   # histogram_quantile(1.0, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le, worker))
   - metric_name: mz_perf_peek_durations_bucket

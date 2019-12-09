@@ -8,6 +8,7 @@
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 
+use lazy_static::lazy_static;
 use timely::communication::allocator::generic::GenericBuilder;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::initialize::WorkerGuards;
@@ -21,6 +22,7 @@ use futures::sync::mpsc::UnboundedReceiver;
 use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
+use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use repr::{Datum, Row, RowPacker, RowUnpacker};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -40,6 +42,21 @@ use dataflow_types::{
     compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
 };
 use expr::{EvalEnv, GlobalId};
+
+lazy_static! {
+    static ref COMMAND_QUEUE_RAW: IntGaugeVec = register_int_gauge_vec!(
+        "mz_worker_command_queue_size",
+        "the number of commands we would like to handle",
+        &["worker"]
+    )
+    .unwrap();
+    static ref PENDING_PEEKS_RAW: IntGaugeVec = register_int_gauge_vec!(
+        "mz_worker_pending_peeks_queue_size",
+        "the number of peeks remaining to be processed",
+        &["worker"]
+    )
+    .unwrap();
+}
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
 /// Timely workers.
@@ -164,7 +181,7 @@ where
             .unwrap()
             .request_unparks(executor.clone())
             .unwrap();
-
+        let worker_idx = timely_worker.index();
         Worker {
             inner: timely_worker,
             pending_peeks: Vec::new(),
@@ -177,6 +194,7 @@ where
             local_inputs: HashMap::new(),
             reported_frontiers: HashMap::new(),
             executor: executor.clone(),
+            metrics: Metrics::for_worker_id(worker_idx),
         }
         .run()
     })
@@ -198,6 +216,38 @@ where
     local_inputs: HashMap<GlobalId, LocalInput>,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     executor: E,
+    metrics: Metrics,
+}
+
+/// Prometheus metrics that we would like to easily export
+struct Metrics {
+    /// The size of the command queue
+    ///
+    /// Updated every time we decide to handle some
+    command_queue: IntGauge,
+    /// The number of pending peeks
+    ///
+    /// Updated every time we successfully fulfill a peek
+    pending_peeks: IntGauge,
+}
+
+impl Metrics {
+    fn for_worker_id(id: usize) -> Metrics {
+        let worker_id = id.to_string();
+
+        Metrics {
+            command_queue: COMMAND_QUEUE_RAW.with_label_values(&[&worker_id]),
+            pending_peeks: PENDING_PEEKS_RAW.with_label_values(&[&worker_id]),
+        }
+    }
+
+    fn observe_command_queue(&self, commands: &[SequencedCommand]) {
+        self.command_queue.set(commands.len() as i64);
+    }
+
+    fn observe_pending_peeks(&self, pending_peeks: &[PendingPeek]) {
+        self.pending_peeks.set(pending_peeks.len() as i64);
+    }
 }
 
 impl<'w, A, E> Worker<'w, A, E>
@@ -313,6 +363,7 @@ where
             while let Ok(Some(cmd)) = self.command_rx.try_next() {
                 cmds.push(cmd);
             }
+            self.metrics.observe_command_queue(&cmds);
             for cmd in cmds {
                 if let SequencedCommand::Shutdown = cmd {
                     shutdown = true;
@@ -320,6 +371,7 @@ where
                 self.handle_command(cmd);
             }
 
+            self.metrics.observe_pending_peeks(&self.pending_peeks);
             self.process_peeks();
         }
     }
@@ -467,6 +519,9 @@ where
                         logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                     }
                 }
+                self.metrics
+                    .pending_peeks
+                    .set(self.pending_peeks.len() as i64);
             }
 
             SequencedCommand::CancelPeek { conn_id } => {
