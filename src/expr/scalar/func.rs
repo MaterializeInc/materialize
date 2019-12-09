@@ -854,6 +854,22 @@ pub fn neg_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Da
     Datum::from(-a.unwrap_decimal())
 }
 
+pub fn sqrt_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Datum<'a> {
+    let x = a.unwrap_float32();
+    if x < 0.0 {
+        return Datum::Null;
+    }
+    Datum::from(x.sqrt())
+}
+
+pub fn sqrt_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Datum<'a> {
+    let x = a.unwrap_float64();
+    if x < 0.0 {
+        return Datum::Null;
+    }
+    Datum::from(x.sqrt())
+}
+
 pub fn eq<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -1540,6 +1556,8 @@ pub enum UnaryFunc {
     NegFloat32,
     NegFloat64,
     NegDecimal,
+    SqrtFloat32,
+    SqrtFloat64,
     AbsInt32,
     AbsInt64,
     AbsFloat32,
@@ -1654,6 +1672,8 @@ impl UnaryFunc {
             UnaryFunc::CeilFloat64 => ceil_float64,
             UnaryFunc::FloorFloat32 => floor_float32,
             UnaryFunc::FloorFloat64 => floor_float64,
+            UnaryFunc::SqrtFloat32 => sqrt_float32,
+            UnaryFunc::SqrtFloat64 => sqrt_float64,
             UnaryFunc::Ascii => ascii,
             UnaryFunc::ExtractIntervalYear => extract_interval_year,
             UnaryFunc::ExtractIntervalMonth => extract_interval_month,
@@ -1762,8 +1782,15 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
             }
 
-            CeilFloat32 | FloorFloat32 => ColumnType::new(ScalarType::Float32),
-            CeilFloat64 | FloorFloat64 => ColumnType::new(ScalarType::Float64),
+            CeilFloat32 | FloorFloat32 => {
+                ColumnType::new(ScalarType::Float32).nullable(in_nullable)
+            }
+            CeilFloat64 | FloorFloat64 => {
+                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
+            }
+
+            SqrtFloat32 => ColumnType::new(ScalarType::Float32).nullable(true),
+            SqrtFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | AbsInt32
             | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
@@ -1853,6 +1880,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
             UnaryFunc::FloorFloat64 => f.write_str("floorf64"),
+            UnaryFunc::SqrtFloat32 => f.write_str("sqrtf32"),
+            UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),

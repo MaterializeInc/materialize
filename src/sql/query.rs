@@ -1557,6 +1557,27 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "sqrt" => {
+                if sql_func.args.len() != 1 {
+                    bail!("sqrt expects 1 argument, got {}", sql_func.args.len());
+                }
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
+                let expr = promote_number_floatdec(ecx, "sqrt", expr)?;
+                Ok(match ecx.column_type(&expr).scalar_type {
+                    ScalarType::Float32 => expr.call_unary(UnaryFunc::SqrtFloat32),
+                    ScalarType::Float64 => expr.call_unary(UnaryFunc::SqrtFloat64),
+                    ScalarType::Decimal(p, s) => {
+                        // TODO(benesch): proper sqrt support for decimals. For
+                        // now we cast to an f64 and back, which is semi-ok
+                        // because sqrt is an inherently imprecise operation.
+                        let expr = plan_cast_internal(ecx, "sqrt", expr, ScalarType::Float64)?;
+                        let expr = expr.call_unary(UnaryFunc::SqrtFloat64);
+                        plan_cast_internal(ecx, "sqrt", expr, ScalarType::Decimal(p, s))?
+                    }
+                    _ => unreachable!(),
+                })
+            }
+
             "substr" => {
                 let func = Function {
                     name: ObjectName(vec![Ident::new("substring")]),
@@ -2640,6 +2661,26 @@ where
         }
     };
     Ok(expr)
+}
+
+fn promote_number_floatdec<'a, S>(
+    ecx: &ExprContext<'a>,
+    name: S,
+    expr: ScalarExpr,
+) -> Result<ScalarExpr, failure::Error>
+where
+    S: fmt::Display + Copy,
+{
+    Ok(match ecx.column_type(&expr).scalar_type {
+        ScalarType::Null
+        | ScalarType::Float32
+        | ScalarType::Float64
+        | ScalarType::Decimal(_, _) => expr,
+        ScalarType::Int32 | ScalarType::Int64 => {
+            plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
+        }
+        other => bail!("{} has non-numeric type {:?}", name, other),
+    })
 }
 
 fn promote_int_int64<'a, S>(
