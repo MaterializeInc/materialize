@@ -292,6 +292,7 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
+ "log",
  "repr",
  "rusqlite",
  "serde",

@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use failure::bail;
+use log::info;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +53,18 @@ pub enum CatalogItem {
     View(View),
     Sink(Sink),
     Index(Index),
+}
+
+impl CatalogItem {
+    /// Returns a string indicating the type of this catalog entry.
+    pub fn type_string(&self) -> &'static str {
+        match self {
+            CatalogItem::Source(_) => "source",
+            CatalogItem::Sink(_) => "sink",
+            CatalogItem::View(_) => "view",
+            CatalogItem::Index(_) => "index",
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -245,6 +258,7 @@ impl Catalog {
     }
 
     fn insert_id_core(&mut self, id: GlobalId, name: QualName, item: CatalogItem) {
+        info!("new {} {} ({})", item.type_string(), name, id);
         let entry = CatalogEntry {
             inner: item,
             name,
@@ -320,6 +334,12 @@ impl Catalog {
     /// be violated.
     pub fn remove(&mut self, id: GlobalId) {
         if let Some(metadata) = self.by_id.remove(&id) {
+            info!(
+                "remove {} {} ({})",
+                metadata.inner.type_string(),
+                metadata.name,
+                id
+            );
             for u in metadata.uses() {
                 if let Some(dep_metadata) = self.by_id.get_mut(&u) {
                     dep_metadata.used_by.retain(|u| *u != metadata.id)
