@@ -182,3 +182,38 @@ query R
 SELECT ceil(cast(1 AS bigint))
 ----
 1
+
+# Tests for the sqrt function.
+#
+# The implementation of sqrt delegates to {f32,f64}::sqrt, so these tests are
+# not particularly extensive.
+
+query R
+SELECT sqrt(-1::float)
+----
+NULL
+
+query R
+SELECT sqrt(-1::double precision)
+----
+NULL
+
+query R
+SELECT sqrt(-1::decimal(15, 2))
+----
+NULL
+
+query R
+SELECT sqrt(1.23783::float)
+----
+1.112578087147145
+
+query R
+SELECT sqrt(1.23783::double)
+----
+1.112578087147145
+
+query R
+SELECT sqrt(1.23783::decimal(15, 5))
+----
+1.11257
