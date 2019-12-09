@@ -3,9 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use assert_cmd::prelude::*;
+use assert_cmd::Command;
 use predicates::prelude::*;
-use std::process::Command;
 
 fn cmd() -> Command {
     Command::cargo_bin("testdrive").unwrap()
@@ -36,8 +35,7 @@ fn test_bad_file() {
 #[test]
 fn test_leading_input() {
     cmd()
-        .with_stdin()
-        .buffer("leading input")
+        .write_stdin("leading input")
         .assert()
         .failure()
         .stderr(
@@ -51,42 +49,31 @@ fn test_leading_input() {
 
 #[test]
 fn test_cmd_missing_name() {
-    cmd()
-        .with_stdin()
-        .buffer("$   ")
-        .assert()
-        .failure()
-        .stderr(concat!(
-            r#"<stdin>:1:1: error: command line is missing command name
+    cmd().write_stdin("$   ").assert().failure().stderr(concat!(
+        r#"<stdin>:1:1: error: command line is missing command name
      |
    1 | $   "#, // separated to preserve trailing spaces
-            r#"
+        r#"
      | ^
 "#,
-        ));
+    ));
 }
 
 #[test]
 fn test_cmd_arg_missing_value() {
-    cmd()
-        .with_stdin()
-        .buffer("$ cmd badarg")
-        .assert()
-        .failure()
-        .stderr(
-            r#"<stdin>:1:7: error: command argument is not in required key=value format
+    cmd().write_stdin("$ cmd badarg").assert().failure().stderr(
+        r#"<stdin>:1:7: error: command argument is not in required key=value format
      |
    1 | $ cmd badarg
      |       ^
 "#,
-        );
+    );
 }
 
 #[test]
 fn test_cmd_arg_bad_nesting_close() {
     cmd()
-        .with_stdin()
-        .buffer("$ cmd arg={}}")
+        .write_stdin("$ cmd arg={}}")
         .assert()
         .failure()
         .stderr(
@@ -101,8 +88,7 @@ fn test_cmd_arg_bad_nesting_close() {
 #[test]
 fn test_cmd_arg_bad_nesting_open() {
     cmd()
-        .with_stdin()
-        .buffer("$ cmd arg={{one} two three")
+        .write_stdin("$ cmd arg={{one} two three")
         .assert()
         .failure()
         .stderr(
