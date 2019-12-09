@@ -7,14 +7,17 @@ menu:
     parent: 'sql'
 ---
 
-In Materialize, identifiers are used to refer to elements of your SQL nodes like sources, views, and indexes.
+In Materialize, identifiers are used to refer to SQL elements like sources, views, and indexes.
 
 ## Naming restrictions
 
-Identifiers must begin with an ASCII letter (i.e. `[a-zA-Z]` in terms of regex) and only contain ASCII characters.
+Identifiers must:
 
-However, you can circumvent any naming restriction by placing the string in double-quotes, e.g. `"123_source"`, `"fun_source_😀"`. When using double-quoted identifiers, the quotation marks are part of the identifer and must be used whenever referring to the element.
+- Begin with an ASCII letter (i.e. `[a-zA-Z]` in terms of regex)
+- Only contain ASCII characters
+
+You can circumvent any of the above rules by double-quoting the the identifier, e.g. `"123_source"` or `"fun_source_😀"`. When using double-quoted identifiers, the quotation marks are part of the identifier and must be used whenever referring to the element.
 
 ## Keyword collision
 
-Materialize is very permissive with letting users typical SQL keywords as identifiers (e.g. `name`, `user`). If Materialize cannot use a keyword as an identifer in a particular location, it throws a syntax error.
+Materialize is very permissive with letting users typical SQL keywords as identifiers (e.g. `name`, `user`). If Materialize cannot use a keyword as an identifier in a particular location, it throws a syntax error.
