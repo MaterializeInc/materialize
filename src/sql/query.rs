@@ -38,7 +38,10 @@ use catalog::{Catalog, CatalogEntry};
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, ScalarType};
+use repr::{
+    ColumnName, ColumnType, Datum, PackableRow, QualName, RelationDesc, RelationType, RowPacker,
+    ScalarType,
+};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
@@ -2341,8 +2344,21 @@ fn plan_case<'a>(
     Ok(expr)
 }
 
-fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Error> {
-    let (datum, scalar_type) = match l {
+fn plan_literal<'a>(catalog: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Error> {
+    let mut temp_storage = RowPacker::new();
+    let (datum, scalar_type) = translate_value(catalog, &mut temp_storage.packable(), l)?;
+    let nullable = datum == Datum::Null;
+    let typ = ColumnType::new(scalar_type).nullable(nullable);
+    let expr = ScalarExpr::literal(datum, typ);
+    Ok(expr)
+}
+
+fn translate_value<'a>(
+    catalog: &Catalog,
+    temp_storage: &mut PackableRow<'a>,
+    l: &'a Value,
+) -> Result<(Datum<'a>, ScalarType), failure::Error> {
+    Ok(match l {
         Value::Number(s) => {
             let d: Decimal = s.parse()?;
             if d.scale() == 0 {
@@ -2441,11 +2457,34 @@ fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Er
             (Datum::Interval(i.into()), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Null),
-    };
-    let nullable = datum == Datum::Null;
-    let typ = ColumnType::new(scalar_type).nullable(nullable);
-    let expr = ScalarExpr::literal(datum, typ);
-    Ok(expr)
+        Value::Array(array) => {
+            let mut datums = vec![];
+            let mut scalar_types = vec![];
+            for value in array {
+                let (datum, scalar_type) = translate_value(catalog, temp_storage, value)?;
+                datums.push(datum);
+                scalar_types.push(scalar_type);
+            }
+            for scalar_type in &scalar_types {
+                if *scalar_type != scalar_types[0] {
+                    bail!(
+                        "Mixed types are not allow in array literal: {} vs {} in {}",
+                        &scalar_types[0],
+                        scalar_type,
+                        l
+                    );
+                }
+            }
+            let datum = Datum::Array(temp_storage.push_array(datums));
+            let scalar_type = if scalar_types.is_empty() {
+                // TODO(jamii) postgres will ask for an explicit cast, but we don't have the ability to flow type constraints down into the argument to cast yet
+                ScalarType::Null
+            } else {
+                scalar_types[0].clone()
+            };
+            (datum, scalar_type)
+        }
+    })
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
