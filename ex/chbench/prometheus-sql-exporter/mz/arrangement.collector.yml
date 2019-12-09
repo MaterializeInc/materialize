@@ -27,7 +27,7 @@ metrics:
       SELECT
           operator, worker, batches
       FROM
-          logs_arrangement
+          mz_arrangement_sizes
     help: information about running arrangements
     type: gauge
     values:
@@ -55,7 +55,7 @@ metrics:
       SELECT
           worker, duration_ns, count
       FROM
-          logs_peek_durations
+          mz_peek_durations
     help: evolving histogram of peek durations
     type: gauge
     values:
@@ -95,7 +95,7 @@ metrics:
       SELECT
           operator, worker, count
       FROM
-          logs_sharing
+          mz_arrangement_sharing
     type: gauge
     values:
       - count
