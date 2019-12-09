@@ -63,6 +63,14 @@
                 "description": "The absolute value of `x`"
             },
             {
+                "signature": "ceil(x: N) -> N",
+                "description": "The largest integer >= `x`"
+            },
+            {
+                "signature": "floor(x: N) -> N",
+                "description": "The largest integer <= `x`"
+            },
+            {
                 "signature": "mod(x: N, y: N) -> N",
                 "description": "`x % y`"
             }
