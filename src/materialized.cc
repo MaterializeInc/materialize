@@ -74,7 +74,16 @@ mz::PeekResults mz::peekView(pqxx::connection &c, const std::string &name, const
 
     auto [time, results] = timeInvocation([&query, &c]() {
         pqxx::nontransaction w(c);
-        return w.exec(query);
+        try {
+            return w.exec(query);
+        } catch (const pqxx::sql_error &e) {
+            if (!strstr(e.what(), "At least one input has no complete timestamps yet.")) {
+                throw;
+            } else {
+                fprintf(stderr, "WARNING: ignoring \"no complete timestamps\" error.");
+                return pqxx::result {};
+            }
+        }
     });
     
     return {time, results};
