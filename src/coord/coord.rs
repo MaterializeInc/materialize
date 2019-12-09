@@ -158,7 +158,7 @@ where
             match item {
                 CatalogItem::Source(source) => {
                     match id {
-                        GlobalId::User(_) => coord.create_sources_id(vec![(id, source)]),
+                        GlobalId::User(..) => coord.create_sources_id(vec![(id, source)]),
                         GlobalId::System(_) => {
                             // Insert with 1 second compaction latency.
                             coord.insert_source(id, Some(1_000));
@@ -381,7 +381,7 @@ where
 
             Plan::DropItems(ids, item_type) => {
                 for id in &ids {
-                    self.catalog.remove(*id);
+                    self.catalog.remove(&id);
                 }
                 let mut sources_to_drop = Vec::new();
                 let mut views_to_drop: Vec<GlobalId> = Vec::new();
@@ -389,7 +389,7 @@ where
                 for id in ids {
                     // TODO: Test if a name was installed and error if not?
                     if let Some((_source, new_id)) = self.sources.remove(&id) {
-                        sources_to_drop.push(id);
+                        sources_to_drop.push(id.clone());
                         if let Some(id) = new_id {
                             views_to_drop.push(id);
                         } else {
@@ -494,7 +494,7 @@ where
                         // If `name` is a source, we'll need to rename it.
                         if let Some((_source, rename)) = self.sources.get(&id) {
                             if let Some(rename) = rename {
-                                id = *rename;
+                                id = rename.clone();
                             }
                         }
 
@@ -529,21 +529,21 @@ where
                             typ,
                             iter::repeat::<Option<ColumnName>>(None).take(ncols),
                         );
-                        let view_id = self.catalog.allocate_id();
+                        let view_id = self.catalog.allocate_id("<none>".to_owned());
                         let view = View {
                             raw_sql: "<none>".into(),
                             relation_expr: source,
                             desc,
                         };
                         let dataflow = DataflowDesc::new(format!("temp-view-{}", view_id))
-                            .add_view(view_id, view)
+                            .add_view(view_id.clone(), view)
                             .as_of(Some(vec![timestamp.clone()]));
 
                         self.create_dataflows(vec![dataflow]);
                         broadcast(
                             &mut self.broadcast_tx,
                             SequencedCommand::Peek {
-                                id: view_id,
+                                id: view_id.clone(),
                                 conn_id,
                                 tx: rows_tx,
                                 timestamp,
@@ -591,8 +591,8 @@ where
                     }
                 }
 
-                let sink_id = self.catalog.allocate_id();
-                self.active_tails.insert(conn_id, sink_id);
+                let sink_id = self.catalog.allocate_id(format!("sink-for-{}", source_id));
+                self.active_tails.insert(conn_id, sink_id.clone());
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 let since = self
                     .upper_of(&source_id)
@@ -601,7 +601,7 @@ where
                     .copied()
                     .unwrap_or(Timestamp::max_value());
                 let sink = Sink {
-                    from: (source_id, source.desc()?.clone()),
+                    from: (source_id.clone(), source.desc()?.clone()),
                     connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                 };
                 let dataflow = DataflowDesc::new(format!(
@@ -610,7 +610,7 @@ where
                         .humanize_id(Id::Global(source_id))
                         .expect("Source id is known to exist in catalog")
                 ))
-                .add_sink(sink_id, sink);
+                .add_sink(sink_id.clone(), sink);
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -662,7 +662,7 @@ where
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AdvanceTime {
-                            id: *id,
+                            id: id.clone(),
                             to: self.local_input_time,
                         },
                     );
@@ -705,16 +705,19 @@ where
             .into_iter()
             .map(|(source_id, source)| {
                 // Effecting policy, we mirror all sources with a view.
-                let view_id = self.catalog.allocate_id();
+                let view_id = self.catalog.allocate_id(format!("view-for-{}", source_id));
                 self.sources
-                    .insert(source_id, (source.clone(), Some(view_id)));
-                let dataflow_name = self.catalog.humanize_id(Id::Global(source_id)).unwrap();
+                    .insert(source_id.clone(), (source.clone(), Some(view_id.clone())));
+                let dataflow_name = self
+                    .catalog
+                    .humanize_id(Id::Global(source_id.clone()))
+                    .unwrap();
                 DataflowDesc::new(dataflow_name)
                     .add_view(
                         view_id,
                         View {
                             relation_expr: RelationExpr::Get {
-                                id: Id::Global(source_id),
+                                id: Id::Global(source_id.clone()),
                                 typ: source.desc.typ().clone(),
                             },
                             raw_sql: "<created by CREATE SOURCE>".to_string(),
@@ -734,7 +737,7 @@ where
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AdvanceTime {
-                            id: *source_id,
+                            id: source_id.clone(),
                             to: self.local_input_time,
                         },
                     );
@@ -749,13 +752,13 @@ where
         if let Some((_source, new_id)) = self.sources.get(&idx.on_id) {
             // If the source has a corresponding view, use its name instead.
             if let Some(new_id) = new_id {
-                idx.on_id = *new_id;
+                idx.on_id = new_id.clone();
             } else {
                 panic!("create_index called on bare source");
             }
         }
         let trace_key = (idx.on_id.clone(), idx.keys.clone());
-        self.index_aliases.insert(idx_id, trace_key.clone());
+        self.index_aliases.insert(idx_id.clone(), trace_key.clone());
 
         if let Some(count) = self.indexes.get_mut(&trace_key) {
             // just increment the count. no need to build a duplicate index
@@ -787,9 +790,9 @@ where
                         if let Some((_source, new_id)) = self.sources.get(id) {
                             // If the source has a corresponding view, use its name instead.
                             if let Some(new_id) = new_id {
-                                *id = *new_id;
+                                *id = new_id.clone();
                             } else {
-                                sources.push(*id);
+                                sources.push(id.clone());
                             }
                         }
                     }
@@ -800,7 +803,7 @@ where
             for id in sources {
                 dataflow
                     .sources
-                    .push((id, self.sources.get(&id).unwrap().0.clone()));
+                    .push((id.clone(), self.sources.get(&id).unwrap().0.clone()));
             }
 
             // Now optimize the query expression.
@@ -979,14 +982,14 @@ where
                 match when {
                     PeekWhen::EarliestSource => {
                         for id in uses_ids.iter() {
-                            self.sources_frontier(*id, &mut sources, &mut reached);
+                            self.sources_frontier(id.clone(), &mut sources, &mut reached);
                         }
                     }
                     PeekWhen::Immediately => {
                         for mut id in uses_ids.iter().cloned() {
                             if let Some((_source, rename)) = &self.sources.get(&id) {
                                 if let Some(rename) = rename {
-                                    id = *rename;
+                                    id = rename.clone();
                                 }
                             }
                             sources.insert(id);
@@ -1027,7 +1030,7 @@ where
         for mut id in uses_ids {
             if let Some((_source, rename)) = &self.sources.get(&id) {
                 if let Some(rename) = rename {
-                    id = *rename;
+                    id = rename.clone();
                 }
             }
             let prior_since = std::mem::replace(&mut since, Antichain::new());
@@ -1067,19 +1070,19 @@ where
     ) {
         if let Some((_source, rename)) = self.sources.get(&id) {
             if let Some(rename) = rename {
-                self.sources_frontier(*rename, sources, reached);
+                self.sources_frontier(rename.clone(), sources, reached);
             } else {
                 panic!("sources_frontier called on bare source");
             }
         } else {
-            reached.insert(id);
+            reached.insert(id.clone());
             if let Some(view) = self.views.get(&id) {
                 if view.depends_on_source {
                     sources.insert(id);
                 } else {
                     for id in view.uses.iter() {
                         if !reached.contains(id) {
-                            self.sources_frontier(*id, sources, reached);
+                            self.sources_frontier(id.clone(), sources, reached);
                         }
                     }
                 }
@@ -1155,7 +1158,7 @@ where
     fn insert_views(&mut self, dataflow: &DataflowDesc) {
         let contains_sources = !dataflow.sources.is_empty();
         for (view_id, view) in dataflow.views.iter() {
-            self.remove_view(view_id);
+            self.remove_view(&view_id);
             let mut viewstate = ViewState::from_view(view, self.num_timely_workers);
             viewstate.depends_on_source = contains_sources;
             if self.log {
@@ -1163,14 +1166,14 @@ where
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            *view_id,
+                            view_id.clone(),
                             time.clone(),
                             1,
                         )),
                     );
                 }
             }
-            self.views.insert(*view_id, viewstate);
+            self.views.insert(view_id.clone(), viewstate);
         }
     }
 

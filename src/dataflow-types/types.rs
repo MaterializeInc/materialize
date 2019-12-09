@@ -189,7 +189,7 @@ impl DataflowDesc {
             view.relation_expr.global_uses(&mut out);
         }
         for (_id, index) in self.indexes.iter() {
-            out.push(index.on_id);
+            out.push(index.on_id.clone());
         }
         out.sort();
         out.dedup();

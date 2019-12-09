@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`RelationExpr::Get`](crate::RelationExpr::Get).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
     Local(LocalId),
@@ -50,13 +50,15 @@ impl fmt::Display for LocalId {
     }
 }
 
+use std::sync::Arc;
+
 /// The identifier for a global dataflow.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum GlobalId {
     /// System namespace.
     System(usize),
     /// User namespace.
-    User(usize),
+    User(usize, Arc<String>),
 }
 
 impl GlobalId {
@@ -68,8 +70,8 @@ impl GlobalId {
 
     /// Constructs a new global identifier in the user namespace. It is the
     /// caller's responsiblity to provide a unique `v`.
-    pub fn user(v: usize) -> GlobalId {
-        GlobalId::User(v)
+    pub fn user(v: usize, name: String) -> GlobalId {
+        GlobalId::User(v, Arc::new(name))
     }
 }
 
@@ -77,7 +79,7 @@ impl fmt::Display for GlobalId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             GlobalId::System(id) => write!(f, "s{}", id),
-            GlobalId::User(id) => write!(f, "u{}", id),
+            GlobalId::User(id, name) => write!(f, "u{}-{}", id, name),
         }
     }
 }

@@ -69,7 +69,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                     SourceConnector::Local => {
                         let ((handle, capability), stream) = region.new_unordered_input();
                         if worker_index == 0 {
-                            local_inputs.insert(src_id, LocalInput { handle, capability });
+                            local_inputs.insert(src_id.clone(), LocalInput { handle, capability });
                         }
                         (stream, None)
                     }
@@ -92,7 +92,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                 // Introduce the stream by name, as an unarranged collection.
                 context.collections.insert(
                     RelationExpr::Get {
-                        id: Id::Global(src_id),
+                        id: Id::Global(src_id.clone()),
                         typ: src.desc.typ().clone(),
                     },
                     stream.as_collection(),
@@ -102,7 +102,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
 
             let source_tokens = Rc::new(source_tokens);
 
-            for (view_id, view) in dataflow.views {
+            for (view_id, view) in dataflow.views.iter() {
                 let mut tokens = Vec::new();
                 let as_of = dataflow
                     .as_of
@@ -120,7 +120,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                     {
                         // Import arrangements for this collection.
                         // TODO: we could import only used arrangements.
-                        if let Some(traces) = manager.get_all_keyed(*id) {
+                        if let Some(traces) = manager.get_all_keyed(&id) {
                             for (key, trace) in traces {
                                 let token = trace.to_drop().clone();
                                 let (arranged, button) = trace.import_frontier_core(
@@ -136,8 +136,8 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                             // Log the dependency.
                             if let Some(logger) = logger {
                                 logger.log(MaterializedEvent::DataflowDependency {
-                                    dataflow: view_id,
-                                    source: *id,
+                                    dataflow: view_id.clone(),
+                                    source: id.clone(),
                                 });
                             }
                         }
@@ -160,7 +160,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                     // TODO: This stores all arrangements. Should we store fewer?
                     for (key, arrangement) in arrangements {
                         manager.set_by_keys(
-                            view_id,
+                            view_id.clone(),
                             &key[..],
                             WithDrop::new(arrangement.trace.clone(), tokens.clone()),
                         );
@@ -185,7 +185,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                             })
                             .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view_id));
                         manager.set_by_keys(
-                            view_id,
+                            view_id.clone(),
                             &key_clone[..],
                             WithDrop::new(arrangement.trace, tokens.clone()),
                         );
@@ -196,13 +196,13 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
             for (_idx_id, idx) in dataflow.indexes {
                 let mut tokens = Vec::new();
                 let get_expr = RelationExpr::Get {
-                    id: Id::Global(idx.on_id),
+                    id: Id::Global(idx.on_id.clone()),
                     typ: idx.relation_type.clone(),
                 };
                 // TODO (wangandi) for the function-based column case,
                 // think about checking if there is another index
                 // with the function pre-rendered
-                let (key, trace) = manager.get_default_with_key(idx.on_id).unwrap();
+                let (key, trace) = manager.get_default_with_key(idx.on_id.clone()).unwrap();
                 let token = trace.to_drop().clone();
                 let (arranged, button) = trace.import_frontier_core(
                     scope,
@@ -250,7 +250,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
 
             for (sink_id, sink) in dataflow.sinks {
                 let (_key, trace) = manager
-                    .get_all_keyed(sink.from.0)
+                    .get_all_keyed(&sink.from.0)
                     .expect("View missing")
                     .next()
                     .expect("No arrangements");
@@ -259,8 +259,8 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                     trace.import_core(scope, &format!("Import({:?})", sink.from));
 
                 match sink.connector {
-                    SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, sink_id, c),
-                    SinkConnector::Tail(c) => sink::tail(&arrangement.stream, sink_id, c),
+                    SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, sink_id.clone(), c),
+                    SinkConnector::Tail(c) => sink::tail(&arrangement.stream, sink_id.clone(), c),
                 }
 
                 dataflow_drops.insert(sink_id, Box::new((token, button.press_on_drop())));

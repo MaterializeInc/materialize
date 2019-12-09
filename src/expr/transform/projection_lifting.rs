@@ -34,7 +34,7 @@ impl ProjectionLifting {
             RelationExpr::Get { id, .. } => {
                 if let Some((typ, columns)) = gets.get(id) {
                     *relation = RelationExpr::Get {
-                        id: *id,
+                        id: id.clone(),
                         typ: typ.clone(),
                     }
                     .project(columns.clone());
@@ -42,10 +42,10 @@ impl ProjectionLifting {
             }
             RelationExpr::Let { id, value, body } => {
                 self.action(value, gets);
-                let id = Id::Local(*id);
+                let id = Id::Local(id.clone());
                 if let RelationExpr::Project { input, outputs } = &mut **value {
                     let typ = input.typ();
-                    let prior = gets.insert(id, (typ, outputs.clone()));
+                    let prior = gets.insert(id.clone(), (typ, outputs.clone()));
                     assert!(!prior.is_some());
                     **value = input.take_dangerous();
                 }

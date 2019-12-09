@@ -502,7 +502,7 @@ impl RelationExpr {
             id: Id::Global(id), ..
         } = self
         {
-            out.push(*id);
+            out.push(id.clone());
         }
         self.visit1(|e| e.global_uses(out))
     }
@@ -662,7 +662,7 @@ impl RelationExpr {
                 )
                 .tightly_embrace("Constant [", "]"),
             RelationExpr::Get { id, typ: _ } => {
-                let id = match id_humanizer.humanize_id(*id) {
+                let id = match id_humanizer.humanize_id(id.clone()) {
                     Some(s) => format!("{} ({})", s, id),
                     None => id.to_string(),
                 };

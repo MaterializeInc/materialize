@@ -76,7 +76,7 @@ impl CatalogEntry {
     pub fn uses(&self) -> Vec<GlobalId> {
         match &self.inner {
             CatalogItem::Source(_src) => Vec::new(),
-            CatalogItem::Sink(sink) => vec![sink.from.0],
+            CatalogItem::Sink(sink) => vec![sink.from.0.clone()],
             CatalogItem::View(view) => {
                 let mut out = Vec::new();
                 view.relation_expr.global_uses(&mut out);
@@ -84,7 +84,7 @@ impl CatalogEntry {
             }
             CatalogItem::Index(idx) => {
                 let mut out = Vec::new();
-                out.push(idx.on_id);
+                out.push(idx.on_id.clone());
                 out
             }
         }
@@ -97,7 +97,7 @@ impl CatalogEntry {
 
     /// Returns the global ID of this catalog entry.
     pub fn id(&self) -> GlobalId {
-        self.id
+        self.id.clone()
     }
 
     /// Returns the name of this catalog entry.
@@ -165,8 +165,8 @@ impl Catalog {
             .collect();
         for row in rows {
             let (id, name, item) = row?;
-            catalog.insert_id_core(id, name, item);
-            if let GlobalId::User(id) = id {
+            catalog.insert_id_core(id.clone(), name, item);
+            if let GlobalId::User(id, _) = id {
                 catalog.id = cmp::max(catalog.id, id);
             }
         }
@@ -176,9 +176,9 @@ impl Catalog {
 }
 
 impl Catalog {
-    pub fn allocate_id(&mut self) -> GlobalId {
+    pub fn allocate_id(&mut self, name: String) -> GlobalId {
         self.id += 1;
-        GlobalId::user(self.id)
+        GlobalId::user(self.id, name)
     }
 
     /// Returns the named catalog item, if it exists.
@@ -206,8 +206,8 @@ impl Catalog {
         name: QualName,
         item: CatalogItem,
     ) -> Result<GlobalId, failure::Error> {
-        let id = self.allocate_id();
-        self.insert_id(id, name, item)?;
+        let id = self.allocate_id(name.to_string());
+        self.insert_id(id.clone(), name, item)?;
         Ok(id)
     }
 
@@ -248,20 +248,20 @@ impl Catalog {
         let entry = CatalogEntry {
             inner: item,
             name,
-            id,
+            id: id.clone(),
             used_by: Vec::new(),
         };
         for u in entry.uses() {
             match self.by_id.get_mut(&u) {
-                Some(metadata) => metadata.used_by.push(entry.id),
+                Some(metadata) => metadata.used_by.push(entry.id.clone()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
                     u, entry.name
                 ),
             }
         }
-        self.by_name.insert(entry.name.clone(), entry.id);
-        self.by_id.insert(entry.id, entry);
+        self.by_name.insert(entry.name.clone(), entry.id.clone());
+        self.by_id.insert(entry.id.clone(), entry);
     }
 
     /// Determines whether it is feasible to remove the view named `name`
@@ -297,7 +297,7 @@ impl Catalog {
                         self.by_id[&metadata.used_by[0]].name()
                     )
                 }
-                to_remove.push(metadata.id);
+                to_remove.push(metadata.id.clone());
                 Ok(())
             }
             RemoveMode::Cascade => {
@@ -312,13 +312,13 @@ impl Catalog {
         for u in used_by {
             self.plan_remove_cascade(&self.by_id[&u], to_remove);
         }
-        to_remove.push(metadata.id);
+        to_remove.push(metadata.id.clone());
     }
 
     /// Unconditionally removes the named view. It is required that `id`
     /// come from the output of `plan_remove`; otherwise consistency rules may
     /// be violated.
-    pub fn remove(&mut self, id: GlobalId) {
+    pub fn remove(&mut self, id: &GlobalId) {
         if let Some(metadata) = self.by_id.remove(&id) {
             for u in metadata.uses() {
                 if let Some(dep_metadata) = self.by_id.get_mut(&u) {

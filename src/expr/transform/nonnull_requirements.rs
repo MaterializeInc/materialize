@@ -51,14 +51,16 @@ impl NonNullRequirements {
                 columns.iter().all(|c| datums[*c] != repr::Datum::Null)
             }),
             RelationExpr::Get { id, .. } => {
-                gets.entry(*id).or_insert(Vec::new()).push(columns.clone());
+                gets.entry(id.clone())
+                    .or_insert(Vec::new())
+                    .push(columns.clone());
             }
             RelationExpr::Let { id, value, body } => {
                 // Let harvests any non-null requirements from its body,
                 // and acts on the intersection of the requirements for
                 // each corresponding Get, pushing them at its value.
                 let id = Id::Local(*id);
-                let prior = gets.insert(id, Vec::new());
+                let prior = gets.insert(id.clone(), Vec::new());
                 self.action(body, columns, gets);
                 let mut needs = gets.remove(&id).unwrap();
                 if let Some(prior) = prior {

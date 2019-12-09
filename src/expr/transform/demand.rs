@@ -47,13 +47,15 @@ impl Demand {
                 // Nothing clever to do with constants, that I can think of.
             }
             RelationExpr::Get { id, .. } => {
-                gets.entry(*id).or_insert(HashSet::new()).extend(columns);
+                gets.entry(id.clone())
+                    .or_insert(HashSet::new())
+                    .extend(columns);
             }
             RelationExpr::Let { id, value, body } => {
                 // Let harvests any requirements of get from its body,
                 // and pushes the union of the requirements at its value.
-                let id = Id::Local(*id);
-                let prior = gets.insert(id, HashSet::new());
+                let id = Id::Local(id.clone());
+                let prior = gets.insert(id.clone(), HashSet::new());
                 self.action(body, columns, gets);
                 let needs = gets.remove(&id).unwrap();
                 if let Some(prior) = prior {

@@ -130,8 +130,8 @@ pub fn construct<A: Allocate>(
                         let time_ms = time_ms as Timestamp;
 
                         match datum {
-                            MaterializedEvent::Dataflow(id, is_create) => {
-                                dataflow_session.give((id, worker, is_create, time_ns));
+                            MaterializedEvent::Dataflow(ref id, is_create) => {
+                                dataflow_session.give((id.clone(), worker, is_create, time_ns));
 
                                 // For now we know that these always happen in
                                 // the correct order, but it may be necessary
@@ -139,13 +139,13 @@ pub fn construct<A: Allocate>(
                                 // reference to their own sources and a logger
                                 // that is called on them in a `with_drop` handler
                                 if is_create {
-                                    active_dataflows.insert((id, worker), vec![]);
+                                    active_dataflows.insert((id.clone(), worker), vec![]);
                                 } else {
-                                    let key = &(id, worker);
+                                    let key = &(id.clone(), worker);
                                     match active_dataflows.remove(key) {
                                         Some(sources) => {
                                             for (source, worker) in sources {
-                                                let n = key.0;
+                                                let n = key.0.clone();
                                                 dependency_session
                                                     .give((n, source, worker, false, time_ns));
                                             }
@@ -192,8 +192,14 @@ pub fn construct<A: Allocate>(
                                 }
                             }
                             MaterializedEvent::DataflowDependency { dataflow, source } => {
-                                dependency_session.give((dataflow, source, worker, true, time_ns));
-                                let key = (dataflow, worker);
+                                dependency_session.give((
+                                    dataflow.clone(),
+                                    source.clone(),
+                                    worker,
+                                    true,
+                                    time_ns,
+                                ));
+                                let key = (dataflow.clone(), worker);
                                 match active_dataflows.get_mut(&key) {
                                     Some(existing_sources) => {
                                         existing_sources.push((source, worker))

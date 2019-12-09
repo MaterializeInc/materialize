@@ -330,7 +330,7 @@ where
             let mut progress = Vec::new();
             let ids = self.traces.traces.keys().cloned().collect::<Vec<_>>();
             for id in ids {
-                if let Some(trace) = self.traces.get_default(id) {
+                if let Some(trace) = self.traces.get_default(&id) {
                     // Read the upper frontier and compare to what we've reported.
                     trace.clone().read_upper(&mut upper);
                     let lower = self
@@ -373,13 +373,13 @@ where
                             if self.traces.traces.contains_key(&view_id) {
                                 panic!("View already installed: {}", view_id);
                             }
-                            logger.log(MaterializedEvent::Dataflow(*view_id, true));
+                            logger.log(MaterializedEvent::Dataflow(view_id.clone(), true));
                         }
                     }
                     for (view_id, _view) in dataflow.views.iter() {
                         let prior = self
                             .reported_frontiers
-                            .insert(*view_id, Antichain::from_elem(0));
+                            .insert(view_id.clone(), Antichain::from_elem(0));
                         assert!(prior == None);
                     }
 
@@ -403,9 +403,9 @@ where
 
             SequencedCommand::DropViews(ids) => {
                 for id in ids {
-                    if self.traces.del_collection_traces(id).is_some() {
+                    if self.traces.del_collection_traces(id.clone()).is_some() {
                         if let Some(logger) = self.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(id, false));
+                            logger.log(MaterializedEvent::Dataflow(id.clone(), false));
                         }
                     }
                     self.reported_frontiers
@@ -436,12 +436,12 @@ where
                 filter,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace = self.traces.get_default(id).unwrap().clone();
+                let mut trace = self.traces.get_default(&id).unwrap().clone();
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
                 // Prepare a description of the peek work to do.
                 let mut peek = PendingPeek {
-                    id,
+                    id: id.clone(),
                     conn_id,
                     tx,
                     timestamp,
@@ -584,7 +584,7 @@ struct PendingPeek {
 impl PendingPeek {
     /// Produces a corresponding log event.
     pub fn as_log_event(&self) -> crate::logging::materialized::Peek {
-        crate::logging::materialized::Peek::new(self.id, self.timestamp, self.conn_id)
+        crate::logging::materialized::Peek::new(self.id.clone(), self.timestamp, self.conn_id)
     }
 
     /// Attempts to fulfill the peek and reports success.

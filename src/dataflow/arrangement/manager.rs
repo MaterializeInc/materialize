@@ -96,9 +96,9 @@ impl TraceManager {
     /// Returns a copy of all by_key arrangements, should they exist.
     pub fn get_all_keyed(
         &mut self,
-        id: GlobalId,
+        id: &GlobalId,
     ) -> Option<impl Iterator<Item = (&Vec<usize>, &mut WithDrop<KeysValsHandle>)>> {
-        let collection_trace = self.traces.get_mut(&id)?;
+        let collection_trace = self.traces.get_mut(id)?;
         Some(
             collection_trace
                 .system
@@ -125,8 +125,8 @@ impl TraceManager {
     }
 
     /// get the default arrangement, which is by primary key
-    pub fn get_default(&self, id: GlobalId) -> Option<&WithDrop<KeysValsHandle>> {
-        if let Some(collection) = self.traces.get(&id) {
+    pub fn get_default(&self, id: &GlobalId) -> Option<&WithDrop<KeysValsHandle>> {
+        if let Some(collection) = self.traces.get(id) {
             collection.system.get(&collection.default_arr_key)
         } else {
             None
