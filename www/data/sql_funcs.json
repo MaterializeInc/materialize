@@ -86,6 +86,10 @@
                 "url": "length"
             },
             {
+                "signature": "replace(s: str, f: str, r: str) -> str",
+                "description": "`s` with all instances of `f` replaced with `r`"
+            },
+            {
                 "signature": "substring(s: str, start_pos: int) -> str",
                 "description": "Substring of `s` starting at `start_pos`",
                 "url": "substring"
