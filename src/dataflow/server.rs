@@ -8,6 +8,7 @@
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 
+use lazy_static::lazy_static;
 use timely::communication::allocator::generic::GenericBuilder;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::initialize::WorkerGuards;
@@ -21,7 +22,7 @@ use futures::sync::mpsc::UnboundedReceiver;
 use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
-use prometheus::{register_int_gauge_vec, IntGauge};
+use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use repr::{Datum, Row, RowPacker, RowUnpacker};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -41,6 +42,21 @@ use dataflow_types::{
     compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
 };
 use expr::GlobalId;
+
+lazy_static! {
+    static ref COMMAND_QUEUE_RAW: IntGaugeVec = register_int_gauge_vec!(
+        "mz_worker_command_queue_size",
+        "the number of commands we would like to handle",
+        &["worker"]
+    )
+    .unwrap();
+    static ref PENDING_PEEKS_RAW: IntGaugeVec = register_int_gauge_vec!(
+        "mz_worker_pending_peeks_queue_size",
+        "the number of peeks remaining to be processed",
+        &["worker"]
+    )
+    .unwrap();
+}
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
 /// Timely workers.
@@ -217,23 +233,10 @@ struct Metrics {
 impl Metrics {
     fn for_worker_id(id: usize) -> Metrics {
         let worker_id = id.to_string();
-        let command_queue_raw = register_int_gauge_vec!(
-            "mz_worker_command_queue_size",
-            "the number of commands we would like to handle",
-            &["worker"]
-        )
-        .unwrap();
-
-        let pending_peeks_raw = register_int_gauge_vec!(
-            "mz_worker_pending_peeks_queue_size",
-            "the number of peeks remaining to be processed",
-            &["worker"]
-        )
-        .unwrap();
 
         Metrics {
-            command_queue: command_queue_raw.with_label_values(&[&worker_id]),
-            pending_peeks: pending_peeks_raw.with_label_values(&[&worker_id]),
+            command_queue: COMMAND_QUEUE_RAW.with_label_values(&[&worker_id]),
+            pending_peeks: PENDING_PEEKS_RAW.with_label_values(&[&worker_id]),
         }
     }
 
