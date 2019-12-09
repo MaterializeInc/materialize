@@ -15,7 +15,6 @@
 //! In `RelationExpr`, aggregates can only be applied immediately at the time of grouping.
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
-use chrono::{DateTime, Utc};
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{btree_map, BTreeMap, HashSet};
@@ -39,11 +38,11 @@ use catalog::{Catalog, CatalogEntry};
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, ScalarType};
 
 use super::expr::{
-    AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
-    ScalarExpr, UnaryFunc, VariadicFunc,
+    AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
+    RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
 use super::names;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
@@ -59,9 +58,10 @@ use super::scope::{Scope, ScopeItem, ScopeItemName};
 pub fn plan_root_query(
     catalog: &Catalog,
     mut query: Query,
+    lifetime: QueryLifetime,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), failure::Error> {
     crate::transform::transform(&mut query);
-    let qcx = QueryContext::root();
+    let qcx = QueryContext::root(lifetime);
     let (expr, scope, finishing) = plan_query(catalog, &qcx, &query)?;
     let typ = qcx.relation_type(&expr);
     let typ = RelationType::new(
@@ -562,7 +562,7 @@ pub fn plan_index<'a>(
     let item = catalog.get(on_name)?;
     let desc = item.desc()?;
     let scope = Scope::from_source(Some(on_name), desc.iter_names(), Some(Scope::empty(None)));
-    let qcx = &QueryContext::root();
+    let qcx = &QueryContext::root(QueryLifetime::Static);
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "CREATE INDEX",
@@ -1466,10 +1466,15 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
-            "current_timestamp" | "now" => Ok(ScalarExpr::Literal(
-                Row::pack(&[Datum::TimestampTz(ecx.qcx.current_timestamp)]),
-                ColumnType::new(ScalarType::TimestampTz),
-            )),
+            "current_timestamp" | "now" => {
+                if !sql_func.args.is_empty() {
+                    bail!("{} does not take any arguments", ident);
+                }
+                match ecx.qcx.lifetime {
+                    QueryLifetime::OneShot => Ok(ScalarExpr::CallNullary(NullaryFunc::Now)),
+                    QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
+                }
+            }
 
             "floor" => {
                 if sql_func.args.len() != 1 {
@@ -1519,6 +1524,18 @@ fn plan_function<'a>(
                     &sql_func.args[0],
                     &sql_func.args[1],
                 )
+            }
+
+            "mz_logical_timestamp" => {
+                if !sql_func.args.is_empty() {
+                    bail!("mz_logical_timestamp does not take any arguments");
+                }
+                match ecx.qcx.lifetime {
+                    QueryLifetime::OneShot => {
+                        Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
+                    }
+                    QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
+                }
             }
 
             "nullif" => {
@@ -2757,11 +2774,22 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     }
 }
 
-/// A bundle of unrelated things that we need for planning `Query`s.
+/// Specifies how long a query will live. This impacts whether the query is
+/// allowed to reason about the time at which it is running, e.g., by calling
+/// the `now()` function.
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+pub enum QueryLifetime {
+    /// The query's result will be computed at one point in time.
+    OneShot,
+    /// The query's result will be maintained indefinitely.
+    Static,
+}
+
+/// The state required when planning a `Query`.
 #[derive(Debug)]
 struct QueryContext {
-    /// Always add the current timestamp of the query, available for now() function.
-    current_timestamp: DateTime<Utc>,
+    /// The lifetime that the planned query will have.
+    lifetime: QueryLifetime,
     /// The scope of the outer relation expression.
     outer_scope: Scope,
     /// The type of the outer relation expression.
@@ -2772,9 +2800,9 @@ struct QueryContext {
 }
 
 impl QueryContext {
-    fn root() -> QueryContext {
+    fn root(lifetime: QueryLifetime) -> QueryContext {
         QueryContext {
-            current_timestamp: Utc::now(),
+            lifetime,
             outer_scope: Scope::empty(None),
             outer_relation_type: RelationType::empty(),
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
@@ -2819,7 +2847,7 @@ impl<'a> ExprContext<'a> {
 
     fn derived_query_context(&self) -> QueryContext {
         QueryContext {
-            current_timestamp: self.qcx.current_timestamp,
+            lifetime: self.qcx.lifetime,
             outer_scope: self.scope.clone(),
             outer_relation_type: RelationType::new(
                 self.qcx

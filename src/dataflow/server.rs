@@ -39,7 +39,7 @@ use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
 };
-use expr::GlobalId;
+use expr::{EvalEnv, GlobalId};
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
 /// Timely workers.
@@ -80,6 +80,7 @@ pub enum SequencedCommand {
         finishing: RowSetFinishing,
         project: Option<Vec<usize>>,
         filter: Vec<expr::ScalarExpr>,
+        eval_env: EvalEnv,
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek { conn_id: u32 },
@@ -434,6 +435,7 @@ where
                 finishing,
                 project,
                 filter,
+                eval_env,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace = self.traces.get_default(id).unwrap().clone();
@@ -449,6 +451,7 @@ where
                     trace,
                     project,
                     filter,
+                    eval_env,
                 };
                 // Log the receipt of the peek.
                 if let Some(logger) = self.materialized_logger.as_mut() {
@@ -577,6 +580,7 @@ struct PendingPeek {
     finishing: RowSetFinishing,
     project: Option<Vec<usize>>,
     filter: Vec<expr::ScalarExpr>,
+    eval_env: EvalEnv,
     /// The data from which the trace derives.
     trace: WithDrop<KeysValsHandle>,
 }
@@ -632,11 +636,9 @@ impl PendingPeek {
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
                 let temp_storage = &mut temp_storage.packable();
-                if self
-                    .filter
-                    .iter()
-                    .all(|predicate| predicate.eval(temp_storage, &datums) == Datum::True)
-                {
+                if self.filter.iter().all(|predicate| {
+                    predicate.eval(&datums, &self.eval_env, temp_storage) == Datum::True
+                }) {
                     // Differential dataflow represents collections with binary counts,
                     // but our output representation is unary (as many rows as reported
                     // by the count). We should determine this count, and especially if

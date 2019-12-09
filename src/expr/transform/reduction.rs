@@ -5,9 +5,11 @@
 
 #![allow(clippy::cognitive_complexity)]
 
-use crate::RelationExpr;
-use repr::{Datum, Row, RowPacker};
 use std::collections::BTreeMap;
+
+use repr::{Datum, Row, RowPacker};
+
+use crate::{EvalEnv, RelationExpr};
 
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
@@ -16,18 +18,19 @@ pub use undistribute_and::UndistributeAnd;
 pub struct FoldConstants;
 
 impl super::Transform for FoldConstants {
-    fn transform(&self, relation: &mut RelationExpr) {
-        self.transform(relation)
+    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
+        self.transform(relation, env)
     }
 }
 
 impl FoldConstants {
-    pub fn transform(&self, relation: &mut RelationExpr) {
+    pub fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
         relation.visit_mut(&mut |e| {
-            self.action(e);
+            self.action(e, env);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr) {
+
+    pub fn action(&self, relation: &mut RelationExpr, env: &EvalEnv) {
         match relation {
             RelationExpr::Constant { .. } => { /* handled after match */ }
             RelationExpr::Get { .. } => {}
@@ -38,7 +41,7 @@ impl FoldConstants {
                 aggregates,
             } => {
                 for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce();
+                    aggregate.expr.reduce(env);
                 }
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
@@ -64,7 +67,7 @@ impl FoldConstants {
                         let mut packer = RowPacker::new();
                         let val = aggregates
                             .iter()
-                            .map(|agg| packer.pack(&[agg.expr.eval(temp_storage, &datums)]))
+                            .map(|agg| packer.pack(&[agg.expr.eval(&datums, env, temp_storage)]))
                             .collect::<Vec<_>>();
                         let entry = groups.entry(key).or_insert_with(|| Vec::new());
                         for _ in 0..*diff {
@@ -85,8 +88,9 @@ impl FoldConstants {
                             let row = Row::pack(key.into_iter().chain(
                                 aggregates.iter().enumerate().map(|(i, agg)| {
                                     (agg.func.func())(
-                                        temp_storage,
                                         vals.iter().map(|val| val[i].unpack_first()),
+                                        env,
+                                        temp_storage,
                                     )
                                 }),
                             ));
@@ -121,7 +125,7 @@ impl FoldConstants {
             }
             RelationExpr::Map { input, scalars } => {
                 for scalar in scalars.iter_mut() {
-                    scalar.reduce();
+                    scalar.reduce(env);
                 }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
@@ -133,7 +137,7 @@ impl FoldConstants {
                             let mut temp_storage = RowPacker::new();
                             let temp_storage = &mut temp_storage.packable();
                             for scalar in scalars.iter() {
-                                unpacked.push(scalar.eval(temp_storage, &unpacked))
+                                unpacked.push(scalar.eval(&unpacked, env, temp_storage))
                             }
                             (Row::pack(unpacked), diff)
                         })
@@ -146,7 +150,7 @@ impl FoldConstants {
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates.iter_mut() {
-                    predicate.reduce();
+                    predicate.reduce(env);
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
@@ -166,7 +170,7 @@ impl FoldConstants {
                             let temp_storage = &mut temp_storage.packable();
                             predicates
                                 .iter()
-                                .all(|p| p.eval(temp_storage, &datums) == Datum::True)
+                                .all(|p| p.eval(&datums, env, temp_storage) == Datum::True)
                         })
                         .collect();
                     *relation = RelationExpr::Constant {
@@ -258,14 +262,12 @@ impl FoldConstants {
 }
 
 pub mod demorgans {
-
-    use crate::{BinaryFunc, UnaryFunc};
-    use crate::{RelationExpr, ScalarExpr};
+    use crate::{BinaryFunc, EvalEnv, RelationExpr, ScalarExpr, UnaryFunc};
 
     #[derive(Debug)]
     pub struct DeMorgans;
     impl crate::transform::Transform for DeMorgans {
-        fn transform(&self, relation: &mut RelationExpr) {
+        fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
             self.transform(relation)
         }
     }
@@ -336,15 +338,15 @@ pub mod demorgans {
 }
 
 pub mod undistribute_and {
-    use crate::BinaryFunc;
-    use crate::{RelationExpr, ScalarExpr};
     use repr::{ColumnType, Datum, ScalarType};
+
+    use crate::{BinaryFunc, EvalEnv, RelationExpr, ScalarExpr};
 
     #[derive(Debug)]
     pub struct UndistributeAnd;
 
     impl crate::transform::Transform for UndistributeAnd {
-        fn transform(&self, relation: &mut RelationExpr) {
+        fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
             self.transform(relation)
         }
     }

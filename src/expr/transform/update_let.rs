@@ -3,15 +3,17 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{Id, RelationExpr};
-use repr::RelationType;
 use std::collections::HashMap;
+
+use repr::RelationType;
+
+use crate::{EvalEnv, Id, RelationExpr};
 
 #[derive(Debug)]
 pub struct UpdateLet;
 
 impl super::Transform for UpdateLet {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

@@ -27,10 +27,11 @@ use dataflow_types::{
 use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
-use relationexpr::Id;
+use relationexpr::{EvalEnv, Id};
 use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr::like::build_like_regex_from_string;
+use crate::query::QueryLifetime;
 use crate::session::Session;
 use crate::{names, query, Params, Plan};
 
@@ -132,7 +133,7 @@ pub fn describe_statement(
             // `handle_statement` is called. This will require a complicated
             // dance when bind parameters are implemented, so punting for now.
             let (_relation_expr, desc, _finishing, param_types) =
-                query::plan_root_query(catalog, *query)?;
+                query::plan_root_query(catalog, *query, QueryLifetime::OneShot)?;
             (Some(desc), param_types)
         }
 
@@ -376,7 +377,7 @@ fn handle_create_dataflow(
                 bail!("WITH options are not yet supported");
             }
             let (mut relation_expr, mut desc, finishing) =
-                handle_query(catalog, *query.clone(), params)?;
+                handle_query(catalog, *query.clone(), params, QueryLifetime::Static)?;
             if !finishing.is_trivial() {
                 //TODO: materialize#724 - persist finishing information with the view?
                 relation_expr = relationexpr::RelationExpr::Project {
@@ -409,6 +410,7 @@ fn handle_create_dataflow(
                 raw_sql: stmt.to_string(),
                 relation_expr,
                 desc,
+                eval_env: EvalEnv::default(),
             };
             Ok(Plan::CreateView(name, view))
         }
@@ -590,6 +592,7 @@ fn handle_create_dataflow(
                     .into_iter()
                     .map(|x| x.lower_uncorrelated())
                     .collect(),
+                eval_env: EvalEnv::default(),
             };
             Ok(Plan::CreateIndex(name, index))
         }
@@ -663,6 +666,7 @@ fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Pla
                 .collect(),
             project: (0..typ.column_types.len()).collect(),
         },
+        eval_env: EvalEnv::default(),
     })
 }
 
@@ -671,11 +675,13 @@ pub fn handle_select(
     query: Query,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _, finishing) = handle_query(catalog, query, params)?;
+    let (relation_expr, _, finishing) =
+        handle_query(catalog, query, params, QueryLifetime::OneShot)?;
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
         finishing,
+        eval_env: EvalEnv::default(),
     })
 }
 
@@ -685,7 +691,8 @@ pub fn handle_explain(
     query: Query,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _desc, _finishing) = handle_query(catalog, query, params)?;
+    let (relation_expr, _desc, _finishing) =
+        handle_query(catalog, query, params, QueryLifetime::OneShot)?;
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
@@ -693,7 +700,7 @@ pub fn handle_explain(
             &relation_expr.pretty_humanized(catalog),
         )])]))
     } else {
-        Ok(Plan::ExplainPlan(relation_expr))
+        Ok(Plan::ExplainPlan(relation_expr, EvalEnv::default()))
     }
 }
 
@@ -703,8 +710,10 @@ fn handle_query(
     catalog: &Catalog,
     query: Query,
     params: &Params,
+    lifetime: QueryLifetime,
 ) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
-    let (mut expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
+    let (mut expr, desc, finishing, _param_types) =
+        query::plan_root_query(catalog, query, lifetime)?;
     expr.bind_parameters(&params);
     Ok((expr.decorrelate()?, desc, finishing))
 }

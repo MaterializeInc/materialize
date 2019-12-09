@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::RelationExpr;
+use crate::{EvalEnv, RelationExpr};
 
 /// Re-order relations in a join to minimize the size of intermediate results.
 /// To minimize intermediate results, ensure each additional relation
@@ -47,7 +47,7 @@ use crate::RelationExpr;
 pub struct JoinOrder;
 
 impl super::Transform for JoinOrder {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }

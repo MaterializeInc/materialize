@@ -623,6 +623,12 @@ SELECT current_timestamp > TIMESTAMP '2016-06-13 00:00:00'
 ----
 true
 
+query error mz_logical_timestamp cannot be used in static queries
+CREATE VIEW timeview AS SELECT mz_logical_timestamp()
+
+query error now cannot be used in static queries
+CREATE VIEW timeview AS SELECT now()
+
 query T
 SELECT (DATE '2000-01-01')::text
 ----

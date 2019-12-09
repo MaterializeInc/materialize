@@ -65,10 +65,11 @@ pub enum Plan {
         source: ::expr::RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
+        eval_env: ::expr::EvalEnv,
     },
     Tail(CatalogEntry),
     SendRows(Vec<Row>),
-    ExplainPlan(::expr::RelationExpr),
+    ExplainPlan(::expr::RelationExpr, ::expr::EvalEnv),
     SendDiffs {
         id: GlobalId,
         updates: Vec<(Row, isize)>,

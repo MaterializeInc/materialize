@@ -48,13 +48,13 @@
 
 use repr::{ColumnType, Datum, ScalarType};
 
-use crate::{AggregateFunc, RelationExpr, ScalarExpr};
+use crate::{AggregateFunc, EvalEnv, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct PredicatePushdown;
 
 impl super::Transform for PredicatePushdown {
-    fn transform(&self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }
