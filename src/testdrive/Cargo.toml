@@ -26,7 +26,7 @@ interchange = { path = "../interchange" }
 lazy_static = "1.4.0"
 ore = { path = "../ore" }
 pg_interval = "0.3"
-postgres = "0.15"
+postgres = { version = "0.15", features = ["with-chrono"] }
 serde_json = { version = "1.0.44", features = ["preserve_order"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rand = "0.7.2"
@@ -37,5 +37,5 @@ rust_decimal = { version = "1.0", features = ["postgres"] }
 termcolor = "1.0.5"
 
 [dev-dependencies]
-assert_cmd = "0.11.1"
+assert_cmd = "0.12.0"
 predicates = "1.0.2"
