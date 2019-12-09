@@ -310,7 +310,7 @@ fn handle_show_columns(
             Row::pack(&[
                 Datum::String(name.mz_as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
-                Datum::String(postgres_type_name(typ.scalar_type)),
+                Datum::String(&postgres_type_name(&typ.scalar_type)),
             ])
         })
         .collect();
