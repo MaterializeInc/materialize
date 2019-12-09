@@ -13,14 +13,13 @@ use serde::{Deserialize, Serialize};
 use sqlparser::ast::Interval as SqlInterval;
 
 use self::decimal::Significand;
-use crate::ColumnType;
+use crate::{ColumnType, DatumArray};
 
 pub mod decimal;
 pub mod regex;
 
 /// A literal value.
-#[serde(rename_all = "snake_case")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Datum<'a> {
     /// An unknown value.
     Null,
@@ -53,6 +52,8 @@ pub enum Datum<'a> {
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(&'a str),
+    /// A sequence of Datums
+    Array(DatumArray<'a>),
 }
 
 impl<'a> Datum<'a> {
@@ -239,7 +240,7 @@ impl<'a> Datum<'a> {
         }
     }
 
-    pub fn is_instance_of(&self, column_type: ColumnType) -> bool {
+    pub fn is_instance_of(&self, column_type: &ColumnType) -> bool {
         match (self, &column_type.scalar_type) {
             (Datum::Null, _) if column_type.nullable => true,
             (Datum::Null, _) => false,
@@ -269,6 +270,10 @@ impl<'a> Datum<'a> {
             (Datum::Bytes(_), _) => false,
             (Datum::String(_), ScalarType::String) => true,
             (Datum::String(_), _) => false,
+            (Datum::Array(array), ScalarType::Array(elem_type)) => {
+                array.iter().all(|datum| datum.is_instance_of(&**elem_type))
+            }
+            (Datum::Array(_), _) => false,
         }
     }
 }
@@ -393,6 +398,26 @@ where
     }
 }
 
+fn write_delimited<T, TS, F>(
+    f: &mut fmt::Formatter,
+    delimiter: &str,
+    things: TS,
+    write: F,
+) -> fmt::Result
+where
+    TS: IntoIterator<Item = T>,
+    F: Fn(&mut fmt::Formatter, T) -> fmt::Result,
+{
+    let mut iter = things.into_iter().enumerate().peekable();
+    while let Some((_i, thing)) = iter.next() {
+        write(f, thing)?;
+        if let Some(_) = iter.peek() {
+            write!(f, "{}", delimiter)?;
+        }
+    }
+    Ok(())
+}
+
 impl fmt::Display for Datum<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -426,6 +451,11 @@ impl fmt::Display for Datum<'_> {
                 }
                 f.write_str("\"")
             }
+            Datum::Array(array) => {
+                f.write_str("ARRAY[")?;
+                write_delimited(f, ", ", array, |f, d| d.fmt(f))?;
+                f.write_str("]")
+            }
         }
     }
 }
@@ -437,7 +467,7 @@ impl fmt::Display for Datum<'_> {
 /// an optional default value and nullability, that must also be considered part
 /// of a datum's type.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Copy, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum ScalarType {
     /// The type of a datum that can only be null.
     ///
@@ -463,17 +493,18 @@ pub enum ScalarType {
     Interval,
     Bytes,
     String,
+    Array(Box<ColumnType>),
 }
 
 impl<'a> ScalarType {
-    pub fn unwrap_decimal_parts(self) -> (u8, u8) {
+    pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
         match self {
-            ScalarType::Decimal(p, s) => (p, s),
+            ScalarType::Decimal(p, s) => (*p, *s),
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
         }
     }
 
-    pub fn dummy_datum(self) -> Datum<'a> {
+    pub fn dummy_datum(&self) -> Datum<'a> {
         match self {
             ScalarType::Null => Datum::Null,
             ScalarType::Bool => Datum::False,
@@ -490,6 +521,7 @@ impl<'a> ScalarType {
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
             ScalarType::Bytes => Datum::Bytes(&[]),
             ScalarType::String => Datum::String(""),
+            ScalarType::Array(_) => Datum::Array(DatumArray::empty()),
         }
     }
 }
@@ -502,6 +534,7 @@ impl PartialEq for ScalarType {
         use ScalarType::*;
         match (self, other) {
             (Decimal(_, s1), Decimal(_, s2)) => s1 == s2,
+            (Array(e1), Array(e2)) => e1 == e2,
 
             (Null, Null)
             | (Bool, Bool)
@@ -528,7 +561,8 @@ impl PartialEq for ScalarType {
             | (TimestampTz, _)
             | (Interval, _)
             | (Bytes, _)
-            | (String, _) => false,
+            | (String, _)
+            | (Array(_), _) => false,
         }
     }
 }
@@ -555,6 +589,10 @@ impl Hash for ScalarType {
             Interval => state.write_u8(10),
             Bytes => state.write_u8(11),
             String => state.write_u8(12),
+            Array(e) => {
+                state.write_u8(13);
+                e.hash(state);
+            }
         }
     }
 }
@@ -581,7 +619,19 @@ impl fmt::Display for ScalarType {
             Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
+            Array(e) => write!(f, "{}[]", e),
         }
+    }
+}
+
+impl fmt::Display for ColumnType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}{}",
+            self.scalar_type,
+            if self.nullable { "?" } else { "" }
+        )
     }
 }
 

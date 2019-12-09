@@ -414,6 +414,7 @@ impl FieldValue {
             }
             Datum::Bytes(b) => Some(FieldValue::Bytea(b.to_vec())),
             Datum::String(s) => Some(FieldValue::Text(s.to_owned())),
+            Datum::Array(_a) => panic!("TODO(jamii) how does postgres pass arrays?"),
         }
     }
 

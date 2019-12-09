@@ -890,20 +890,21 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 /// Returns the name that PostgreSQL would use for this `ScalarType`. Note that
 /// PostgreSQL does not have an explicit NULL type, so this function panics if
 /// called with `ScalarType::Null`.
-fn postgres_type_name(typ: ScalarType) -> &'static str {
+fn postgres_type_name(typ: &ScalarType) -> String {
     match typ {
         ScalarType::Null => panic!("postgres_type_name called on ScalarType::Null"),
-        ScalarType::Bool => "bool",
-        ScalarType::Int32 => "int4",
-        ScalarType::Int64 => "int8",
-        ScalarType::Float32 => "float4",
-        ScalarType::Float64 => "float8",
-        ScalarType::Decimal(_, _) => "numeric",
-        ScalarType::Date => "date",
-        ScalarType::Timestamp => "timestamp",
-        ScalarType::TimestampTz => "timestamptz",
-        ScalarType::Interval => "interval",
-        ScalarType::Bytes => "bytea",
-        ScalarType::String => "text",
+        ScalarType::Bool => "bool".to_owned(),
+        ScalarType::Int32 => "int4".to_owned(),
+        ScalarType::Int64 => "int8".to_owned(),
+        ScalarType::Float32 => "float4".to_owned(),
+        ScalarType::Float64 => "float8".to_owned(),
+        ScalarType::Decimal(_, _) => "numeric".to_owned(),
+        ScalarType::Date => "date".to_owned(),
+        ScalarType::Timestamp => "timestamp".to_owned(),
+        ScalarType::TimestampTz => "timestamptz".to_owned(),
+        ScalarType::Interval => "interval".to_owned(),
+        ScalarType::Bytes => "bytea".to_owned(),
+        ScalarType::String => "text".to_owned(),
+        ScalarType::Array(e) => format!("{}[]", postgres_type_name(&e.scalar_type)),
     }
 }
