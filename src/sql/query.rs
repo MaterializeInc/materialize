@@ -2482,7 +2482,7 @@ fn translate_value<'a>(
             } else {
                 scalar_types[0].clone()
             };
-            (datum, scalar_type)
+            (datum, ScalarType::Array(Box::new(scalar_type)))
         }
     })
 }
