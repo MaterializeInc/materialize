@@ -380,8 +380,8 @@ impl ScalarExpr {
 
     pub fn typ(&self, relation_type: &RelationType) -> ColumnType {
         match self {
-            ScalarExpr::Column(i) => relation_type.column_types[*i],
-            ScalarExpr::Literal(_, typ) => *typ,
+            ScalarExpr::Column(i) => relation_type.column_types[*i].clone(),
+            ScalarExpr::Literal(_, typ) => typ.clone(),
             ScalarExpr::CallNullary(func) => func.output_type(),
             ScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(relation_type)),
             ScalarExpr::CallBinary { expr1, expr2, func } => {

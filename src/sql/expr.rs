@@ -762,7 +762,7 @@ impl ScalarExpr {
                 let datum = parameters.datums.iter().nth(*n - 1).unwrap();
                 let scalar_type = &parameters.types[*n - 1];
                 let row = Row::pack(&[datum]);
-                let column_type = ColumnType::new(*scalar_type).nullable(datum.is_null());
+                let column_type = ColumnType::new(scalar_type.clone()).nullable(datum.is_null());
                 mem::replace(self, ScalarExpr::Literal(row, column_type));
             }
             ScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(parameters),
@@ -979,7 +979,12 @@ impl RelationExpr {
             RelationExpr::Get { typ, .. } => typ.clone(),
             RelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ(outer, params);
-                RelationType::new(outputs.iter().map(|&i| input_typ.column_types[i]).collect())
+                RelationType::new(
+                    outputs
+                        .iter()
+                        .map(|&i| input_typ.column_types[i].clone())
+                        .collect(),
+                )
             }
             RelationExpr::Map { input, scalars } => {
                 let mut typ = input.typ(outer, params);
@@ -1006,7 +1011,7 @@ impl RelationExpr {
                 let input_typ = input.typ(outer, params);
                 let mut column_types = group_key
                     .iter()
-                    .map(|&i| input_typ.column_types[i])
+                    .map(|&i| input_typ.column_types[i].clone())
                     .collect::<Vec<_>>();
                 for agg in aggregates {
                     column_types.push(agg.typ(outer, &input_typ, params));
@@ -1027,7 +1032,7 @@ impl RelationExpr {
                         .column_types
                         .iter()
                         .zip(right_typ.column_types.iter())
-                        .map(|(l, r)| l.union(*r))
+                        .map(|(l, r)| l.union(r))
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap(),
                 )
@@ -1132,10 +1137,10 @@ impl ScalarExpr {
         params: &BTreeMap<usize, ScalarType>,
     ) -> ColumnType {
         match self {
-            ScalarExpr::Column(ColumnRef::Outer(i)) => outer.column_types[*i],
-            ScalarExpr::Column(ColumnRef::Inner(i)) => inner.column_types[*i],
-            ScalarExpr::Parameter(n) => ColumnType::new(params[&n]).nullable(true),
-            ScalarExpr::Literal(_, typ) => *typ,
+            ScalarExpr::Column(ColumnRef::Outer(i)) => outer.column_types[*i].clone(),
+            ScalarExpr::Column(ColumnRef::Inner(i)) => inner.column_types[*i].clone(),
+            ScalarExpr::Parameter(n) => ColumnType::new(params[&n].clone()).nullable(true),
+            ScalarExpr::Literal(_, typ) => typ.clone(),
             ScalarExpr::CallNullary(func) => func.output_type(),
             ScalarExpr::CallUnary { expr, func } => {
                 func.output_type(expr.typ(outer, inner, params))
@@ -1150,7 +1155,7 @@ impl ScalarExpr {
             ScalarExpr::If { cond: _, then, els } => {
                 let then_type = then.typ(outer, inner, params);
                 let else_type = els.typ(outer, inner, params);
-                then_type.union(else_type).unwrap()
+                then_type.union(&else_type).unwrap()
             }
             ScalarExpr::Exists(_) => ColumnType::new(ScalarType::Bool).nullable(true),
             ScalarExpr::Select(expr) => expr

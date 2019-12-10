@@ -154,7 +154,7 @@ impl RelationExpr {
                 for (row, _diff) in rows {
                     for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                         assert!(
-                            datum.is_instance_of(*column_typ),
+                            datum.is_instance_of(column_typ),
                             "Expected datum of type {:?}, got value {:?}",
                             column_typ,
                             datum
@@ -172,8 +172,12 @@ impl RelationExpr {
             RelationExpr::Let { body, .. } => body.typ(),
             RelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ();
-                let mut output_typ =
-                    RelationType::new(outputs.iter().map(|&i| input_typ.column_types[i]).collect());
+                let mut output_typ = RelationType::new(
+                    outputs
+                        .iter()
+                        .map(|&i| input_typ.column_types[i].clone())
+                        .collect(),
+                );
                 for keys in input_typ.keys {
                     if keys.iter().all(|k| outputs.contains(k)) {
                         output_typ = output_typ.add_keys(keys);
@@ -240,7 +244,7 @@ impl RelationExpr {
                 let input_typ = input.typ();
                 let mut column_types = group_key
                     .iter()
-                    .map(|&i| input_typ.column_types[i])
+                    .map(|&i| input_typ.column_types[i].clone())
                     .collect::<Vec<_>>();
                 for agg in aggregates {
                     column_types.push(agg.typ(&input_typ));
@@ -279,7 +283,7 @@ impl RelationExpr {
                         .column_types
                         .iter()
                         .zip(right_typ.column_types.iter())
-                        .map(|(l, r)| l.union(*r))
+                        .map(|(l, r)| l.union(r))
                         .collect::<Result<Vec<_>, _>>()
                         .with_context(|e| format!("{}\nIn {:#?}", e, self))
                         .unwrap(),
@@ -311,7 +315,7 @@ impl RelationExpr {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(
-                    datum.is_instance_of(*column_typ),
+                    datum.is_instance_of(column_typ),
                     "Expected datum of type {:?}, got value {:?}",
                     column_typ,
                     datum
@@ -939,7 +943,7 @@ impl RelationExpr {
                     // optimizer.
                     .product(RelationExpr::constant(
                         vec![default.iter().map(|(datum, _)| *datum).collect()],
-                        RelationType::new(default.iter().map(|(_, typ)| *typ).collect()),
+                        RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
                     )))
             })
             .unwrap()

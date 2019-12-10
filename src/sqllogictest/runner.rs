@@ -577,7 +577,7 @@ impl State {
                 });
             }
             for (inferred_type, datum) in inferred_types.iter().zip(row.iter()) {
-                if !datum.is_instance_of(*inferred_type) {
+                if !datum.is_instance_of(inferred_type) {
                     return Ok(Outcome::InferenceFailure {
                         expected_types,
                         inferred_types: inferred_types.to_vec(),

@@ -608,22 +608,22 @@ impl RawParameterBytes {
             let datum = match parameter {
                 Some(bytes) => match self.parameter_format_codes[i] {
                     FieldFormat::Binary => {
-                        RawParameterBytes::generate_datum_from_bytes(&bytes, typs[i])?
+                        RawParameterBytes::generate_datum_from_bytes(&bytes, &typs[i])?
                     }
                     FieldFormat::Text => {
-                        RawParameterBytes::generate_datum_from_text(&bytes, typs[i])?
+                        RawParameterBytes::generate_datum_from_text(&bytes, &typs[i])?
                     }
                 },
                 None => Datum::Null,
             };
-            parameters.push((datum, typs[i]));
+            parameters.push((datum, typs[i].clone()));
         }
         Ok(parameters)
     }
 
     fn generate_datum_from_bytes<'a>(
         bytes: &'a [u8],
-        typ: ScalarType,
+        typ: &ScalarType,
     ) -> Result<Datum<'a>, failure::Error> {
         Ok(match typ {
             ScalarType::Null => Datum::Null,
@@ -650,7 +650,7 @@ impl RawParameterBytes {
 
     fn generate_datum_from_text<'a>(
         bytes: &'a [u8],
-        typ: ScalarType,
+        typ: &ScalarType,
     ) -> Result<Datum<'a>, failure::Error> {
         let as_str = str::from_utf8(bytes)?;
         Ok(match typ {

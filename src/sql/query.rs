@@ -68,7 +68,7 @@ pub fn plan_root_query(
         finishing
             .project
             .iter()
-            .map(|i| typ.column_types[*i])
+            .map(|i| typ.column_types[*i].clone())
             .collect(),
     );
 
@@ -238,7 +238,7 @@ fn plan_set_expr(
                 );
             }
             for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
-                if left_col_type.union(*right_col_type).is_err() {
+                if left_col_type.union(right_col_type).is_err() {
                     bail!(
                         "{} types {} and {} cannot be matched",
                         op,
@@ -326,7 +326,7 @@ fn plan_set_expr(
                         types
                             .iter()
                             .zip(value_types.iter())
-                            .map(|(left_typ, right_typ)| left_typ.union(*right_typ))
+                            .map(|(left_typ, right_typ)| left_typ.union(right_typ))
                             .collect::<Result<Vec<_>, _>>()?,
                     )
                 } else {
@@ -1214,7 +1214,7 @@ where
     let best_target_type = best_target_type(
         pending
             .iter()
-            .filter_map(|slot| slot.as_ref().map(|(_expr, typ)| typ.scalar_type)),
+            .filter_map(|slot| slot.as_ref().map(|(_expr, typ)| typ.scalar_type.clone())),
     )
     .or(type_hint);
 
@@ -1222,7 +1222,7 @@ where
     // hint.
     for (i, slot) in pending.iter_mut().enumerate() {
         if slot.is_none() {
-            let expr = plan_expr(catalog, ecx, exprs[i].borrow(), best_target_type)?;
+            let expr = plan_expr(catalog, ecx, exprs[i].borrow(), best_target_type.clone())?;
             let typ = ecx.column_type(&expr);
             *slot = Some((expr, typ));
         }
@@ -1231,7 +1231,7 @@ where
     // Try to cast all expressions to `best_target_type`.
     let mut out = Vec::new();
     for (expr, typ) in pending.into_iter().map(Option::unwrap) {
-        match plan_cast_internal(ecx, name, expr, best_target_type.unwrap()) {
+        match plan_cast_internal(ecx, name, expr, best_target_type.clone().unwrap()) {
             Ok(expr) => out.push(expr),
             Err(_) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
@@ -1315,7 +1315,7 @@ fn plan_cast<'a>(
     data_type: &'a DataType,
 ) -> Result<ScalarExpr, failure::Error> {
     let to_scalar_type = scalar_type_from_sql(data_type)?;
-    let expr = plan_expr(catalog, ecx, expr, Some(to_scalar_type))?;
+    let expr = plan_expr(catalog, ecx, expr, Some(to_scalar_type.clone()))?;
     plan_cast_internal(ecx, "CAST", expr, to_scalar_type)
 }
 
@@ -1979,8 +1979,9 @@ fn plan_arithmetic_op<'a>(
                 // Otherwise, try to find a common type that can represent both
                 // inputs.
                 let best_target_type =
-                    best_target_type(vec![ltype.scalar_type, rtype.scalar_type]).unwrap();
-                lexpr = match plan_cast_internal(ecx, &op, lexpr, best_target_type) {
+                    best_target_type(vec![ltype.scalar_type.clone(), rtype.scalar_type.clone()])
+                        .unwrap();
+                lexpr = match plan_cast_internal(ecx, &op, lexpr, best_target_type.clone()) {
                     Ok(expr) => expr,
                     Err(_) => bail!(
                         "{} does not have uniform type: {:?} vs {:?}",
@@ -1989,7 +1990,7 @@ fn plan_arithmetic_op<'a>(
                         best_target_type,
                     ),
                 };
-                rexpr = match plan_cast_internal(ecx, &op, rexpr, best_target_type) {
+                rexpr = match plan_cast_internal(ecx, &op, rexpr, best_target_type.clone()) {
                     Ok(expr) => expr,
                     Err(_) => bail!(
                         "{} does not have uniform type: {:?} vs {:?}",
@@ -2020,7 +2021,7 @@ fn plan_arithmetic_op<'a>(
 
             // Infer the unknown type. Dates and timestamps want an interval for
             // arithmetic. Everything else wants its own type.
-            let type_hint = match ltype.scalar_type {
+            let type_hint = match ltype.scalar_type.clone() {
                 Date | Timestamp | TimestampTz => Interval,
                 other => other,
             };
@@ -2361,8 +2362,16 @@ fn plan_case<'a>(
     Ok(expr)
 }
 
-fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Error> {
-    let (datum, scalar_type) = match l {
+fn plan_literal<'a>(_catalog: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Error> {
+    let (datum, scalar_type) = sql_value_to_datum(l)?;
+    let nullable = datum == Datum::Null;
+    let typ = ColumnType::new(scalar_type).nullable(nullable);
+    let expr = ScalarExpr::literal(datum, typ);
+    Ok(expr)
+}
+
+fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failure::Error> {
+    Ok(match l {
         Value::Number(s) => {
             let d: Decimal = s.parse()?;
             if d.scale() == 0 {
@@ -2461,11 +2470,8 @@ fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Er
             (Datum::Interval(i.into()), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Null),
-    };
-    let nullable = datum == Datum::Null;
-    let typ = ColumnType::new(scalar_type).nullable(nullable);
-    let expr = ScalarExpr::literal(datum, typ);
-    Ok(expr)
+        Value::Array(_) => bail!("ARRAY literals are not supported: {}", l.to_string()),
+    })
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -2590,7 +2596,7 @@ where
     use ScalarType::*;
     use UnaryFunc::*;
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
-    let expr = match (from_scalar_type, to_scalar_type) {
+    let expr = match (from_scalar_type, to_scalar_type.clone()) {
         (Bool, String) => expr.call_unary(CastBoolToString),
         (Int32, Bool) => expr.call_unary(CastInt32ToBool),
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),

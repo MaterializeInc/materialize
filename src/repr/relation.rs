@@ -14,7 +14,7 @@ use crate::ScalarType;
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
 /// Int32 or String) with additional attributes, like its nullability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub struct ColumnType {
     /// Whether this datum can be null.
     pub nullable: bool,
@@ -37,10 +37,10 @@ impl ColumnType {
         }
     }
 
-    pub fn union(self, other: Self) -> Result<Self, failure::Error> {
-        let scalar_type = match (self.scalar_type, other.scalar_type) {
-            (ScalarType::Null, s) | (s, ScalarType::Null) => s,
-            (s1, s2) if s1 == s2 => s1,
+    pub fn union(&self, other: &Self) -> Result<Self, failure::Error> {
+        let scalar_type = match (&self.scalar_type, &other.scalar_type) {
+            (ScalarType::Null, s) | (s, ScalarType::Null) => s.clone(),
+            (s1, s2) if s1 == s2 => s1.clone(),
             (s1, s2) => bail!("Can't union types: {:?} and {:?}", s1, s2),
         };
         Ok(ColumnType {
