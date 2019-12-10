@@ -27,7 +27,7 @@ You cannot cast `boolean` to any other type.
 
 #### To `boolean`
 
-You cannot cast any other type to `boolean`.
+You can cast [`int`](../int) to `boolean`.
 
 ## Examples
 

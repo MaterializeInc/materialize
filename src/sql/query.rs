@@ -2592,11 +2592,13 @@ where
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
     let expr = match (from_scalar_type, to_scalar_type) {
         (Bool, String) => expr.call_unary(CastBoolToString),
+        (Int32, Bool) => expr.call_unary(CastInt32ToBool),
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
         (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
         (Int32, Int64) => expr.call_unary(CastInt32ToInt64),
         (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, s),
         (Int32, String) => expr.call_unary(CastInt32ToString),
+        (Int64, Bool) => expr.call_unary(CastInt64ToBool),
         (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, s),
         (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
         (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),

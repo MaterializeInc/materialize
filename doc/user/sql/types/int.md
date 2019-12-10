@@ -22,6 +22,7 @@ Detail | Info
 
 You can [cast](../../functions/cast) `int` to:
 
+- [`bool`](../boolean)
 - [`decimal`](../decimal)
 - [`float`](../float)
 - [`string`](../string)

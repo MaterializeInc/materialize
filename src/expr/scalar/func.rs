@@ -111,6 +111,10 @@ pub fn cast_bool_to_string<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a
     }
 }
 
+pub fn cast_int32_to_bool<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int32() != 0)
+}
+
 pub fn cast_int32_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
@@ -135,6 +139,10 @@ pub fn cast_int32_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a
 
 pub fn cast_int32_to_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Datum<'a> {
     Datum::from(i128::from(a.unwrap_int32()))
+}
+
+pub fn cast_int64_to_bool<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_int64() != 0)
 }
 
 pub fn cast_int64_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Datum<'a> {
@@ -1563,12 +1571,14 @@ pub enum UnaryFunc {
     AbsFloat32,
     AbsFloat64,
     CastBoolToString,
+    CastInt32ToBool,
     CastInt32ToFloat32,
     CastInt32ToFloat64,
     CastInt32ToInt64,
     CastInt32ToString,
     CastInt64ToInt32,
     CastInt32ToDecimal,
+    CastInt64ToBool,
     CastInt64ToDecimal,
     CastInt64ToFloat32,
     CastInt64ToFloat64,
@@ -1636,12 +1646,14 @@ impl UnaryFunc {
             UnaryFunc::AbsFloat32 => abs_float32,
             UnaryFunc::AbsFloat64 => abs_float64,
             UnaryFunc::CastBoolToString => cast_bool_to_string,
+            UnaryFunc::CastInt32ToBool => cast_int32_to_bool,
             UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32,
             UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64,
             UnaryFunc::CastInt32ToInt64 => cast_int32_to_int64,
             UnaryFunc::CastInt32ToDecimal => cast_int32_to_decimal,
             UnaryFunc::CastInt32ToString => cast_int32_to_string,
             UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
+            UnaryFunc::CastInt64ToBool => cast_int64_to_bool,
             UnaryFunc::CastInt64ToDecimal => cast_int64_to_decimal,
             UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32,
             UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64,
@@ -1732,7 +1744,7 @@ impl UnaryFunc {
         use UnaryFunc::*;
         let in_nullable = input_type.nullable;
         match self {
-            IsNull => ColumnType::new(ScalarType::Bool),
+            IsNull | CastInt32ToBool | CastInt64ToBool => ColumnType::new(ScalarType::Bool),
 
             Ascii => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
 
@@ -1844,12 +1856,14 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
             UnaryFunc::CastBoolToString => f.write_str("booltostr"),
+            UnaryFunc::CastInt32ToBool => f.write_str("i32tobool"),
             UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
             UnaryFunc::CastInt32ToFloat64 => f.write_str("i32tof64"),
             UnaryFunc::CastInt32ToInt64 => f.write_str("i32toi64"),
             UnaryFunc::CastInt32ToString => f.write_str("i32tostr"),
             UnaryFunc::CastInt32ToDecimal => f.write_str("i32todec"),
             UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
+            UnaryFunc::CastInt64ToBool => f.write_str("i64tobool"),
             UnaryFunc::CastInt64ToDecimal => f.write_str("i64todec"),
             UnaryFunc::CastInt64ToFloat32 => f.write_str("i64tof32"),
             UnaryFunc::CastInt64ToFloat64 => f.write_str("i64tof64"),
