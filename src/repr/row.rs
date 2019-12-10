@@ -165,6 +165,7 @@ enum Tag {
     String,
     List,
     Dict,
+    JsonNull,
 }
 
 /// Reads a `Copy` value starting at byte `offset`.
@@ -282,6 +283,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let bytes = &data[*offset..(*offset + len)];
             Datum::Dict(DatumDict { data: bytes })
         }
+        Tag::JsonNull => Datum::JsonNull,
     }
 }
 
@@ -613,6 +615,7 @@ impl<'a> PackableRow<'a> {
                 data.extend_from_slice(&dict.data.len().to_le_bytes());
                 data.extend_from_slice(dict.data);
             }
+            Datum::JsonNull => data.push(Tag::JsonNull as u8),
         }
     }
 

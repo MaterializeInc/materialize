@@ -905,5 +905,6 @@ fn postgres_type_name(typ: &ScalarType) -> String {
         ScalarType::Interval => "interval".to_owned(),
         ScalarType::Bytes => "bytea".to_owned(),
         ScalarType::String => "text".to_owned(),
+        ScalarType::Json => "jsonb".to_owned(),
     }
 }

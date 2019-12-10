@@ -56,6 +56,8 @@ pub enum Datum<'a> {
     List(DatumList<'a>),
     /// A mapping from string keys to Datums,
     Dict(DatumDict<'a>),
+    /// Json null does not behave like SQL null :'(
+    JsonNull,
 }
 
 impl<'a> Datum<'a> {
@@ -242,39 +244,59 @@ impl<'a> Datum<'a> {
         }
     }
 
-    pub fn is_instance_of(&self, column_type: &ColumnType) -> bool {
-        fn is_instance_of_scalar(datum: &Datum, scalar_type: &ScalarType) -> bool {
-            match (datum, scalar_type) {
-                (Datum::Null, ScalarType::Null) => true,
-                (Datum::Null, _) => false,
-                (Datum::False, ScalarType::Bool) => true,
-                (Datum::False, _) => false,
-                (Datum::True, ScalarType::Bool) => true,
-                (Datum::True, _) => false,
-                (Datum::Int32(_), ScalarType::Int32) => true,
-                (Datum::Int32(_), _) => false,
-                (Datum::Int64(_), ScalarType::Int64) => true,
-                (Datum::Int64(_), _) => false,
-                (Datum::Float32(_), ScalarType::Float32) => true,
-                (Datum::Float32(_), _) => false,
-                (Datum::Float64(_), ScalarType::Float64) => true,
-                (Datum::Float64(_), _) => false,
-                (Datum::Date(_), ScalarType::Date) => true,
-                (Datum::Date(_), _) => false,
-                (Datum::Timestamp(_), ScalarType::Timestamp) => true,
-                (Datum::Timestamp(_), _) => false,
-                (Datum::TimestampTz(_), ScalarType::TimestampTz) => true,
-                (Datum::TimestampTz(_), _) => false,
-                (Datum::Interval(_), ScalarType::Interval) => true,
-                (Datum::Interval(_), _) => false,
-                (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
-                (Datum::Decimal(_), _) => false,
-                (Datum::Bytes(_), ScalarType::Bytes) => true,
-                (Datum::Bytes(_), _) => false,
-                (Datum::String(_), ScalarType::String) => true,
-                (Datum::String(_), _) => false,
-                (Datum::List(_), _) => false,
-                (Datum::Dict(_), _) => false,
+    pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
+        fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
+            if let ScalarType::Json = scalar_type {
+                // json type checking
+                match datum {
+                    Datum::JsonNull
+                    | Datum::False
+                    | Datum::True
+                    | Datum::Float64(_)
+                    | Datum::String(_) => true,
+                    Datum::List(list) => list
+                        .iter()
+                        .all(|elem| is_instance_of_scalar(elem, scalar_type)),
+                    Datum::Dict(dict) => dict
+                        .iter()
+                        .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
+                    _ => false,
+                }
+            } else {
+                // sql type checking
+                match (datum, scalar_type) {
+                    (Datum::Null, ScalarType::Null) => true,
+                    (Datum::Null, _) => false,
+                    (Datum::False, ScalarType::Bool) => true,
+                    (Datum::False, _) => false,
+                    (Datum::True, ScalarType::Bool) => true,
+                    (Datum::True, _) => false,
+                    (Datum::Int32(_), ScalarType::Int32) => true,
+                    (Datum::Int32(_), _) => false,
+                    (Datum::Int64(_), ScalarType::Int64) => true,
+                    (Datum::Int64(_), _) => false,
+                    (Datum::Float32(_), ScalarType::Float32) => true,
+                    (Datum::Float32(_), _) => false,
+                    (Datum::Float64(_), ScalarType::Float64) => true,
+                    (Datum::Float64(_), _) => false,
+                    (Datum::Date(_), ScalarType::Date) => true,
+                    (Datum::Date(_), _) => false,
+                    (Datum::Timestamp(_), ScalarType::Timestamp) => true,
+                    (Datum::Timestamp(_), _) => false,
+                    (Datum::TimestampTz(_), ScalarType::TimestampTz) => true,
+                    (Datum::TimestampTz(_), _) => false,
+                    (Datum::Interval(_), ScalarType::Interval) => true,
+                    (Datum::Interval(_), _) => false,
+                    (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
+                    (Datum::Decimal(_), _) => false,
+                    (Datum::Bytes(_), ScalarType::Bytes) => true,
+                    (Datum::Bytes(_), _) => false,
+                    (Datum::String(_), ScalarType::String) => true,
+                    (Datum::String(_), _) => false,
+                    (Datum::List(_), _) => false,
+                    (Datum::Dict(_), _) => false,
+                    (Datum::JsonNull, _) => false,
+                }
             }
         }
         if column_type.nullable {
@@ -469,6 +491,7 @@ impl fmt::Display for Datum<'_> {
                 write_delimited(f, ", ", dict, |f, (k, v)| write!(f, "{}: {}", k, v))?;
                 f.write_str("}")
             }
+            Datum::JsonNull => f.write_str("json_null"),
         }
     }
 }
@@ -506,6 +529,9 @@ pub enum ScalarType {
     Interval,
     Bytes,
     String,
+    /// Json behaves like postgres' jsonb type but is stored as Datum::JsonNull/True/False/String/Float64/List/Dict.
+    /// The sql type system is responsible for preventing these being used as normal sql datums without casting.
+    Json,
 }
 
 impl<'a> ScalarType {
@@ -533,6 +559,7 @@ impl<'a> ScalarType {
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
             ScalarType::Bytes => Datum::Bytes(&[]),
             ScalarType::String => Datum::String(""),
+            ScalarType::Json => Datum::JsonNull,
         }
     }
 }
@@ -557,7 +584,8 @@ impl PartialEq for ScalarType {
             | (TimestampTz, TimestampTz)
             | (Interval, Interval)
             | (Bytes, Bytes)
-            | (String, String) => true,
+            | (String, String)
+            | (Json, Json) => true,
 
             (Null, _)
             | (Bool, _)
@@ -571,7 +599,8 @@ impl PartialEq for ScalarType {
             | (TimestampTz, _)
             | (Interval, _)
             | (Bytes, _)
-            | (String, _) => false,
+            | (String, _)
+            | (Json, _) => false,
         }
     }
 }
@@ -598,6 +627,7 @@ impl Hash for ScalarType {
             Interval => state.write_u8(10),
             Bytes => state.write_u8(11),
             String => state.write_u8(12),
+            Json => state.write_u8(13),
         }
     }
 }
@@ -624,6 +654,7 @@ impl fmt::Display for ScalarType {
             Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
+            Json => f.write_str("json"),
         }
     }
 }

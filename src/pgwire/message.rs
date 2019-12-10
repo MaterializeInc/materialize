@@ -414,7 +414,7 @@ impl FieldValue {
             }
             Datum::Bytes(b) => Some(FieldValue::Bytea(b.to_vec())),
             Datum::String(s) => Some(FieldValue::Text(s.to_owned())),
-            Datum::List(_) | Datum::Dict(_) => {
+            Datum::JsonNull | Datum::List(_) | Datum::Dict(_) => {
                 panic!("TODO(jamii) figure out list/dict representation for pgwire")
             }
         }
