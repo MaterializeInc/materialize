@@ -73,3 +73,20 @@ query B
 SELECT NOT FALSE OR FALSE
 ----
 true
+
+### int64 to bool ###
+
+query B
+SELECT 99::bool
+----
+true
+
+query B
+SELECT 0::bool
+----
+false
+
+query B
+SELECT NOT 0::bool
+----
+true

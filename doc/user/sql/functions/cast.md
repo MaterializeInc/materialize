@@ -29,6 +29,7 @@ _type_ | [Typename](../../types) | The return value's type.
 
 Source type | Return type
 ------------|------------
+`int` | `bool`
 `int` | `float`
 `int` | `decimal`
 `int` | `string`
