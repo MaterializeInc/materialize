@@ -956,6 +956,7 @@ dependencies = [
  "regex-syntax",
  "repr",
  "serde",
+ "serde_json",
  "unicase",
  "uuid 0.8.1",
 ]

@@ -12,6 +12,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 pub use crate::like::build_like_regex_from_string;
@@ -391,6 +392,59 @@ pub fn cast_bytes_to_string<'a>(
         write!(&mut out, "{:x}", byte).expect("writing to string cannot fail");
     }
     Datum::String(temp_storage.push_string(&out))
+}
+
+// TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
+fn serde_to_datum<'a>(
+    temp_storage: &mut PackableRow<'a>,
+    serde: serde_json::Value,
+) -> Result<Datum<'a>, failure::Error> {
+    use serde_json::Value;
+    Ok(match serde {
+        Value::Null => Datum::JsonNull,
+        Value::Bool(b) => {
+            if b {
+                Datum::True
+            } else {
+                Datum::False
+            }
+        }
+        Value::Number(n) => {
+            Datum::Float64(OrderedFloat(n.as_f64().ok_or_else(|| {
+                failure::format_err!("{} is out of range for json number", n)
+            })?))
+        }
+        Value::String(s) => Datum::String(temp_storage.push_string(&s)),
+        Value::Array(array) => {
+            let elems = array
+                .into_iter()
+                .map(|elem| serde_to_datum(temp_storage, elem))
+                .collect::<Result<Vec<_>, _>>()?;
+            Datum::List(temp_storage.push_list(elems))
+        }
+        Value::Object(object) => {
+            let mut pairs = object
+                .into_iter()
+                .map(|(key, val)| Ok((key, serde_to_datum(temp_storage, val)?)))
+                .collect::<Result<Vec<_>, failure::Error>>()?;
+            pairs.sort();
+            Datum::Dict(temp_storage.push_dict(pairs))
+        }
+    })
+}
+
+pub fn cast_string_to_json<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    match serde_json::from_str(a.unwrap_str()) {
+        Err(_) => return Datum::Null,
+        Ok(json) => match serde_to_datum(temp_storage, json) {
+            Err(_) => return Datum::Null,
+            Ok(datum) => datum,
+        },
+    }
 }
 
 pub fn add_int32<'a>(
@@ -1605,6 +1659,7 @@ pub enum UnaryFunc {
     CastTimestampTzToString,
     CastIntervalToString,
     CastBytesToString,
+    CastStringToJson,
     CeilFloat32,
     CeilFloat64,
     FloorFloat32,
@@ -1680,6 +1735,7 @@ impl UnaryFunc {
             UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string,
             UnaryFunc::CastIntervalToString => cast_interval_to_string,
             UnaryFunc::CastBytesToString => cast_bytes_to_string,
+            UnaryFunc::CastStringToJson => cast_string_to_json,
             UnaryFunc::CeilFloat32 => ceil_float32,
             UnaryFunc::CeilFloat64 => ceil_float64,
             UnaryFunc::FloorFloat32 => floor_float32,
@@ -1794,6 +1850,9 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
             }
 
+            // can return null for invalid json
+            CastStringToJson => ColumnType::new(ScalarType::Json).nullable(true),
+
             CeilFloat32 | FloorFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
             }
@@ -1890,6 +1949,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastTimestampTzToString => f.write_str("tstztostr"),
             UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
+            UnaryFunc::CastStringToJson => f.write_str("strtojson"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
