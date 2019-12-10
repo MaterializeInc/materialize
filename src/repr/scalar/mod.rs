@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sqlparser::ast::Interval as SqlInterval;
 
 use self::decimal::Significand;
-use crate::{ColumnType, DatumArray, DatumDict};
+use crate::{ColumnType, DatumDict, DatumList};
 
 pub mod decimal;
 pub mod regex;
@@ -52,8 +52,8 @@ pub enum Datum<'a> {
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(&'a str),
-    /// A sequence of Datums
-    Array(DatumArray<'a>),
+    /// A heterogenous sequence of Datums
+    List(DatumList<'a>),
     /// A mapping from string keys to Datums,
     Dict(DatumDict<'a>),
 }
@@ -273,7 +273,7 @@ impl<'a> Datum<'a> {
                 (Datum::Bytes(_), _) => false,
                 (Datum::String(_), ScalarType::String) => true,
                 (Datum::String(_), _) => false,
-                (Datum::Array(_), _) => false,
+                (Datum::List(_), _) => false,
                 (Datum::Dict(_), _) => false,
             }
         }
@@ -459,9 +459,9 @@ impl fmt::Display for Datum<'_> {
                 }
                 f.write_str("\"")
             }
-            Datum::Array(array) => {
+            Datum::List(list) => {
                 f.write_str("[")?;
-                write_delimited(f, ", ", array, |f, e| write!(f, "{}", e))?;
+                write_delimited(f, ", ", list, |f, e| write!(f, "{}", e))?;
                 f.write_str("]")
             }
             Datum::Dict(dict) => {
