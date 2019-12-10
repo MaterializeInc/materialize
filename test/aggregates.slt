@@ -69,3 +69,13 @@ NULL
 
 statement error
 SELECT * ORDER BY SUM(fake_column)
+
+query RRRRRR
+SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_pop(a) FROM t
+----
+0.916666600000  0.916666600000  0.687500000000  0.957427072940  0.957427072940  0.829156197588
+
+query RRRRRR
+SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_pop(a) FROM t2
+----
+0.9166666666666666  0.9166666666666666  0.6875  0.9574271077563381  0.9574271077563381  0.82915619758885

@@ -37,6 +37,30 @@
             {
                 "signature": "sum(x: T) -> T",
                 "description": "Sum of `T`'s values"
+            },
+            {
+                "signature": "stddev(x: T) -> T",
+                "description": "Historical alias for `stddev_samp`\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+            },
+            {
+                "signature": "stddev_pop(x: T) -> T",
+                "description": "Population standard deviation of `T`'s values\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+            },
+            {
+                "signature": "stddev_samp(x: T) -> T",
+                "description": "Sample standard deviation of `T`'s values\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+            },
+            {
+                "signature": "variance(x: T) -> T",
+                "description": "Historical alias for `variance_samp`\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+            },
+            {
+                "signature": "variance_pop(x: T) -> T",
+                "description": "Population variance of `T`'s values\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+            },
+            {
+                "signature": "variance_samp(x: T) -> T",
+                "description": "Sample variance of `T`'s values\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
             }
         ]
     },
