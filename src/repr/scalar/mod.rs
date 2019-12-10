@@ -273,9 +273,6 @@ impl<'a> Datum<'a> {
                 (Datum::Bytes(_), _) => false,
                 (Datum::String(_), ScalarType::String) => true,
                 (Datum::String(_), _) => false,
-                (Datum::Array(array), ScalarType::Array(elem_type)) => array
-                    .iter()
-                    .all(|elem| is_instance_of_scalar(&elem, &**elem_type)),
                 (Datum::Array(_), _) => false,
                 (Datum::Dict(_), _) => false,
             }
@@ -509,7 +506,6 @@ pub enum ScalarType {
     Interval,
     Bytes,
     String,
-    Array(Box<ScalarType>),
 }
 
 impl<'a> ScalarType {
@@ -537,7 +533,6 @@ impl<'a> ScalarType {
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
             ScalarType::Bytes => Datum::Bytes(&[]),
             ScalarType::String => Datum::String(""),
-            ScalarType::Array(_) => Datum::Array(DatumArray::empty()),
         }
     }
 }
@@ -550,7 +545,6 @@ impl PartialEq for ScalarType {
         use ScalarType::*;
         match (self, other) {
             (Decimal(_, s1), Decimal(_, s2)) => s1 == s2,
-            (Array(e1), Array(e2)) => e1 == e2,
 
             (Null, Null)
             | (Bool, Bool)
@@ -577,8 +571,7 @@ impl PartialEq for ScalarType {
             | (TimestampTz, _)
             | (Interval, _)
             | (Bytes, _)
-            | (String, _)
-            | (Array(_), _) => false,
+            | (String, _) => false,
         }
     }
 }
@@ -605,10 +598,6 @@ impl Hash for ScalarType {
             Interval => state.write_u8(10),
             Bytes => state.write_u8(11),
             String => state.write_u8(12),
-            Array(e) => {
-                state.write_u8(13);
-                e.hash(state);
-            }
         }
     }
 }
@@ -635,7 +624,6 @@ impl fmt::Display for ScalarType {
             Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
-            Array(e) => write!(f, "{}[]", e),
         }
     }
 }

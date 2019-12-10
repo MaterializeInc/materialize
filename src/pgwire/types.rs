@@ -115,7 +115,6 @@ impl From<&ScalarType> for PgType {
             ScalarType::Interval => INTERVAL,
             ScalarType::Bytes => BYTEA,
             ScalarType::String => TEXT,
-            ScalarType::Array(_e) => panic!("TODO(jamii)"),
         }
     }
 }
