@@ -2,4 +2,5 @@
 !CMakeLists.txt
 !src
 !flush-tables
+!mz-default.cfg
 **/*.o
