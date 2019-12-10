@@ -40,7 +40,7 @@ WHERE
 --
 -- Keeping this as a separate view instead of rolling it into
 -- mz_records_per_dataflow_operator to simplify logic
-CREATE VIEW mz_dataflow_operators AS
+CREATE VIEW mz_dataflow_operator_dataflows AS
 SELECT
     mz_dataflow_operators.id,
     mz_dataflow_operators.name,
@@ -62,17 +62,17 @@ WHERE
 -- Operators not using any records are not shown
 CREATE VIEW mz_records_per_dataflow_operator AS
 SELECT
-    mz_dataflow_operators.id,
-    mz_dataflow_operators.name,
-    mz_dataflow_operators.worker,
-    mz_dataflow_operators.dataflow_id,
+    mz_dataflow_operator_dataflows.id,
+    mz_dataflow_operator_dataflows.name,
+    mz_dataflow_operator_dataflows.worker,
+    mz_dataflow_operator_dataflows.dataflow_id,
     mz_arrangement_sizes.records
 FROM
     mz_arrangement_sizes,
-    mz_dataflow_operators
+    mz_dataflow_operator_dataflows
 WHERE
-    mz_dataflow_operators.id = mz_arrangement_sizes.operator AND
-    mz_dataflow_operators.worker = mz_arrangement_sizes.worker;
+    mz_dataflow_operator_dataflows.id = mz_arrangement_sizes.operator AND
+    mz_dataflow_operator_dataflows.worker = mz_arrangement_sizes.worker;
 
 -- Maintains the number of records used by each dataflow (per worker)
 CREATE VIEW mz_records_per_dataflow AS
