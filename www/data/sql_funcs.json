@@ -40,27 +40,27 @@
             },
             {
                 "signature": "stddev(x: T) -> T",
-                "description": "Historical alias for `stddev_samp`\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+                "description": "Historical alias for `stddev_samp` *(imprecise)*"
             },
             {
                 "signature": "stddev_pop(x: T) -> T",
-                "description": "Population standard deviation of `T`'s values\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+                "description": "Population standard deviation of `T`'s values *(imprecise)*"
             },
             {
                 "signature": "stddev_samp(x: T) -> T",
-                "description": "Sample standard deviation of `T`'s values\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+                "description": "Sample standard deviation of `T`'s values *(imprecise)*"
             },
             {
                 "signature": "variance(x: T) -> T",
-                "description": "Historical alias for `variance_samp`\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+                "description": "Historical alias for `variance_samp` *(imprecise)*"
             },
             {
                 "signature": "variance_pop(x: T) -> T",
-                "description": "Population variance of `T`'s values\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+                "description": "Population variance of `T`'s values *(imprecise)*"
             },
             {
                 "signature": "variance_samp(x: T) -> T",
-                "description": "Sample variance of `T`'s values\n\n*NUMERICALLY UNSTABLE: do not use if high accuracy is required.*"
+                "description": "Sample variance of `T`'s values *(imprecise)*"
             }
         ]
     },
