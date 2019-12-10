@@ -200,6 +200,14 @@ where
         // Announce primary and foreign key relationships.
         if let Some(logging_config) = config.logging {
             for log in logging_config.active_logs().iter() {
+                coord.report_catalog_update(
+                    log.id(),
+                    coord
+                        .catalog
+                        .humanize_id(expr::Id::Global(log.id()))
+                        .unwrap(),
+                    true,
+                );
                 for (index, key) in log.schema().typ().keys.iter().enumerate() {
                     broadcast(
                         &mut coord.broadcast_tx,
@@ -359,6 +367,11 @@ where
                 let id = self
                     .catalog
                     .insert(name.clone(), CatalogItem::Sink(sink.clone()))?;
+                self.report_catalog_update(
+                    id,
+                    self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
+                    true,
+                );
                 self.create_dataflows(vec![DataflowDesc::new(name.to_string()).add_sink(id, sink)]);
                 ExecuteResponse::CreatedSink
             }
@@ -367,6 +380,11 @@ where
                 let id = self
                     .catalog
                     .insert(name.clone(), CatalogItem::View(view.clone()))?;
+                self.report_catalog_update(
+                    id,
+                    self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
+                    true,
+                );
                 self.create_dataflows(vec![DataflowDesc::new(name.to_string()).add_view(id, view)]);
                 ExecuteResponse::CreatedView
             }
@@ -375,12 +393,22 @@ where
                 let id = self
                     .catalog
                     .insert(name.clone(), CatalogItem::Index(index.clone()))?;
+                self.report_catalog_update(
+                    id,
+                    self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
+                    true,
+                );
                 self.create_index(id, &name, index);
                 ExecuteResponse::CreatedIndex
             }
 
             Plan::DropItems(ids, item_type) => {
                 for id in &ids {
+                    self.report_catalog_update(
+                        *id,
+                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
+                        false,
+                    );
                     self.catalog.remove(*id);
                 }
                 let mut sources_to_drop = Vec::new();
@@ -698,6 +726,11 @@ where
             let id = self
                 .catalog
                 .insert(name.clone(), CatalogItem::Source(source.clone()))?;
+            self.report_catalog_update(
+                id,
+                self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
+                true,
+            );
             source_ids.push((id, source));
         }
         self.create_sources_id(source_ids);
@@ -877,6 +910,13 @@ where
 
     pub fn shutdown(&mut self) {
         broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown)
+    }
+
+    pub fn report_catalog_update(&mut self, id: GlobalId, name: String, insert: bool) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::AppendLog(MaterializedEvent::Catalog(id, name, insert)),
+        );
     }
 
     /// Perform maintenance work associated with the coordinator.
