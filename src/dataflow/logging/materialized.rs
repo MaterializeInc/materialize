@@ -342,10 +342,7 @@ pub fn construct<A: Allocate>(
         let catalog = catalog.as_collection().map({
             let mut packer = RowPacker::new();
             move |(id, name)| {
-                packer.pack(&[
-                    Datum::String(&format!("{}", id)),
-                    Datum::String(&format!("{}", name)),
-                ])
+                packer.pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
             }
         });
 
