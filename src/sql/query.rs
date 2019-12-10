@@ -38,10 +38,7 @@ use catalog::{Catalog, CatalogEntry};
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{
-    ColumnName, ColumnType, Datum, PackableRow, QualName, RelationDesc, RelationType, RowPacker,
-    ScalarType,
-};
+use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, ScalarType};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
@@ -2344,7 +2341,7 @@ fn plan_case<'a>(
     Ok(expr)
 }
 
-fn plan_literal<'a>(catalog: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Error> {
+fn plan_literal<'a>(_catalog: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Error> {
     let (datum, scalar_type) = sql_value_to_datum(l)?;
     let nullable = datum == Datum::Null;
     let typ = ColumnType::new(scalar_type).nullable(nullable);
