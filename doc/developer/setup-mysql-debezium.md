@@ -74,8 +74,8 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s
     mysql -uroot --local-infile < ddl.sql
     ```
 
-1. Download the [latest stable Debezium MySQL
-   connector](https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/0.9.5.Final/debezium-connector-mysql-0.9.5.Final-plugin.tar.gz)
+1. Download the [latest 1.0 Debezium MySQL
+   connector](https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/1.0.0.Beta3/debezium-connector-mysql-1.0.0.Beta3-plugin.tar.gz)
    and place the `debezium-connector-mysql` directory in
    `/usr/local/opt/confluent-platform/share/java/`. If this directory doesn't
    exist, put the contents of the `tar` into the `share/java` directory under
@@ -84,15 +84,18 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s
    where you installed Confluent.
 
     ```shell
-    curl -O https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/0.9.5.Final/debezium-connector-mysql-0.9.5.Final-plugin.tar.gz
-    tar -zxvf debezium-connector-mysql-0.9.5.Final-plugin.tar.gz
-    rm debezium-connector-mysql-0.9.5.Final-plugin.tar.gz
-    if [ -d "/usr/local/opt/confluent-platform/share/java/" ]; then
+    curl -O https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/1.0.0.Beta3/debezium-connector-mysql-1.0.0.Beta3-plugin.tar.gz
+    tar -zxvf debezium-connector-mysql-1.0.0.Beta3-plugin.tar.gz
+    rm debezium-connector-mysql-1.0.0.Beta3-plugin.tar.gz
+    if [ -d /usr/local/opt/confluent-platform/share/java/ ]; then
       mv debezium-connector-mysql /usr/local/opt/confluent-platform/share/java
     else
       echo "Move debezium-connector-mysql into the share/java directory under your Confluent install directory"
     fi
     ```
+
+    **Note that Debezium versions before 1.0 mishandled dates in a way that
+    can cause incorrect results when loading data into Materialize.**
 
 ## Loading TPCH
 
