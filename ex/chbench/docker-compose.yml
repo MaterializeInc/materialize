@@ -35,7 +35,7 @@ services:
       # 1000 was chosen by fair dice roll
       - DIFFERENTIAL_EAGER_MERGE=1000
   mysql:
-    image: debezium/example-mysql:0.9
+    image: debezium/example-mysql:1.0
     ports:
      - *mysql
     environment:
@@ -48,7 +48,7 @@ services:
         target: /var/lib/mysql-files
         read_only: true
   mysqlcli:
-    image: debezium/example-mysql:0.9
+    image: debezium/example-mysql:1.0
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=tpcch"]
     init: true
     depends_on:
@@ -72,7 +72,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
   connect:
-    image: debezium/connect:0.9
+    image: debezium/connect:1.0
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: 1
