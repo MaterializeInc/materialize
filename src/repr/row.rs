@@ -131,7 +131,7 @@ pub struct PackableRow<'a> {
     data: &'a mut Vec<u8>,
 }
 
-// DatumArray is defined here rather than near Datum because we need private access to the unsafe data field
+// DatumArray and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
