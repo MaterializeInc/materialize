@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sqlparser::ast::Interval as SqlInterval;
 
 use self::decimal::Significand;
-use crate::{ColumnType, DatumArray};
+use crate::{ColumnType, DatumArray, DatumDict};
 
 pub mod decimal;
 pub mod regex;
@@ -54,6 +54,8 @@ pub enum Datum<'a> {
     String(&'a str),
     /// A sequence of Datums
     Array(DatumArray<'a>),
+    /// A mapping from string keys to Datums,
+    Dict(DatumDict<'a>),
 }
 
 impl<'a> Datum<'a> {
@@ -275,6 +277,7 @@ impl<'a> Datum<'a> {
                     .iter()
                     .all(|elem| is_instance_of_scalar(&elem, &**elem_type)),
                 (Datum::Array(_), _) => false,
+                (Datum::Dict(_), _) => false,
             }
         }
         if column_type.nullable {
@@ -460,9 +463,14 @@ impl fmt::Display for Datum<'_> {
                 f.write_str("\"")
             }
             Datum::Array(array) => {
-                f.write_str("ARRAY[")?;
-                write_delimited(f, ", ", array, |f, d| d.fmt(f))?;
+                f.write_str("[")?;
+                write_delimited(f, ", ", array, |f, e| write!(f, "{}", e))?;
                 f.write_str("]")
+            }
+            Datum::Dict(dict) => {
+                f.write_str("{")?;
+                write_delimited(f, ", ", dict, |f, (k, v)| write!(f, "{}: {}", k, v))?;
+                f.write_str("}")
             }
         }
     }

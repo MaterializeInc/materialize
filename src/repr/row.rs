@@ -65,6 +65,12 @@ pub struct DatumArrayIter<'a> {
     offset: usize,
 }
 
+#[derive(Debug)]
+pub struct DatumDictIter<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
 impl fmt::Debug for Row {
     /// Debug representation using the internal datums
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -134,6 +140,13 @@ pub struct DatumArray<'a> {
     data: &'a [u8],
 }
 
+/// A mapping from string keys to Datums
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct DatumDict<'a> {
+    /// Points at the serialized datums, which should be sorted in key order
+    data: &'a [u8],
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Tag {
     Null,
@@ -151,6 +164,7 @@ enum Tag {
     Bytes,
     String,
     Array,
+    Dict,
 }
 
 /// Reads a `Copy` value starting at byte `offset`.
@@ -159,7 +173,7 @@ enum Tag {
 ///
 /// # Safety
 ///
-/// This function is safe if a value of type `T` was previously written at this offset by `RowPacker::push`.
+/// This function is safe if a value of type `T` was previously written at this offset by `PackableRow::push`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 #[inline(always)]
 unsafe fn read_copy<T>(data: &[u8], offset: &mut usize) -> T
@@ -172,13 +186,41 @@ where
     (ptr as *const T).read_unaligned()
 }
 
+/// Read a byte slice starting at byte `offset`.
+///
+/// Updates `offset` to point to the first byte after the end of the read region.
+///
+/// # Safety
+///
+/// This function is safe if a `&[u8]` was previously written at this offset by `PackableRow::push_untagged_bytes`.
+/// Otherwise it could return invalid values, which is Undefined Behavior.
+unsafe fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
+    let len = read_copy::<usize>(data, offset);
+    let bytes = &data[*offset..(*offset + len)];
+    *offset += len;
+    bytes
+}
+
+/// Read a string starting at byte `offset`.
+///
+/// Updates `offset` to point to the first byte after the end of the read region.
+///
+/// # Safety
+///
+/// This function is safe if a `str` was previously written at this offset by `PackableRow::push_untagged_string`.
+/// Otherwise it could return invalid values, which is Undefined Behavior.
+unsafe fn read_untagged_string<'a>(data: &'a [u8], offset: &mut usize) -> &'a str {
+    let bytes = read_untagged_bytes(data, offset);
+    std::str::from_utf8_unchecked(bytes)
+}
+
 /// Read a datum starting at byte `offset`.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
 ///
 /// # Safety
 ///
-/// This function is safe is a `Datum` was previously written at this offset by `RowPacker::push`.
+/// This function is safe if a `Datum` was previously written at this offset by `PackableRow::push`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
     let tag = read_copy::<Tag>(data, offset);
@@ -223,22 +265,22 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::Decimal(s)
         }
         Tag::Bytes => {
-            let len = read_copy::<usize>(data, offset);
-            let bytes = &data[*offset..(*offset + len)];
-            *offset += len;
+            let bytes = read_untagged_bytes(data, offset);
             Datum::Bytes(bytes)
         }
         Tag::String => {
-            let len = read_copy::<usize>(data, offset);
-            let bytes = &data[*offset..(*offset + len)];
-            let string = std::str::from_utf8_unchecked(bytes);
-            *offset += len;
+            let string = read_untagged_string(data, offset);
             Datum::String(string)
         }
         Tag::Array => {
             let len = read_copy::<usize>(data, offset);
             let bytes = &data[*offset..(*offset + len)];
             Datum::Array(DatumArray { data: bytes })
+        }
+        Tag::Dict => {
+            let len = read_copy::<usize>(data, offset);
+            let bytes = &data[*offset..(*offset + len)];
+            Datum::Dict(DatumDict { data: bytes })
         }
     }
 }
@@ -317,6 +359,42 @@ impl<'a> Iterator for DatumArrayIter<'a> {
     }
 }
 
+impl<'a> DatumDict<'a> {
+    pub fn empty() -> DatumDict<'static> {
+        DatumDict { data: &[] }
+    }
+
+    pub fn iter(&'a self) -> DatumDictIter<'a> {
+        DatumDictIter {
+            data: self.data,
+            offset: 0,
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a DatumDict<'a> {
+    type Item = (&'a str, Datum<'a>);
+    type IntoIter = DatumDictIter<'a>;
+    fn into_iter(self) -> DatumDictIter<'a> {
+        self.iter()
+    }
+}
+
+impl<'a> Iterator for DatumDictIter<'a> {
+    type Item = (&'a str, Datum<'a>);
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.data.len() {
+            None
+        } else {
+            Some(unsafe {
+                let key = read_untagged_string(self.data, &mut self.offset);
+                let val = read_datum(self.data, &mut self.offset);
+                (key, val)
+            })
+        }
+    }
+}
+
 impl RowPacker {
     pub fn new() -> Self {
         RowPacker { data: vec![] }
@@ -348,6 +426,23 @@ impl RowPacker {
 }
 
 impl<'a> PackableRow<'a> {
+    fn push_untagged_bytes(&mut self, bytes: &[u8]) -> &'a [u8] {
+        let data = &mut self.data;
+        data.extend_from_slice(&bytes.len().to_le_bytes());
+        let start = data.len();
+        data.extend_from_slice(bytes);
+        let backed_bytes = &data[start..(start + bytes.len())];
+        unsafe {
+            // it's safe to return &'a because so long as this PackableRow exists we will only ever append to self.data
+            transmute::<&[u8], &'a [u8]>(backed_bytes)
+        }
+    }
+
+    fn push_untagged_string(&mut self, string: &str) -> &'a str {
+        let backed_bytes = self.push_untagged_bytes(string.as_bytes());
+        unsafe { std::str::from_utf8_unchecked(backed_bytes) }
+    }
+
     /// Push `Datum::Bytes(bytes)` onto the end of `self` and return a reference to the stored bytes
     ///
     /// ```compile_fail
@@ -359,16 +454,8 @@ impl<'a> PackableRow<'a> {
     /// println!("{:?}", s);
     /// ```
     pub fn push_bytes(&mut self, bytes: &[u8]) -> &'a [u8] {
-        let data = &mut self.data;
-        data.push(Tag::Bytes as u8);
-        data.extend_from_slice(&bytes.len().to_le_bytes());
-        let start = data.len();
-        data.extend_from_slice(bytes);
-        let backed_bytes = &data[start..(start + bytes.len())];
-        unsafe {
-            // it's safe to return &'a because so long as this PackableRow exists we will only ever append to self.data
-            transmute::<&[u8], &'a [u8]>(backed_bytes)
-        }
+        self.data.push(Tag::Bytes as u8);
+        self.push_untagged_bytes(bytes)
     }
 
     /// Push `Datum::String(string)` onto the end of `self` and return a reference to the stored string
@@ -382,18 +469,8 @@ impl<'a> PackableRow<'a> {
     /// println!("{}", s);
     /// ```
     pub fn push_string(&mut self, string: &str) -> &'a str {
-        let data = &mut self.data;
-        data.push(Tag::String as u8);
-        let bytes = string.as_bytes();
-        data.extend_from_slice(&bytes.len().to_le_bytes());
-        let start = data.len();
-        data.extend_from_slice(bytes);
-        let backed_bytes = &data[start..(start + bytes.len())];
-        unsafe {
-            let backed_string = std::str::from_utf8_unchecked(backed_bytes);
-            // it's safe to return &'a because so long as this PackableRow exists we will only ever append to self.data
-            transmute::<&str, &'a str>(backed_string)
-        }
+        self.data.push(Tag::String as u8);
+        self.push_untagged_string(string)
     }
 
     /// Push an iterator of `Datum`s onto the end of `self` and return a `DatumArray` referencing the stored `Datum`s
@@ -420,6 +497,51 @@ impl<'a> PackableRow<'a> {
                 transmute::<&[u8], &'a [u8]>(backed_bytes)
             },
         }
+    }
+
+    /// Push an iterator of `(&str, Datum)` pairs onto the end of `self` and return a `DatumDict` referencing the stored pairs
+    pub fn push_dict<'b, I, SD, S, D>(&mut self, iter: I) -> DatumDict<'a>
+    where
+        I: IntoIterator<Item = SD>,
+        SD: Borrow<(S, D)>,
+        S: Borrow<str>,
+        D: Borrow<Datum<'b>>,
+    {
+        self.data.push(Tag::Dict as u8);
+        // write a dummy len, will fix it up later
+        let len_start = self.data.len();
+        self.data.extend_from_slice(&0usize.to_le_bytes());
+        let data_start = self.data.len();
+        for pair in iter {
+            let (key, datum) = pair.borrow();
+            self.push_untagged_string(key.borrow());
+            self.push(*datum.borrow());
+        }
+        let len = self.data.len() - data_start;
+        // fix up the len
+        self.data[len_start..data_start].copy_from_slice(&len.to_le_bytes());
+        let backed_bytes = &self.data[data_start..(data_start + len)];
+        let dict = DatumDict {
+            data: unsafe {
+                // it's safe to return &'a because so long as this PackableRow exists we will only ever append to self.data
+                transmute::<&[u8], &'a [u8]>(backed_bytes)
+            },
+        };
+        if cfg!(debug_assertions) {
+            let mut prev_key = None;
+            for (key, _val) in dict.iter() {
+                if let Some(prev_key) = prev_key {
+                    debug_assert!(
+                        prev_key < key,
+                        "Dict keys must be unique and given in ascending order: {} came before {}",
+                        prev_key,
+                        key
+                    );
+                }
+                prev_key = Some(key);
+            }
+        }
+        dict
     }
 
     /// Push `datum` onto the end of `self`
@@ -485,6 +607,11 @@ impl<'a> PackableRow<'a> {
                 data.push(Tag::Array as u8);
                 data.extend_from_slice(&array.data.len().to_le_bytes());
                 data.extend_from_slice(array.data);
+            }
+            Datum::Dict(dict) => {
+                data.push(Tag::Dict as u8);
+                data.extend_from_slice(&dict.data.len().to_le_bytes());
+                data.extend_from_slice(dict.data);
             }
         }
     }
@@ -581,22 +708,46 @@ mod tests {
     fn miri_test_push() {
         let mut packer = RowPacker::new();
         let mut packable = packer.packable();
+
         assert_eq!(packable.push_string(""), "");
         assert_eq!(packable.push_string("العَرَبِيَّة"), "العَرَبِيَّة");
+
         assert_eq!(packable.push_bytes(&[]), &[]);
         assert_eq!(packable.push_bytes(&[0, 2, 1, 255]), &[0, 2, 1, 255]);
+
         assert_eq!(
             packable.push_array(&[]).iter().collect::<Vec<Datum>>(),
             vec![]
         );
-        let datums = vec![
+        let array = vec![
             Datum::Null,
             Datum::Int32(-42),
             Datum::Interval(Interval::Months(312)),
         ];
         assert_eq!(
-            packable.push_array(&datums).iter().collect::<Vec<Datum>>(),
-            datums
+            packable.push_array(&array).iter().collect::<Vec<Datum>>(),
+            array
+        );
+
+        let dict: &[(&str, Datum)] = &[];
+        assert_eq!(
+            packable
+                .push_dict(dict)
+                .iter()
+                .collect::<Vec<(&str, Datum)>>(),
+            vec![]
+        );
+        let dict = vec![
+            ("an int", Datum::Int32(-42)),
+            ("an interval", Datum::Interval(Interval::Months(312))),
+            ("null", Datum::Null),
+        ];
+        assert_eq!(
+            packable
+                .push_dict(&dict)
+                .iter()
+                .collect::<Vec<(&str, Datum)>>(),
+            dict
         );
     }
 

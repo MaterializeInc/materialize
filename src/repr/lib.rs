@@ -22,7 +22,7 @@ mod scalar;
 
 pub use qualname::{LiteralName, QualName};
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
-pub use row::{DatumArray, PackableRow, Row, RowPacker, RowUnpacker, UnpackedRow};
+pub use row::{DatumArray, DatumDict, PackableRow, Row, RowPacker, RowUnpacker, UnpackedRow};
 pub use scalar::decimal;
 pub use scalar::regex;
 pub use scalar::{Datum, Interval, ScalarType};
