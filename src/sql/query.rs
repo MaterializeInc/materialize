@@ -2756,7 +2756,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::TimestampTz => ScalarType::TimestampTz,
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
-        DataType::Custom(name) if name.to_string() == "jsonb" => ScalarType::Jsonb,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => ScalarType::Jsonb,
         other @ DataType::Array(_)
         | other @ DataType::Binary(..)
         | other @ DataType::Blob(_)
