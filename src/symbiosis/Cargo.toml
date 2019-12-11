@@ -20,5 +20,7 @@ repr = { path = "../repr" }
 rust_decimal = { version = "1.0", features = ["postgres"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 sql = { path = "../sql" }
+expr = { path = "../expr" }
+serde_json = "1.0"
 whoami = "0.6"
 log = "0.4.8"

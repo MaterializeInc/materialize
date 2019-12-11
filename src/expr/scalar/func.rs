@@ -395,7 +395,7 @@ pub fn cast_bytes_to_string<'a>(
 }
 
 // TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
-fn serde_to_datum<'a>(
+pub fn serde_to_datum<'a>(
     temp_storage: &mut PackableRow<'a>,
     serde: serde_json::Value,
 ) -> Result<Datum<'a>, failure::Error> {
