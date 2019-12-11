@@ -435,6 +435,7 @@ pub fn serde_to_datum<'a>(
     })
 }
 
+#[allow(clippy::float_cmp)]
 pub fn datum_to_serde(datum: Datum) -> serde_json::Value {
     use serde_json::Value;
     match datum {
@@ -448,7 +449,7 @@ pub fn datum_to_serde(datum: Datum) -> serde_json::Value {
                 // But we want serde to print integer-like things as integers, for consistency with postgres.
                 if f == f.trunc() {
                     (f.trunc() as i64).into()
-                } else if let Some(n) = serde_json::Number::from_f64(f.into()) {
+                } else if let Some(n) = serde_json::Number::from_f64(f) {
                     n
                 } else {
                     // This should only be reachable for NaN/Infinity, which aren't allowed to be cast to Jsonb
@@ -474,9 +475,9 @@ pub fn cast_string_to_jsonb<'a>(
     temp_storage: &mut PackableRow<'a>,
 ) -> Datum<'a> {
     match serde_json::from_str(a.unwrap_str()) {
-        Err(_) => return Datum::Null,
+        Err(_) => Datum::Null,
         Ok(json) => match serde_to_datum(temp_storage, json) {
-            Err(_) => return Datum::Null,
+            Err(_) => Datum::Null,
             Ok(datum) => datum,
         },
     }
