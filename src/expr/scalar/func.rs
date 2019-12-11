@@ -996,6 +996,22 @@ pub fn extract_timestamptz_year<'a>(
     Datum::from(f64::from(a.unwrap_timestamptz().year()))
 }
 
+pub fn extract_timestamp_quarter<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    Datum::from((f64::from(a.unwrap_timestamp().month()) / 3.0).ceil())
+}
+
+pub fn extract_timestamptz_quarter<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    Datum::from((f64::from(a.unwrap_timestamptz().month()) / 3.0).ceil())
+}
+
 pub fn extract_timestamp_month<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
@@ -1072,6 +1088,86 @@ pub fn extract_timestamptz_second<'a>(
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
     Datum::from(s + ns)
+}
+
+/// Extract the iso week of the year
+///
+/// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
+/// 1 about half of the time
+pub fn extract_timestamp_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>) -> Datum<'a> {
+    let a = a.unwrap_timestamp();
+    Datum::from(f64::from(a.iso_week().week()))
+}
+
+/// Extract the iso week of the year
+///
+/// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
+/// 1 about half of the time
+pub fn extract_timestamptz_week<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let a = a.unwrap_timestamptz();
+    Datum::from(f64::from(a.iso_week().week()))
+}
+
+pub fn extract_timestamp_dayofyear<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let a = a.unwrap_timestamp();
+    Datum::from(f64::from(a.ordinal()))
+}
+
+pub fn extract_timestamptz_dayofyear<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let a = a.unwrap_timestamptz();
+    Datum::from(f64::from(a.ordinal()))
+}
+
+/// extract day of week with monday = 1 sunday = 0
+pub fn extract_timestamp_dayofweek<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let a = a.unwrap_timestamp();
+    Datum::from(a.weekday().num_days_from_sunday() as f64)
+}
+
+/// extract day of week with monday = 1 sunday = 0
+pub fn extract_timestamptz_dayofweek<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let a = a.unwrap_timestamptz();
+    Datum::from(a.weekday().num_days_from_sunday() as f64)
+}
+
+/// extract day of week with monday = 1 sunday = 7
+pub fn extract_timestamp_isodayofweek<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let a = a.unwrap_timestamp();
+    Datum::from(a.weekday().number_from_monday() as f64)
+}
+
+/// extract day of week with monday = 1 sunday = 7
+pub fn extract_timestamptz_isodayofweek<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let a = a.unwrap_timestamptz();
+    Datum::from(a.weekday().number_from_monday() as f64)
 }
 
 pub fn date_trunc<'a>(
@@ -1617,17 +1713,27 @@ pub enum UnaryFunc {
     ExtractIntervalMinute,
     ExtractIntervalSecond,
     ExtractTimestampYear,
+    ExtractTimestampQuarter,
     ExtractTimestampMonth,
     ExtractTimestampDay,
     ExtractTimestampHour,
     ExtractTimestampMinute,
     ExtractTimestampSecond,
+    ExtractTimestampWeek,
+    ExtractTimestampDayOfYear,
+    ExtractTimestampDayOfWeek,
+    ExtractTimestampIsoDayOfWeek,
     ExtractTimestampTzYear,
+    ExtractTimestampTzQuarter,
     ExtractTimestampTzMonth,
     ExtractTimestampTzDay,
     ExtractTimestampTzHour,
     ExtractTimestampTzMinute,
     ExtractTimestampTzSecond,
+    ExtractTimestampTzWeek,
+    ExtractTimestampTzDayOfYear,
+    ExtractTimestampTzDayOfWeek,
+    ExtractTimestampTzIsoDayOfWeek,
     DateTrunc(DateTruncTo),
 }
 
@@ -1694,17 +1800,27 @@ impl UnaryFunc {
             UnaryFunc::ExtractIntervalMinute => extract_interval_minute,
             UnaryFunc::ExtractIntervalSecond => extract_interval_second,
             UnaryFunc::ExtractTimestampYear => extract_timestamp_year,
+            UnaryFunc::ExtractTimestampQuarter => extract_timestamp_quarter,
             UnaryFunc::ExtractTimestampMonth => extract_timestamp_month,
             UnaryFunc::ExtractTimestampDay => extract_timestamp_day,
             UnaryFunc::ExtractTimestampHour => extract_timestamp_hour,
             UnaryFunc::ExtractTimestampMinute => extract_timestamp_minute,
             UnaryFunc::ExtractTimestampSecond => extract_timestamp_second,
+            UnaryFunc::ExtractTimestampWeek => extract_timestamp_week,
+            UnaryFunc::ExtractTimestampDayOfYear => extract_timestamp_dayofyear,
+            UnaryFunc::ExtractTimestampDayOfWeek => extract_timestamp_dayofweek,
+            UnaryFunc::ExtractTimestampIsoDayOfWeek => extract_timestamp_isodayofweek,
             UnaryFunc::ExtractTimestampTzYear => extract_timestamptz_year,
+            UnaryFunc::ExtractTimestampTzQuarter => extract_timestamptz_quarter,
             UnaryFunc::ExtractTimestampTzMonth => extract_timestamptz_month,
             UnaryFunc::ExtractTimestampTzDay => extract_timestamptz_day,
             UnaryFunc::ExtractTimestampTzHour => extract_timestamptz_hour,
             UnaryFunc::ExtractTimestampTzMinute => extract_timestamptz_minute,
             UnaryFunc::ExtractTimestampTzSecond => extract_timestamptz_second,
+            UnaryFunc::ExtractTimestampTzWeek => extract_timestamptz_week,
+            UnaryFunc::ExtractTimestampTzDayOfYear => extract_timestamptz_dayofyear,
+            UnaryFunc::ExtractTimestampTzDayOfWeek => extract_timestamptz_dayofweek,
+            UnaryFunc::ExtractTimestampTzIsoDayOfWeek => extract_timestamptz_isodayofweek,
             UnaryFunc::DateTrunc(to) => match to {
                 DateTruncTo::Micros => date_trunc_microseconds,
                 DateTruncTo::Millis => date_trunc_milliseconds,
@@ -1814,17 +1930,27 @@ impl UnaryFunc {
             | ExtractIntervalMinute
             | ExtractIntervalSecond
             | ExtractTimestampYear
+            | ExtractTimestampQuarter
             | ExtractTimestampMonth
             | ExtractTimestampDay
             | ExtractTimestampHour
             | ExtractTimestampMinute
             | ExtractTimestampSecond
+            | ExtractTimestampWeek
+            | ExtractTimestampDayOfYear
+            | ExtractTimestampDayOfWeek
+            | ExtractTimestampIsoDayOfWeek
             | ExtractTimestampTzYear
+            | ExtractTimestampTzQuarter
             | ExtractTimestampTzMonth
             | ExtractTimestampTzDay
             | ExtractTimestampTzHour
             | ExtractTimestampTzMinute
-            | ExtractTimestampTzSecond => {
+            | ExtractTimestampTzSecond
+            | ExtractTimestampTzWeek
+            | ExtractTimestampTzDayOfYear
+            | ExtractTimestampTzDayOfWeek
+            | ExtractTimestampTzIsoDayOfWeek => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
 
@@ -1904,17 +2030,27 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::ExtractIntervalMinute => f.write_str("ivextractminute"),
             UnaryFunc::ExtractIntervalSecond => f.write_str("ivextractsecond"),
             UnaryFunc::ExtractTimestampYear => f.write_str("tsextractyear"),
+            UnaryFunc::ExtractTimestampQuarter => f.write_str("tsextractquarter"),
             UnaryFunc::ExtractTimestampMonth => f.write_str("tsextractmonth"),
             UnaryFunc::ExtractTimestampDay => f.write_str("tsextractday"),
             UnaryFunc::ExtractTimestampHour => f.write_str("tsextracthour"),
             UnaryFunc::ExtractTimestampMinute => f.write_str("tsextractminute"),
             UnaryFunc::ExtractTimestampSecond => f.write_str("tsextractsecond"),
+            UnaryFunc::ExtractTimestampWeek => f.write_str("tsextractweek"),
+            UnaryFunc::ExtractTimestampDayOfYear => f.write_str("tsextractdayofyear"),
+            UnaryFunc::ExtractTimestampDayOfWeek => f.write_str("tsextractdayofweek"),
+            UnaryFunc::ExtractTimestampIsoDayOfWeek => f.write_str("tsextractisodayofweek"),
             UnaryFunc::ExtractTimestampTzYear => f.write_str("tstzextractyear"),
+            UnaryFunc::ExtractTimestampTzQuarter => f.write_str("tsextracttzquarter"),
             UnaryFunc::ExtractTimestampTzMonth => f.write_str("tstzextractmonth"),
             UnaryFunc::ExtractTimestampTzDay => f.write_str("tstzextractday"),
             UnaryFunc::ExtractTimestampTzHour => f.write_str("tstzextracthour"),
             UnaryFunc::ExtractTimestampTzMinute => f.write_str("tstzextractminute"),
             UnaryFunc::ExtractTimestampTzSecond => f.write_str("tstzextractsecond"),
+            UnaryFunc::ExtractTimestampTzWeek => f.write_str("tstzextractweek"),
+            UnaryFunc::ExtractTimestampTzDayOfYear => f.write_str("tstzextractdayofyear"),
+            UnaryFunc::ExtractTimestampTzDayOfWeek => f.write_str("tstzextractdayofweek"),
+            UnaryFunc::ExtractTimestampTzIsoDayOfWeek => f.write_str("tstzextractisodayofweek"),
             UnaryFunc::DateTrunc(to) => {
                 f.write_str("date_trunc_")?;
                 f.write_str(&format!("{:?}", to).to_lowercase())

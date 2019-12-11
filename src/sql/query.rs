@@ -1148,25 +1148,49 @@ fn plan_expr<'a>(
                         ExtractField::Hour => UnaryFunc::ExtractIntervalHour,
                         ExtractField::Minute => UnaryFunc::ExtractIntervalMinute,
                         ExtractField::Second => UnaryFunc::ExtractIntervalSecond,
-                        _ => failure::bail!("don't support EXTRACT({} ..) yet", field),
+                        ExtractField::DayOfWeek
+                        | ExtractField::IsoDayOfWeek
+                        | ExtractField::Quarter => {
+                            failure::bail!("invalid extract field for INTERVAL: {}", field)
+                        }
+                        _ => failure::bail!(
+                            "EXTRACT({} ..) for INTERVAL is not yet implemented",
+                            field
+                        ),
                     },
                     ScalarType::Timestamp => match field {
                         ExtractField::Year => UnaryFunc::ExtractTimestampYear,
+                        ExtractField::Quarter => UnaryFunc::ExtractTimestampQuarter,
                         ExtractField::Month => UnaryFunc::ExtractTimestampMonth,
                         ExtractField::Day => UnaryFunc::ExtractTimestampDay,
                         ExtractField::Hour => UnaryFunc::ExtractTimestampHour,
                         ExtractField::Minute => UnaryFunc::ExtractTimestampMinute,
                         ExtractField::Second => UnaryFunc::ExtractTimestampSecond,
-                        _ => failure::bail!("don't support EXTRACT({} ..) yet", field),
+                        ExtractField::WeekOfYear => UnaryFunc::ExtractTimestampWeek,
+                        ExtractField::DayOfYear => UnaryFunc::ExtractTimestampDayOfYear,
+                        ExtractField::DayOfWeek => UnaryFunc::ExtractTimestampDayOfWeek,
+                        ExtractField::IsoDayOfWeek => UnaryFunc::ExtractTimestampIsoDayOfWeek,
+                        _ => failure::bail!(
+                            "EXTRACT({} ..) for timestamp is not yet implemented",
+                            field
+                        ),
                     },
                     ScalarType::TimestampTz => match field {
                         ExtractField::Year => UnaryFunc::ExtractTimestampTzYear,
+                        ExtractField::Quarter => UnaryFunc::ExtractTimestampTzQuarter,
                         ExtractField::Month => UnaryFunc::ExtractTimestampTzMonth,
                         ExtractField::Day => UnaryFunc::ExtractTimestampTzDay,
                         ExtractField::Hour => UnaryFunc::ExtractTimestampTzHour,
                         ExtractField::Minute => UnaryFunc::ExtractTimestampTzMinute,
                         ExtractField::Second => UnaryFunc::ExtractTimestampTzSecond,
-                        _ => failure::bail!("don't support EXTRACT({} ..) yet", field),
+                        ExtractField::WeekOfYear => UnaryFunc::ExtractTimestampTzWeek,
+                        ExtractField::DayOfYear => UnaryFunc::ExtractTimestampTzDayOfYear,
+                        ExtractField::DayOfWeek => UnaryFunc::ExtractTimestampTzDayOfWeek,
+                        ExtractField::IsoDayOfWeek => UnaryFunc::ExtractTimestampTzIsoDayOfWeek,
+                        _ => failure::bail!(
+                            "EXTRACT({} ..) for timestamp tz is not yet implemented",
+                            field
+                        ),
                     },
                     other => bail!(
                         "EXTRACT expects timestamp, interval, or date input, got {:?}",
