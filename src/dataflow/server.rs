@@ -87,7 +87,7 @@ pub enum SequencedCommand {
     /// Drop the sinks bound to these names.
     DropSinks(Vec<GlobalId>),
     /// Drop the indexes bound to these names.
-    DropIndexes(Vec<(GlobalId, Vec<usize>)>),
+    DropIndexes(Vec<(GlobalId, Vec<expr::ScalarExpr>)>),
     /// Peek at a materialized view.
     Peek {
         id: GlobalId,
@@ -305,19 +305,19 @@ where
             // Install traces as maintained views.
             for (log, (key, trace)) in t_traces {
                 self.traces
-                    .set_by_keys(log.id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
                     .insert(log.id(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in d_traces {
                 self.traces
-                    .set_by_keys(log.id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
                     .insert(log.id(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in m_traces {
                 self.traces
-                    .set_by_keys(log.id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
                     .insert(log.id(), Antichain::from_elem(0));
             }

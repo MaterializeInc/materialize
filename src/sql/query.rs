@@ -558,7 +558,7 @@ pub fn plan_index<'a>(
     catalog: &'a Catalog,
     on_name: &QualName,
     key_parts: &[Expr],
-) -> Result<(&'a CatalogEntry, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
+) -> Result<(&'a CatalogEntry, Vec<ScalarExpr>), failure::Error> {
     let item = catalog.get(on_name)?;
     let desc = item.desc()?;
     let scope = Scope::from_source(Some(on_name), desc.iter_names(), Some(Scope::empty(None)));
@@ -572,21 +572,11 @@ pub fn plan_index<'a>(
         allow_subqueries: false,
     };
 
-    let mut map_exprs = vec![];
-    let mut arrange_cols = vec![];
-    let mut func_count = key_parts.len();
-
-    for key_part in key_parts {
-        let expr = plan_expr(catalog, ecx, key_part, Some(ScalarType::String))?;
-        if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
-            arrange_cols.push(*i);
-        } else {
-            map_exprs.push(expr);
-            arrange_cols.push(func_count);
-            func_count += 1;
-        }
-    }
-    Ok((item, arrange_cols, map_exprs))
+    let keys = key_parts
+        .iter()
+        .map(|key_part| plan_expr(catalog, ecx, key_part, Some(ScalarType::String)))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((item, keys))
 }
 
 fn plan_table_with_joins<'a>(

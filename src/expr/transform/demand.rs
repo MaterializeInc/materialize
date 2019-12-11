@@ -207,7 +207,9 @@ impl Demand {
                 self.action(right, columns, gets);
             }
             RelationExpr::ArrangeBy { input, keys } => {
-                columns.extend(keys.iter().cloned());
+                for key in keys {
+                    columns.extend(key.support());
+                }
                 self.action(input, columns, gets);
             }
         }

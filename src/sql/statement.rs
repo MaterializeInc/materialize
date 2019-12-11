@@ -21,8 +21,8 @@ use url::Url;
 
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
-    FileFormat, FileSourceConnector, Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
-    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
+    FileFormat, FileSourceConnector, Index, IndexDesc, KafkaSinkConnector, KafkaSourceConnector,
+    KeySql, PeekWhen, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::avro;
@@ -92,6 +92,31 @@ pub fn describe_statement(
                     .add_column("Nullable", ScalarType::String)
                     .add_column("Type", ScalarType::String),
             ),
+            vec![],
+        ),
+
+        Statement::ShowIndexes { .. } => (
+            Some(RelationDesc::new(
+                RelationType::new(vec![
+                    ColumnType::new(ScalarType::String),
+                    ColumnType::new(ScalarType::String),
+                    ColumnType::new(ScalarType::String).nullable(true),
+                    ColumnType::new(ScalarType::String).nullable(true),
+                    ColumnType::new(ScalarType::Bool),
+                    ColumnType::new(ScalarType::Int64),
+                ]),
+                vec![
+                    "Table",
+                    "Key_name",
+                    "Column_name",
+                    "Expression",
+                    "Null",
+                    "Seq_in_index",
+                ]
+                .iter()
+                .map(|s| Some(*s))
+                .collect::<Vec<_>>(),
+            )),
             vec![],
         ),
 
@@ -171,6 +196,9 @@ pub fn handle_statement(
             object_type: ot,
             filter,
         } => handle_show_objects(catalog, ot, filter.as_ref()),
+        Statement::ShowIndexes { table_name, filter } => {
+            handle_show_indexes(catalog, &table_name.try_into()?, filter.as_ref())
+        }
         Statement::ShowColumns {
             extended,
             full,
@@ -280,6 +308,52 @@ fn handle_show_objects(
         .map(|entry| Row::pack(&[Datum::from(&*entry.name().to_string())]))
         .collect();
     rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
+    Ok(Plan::SendRows(rows))
+}
+
+fn handle_show_indexes(
+    catalog: &Catalog,
+    from_name: &QualName,
+    filter: Option<&ShowStatementFilter>,
+) -> Result<Plan, failure::Error> {
+    if filter.is_some() {
+        bail!("SHOW INDEXES ... WHERE is not supported");
+    }
+    let from_entry = catalog.get(from_name)?;
+    if !object_type_matches(ObjectType::Source, from_entry.item())
+        && !object_type_matches(ObjectType::View, from_entry.item())
+    {
+        bail!("{} is not a source or view", from_name);
+    }
+    let rows = catalog
+        .iter()
+        .filter(|entry| {
+            object_type_matches(ObjectType::Index, entry.item())
+                && entry.uses() == vec![from_entry.id()]
+        })
+        .flat_map(|entry| match entry.item() {
+            CatalogItem::Index(dataflow_types::Index { desc: _, raw_keys }) => {
+                let mut row_subset = Vec::new();
+                for (seq_in_index, key_sql) in raw_keys.iter().enumerate() {
+                    let (col_name, func) = if key_sql.is_column_name {
+                        (Datum::from(&*key_sql.raw_sql), Datum::Null)
+                    } else {
+                        (Datum::Null, Datum::from(&*key_sql.raw_sql))
+                    };
+                    row_subset.push(Row::pack(&vec![
+                        Datum::from(&*from_entry.name().to_string()),
+                        Datum::from(&*entry.name().to_string()),
+                        col_name,
+                        func,
+                        Datum::from(key_sql.nullable),
+                        Datum::from((seq_in_index + 1) as i64),
+                    ]));
+                }
+                row_subset
+            }
+            _ => unreachable!(),
+        })
+        .collect();
     Ok(Plan::SendRows(rows))
 }
 
@@ -578,21 +652,37 @@ fn handle_create_dataflow(
             key_parts,
         } => {
             let on_name = on_name.try_into()?;
-            let (catalog_entry, keys, map_exprs) = query::plan_index(catalog, &on_name, key_parts)?;
-            // TODO (andiwang) remove this when trace manager supports ScalarExpr keys
-            if !map_exprs.is_empty() {
-                bail!("function-based indexes are not supported yet");
-            }
+            let (catalog_entry, keys) = query::plan_index(catalog, &on_name, key_parts)?;
             let name = QualName::new_normalized(iter::once(name.clone()))?;
+            let keys = keys
+                .into_iter()
+                .map(|x| x.lower_uncorrelated())
+                .collect::<Vec<_>>();
+            let on_relation_type = catalog_entry.desc()?.typ();
+            let nullables = keys
+                .iter()
+                .map(|key| key.typ(on_relation_type).nullable)
+                .collect::<Vec<_>>();
+            let raw_keys = key_parts
+                .iter()
+                .zip(keys.iter().zip(nullables))
+                .map(|(key_part, (key, nullable))| KeySql {
+                    raw_sql: key_part.to_string(),
+                    is_column_name: match key {
+                        relationexpr::ScalarExpr::Column(_i) => true,
+                        _ => false,
+                    },
+                    nullable,
+                })
+                .collect();
             let index = Index {
-                on_id: catalog_entry.id(),
-                relation_type: catalog_entry.desc()?.typ().clone(),
-                keys,
-                funcs: map_exprs
-                    .into_iter()
-                    .map(|x| x.lower_uncorrelated())
-                    .collect(),
-                eval_env: EvalEnv::default(),
+                desc: IndexDesc {
+                    on_id: catalog_entry.id(),
+                    relation_type: on_relation_type.clone(),
+                    keys,
+                    eval_env: EvalEnv::default(),
+                },
+                raw_keys,
             };
             Ok(Plan::CreateIndex(name, index))
         }

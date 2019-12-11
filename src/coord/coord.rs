@@ -35,7 +35,7 @@ use dataflow_types::{
     DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source, SourceConnector,
     TailSinkConnector, Timestamp, Update, View,
 };
-use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr};
+use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::option::OptionExt;
@@ -77,10 +77,10 @@ where
     views: HashMap<GlobalId, ViewState>,
     /// Each source name maps to a source and re-written name (for auto-created views).
     sources: HashMap<GlobalId, (dataflow_types::Source, Option<GlobalId>)>,
-    /// Maps user-defined indexes by collection + key and how many aliases it has
-    indexes: HashMap<(GlobalId, Vec<usize>), usize>,
-    /// Maps user-defined index names to their collection + key
-    index_aliases: HashMap<GlobalId, (GlobalId, Vec<usize>)>,
+    /// Maps (view id, keys index is arranged on) -> (how many aliases it has, id of the first alias)
+    indexes: HashMap<(GlobalId, Vec<ScalarExpr>), (usize, GlobalId)>,
+    /// Maps (id corresponding to an index name) -> (view id, keys index is arranged on)
+    index_aliases: HashMap<GlobalId, (GlobalId, Vec<ScalarExpr>)>,
     since_updates: Vec<(GlobalId, Vec<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
@@ -173,7 +173,7 @@ where
                     let dataflow = DataflowDesc::new(name.to_string()).add_sink(id, sink.clone());
                     coord.create_dataflows(vec![dataflow]);
                 }
-                CatalogItem::Index(index) => coord.create_index(id, &name, index),
+                CatalogItem::Index(index) => coord.create_index(id, &name, index.desc),
             }
         }
 
@@ -398,7 +398,7 @@ where
                     self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
                     true,
                 );
-                self.create_index(id, &name, index);
+                self.create_index(id, &name, index.desc);
                 ExecuteResponse::CreatedIndex
             }
 
@@ -784,7 +784,12 @@ where
         }
     }
 
-    fn create_index(&mut self, idx_id: GlobalId, name: &QualName, mut idx: dataflow_types::Index) {
+    fn create_index(
+        &mut self,
+        idx_id: GlobalId,
+        name: &QualName,
+        mut idx: dataflow_types::IndexDesc,
+    ) {
         // Rewrite the source used.
         if let Some((_source, new_id)) = self.sources.get(&idx.on_id) {
             // If the source has a corresponding view, use its name instead.
@@ -797,12 +802,12 @@ where
         let trace_key = (idx.on_id.clone(), idx.keys.clone());
         self.index_aliases.insert(idx_id, trace_key.clone());
 
-        if let Some(count) = self.indexes.get_mut(&trace_key) {
+        if let Some((count, _id)) = self.indexes.get_mut(&trace_key) {
             // just increment the count. no need to build a duplicate index
             *count += 1;
             return;
         }
-        self.indexes.insert(trace_key, 1);
+        self.indexes.insert(trace_key, (1, idx_id));
         let dataflows = vec![DataflowDesc::new(name.to_string()).add_index(idx_id, idx)];
         broadcast(
             &mut self.broadcast_tx,
@@ -884,7 +889,7 @@ where
                     // view is removed. No need to signal the server
                     self.indexes.remove(&trace_key);
                 } else {
-                    let count = self.indexes.get_mut(&trace_key).unwrap();
+                    let (count, _id) = self.indexes.get_mut(&trace_key).unwrap();
                     if count == &1 {
                         self.indexes.remove(&trace_key);
                         trace_keys.push(trace_key);

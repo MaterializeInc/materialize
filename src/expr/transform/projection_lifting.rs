@@ -250,7 +250,7 @@ impl ProjectionLifting {
                 } = &mut **input
                 {
                     for key in keys.iter_mut() {
-                        *key = outputs[*key];
+                        key.permute(outputs);
                     }
                     *relation = inner
                         .take_dangerous()

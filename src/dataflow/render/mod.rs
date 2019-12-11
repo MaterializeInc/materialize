@@ -161,7 +161,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                     for (key, arrangement) in arrangements {
                         manager.set_by_keys(
                             view_id,
-                            &key[..],
+                            key,
                             WithDrop::new(arrangement.trace.clone(), tokens.clone()),
                         );
                     }
@@ -184,7 +184,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                                 (key_row, row)
                             })
                             .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view_id));
-                        manager.set_by_keys(
+                        manager.set_by_columns(
                             view_id,
                             &key_clone[..],
                             WithDrop::new(arrangement.trace, tokens.clone()),
@@ -193,12 +193,8 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                 }
             }
 
-            for (_idx_id, idx) in dataflow.indexes {
+            for (idx_id, idx) in dataflow.indexes {
                 let mut tokens = Vec::new();
-                let get_expr = RelationExpr::Get {
-                    id: Id::Global(idx.on_id),
-                    typ: idx.relation_type.clone(),
-                };
                 // TODO (wangandi) for the function-based column case,
                 // think about checking if there is another index
                 // with the function pre-rendered
@@ -210,50 +206,52 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                     vec![0],
                 );
                 let arranged = arranged.enter(region);
+                let get_expr = RelationExpr::Get {
+                    id: expr::Id::Global(idx.on_id),
+                    typ: idx.relation_type.clone(),
+                };
                 context.set_trace(&get_expr, &key, arranged);
                 tokens.push((button.press_on_drop(), token));
 
                 // Capture both the tokens of imported traces and those of sources.
                 let tokens = Rc::new((tokens, source_tokens.clone()));
 
-                let to_arrange = if idx.funcs.is_empty() {
-                    get_expr
-                } else {
-                    RelationExpr::Map {
-                        input: Box::new(get_expr),
-                        scalars: idx.funcs.clone(),
-                    }
+                let arrange_expr = RelationExpr::ArrangeBy {
+                    input: Box::new(get_expr),
+                    keys: idx.keys.clone(),
                 };
-                context.ensure_rendered(
-                    &to_arrange.clone().arrange_by(&idx.keys),
+
+                context.render_arranged(
+                    &arrange_expr,
                     &idx.eval_env,
                     region,
                     worker_index,
+                    Some(&idx_id.to_string()),
                 );
 
-                match context.arrangement(&to_arrange, &idx.keys) {
-                    Some(ArrangementFlavor::Local(local)) => {
-                        manager.set_user_created(
-                            idx.on_id,
-                            &idx.keys,
-                            WithDrop::new(local.trace.clone(), tokens.clone()),
-                        );
-                    }
-                    Some(ArrangementFlavor::Trace(_)) => {
-                        // do nothing. there already exists an system
-                        // index on the same keys
-                    }
-                    None => {
-                        panic!("Arrangement alarmingly absent!");
-                    }
-                };
+                if let RelationExpr::ArrangeBy { input, keys } = arrange_expr {
+                    match context.arrangement(&input, &keys[..]) {
+                        Some(ArrangementFlavor::Local(local)) => {
+                            manager.set_user_created(
+                                idx.on_id,
+                                &idx.keys,
+                                WithDrop::new(local.trace.clone(), tokens.clone()),
+                            );
+                        }
+                        Some(ArrangementFlavor::Trace(_)) => {
+                            // do nothing. there already exists an system
+                            // index on the same keys
+                        }
+                        None => {
+                            panic!("Arrangement alarmingly absent!");
+                        }
+                    };
+                }
             }
 
             for (sink_id, sink) in dataflow.sinks {
-                let (_key, trace) = manager
-                    .get_all_keyed(sink.from.0)
-                    .expect("View missing")
-                    .next()
+                let (_keys, trace) = manager
+                    .get_default_with_key(sink.from.0)
                     .expect("No arrangements");
                 let token = trace.to_drop().clone();
                 let (arrangement, button) =
@@ -429,25 +427,47 @@ where
                         .insert(relation_expr.clone(), input1.concat(&input2));
                 }
 
-                RelationExpr::ArrangeBy { input, keys } => {
-                    if self.arrangement(&input, &keys[..]).is_none() {
-                        self.ensure_rendered(input, env, scope, worker_index);
-                        let built = self.collection(input).unwrap();
-                        let keys2 = keys.clone();
-                        let mut unpacker = RowUnpacker::new();
-                        let mut packer = RowPacker::new();
-                        let keyed = built
-                            .map(move |row| {
-                                let datums = unpacker.unpack(&row);
-                                let key_row = packer.pack(keys2.iter().map(|i| datums[*i]));
-                                drop(datums);
-                                (key_row, row)
-                            })
-                            .arrange_by_key();
-                        self.set_local(&input, &keys[..], keyed);
-                    }
+                RelationExpr::ArrangeBy { .. } => {
+                    self.render_arranged(relation_expr, env, scope, worker_index, None);
                 }
             };
+        }
+    }
+
+    fn render_arranged(
+        &mut self,
+        relation_expr: &RelationExpr,
+        env: &EvalEnv,
+        scope: &mut G,
+        worker_index: usize,
+        id: Option<&str>,
+    ) {
+        if let RelationExpr::ArrangeBy { input, keys } = relation_expr {
+            if self.arrangement(&input, &keys).is_none() {
+                self.ensure_rendered(input, env, scope, worker_index);
+                let built = self.collection(input).unwrap();
+                let keys2 = keys.clone();
+                let env = env.clone();
+                let mut unpacker = RowUnpacker::new();
+                let mut eval_packer = RowPacker::new();
+                let mut key_row_packer = RowPacker::new();
+                let name = if let Some(id) = id {
+                    format!("Arrange: {}", id)
+                } else {
+                    "Arrange".to_string()
+                };
+                let keyed = built
+                    .map(move |row| {
+                        let datums = unpacker.unpack(&row);
+                        let temp_storage = &mut eval_packer.packable();
+                        let key_row = key_row_packer
+                            .pack(keys2.iter().map(|k| k.eval(&datums, &env, temp_storage)));
+                        drop(datums);
+                        (key_row, row)
+                    })
+                    .arrange_named::<OrdValSpine<_, _, _, _>>(&name);
+                self.set_local(&input, &keys, keyed);
+            }
         }
     }
 
@@ -595,7 +615,7 @@ where
                         .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", index));
 
                     // TODO: easier idioms for detecting, re-using, and stashing.
-                    if self.arrangement(&input, &new_keys[..]).is_none() {
+                    if self.arrangement_columns(&input, &new_keys[..]).is_none() {
                         let built = self.collection(input).unwrap();
                         let new_keys2 = new_keys.clone();
                         let mut unpacker = RowUnpacker::new();
@@ -611,13 +631,13 @@ where
                                 "JoinIndex: {}",
                                 index
                             ));
-                        self.set_local(&input, &new_keys[..], new_keyed);
+                        self.set_local_columns(&input, &new_keys[..], new_keyed);
                     }
 
                     let mut old_unpacker = RowUnpacker::new();
                     let mut new_unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
-                    joined = match self.arrangement(&input, &new_keys[..]) {
+                    joined = match self.arrangement_columns(&input, &new_keys[..]) {
                         Some(ArrangementFlavor::Local(local)) => {
                             old_keyed.join_core(&local, move |_keys, old, new| {
                                 let old_datums = old_unpacker.unpack(old);
@@ -982,7 +1002,7 @@ where
                     );
 
             let index = (0..keys_clone.len()).collect::<Vec<_>>();
-            self.set_local(relation_expr, &index[..], arrangement.clone());
+            self.set_local_columns(relation_expr, &index[..], arrangement.clone());
         }
     }
 
@@ -1076,7 +1096,7 @@ where
                 });
 
             let index = (0..group_key.len()).collect::<Vec<_>>();
-            self.set_local(relation_expr, &index[..], arrangement.clone());
+            self.set_local_columns(relation_expr, &index[..], arrangement.clone());
         }
     }
 
@@ -1093,7 +1113,7 @@ where
             let keys = (0..arity).collect::<Vec<_>>();
 
             // TODO: easier idioms for detecting, re-using, and stashing.
-            if self.arrangement(&input, &keys[..]).is_none() {
+            if self.arrangement_columns(&input, &keys[..]).is_none() {
                 self.ensure_rendered(input, env, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
@@ -1107,12 +1127,12 @@ where
                         (key_row, row)
                     })
                     .arrange_by_key();
-                self.set_local(&input, &keys[..], keyed);
+                self.set_local_columns(&input, &keys[..], keyed);
             }
 
             use differential_dataflow::operators::reduce::ReduceCore;
 
-            let arranged = match self.arrangement(&input, &keys[..]) {
+            let arranged = match self.arrangement_columns(&input, &keys[..]) {
                 Some(ArrangementFlavor::Local(local)) => local
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Threshold", move |_k, s, t| {
                         for (record, count) in s.iter() {
@@ -1135,7 +1155,7 @@ where
             };
 
             let index = (0..keys.len()).collect::<Vec<_>>();
-            self.set_local(relation_expr, &index[..], arranged.clone());
+            self.set_local_columns(relation_expr, &index[..], arranged.clone());
         }
     }
 }

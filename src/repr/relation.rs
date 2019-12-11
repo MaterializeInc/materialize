@@ -209,6 +209,10 @@ impl RelationDesc {
             .map(|i| (i, &self.typ.column_types[i]))
     }
 
+    pub fn get_name(&self, i: &usize) -> &Option<ColumnName> {
+        &self.names[*i]
+    }
+
     pub fn set_name(&mut self, i: usize, name: Option<ColumnName>) {
         self.names[i] = name
     }
