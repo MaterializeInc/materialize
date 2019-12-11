@@ -42,6 +42,7 @@ main() {
             dc_logs "$@" ;;
         nuke) nuke_docker ;;
         load-test) load_test;;
+        demo-load) demo_load;;
         run)
             if [[ $# -eq 0 ]]; then
                 usage
@@ -79,8 +80,9 @@ Possible COMMANDs:
     `us restart \(SERVICE\|all\)`         Restart either SERVICE or all services. This preserves data in
                                     volumes (kafka, debezium, etc)
     `us load-test`                     Run a long-running load test, modify this file to change parameters
-    `us logs SERVICE \[NUM LINES..\]`    Equivalent of 'docker-compose logs SERVICE'. To print a limited number of
-                                    log messages, enter the number after the SERVICE.
+    `us demo-load`                     Generate a lot of changes to be used in the demo
+    `us logs SERVICE \[NUM LINES..\]`    Equivalent of 'docker-compose logs SERVICE'. To print a limited
+                                    number of log messages, enter the number after the SERVICE.
 
  Danger Zone:
 
@@ -167,6 +169,18 @@ load_test() {
         --peek-conns=5 --flush-every=30 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
         --min-delay=0.05 --max-delay=0.1 -l /dev/stdout \
+        --config-file-path=/etc/chbenchmark/mz-default.cfg
+}
+
+# Generate changes for the demo
+demo_load() {
+    runv docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    runv docker-compose run -d chbench run \
+        --mz-sources --mz-views=q01 \
+        --dsn=mysql --gen-dir=/var/lib/mysql-files \
+        --peek-conns=0 --flush-every=30 \
+        --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
+        --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
         --config-file-path=/etc/chbenchmark/mz-default.cfg
 }
 
