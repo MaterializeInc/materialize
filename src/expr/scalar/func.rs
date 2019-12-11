@@ -1007,9 +1007,6 @@ pub fn jsonb_get_int64<'a>(
     _: &EvalEnv,
     _: &mut PackableRow<'a>,
 ) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        return Datum::Null;
-    }
     let i = b.unwrap_int64();
     match a {
         Datum::List(list) => {
@@ -1039,9 +1036,6 @@ pub fn jsonb_get_string<'a>(
     _: &EvalEnv,
     _: &mut PackableRow<'a>,
 ) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        return Datum::Null;
-    }
     let k = b.unwrap_str();
     match a {
         Datum::Dict(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
@@ -1058,10 +1052,8 @@ pub fn jsonb_contains_field<'a>(
     _: &EvalEnv,
     _: &mut PackableRow<'a>,
 ) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        return Datum::Null;
-    }
     let k = b.unwrap_str();
+    // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
     match a {
         Datum::List(list) => list.iter().any(|k2| b == k2).into(),
         Datum::Dict(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
@@ -1070,15 +1062,46 @@ pub fn jsonb_contains_field<'a>(
     }
 }
 
+// TODO(jamii) nested loops are possibly not the fastest way to do this
+pub fn jsonb_contains_jsonb<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
+    fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
+        match (a, b) {
+            (Datum::JsonNull, Datum::JsonNull) => true,
+            (Datum::False, Datum::False) => true,
+            (Datum::True, Datum::True) => true,
+            (Datum::Float64(a), Datum::Float64(b)) => (a == b),
+            (Datum::String(a), Datum::String(b)) => (a == b),
+            (Datum::List(a), Datum::List(b)) => b
+                .iter()
+                .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false))),
+            (Datum::Dict(a), Datum::Dict(b)) => b.iter().all(|(b_key, b_val)| {
+                a.iter()
+                    .any(|(a_key, a_val)| (a_key == b_key) && contains(a_val, b_val, false))
+            }),
+
+            // fun special case
+            (Datum::List(a), b) => {
+                at_top_level && a.iter().any(|a_elem| contains(a_elem, b, false))
+            }
+
+            _ => false,
+        }
+    }
+    contains(a, b, true).into()
+}
+
 pub fn jsonb_concat<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
     temp_storage: &mut PackableRow<'a>,
 ) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        return Datum::Null;
-    }
     match (a, b) {
         (Datum::Dict(dict_a), Datum::Dict(dict_b)) => {
             let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
@@ -1585,6 +1608,7 @@ pub enum BinaryFunc {
     JsonbGetString,
     JsonbContainsField,
     JsonbConcat,
+    JsonbContainsJsonb,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1694,6 +1718,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbGetString => jsonb_get_string,
             BinaryFunc::JsonbContainsField => jsonb_contains_field,
             BinaryFunc::JsonbConcat => jsonb_concat,
+            BinaryFunc::JsonbContainsJsonb => jsonb_contains_jsonb,
         }
     }
 
@@ -1797,7 +1822,9 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Jsonb).nullable(true)
             }
 
-            JsonbContainsField => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
+            JsonbContainsField | JsonbContainsJsonb => {
+                ColumnType::new(ScalarType::Bool).nullable(in_nullable)
+            }
         }
     }
 
@@ -1862,6 +1889,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbGetString => f.write_str("b->str"),
             BinaryFunc::JsonbContainsField => f.write_str("b?"),
             BinaryFunc::JsonbConcat => f.write_str("b||"),
+            BinaryFunc::JsonbContainsJsonb => f.write_str("b<@"),
         }
     }
 }

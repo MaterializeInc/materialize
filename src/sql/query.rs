@@ -2330,11 +2330,15 @@ fn plan_json_op(
         (Concat, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat),
         (Concat, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
+        (ContainsJson, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsJsonb),
+        (ContainsJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        (ContainedInJson, Jsonb, Jsonb) => rexpr.call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
+        (ContainedInJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
         // TODO(jamii) all of these
         (GetPath, _, _) => bail!("Unsupported json operator: {}", op),
         (GetPathAsText, _, _) => bail!("Unsupported json operator: {}", op),
-        (ContainsJson, _, _) => bail!("Unsupported json operator: {}", op),
-        (ContainedInJson, _, _) => bail!("Unsupported json operator: {}", op),
         (ContainsAnyFields, _, _) => bail!("Unsupported json operator: {}", op),
         (ContainsAllFields, _, _) => bail!("Unsupported json operator: {}", op),
         (DeletePath, _, _) => bail!("Unsupported json operator: {}", op),
