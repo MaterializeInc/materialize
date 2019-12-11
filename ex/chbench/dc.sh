@@ -101,6 +101,12 @@ dc_stop() {
 
 
 bring_up() {
+    bring_up_source_data
+    echo "materialize and ingstion should be running fine, bringing up introspection and metabase"
+    dc_up metabase grafana
+}
+
+bring_up_source_data() {
     for image in "${IMAGES[@]}"; do
         # if we are running with `:local` images then we don't need to pull, so check
         # that `<tag>:latest` is actually in the compose file
@@ -109,20 +115,18 @@ bring_up() {
         fi
     done
     dc_up materialized mysql
-    docker-compose logs materialized | tail -n 5
     echo "Waiting for mysql to come up"
     sleep 5
-    docker-compose logs mysql | tail -n 5
+    runv docker-compose logs --tail 5 materialized
+    runv docker-compose logs --tail 5 mysql
     dc_up connector
     echo "Waiting for schema registry to be fully up"
     sleep 5
-    docker-compose logs schema-registry | tail -n 5
-    echo "Materialize and all chbench should be running fine, bringing up metrics"
-    dc_up grafana
+    docker-compose logs --tail 5 schema-registry
 }
 
 dc_run() {
-    runv docker-compose run --service-ports "$@"
+    runv docker-compose run --use-aliases --service-ports "$@"
 }
 
 dc_logs() {
