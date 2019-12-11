@@ -2310,8 +2310,21 @@ fn plan_json_op(
         (Get, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbGetString),
         (Get, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
+        (GetAsText, Jsonb, Int32) => lexpr
+            .call_binary(
+                rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
+                BinaryFunc::JsonbGetInt64,
+            )
+            .call_unary(UnaryFunc::CastJsonbToString),
+        (GetAsText, Jsonb, Int64) => lexpr
+            .call_binary(rexpr, BinaryFunc::JsonbGetInt64)
+            .call_unary(UnaryFunc::CastJsonbToString),
+        (GetAsText, Jsonb, String) => lexpr
+            .call_binary(rexpr, BinaryFunc::JsonbGetString)
+            .call_unary(UnaryFunc::CastJsonbToString),
+        (GetAsText, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
         // TODO(jamii) all of these
-        (GetAsText, _, _) => bail!("Unsupported json operator: {}", op),
         (GetPath, _, _) => bail!("Unsupported json operator: {}", op),
         (GetPathAsText, _, _) => bail!("Unsupported json operator: {}", op),
         (ContainsJson, _, _) => bail!("Unsupported json operator: {}", op),
