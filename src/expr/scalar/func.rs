@@ -1022,7 +1022,7 @@ pub fn jsonb_get_int64<'a>(
             list.iter().nth(i as usize).unwrap_or(Datum::Null)
         }
         Datum::Dict(_) => Datum::Null,
-        Datum::JsonNull | Datum::True | Datum::False | Datum::Float64(_) | Datum::String(_) => {
+        _ => {
             if i == 0 || i == -1 {
                 // I have no idea why postgres does this, but we're stuck with it
                 a
@@ -1030,7 +1030,6 @@ pub fn jsonb_get_int64<'a>(
                 Datum::Null
             }
         }
-        _ => unreachable!(),
     }
 }
 
@@ -1049,13 +1048,7 @@ pub fn jsonb_get_string<'a>(
             Some((_k, v)) => v,
             None => Datum::Null,
         },
-        Datum::JsonNull
-        | Datum::True
-        | Datum::False
-        | Datum::Float64(_)
-        | Datum::String(_)
-        | Datum::List(_) => Datum::Null,
-        _ => unreachable!(),
+        _ => Datum::Null,
     }
 }
 
@@ -1070,11 +1063,43 @@ pub fn jsonb_contains_field<'a>(
     }
     let k = b.unwrap_str();
     match a {
-        Datum::List(list) => list.iter().find(|k2| b == *k2).is_some().into(),
-        Datum::Dict(dict) => dict.iter().find(|(k2, _v)| k == *k2).is_some().into(),
+        Datum::List(list) => list.iter().any(|k2| b == k2).into(),
+        Datum::Dict(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
         Datum::String(string) => (string == k).into(),
-        Datum::JsonNull | Datum::True | Datum::False | Datum::Float64(_) => false.into(),
-        _ => unreachable!(),
+        _ => false.into(),
+    }
+}
+
+pub fn jsonb_concat<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    if a == Datum::Null || b == Datum::Null {
+        return Datum::Null;
+    }
+    match (a, b) {
+        (Datum::Dict(dict_a), Datum::Dict(dict_b)) => {
+            let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
+            // stable sort, so if keys collide dedup prefers dict_b
+            pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
+            pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
+            Datum::Dict(temp_storage.push_dict(pairs))
+        }
+        (Datum::List(list_a), Datum::List(list_b)) => {
+            let elems = list_a.iter().chain(list_b.iter());
+            Datum::List(temp_storage.push_list(elems))
+        }
+        (Datum::List(list_a), b) => {
+            let elems = list_a.iter().chain(Some(b).into_iter());
+            Datum::List(temp_storage.push_list(elems))
+        }
+        (a, Datum::List(list_b)) => {
+            let elems = Some(a).into_iter().chain(list_b.iter());
+            Datum::List(temp_storage.push_list(elems))
+        }
+        _ => Datum::Null,
     }
 }
 
@@ -1559,6 +1584,7 @@ pub enum BinaryFunc {
     JsonbGetInt64,
     JsonbGetString,
     JsonbContainsField,
+    JsonbConcat,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1667,6 +1693,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbGetInt64 => jsonb_get_int64,
             BinaryFunc::JsonbGetString => jsonb_get_string,
             BinaryFunc::JsonbContainsField => jsonb_contains_field,
+            BinaryFunc::JsonbConcat => jsonb_concat,
         }
     }
 
@@ -1766,7 +1793,9 @@ impl BinaryFunc {
 
             DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(true),
 
-            JsonbGetInt64 | JsonbGetString => ColumnType::new(ScalarType::Jsonb).nullable(true),
+            JsonbGetInt64 | JsonbGetString | JsonbConcat => {
+                ColumnType::new(ScalarType::Jsonb).nullable(true)
+            }
 
             JsonbContainsField => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
         }
@@ -1832,6 +1861,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbGetInt64 => f.write_str("b->i64"),
             BinaryFunc::JsonbGetString => f.write_str("b->str"),
             BinaryFunc::JsonbContainsField => f.write_str("b?"),
+            BinaryFunc::JsonbConcat => f.write_str("b||"),
         }
     }
 }

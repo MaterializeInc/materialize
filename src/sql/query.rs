@@ -2327,6 +2327,9 @@ fn plan_json_op(
         (ContainsField, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsField),
         (ContainsField, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
+        (Concat, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat),
+        (Concat, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
         // TODO(jamii) all of these
         (GetPath, _, _) => bail!("Unsupported json operator: {}", op),
         (GetPathAsText, _, _) => bail!("Unsupported json operator: {}", op),
@@ -2334,7 +2337,6 @@ fn plan_json_op(
         (ContainedInJson, _, _) => bail!("Unsupported json operator: {}", op),
         (ContainsAnyFields, _, _) => bail!("Unsupported json operator: {}", op),
         (ContainsAllFields, _, _) => bail!("Unsupported json operator: {}", op),
-        (Concat, _, _) => bail!("Unsupported json operator: {}", op),
         (DeletePath, _, _) => bail!("Unsupported json operator: {}", op),
         (ContainsPath, _, _) => bail!("Unsupported json operator: {}", op),
         (ApplyPathPredicate, _, _) => bail!("Unsupported json operator: {}", op),
