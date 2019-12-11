@@ -2655,6 +2655,8 @@ where
         (Interval, String) => expr.call_unary(CastIntervalToString),
         (String, Bytes) => expr.call_unary(CastStringToBytes),
         (Bytes, String) => expr.call_unary(CastBytesToString),
+        (String, Jsonb) => expr.call_unary(CastStringToJsonb),
+        (Jsonb, String) => expr.call_unary(CastJsonbToString),
         (Null, _) => {
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }
@@ -2723,7 +2725,7 @@ fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
 }
 
 pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
-    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
+    // NOTE this needs to stay in sync with symbiosis::push_column
     Ok(match data_type {
         DataType::Boolean => ScalarType::Bool,
         DataType::Custom(name) if QualName::name_equals(name.clone(), "bool") => ScalarType::Bool,
@@ -2754,6 +2756,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::TimestampTz => ScalarType::TimestampTz,
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => ScalarType::Jsonb,
         other @ DataType::Array(_)
         | other @ DataType::Binary(..)
         | other @ DataType::Blob(_)

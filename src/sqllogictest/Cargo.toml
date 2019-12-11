@@ -17,6 +17,7 @@ comm = { path = "../comm" }
 coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
+expr = { path = "../expr" }
 failure = "0.1.6"
 futures = "0.1"
 getopts = "0.2"

@@ -331,6 +331,12 @@ fn format_row(
             (Type::Text, Datum::Timestamp(d)) => d.to_string(),
             (Type::Text, Datum::TimestampTz(d)) => d.to_string(),
             (Type::Text, Datum::Interval(iv)) => iv.to_string(),
+            // json
+            (Type::Text, Datum::True)
+            | (Type::Text, Datum::False)
+            | (Type::Text, Datum::JsonNull)
+            | (Type::Text, Datum::List(_))
+            | (Type::Text, Datum::Dict(_)) => expr::datum_to_serde(datum).to_string(),
             other => panic!("Don't know how to format {:?}", other),
         }
     });

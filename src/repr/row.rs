@@ -60,7 +60,7 @@ pub struct Row {
 }
 
 #[derive(Debug)]
-pub struct DatumArrayIter<'a> {
+pub struct DatumListIter<'a> {
     data: &'a [u8],
     offset: usize,
 }
@@ -131,11 +131,11 @@ pub struct PackableRow<'a> {
     data: &'a mut Vec<u8>,
 }
 
-// DatumArray and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
+// DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct DatumArray<'a> {
+pub struct DatumList<'a> {
     /// Points at the serialized datums
     data: &'a [u8],
 }
@@ -163,8 +163,9 @@ enum Tag {
     Interval,
     Bytes,
     String,
-    Array,
+    List,
     Dict,
+    JsonNull,
 }
 
 /// Reads a `Copy` value starting at byte `offset`.
@@ -272,16 +273,15 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let string = read_untagged_string(data, offset);
             Datum::String(string)
         }
-        Tag::Array => {
-            let len = read_copy::<usize>(data, offset);
-            let bytes = &data[*offset..(*offset + len)];
-            Datum::Array(DatumArray { data: bytes })
+        Tag::List => {
+            let bytes = read_untagged_bytes(data, offset);
+            Datum::List(DatumList { data: bytes })
         }
         Tag::Dict => {
-            let len = read_copy::<usize>(data, offset);
-            let bytes = &data[*offset..(*offset + len)];
+            let bytes = read_untagged_bytes(data, offset);
             Datum::Dict(DatumDict { data: bytes })
         }
+        Tag::JsonNull => Datum::JsonNull,
     }
 }
 
@@ -311,8 +311,8 @@ impl Row {
         unsafe { read_datum(&self.data, &mut 0) }
     }
 
-    pub fn iter(&self) -> DatumArrayIter {
-        DatumArrayIter {
+    pub fn iter(&self) -> DatumListIter {
+        DatumListIter {
             data: &self.data,
             offset: 0,
         }
@@ -321,34 +321,34 @@ impl Row {
 
 impl<'a> IntoIterator for &'a Row {
     type Item = Datum<'a>;
-    type IntoIter = DatumArrayIter<'a>;
-    fn into_iter(self) -> DatumArrayIter<'a> {
+    type IntoIter = DatumListIter<'a>;
+    fn into_iter(self) -> DatumListIter<'a> {
         self.iter()
     }
 }
 
-impl<'a> DatumArray<'a> {
-    pub fn empty() -> DatumArray<'static> {
-        DatumArray { data: &[] }
+impl<'a> DatumList<'a> {
+    pub fn empty() -> DatumList<'static> {
+        DatumList { data: &[] }
     }
 
-    pub fn iter(&'a self) -> DatumArrayIter<'a> {
-        DatumArrayIter {
+    pub fn iter(&'a self) -> DatumListIter<'a> {
+        DatumListIter {
             data: self.data,
             offset: 0,
         }
     }
 }
 
-impl<'a> IntoIterator for &'a DatumArray<'a> {
+impl<'a> IntoIterator for &'a DatumList<'a> {
     type Item = Datum<'a>;
-    type IntoIter = DatumArrayIter<'a>;
-    fn into_iter(self) -> DatumArrayIter<'a> {
+    type IntoIter = DatumListIter<'a>;
+    fn into_iter(self) -> DatumListIter<'a> {
         self.iter()
     }
 }
 
-impl<'a> Iterator for DatumArrayIter<'a> {
+impl<'a> Iterator for DatumListIter<'a> {
     type Item = Datum<'a>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset >= self.data.len() {
@@ -473,13 +473,13 @@ impl<'a> PackableRow<'a> {
         self.push_untagged_string(string)
     }
 
-    /// Push an iterator of `Datum`s onto the end of `self` and return a `DatumArray` referencing the stored `Datum`s
-    pub fn push_array<'b, I, D>(&mut self, iter: I) -> DatumArray<'a>
+    /// Push an iterator of `Datum`s onto the end of `self` and return a `DatumList` referencing the stored `Datum`s
+    pub fn push_list<'b, I, D>(&mut self, iter: I) -> DatumList<'a>
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'b>>,
     {
-        self.data.push(Tag::Array as u8);
+        self.data.push(Tag::List as u8);
         // write a dummy len, will fix it up later
         let len_start = self.data.len();
         self.data.extend_from_slice(&0usize.to_le_bytes());
@@ -491,7 +491,7 @@ impl<'a> PackableRow<'a> {
         // fix up the len
         self.data[len_start..data_start].copy_from_slice(&len.to_le_bytes());
         let backed_bytes = &self.data[data_start..(data_start + len)];
-        DatumArray {
+        DatumList {
             data: unsafe {
                 // it's safe to return &'a because so long as this PackableRow exists we will only ever append to self.data
                 transmute::<&[u8], &'a [u8]>(backed_bytes)
@@ -598,21 +598,22 @@ impl<'a> PackableRow<'a> {
                 });
             }
             Datum::Bytes(bytes) => {
-                self.push_bytes(bytes);
+                data.push(Tag::Bytes as u8);
+                self.push_untagged_bytes(bytes);
             }
             Datum::String(string) => {
-                self.push_string(string);
+                data.push(Tag::String as u8);
+                self.push_untagged_string(string);
             }
-            Datum::Array(array) => {
-                data.push(Tag::Array as u8);
-                data.extend_from_slice(&array.data.len().to_le_bytes());
-                data.extend_from_slice(array.data);
+            Datum::List(list) => {
+                data.push(Tag::List as u8);
+                self.push_untagged_bytes(&list.data);
             }
             Datum::Dict(dict) => {
                 data.push(Tag::Dict as u8);
-                data.extend_from_slice(&dict.data.len().to_le_bytes());
-                data.extend_from_slice(dict.data);
+                self.push_untagged_bytes(&dict.data);
             }
+            Datum::JsonNull => data.push(Tag::JsonNull as u8),
         }
     }
 
@@ -716,17 +717,17 @@ mod tests {
         assert_eq!(packable.push_bytes(&[0, 2, 1, 255]), &[0, 2, 1, 255]);
 
         assert_eq!(
-            packable.push_array(&[]).iter().collect::<Vec<Datum>>(),
+            packable.push_list(&[]).iter().collect::<Vec<Datum>>(),
             vec![]
         );
-        let array = vec![
+        let list = vec![
             Datum::Null,
             Datum::Int32(-42),
             Datum::Interval(Interval::Months(312)),
         ];
         assert_eq!(
-            packable.push_array(&array).iter().collect::<Vec<Datum>>(),
-            array
+            packable.push_list(&list).iter().collect::<Vec<Datum>>(),
+            list
         );
 
         let dict: &[(&str, Datum)] = &[];

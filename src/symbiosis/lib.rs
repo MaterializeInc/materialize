@@ -434,6 +434,16 @@ fn push_column(
             let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
             row.push(bytes.mz_as_deref().into());
         }
+        DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => {
+            let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
+            if let Some(serde) = serde {
+                let mut temp_storage = RowPacker::new();
+                let datum = expr::serde_to_datum(&mut temp_storage.packable(), serde).unwrap();
+                row.push(datum)
+            } else {
+                row.push(Datum::Null)
+            }
+        }
         _ => bail!(
             "Postgres to materialize conversion not yet supported for {:?}",
             sql_type

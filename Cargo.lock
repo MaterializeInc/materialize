@@ -956,6 +956,7 @@ dependencies = [
  "regex-syntax",
  "repr",
  "serde",
+ "serde_json",
  "unicase",
  "uuid 0.8.1",
 ]
@@ -1973,6 +1974,7 @@ dependencies = [
  "coord",
  "csv",
  "dataflow-types",
+ "expr",
  "failure",
  "futures",
  "lazy_static",
@@ -2056,6 +2058,7 @@ dependencies = [
  "hex",
  "phf",
  "postgres-protocol",
+ "serde_json",
 ]
 
 [[package]]
@@ -2920,6 +2923,7 @@ dependencies = [
  "coord",
  "dataflow",
  "dataflow-types",
+ "expr",
  "failure",
  "futures",
  "getopts",
@@ -3040,6 +3044,7 @@ dependencies = [
  "catalog",
  "chrono",
  "dataflow-types",
+ "expr",
  "failure",
  "log",
  "ore",
@@ -3047,6 +3052,7 @@ dependencies = [
  "postgres",
  "repr",
  "rust_decimal",
+ "serde_json",
  "sql",
  "sqlparser",
  "whoami",

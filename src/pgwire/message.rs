@@ -392,31 +392,39 @@ pub enum FieldValue {
     Interval(Interval),
     Text(String),
     Numeric(Decimal),
+    Jsonb(String),
 }
 
 impl FieldValue {
     pub fn from_datum(datum: Datum, typ: &ColumnType) -> Option<FieldValue> {
-        match datum {
-            Datum::Null => None,
-            Datum::True => Some(FieldValue::Bool(true)),
-            Datum::False => Some(FieldValue::Bool(false)),
-            Datum::Int32(i) => Some(FieldValue::Int4(i)),
-            Datum::Int64(i) => Some(FieldValue::Int8(i)),
-            Datum::Float32(f) => Some(FieldValue::Float4(*f)),
-            Datum::Float64(f) => Some(FieldValue::Float8(*f)),
-            Datum::Date(d) => Some(FieldValue::Date(d)),
-            Datum::Timestamp(d) => Some(FieldValue::Timestamp(d)),
-            Datum::TimestampTz(d) => Some(FieldValue::TimestampTz(d)),
-            Datum::Interval(i) => Some(FieldValue::Interval(i)),
-            Datum::Decimal(d) => {
-                let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
-                Some(FieldValue::Numeric(d.with_scale(scale)))
-            }
-            Datum::Bytes(b) => Some(FieldValue::Bytea(b.to_vec())),
-            Datum::String(s) => Some(FieldValue::Text(s.to_owned())),
-            Datum::Array(_) | Datum::Dict(_) => {
-                panic!("TODO(jamii) figure out array/dict representation for pgwire")
-            }
+        if let Datum::Null = datum {
+            None
+        } else if let ScalarType::Jsonb = &typ.scalar_type {
+            let string = expr::datum_to_serde(datum).to_string();
+            Some(FieldValue::Jsonb(string))
+        } else {
+            Some(match datum {
+                Datum::Null => unreachable!(),
+                Datum::True => FieldValue::Bool(true),
+                Datum::False => FieldValue::Bool(false),
+                Datum::Int32(i) => FieldValue::Int4(i),
+                Datum::Int64(i) => FieldValue::Int8(i),
+                Datum::Float32(f) => FieldValue::Float4(*f),
+                Datum::Float64(f) => FieldValue::Float8(*f),
+                Datum::Date(d) => FieldValue::Date(d),
+                Datum::Timestamp(d) => FieldValue::Timestamp(d),
+                Datum::TimestampTz(d) => FieldValue::TimestampTz(d),
+                Datum::Interval(i) => FieldValue::Interval(i),
+                Datum::Decimal(d) => {
+                    let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
+                    FieldValue::Numeric(d.with_scale(scale))
+                }
+                Datum::Bytes(b) => FieldValue::Bytea(b.to_vec()),
+                Datum::String(s) => FieldValue::Text(s.to_owned()),
+                Datum::JsonNull | Datum::List(_) | Datum::Dict(_) => {
+                    panic!("Don't know how to serialize {}::{}", datum, typ)
+                }
+            })
         }
     }
 
@@ -454,7 +462,8 @@ impl FieldValue {
             FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),
             FieldValue::Float8(f) => format!("{}", f).into_bytes().into(),
             FieldValue::Numeric(n) => format!("{}", n).into_bytes().into(),
-            FieldValue::Text(ref s) => s.as_bytes().into(),
+            FieldValue::Text(s) => s.as_bytes().into(),
+            FieldValue::Jsonb(s) => s.as_bytes().into(),
         }
     }
 
@@ -580,6 +589,13 @@ impl FieldValue {
                 buf.into()
             }
             FieldValue::Text(ref s) => s.as_bytes().into(),
+            FieldValue::Jsonb(s) => {
+                // https://github.com/postgres/postgres/blob/14aec03502302eff6c67981d8fd121175c436ce9/src/backend/utils/adt/jsonb.c#L148
+                let version = 1;
+                let mut buf: Vec<u8> = vec![version];
+                buf.extend_from_slice(s.as_bytes());
+                buf.into()
+            }
         })
     }
 }
