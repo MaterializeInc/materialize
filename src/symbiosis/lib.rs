@@ -434,13 +434,16 @@ fn push_column(
             let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
             row.push(bytes.mz_as_deref().into());
         }
-        // TODO(jamii) get json out of postgres - it's not supported in the latest released version of rust-postgres
-        // DataType::Custom(name) if name.to_string() == "jsonb" => {
-        //     let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
-        //     let mut temp_storage = RowPacker::new();
-        //     let datum = expr::serde_to_datum(&mut temp_storage.packable(), serde);
-        //     row.push(datum);
-        // }
+        DataType::Custom(name) if name.to_string() == "jsonb" => {
+            let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
+            if let Some(serde) = serde {
+                let mut temp_storage = RowPacker::new();
+                let datum = expr::serde_to_datum(&mut temp_storage.packable(), serde).unwrap();
+                row.push(datum)
+            } else {
+                row.push(Datum::Null)
+            }
+        }
         _ => bail!(
             "Postgres to materialize conversion not yet supported for {:?}",
             sql_type

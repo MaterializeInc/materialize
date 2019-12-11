@@ -14,7 +14,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.6"
 ore = { path = "../ore" }
-postgres = { version = "0.15", features = ["with-chrono"] }
+postgres = { version = "0.15", features = ["with-chrono", "with-serde_json"] }
 pg_interval = "0.3"
 repr = { path = "../repr" }
 rust_decimal = { version = "1.0", features = ["postgres"] }
