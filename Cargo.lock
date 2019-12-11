@@ -1974,6 +1974,7 @@ dependencies = [
  "coord",
  "csv",
  "dataflow-types",
+ "expr",
  "failure",
  "futures",
  "lazy_static",

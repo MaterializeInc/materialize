@@ -17,6 +17,7 @@ coord = { path = "../coord" }
 csv = "1.1"
 chrono = "0.4"
 dataflow-types = { path = "../dataflow-types" }
+expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.1"
 lazy_static = "1.4.0"

@@ -19,6 +19,6 @@ pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId};
 pub use relation::func::AggregateFunc;
 pub use relation::{AggregateExpr, ColumnOrder, IdGen, RelationExpr};
 pub use scalar::func::{
-    serde_to_datum, BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc,
+    datum_to_serde, serde_to_datum, BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc,
 };
 pub use scalar::{EvalEnv, ScalarExpr};
