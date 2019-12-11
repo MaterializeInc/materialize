@@ -394,7 +394,6 @@ pub fn cast_bytes_to_string<'a>(
     Datum::String(temp_storage.push_string(&out))
 }
 
-// TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
 pub fn serde_to_datum<'a>(
     temp_storage: &mut PackableRow<'a>,
     serde: serde_json::Value,
@@ -433,6 +432,32 @@ pub fn serde_to_datum<'a>(
     })
 }
 
+pub fn datum_to_serde(datum: Datum) -> Result<serde_json::Value, failure::Error> {
+    use serde_json::Value;
+    Ok(match datum {
+        Datum::JsonNull => Value::Null,
+        Datum::True => Value::Bool(true),
+        Datum::False => Value::Bool(false),
+        Datum::Float64(f) => Value::Number(
+            serde_json::Number::from_f64(f.into())
+                .ok_or_else(|| failure::format_err!("Not a valid json number: {}", f))?,
+        ),
+        Datum::String(s) => Value::String(s.to_owned()),
+        Datum::List(list) => Value::Array(
+            list.iter()
+                .map(|e| datum_to_serde(e))
+                .collect::<Result<_, _>>()?,
+        ),
+        Datum::Dict(dict) => Value::Object(
+            dict.iter()
+                .map(|(k, v)| Ok((k.to_owned(), datum_to_serde(v)?)))
+                .collect::<Result<_, failure::Error>>()?,
+        ),
+        _ => panic!("Not a json-compatible datum: {:?}", datum),
+    })
+}
+
+// TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
 pub fn cast_string_to_json<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
@@ -444,6 +469,18 @@ pub fn cast_string_to_json<'a>(
             Err(_) => return Datum::Null,
             Ok(datum) => datum,
         },
+    }
+}
+
+// TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
+pub fn cast_json_to_string<'a>(
+    a: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    match datum_to_serde(a) {
+        Err(_) => return Datum::Null,
+        Ok(serde) => Datum::String(temp_storage.push_string(&serde.to_string())),
     }
 }
 
@@ -1660,6 +1697,7 @@ pub enum UnaryFunc {
     CastIntervalToString,
     CastBytesToString,
     CastStringToJson,
+    CastJsonToString,
     CeilFloat32,
     CeilFloat64,
     FloorFloat32,
@@ -1736,6 +1774,7 @@ impl UnaryFunc {
             UnaryFunc::CastIntervalToString => cast_interval_to_string,
             UnaryFunc::CastBytesToString => cast_bytes_to_string,
             UnaryFunc::CastStringToJson => cast_string_to_json,
+            UnaryFunc::CastJsonToString => cast_json_to_string,
             UnaryFunc::CeilFloat32 => ceil_float32,
             UnaryFunc::CeilFloat64 => ceil_float64,
             UnaryFunc::FloorFloat32 => floor_float32,
@@ -1852,6 +1891,8 @@ impl UnaryFunc {
 
             // can return null for invalid json
             CastStringToJson => ColumnType::new(ScalarType::Json).nullable(true),
+            // can return null for nan/infinity
+            CastJsonToString => ColumnType::new(ScalarType::String).nullable(true),
 
             CeilFloat32 | FloorFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
@@ -1950,6 +1991,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
             UnaryFunc::CastStringToJson => f.write_str("strtojson"),
+            UnaryFunc::CastJsonToString => f.write_str("jsontostr"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),

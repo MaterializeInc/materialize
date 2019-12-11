@@ -2656,6 +2656,7 @@ where
         (String, Bytes) => expr.call_unary(CastStringToBytes),
         (Bytes, String) => expr.call_unary(CastBytesToString),
         (String, Json) => expr.call_unary(CastStringToJson),
+        (Json, String) => expr.call_unary(CastJsonToString),
         (Null, _) => {
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }
