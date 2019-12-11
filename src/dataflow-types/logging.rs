@@ -67,6 +67,7 @@ pub enum MaterializedLog {
     PeekDuration,
     PrimaryKeys,
     ForeignKeys,
+    Catalog,
 }
 
 impl LogVariant {
@@ -87,6 +88,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PeekDuration),
             LogVariant::Materialized(MaterializedLog::PrimaryKeys),
             LogVariant::Materialized(MaterializedLog::ForeignKeys),
+            LogVariant::Materialized(MaterializedLog::Catalog),
         ]
     }
 
@@ -110,6 +112,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations".lit(),
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys".lit(),
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys".lit(),
+            LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names".lit(),
         }
     }
 
@@ -131,6 +134,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PeekDuration) => GlobalId::system(13),
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(14),
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(15),
+            LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(16),
         }
     }
 
@@ -240,6 +244,10 @@ impl LogVariant {
                 .add_column("parent_name", ScalarType::String)
                 .add_column("parent_column", ScalarType::Int64)
                 .add_column("key_group", ScalarType::Int64),
+
+            LogVariant::Materialized(MaterializedLog::Catalog) => RelationDesc::empty()
+                .add_column("global_id", ScalarType::String)
+                .add_column("name", ScalarType::Int64),
         }
     }
 
@@ -270,6 +278,7 @@ impl LogVariant {
                 LogVariant::Materialized(MaterializedLog::PrimaryKeys).id(),
                 vec![(2, 0), (3, 1)],
             )],
+            LogVariant::Materialized(MaterializedLog::Catalog) => vec![],
         }
     }
 }

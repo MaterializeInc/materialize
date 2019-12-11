@@ -81,6 +81,7 @@ sum   YES      int8
 data
 mz_arrangement_sharing
 mz_arrangement_sizes
+mz_catalog_names
 mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators

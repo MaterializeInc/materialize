@@ -28,6 +28,8 @@ pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifi
     Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub enum MaterializedEvent {
+    /// Map from global identifiers to string name.
+    Catalog(GlobalId, String, bool),
     /// Dataflow command, true for create and false for drop.
     Dataflow(GlobalId, bool),
     /// Dataflow depends on a named source of data.
@@ -96,6 +98,7 @@ pub fn construct<A: Allocate>(
         let (mut frontier_out, frontier) = demux.new_output();
         let (mut primary_out, primary) = demux.new_output();
         let (mut foreign_out, foreign) = demux.new_output();
+        let (mut catalog_out, catalog) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -112,6 +115,7 @@ pub fn construct<A: Allocate>(
                 let mut frontier = frontier_out.activate();
                 let mut primary = primary_out.activate();
                 let mut foreign = foreign_out.activate();
+                let mut catalog = catalog_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -122,6 +126,7 @@ pub fn construct<A: Allocate>(
                     let mut frontier_session = frontier.session(&time);
                     let mut primary_session = primary.session(&time);
                     let mut foreign_session = foreign.session(&time);
+                    let mut catalog_session = catalog.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos() as Timestamp;
@@ -130,6 +135,13 @@ pub fn construct<A: Allocate>(
                         let time_ms = time_ms as Timestamp;
 
                         match datum {
+                            MaterializedEvent::Catalog(id, name, insert) => {
+                                catalog_session.give((
+                                    (id, name),
+                                    time_ms,
+                                    if insert { 1 } else { -1 },
+                                ));
+                            }
                             MaterializedEvent::Dataflow(id, is_create) => {
                                 dataflow_session.give((id, worker, is_create, time_ns));
 
@@ -327,6 +339,12 @@ pub fn construct<A: Allocate>(
         let frontier_current = frontier.as_collection();
         let primary_key = primary.as_collection();
         let foreign_key = foreign.as_collection();
+        let catalog = catalog.as_collection().map({
+            let mut packer = RowPacker::new();
+            move |(id, name)| {
+                packer.pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
+            }
+        });
 
         // Duration statistics derive from the non-rounded event times.
         use differential_dataflow::operators::reduce::Count;
@@ -419,6 +437,7 @@ pub fn construct<A: Allocate>(
                 LogVariant::Materialized(MaterializedLog::ForeignKeys),
                 foreign_key,
             ),
+            (LogVariant::Materialized(MaterializedLog::Catalog), catalog),
         ];
 
         use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
