@@ -112,9 +112,17 @@ pub trait Conn:
     + Sink<SinkItem = BackendMessage, SinkError = io::Error>
     + Send
 {
+    fn codec_mut(&mut self) -> &mut Codec;
 }
 
-impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + Send {}
+impl<A> Conn for Framed<A, Codec>
+where
+    A: AsyncWrite + AsyncRead + 'static + Send,
+{
+    fn codec_mut(&mut self) -> &mut Codec {
+        Framed::codec_mut(self)
+    }
+}
 
 type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + Send>;
 
@@ -132,8 +140,17 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(start, transitions(RecvStartup))]
     Start { stream: A, session: Session },
 
-    #[state_machine_future(transitions(SendReadyForQuery, SendFatalError, Done, Error))]
+    #[state_machine_future(transitions(
+        SendReadyForQuery,
+        SendEncryptionResponse,
+        SendFatalError,
+        Done,
+        Error
+    ))]
     RecvStartup { recv: Recv<A>, session: Session },
+
+    #[state_machine_future(transitions(RecvStartup))]
+    SendEncryptionResponse { send: SinkSend<A>, session: Session },
 
     // Shared query flow.
     #[state_machine_future(transitions(RecvQuery, SendError, Error))]
@@ -363,6 +380,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 // request succeeds or fails.
                 transition!(Done(()))
             }
+            FrontendMessage::GssEncRequest | FrontendMessage::SslRequest => {
+                transition!(SendEncryptionResponse {
+                    send: conn.send(BackendMessage::EncryptionResponse(false)),
+                    session: state.session,
+                })
+            }
 
             _ => {
                 let timer = start_timer(&cx, &COMMAND_DURATIONS.fatal_error);
@@ -380,7 +403,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             transition!(send_fatal_error(
                 conn,
                 "08004",
-                "server does not support SSL",
+                "server does not support the client's requested protocol version",
                 timer
             ));
         }
@@ -408,6 +431,19 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     .forward(conn)
                     .map(|(_, conn)| conn)
             ),
+            session: state.session,
+        })
+    }
+
+    fn poll_send_encryption_response<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendEncryptionResponse<A>>,
+        _: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendEncryptionResponse<A>, failure::Error> {
+        let mut conn = try_ready!(state.send.poll());
+        conn.codec_mut().reset_decode_state();
+        let state = state.take();
+        transition!(RecvStartup {
+            recv: conn.recv(),
             session: state.session,
         })
     }
