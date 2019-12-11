@@ -2923,6 +2923,7 @@ dependencies = [
  "coord",
  "dataflow",
  "dataflow-types",
+ "expr",
  "failure",
  "futures",
  "getopts",
