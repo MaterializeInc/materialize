@@ -1007,6 +1007,9 @@ pub fn jsonb_get_int64<'a>(
     _: &EvalEnv,
     _: &mut PackableRow<'a>,
 ) -> Datum<'a> {
+    if a == Datum::Null || b == Datum::Null {
+        return Datum::Null;
+    }
     let i = b.unwrap_int64();
     match a {
         Datum::List(list) => {
@@ -1019,12 +1022,7 @@ pub fn jsonb_get_int64<'a>(
             list.iter().nth(i as usize).unwrap_or(Datum::Null)
         }
         Datum::Dict(_) => Datum::Null,
-        Datum::Null
-        | Datum::JsonNull
-        | Datum::True
-        | Datum::False
-        | Datum::Float64(_)
-        | Datum::String(_) => {
+        Datum::JsonNull | Datum::True | Datum::False | Datum::Float64(_) | Datum::String(_) => {
             if i == 0 || i == -1 {
                 // I have no idea why postgres does this, but we're stuck with it
                 a
@@ -1042,19 +1040,40 @@ pub fn jsonb_get_string<'a>(
     _: &EvalEnv,
     _: &mut PackableRow<'a>,
 ) -> Datum<'a> {
+    if a == Datum::Null || b == Datum::Null {
+        return Datum::Null;
+    }
     let k = b.unwrap_str();
     match a {
         Datum::Dict(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
             Some((_k, v)) => v,
             None => Datum::Null,
         },
-        Datum::Null
-        | Datum::JsonNull
+        Datum::JsonNull
         | Datum::True
         | Datum::False
         | Datum::Float64(_)
         | Datum::String(_)
         | Datum::List(_) => Datum::Null,
+        _ => unreachable!(),
+    }
+}
+
+pub fn jsonb_contains_field<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    if a == Datum::Null || b == Datum::Null {
+        return Datum::Null;
+    }
+    let k = b.unwrap_str();
+    match a {
+        Datum::List(list) => list.iter().find(|k2| b == *k2).is_some().into(),
+        Datum::Dict(dict) => dict.iter().find(|(k2, _v)| k == *k2).is_some().into(),
+        Datum::String(string) => (string == k).into(),
+        Datum::JsonNull | Datum::True | Datum::False | Datum::Float64(_) => false.into(),
         _ => unreachable!(),
     }
 }
@@ -1539,6 +1558,7 @@ pub enum BinaryFunc {
     CastDecimalToString,
     JsonbGetInt64,
     JsonbGetString,
+    JsonbContainsField,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1646,6 +1666,7 @@ impl BinaryFunc {
             BinaryFunc::CastDecimalToString => cast_decimal_to_string,
             BinaryFunc::JsonbGetInt64 => jsonb_get_int64,
             BinaryFunc::JsonbGetString => jsonb_get_string,
+            BinaryFunc::JsonbContainsField => jsonb_contains_field,
         }
     }
 
@@ -1746,6 +1767,8 @@ impl BinaryFunc {
             DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(true),
 
             JsonbGetInt64 | JsonbGetString => ColumnType::new(ScalarType::Jsonb).nullable(true),
+
+            JsonbContainsField => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
         }
     }
 
@@ -1806,8 +1829,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::CastDecimalToString => f.write_str("dectostr"),
-            BinaryFunc::JsonbGetInt64 => f.write_str("->i64"),
-            BinaryFunc::JsonbGetString => f.write_str("->str"),
+            BinaryFunc::JsonbGetInt64 => f.write_str("b->i64"),
+            BinaryFunc::JsonbGetString => f.write_str("b->str"),
+            BinaryFunc::JsonbContainsField => f.write_str("b?"),
         }
     }
 }
