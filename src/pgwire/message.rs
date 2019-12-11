@@ -400,7 +400,7 @@ impl FieldValue {
         if let Datum::Null = datum {
             None
         } else if let ScalarType::Jsonb = &typ.scalar_type {
-            let string = expr::datum_to_serde(datum).unwrap().to_string();
+            let string = expr::datum_to_serde(datum).to_string();
             Some(FieldValue::Jsonb(string))
         } else {
             Some(match datum {

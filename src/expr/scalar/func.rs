@@ -410,9 +410,7 @@ pub fn serde_to_datum<'a>(
             }
         }
         Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Datum::Int64(i)
-            } else if let Some(f) = n.as_f64() {
+            if let Some(f) = n.as_f64() {
                 Datum::Float64(OrderedFloat(f))
             } else {
                 bail!("{} is out of range for json number", n)
@@ -437,30 +435,36 @@ pub fn serde_to_datum<'a>(
     })
 }
 
-pub fn datum_to_serde(datum: Datum) -> Result<serde_json::Value, failure::Error> {
+pub fn datum_to_serde(datum: Datum) -> serde_json::Value {
     use serde_json::Value;
-    Ok(match datum {
+    match datum {
         Datum::JsonNull => Value::Null,
         Datum::True => Value::Bool(true),
         Datum::False => Value::Bool(false),
-        Datum::Int64(i) => Value::Number(i.into()),
-        Datum::Float64(f) => Value::Number(
-            serde_json::Number::from_f64(f.into())
-                .ok_or_else(|| failure::format_err!("Not a valid json number: {}", f))?,
-        ),
+        Datum::Float64(f) => {
+            let f: f64 = f.into();
+            Value::Number(
+                // Internally we want all json numbers to be floats so we have a consistent binary representation for joins.
+                // But we want serde to print integer-like things as integers, for consistency with postgres.
+                if f == f.trunc() {
+                    (f.trunc() as i64).into()
+                } else if let Some(n) = serde_json::Number::from_f64(f.into()) {
+                    n
+                } else {
+                    // This should only be reachable for NaN/Infinity, which aren't allowed to be cast to Jsonb
+                    panic!("Not a valid json number: {}", f)
+                },
+            )
+        }
         Datum::String(s) => Value::String(s.to_owned()),
-        Datum::List(list) => Value::Array(
-            list.iter()
-                .map(|e| datum_to_serde(e))
-                .collect::<Result<_, _>>()?,
-        ),
+        Datum::List(list) => Value::Array(list.iter().map(|e| datum_to_serde(e)).collect()),
         Datum::Dict(dict) => Value::Object(
             dict.iter()
-                .map(|(k, v)| Ok((k.to_owned(), datum_to_serde(v)?)))
-                .collect::<Result<_, failure::Error>>()?,
+                .map(|(k, v)| (k.to_owned(), datum_to_serde(v)))
+                .collect(),
         ),
         _ => panic!("Not a json-compatible datum: {:?}", datum),
-    })
+    }
 }
 
 // TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
@@ -484,10 +488,7 @@ pub fn cast_jsonb_to_string<'a>(
     _: &EvalEnv,
     temp_storage: &mut PackableRow<'a>,
 ) -> Datum<'a> {
-    match datum_to_serde(a) {
-        Err(_) => return Datum::Null,
-        Ok(serde) => Datum::String(temp_storage.push_string(&serde.to_string())),
-    }
+    Datum::String(temp_storage.push_string(&datum_to_serde(a).to_string()))
 }
 
 pub fn add_int32<'a>(
