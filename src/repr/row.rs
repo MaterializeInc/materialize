@@ -274,13 +274,11 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::String(string)
         }
         Tag::List => {
-            let len = read_copy::<usize>(data, offset);
-            let bytes = &data[*offset..(*offset + len)];
+            let bytes = read_untagged_bytes(data, offset);
             Datum::List(DatumList { data: bytes })
         }
         Tag::Dict => {
-            let len = read_copy::<usize>(data, offset);
-            let bytes = &data[*offset..(*offset + len)];
+            let bytes = read_untagged_bytes(data, offset);
             Datum::Dict(DatumDict { data: bytes })
         }
         Tag::JsonNull => Datum::JsonNull,
@@ -600,20 +598,20 @@ impl<'a> PackableRow<'a> {
                 });
             }
             Datum::Bytes(bytes) => {
-                self.push_bytes(bytes);
+                data.push(Tag::Bytes as u8);
+                self.push_untagged_bytes(bytes);
             }
             Datum::String(string) => {
-                self.push_string(string);
+                data.push(Tag::String as u8);
+                self.push_untagged_string(string);
             }
             Datum::List(list) => {
                 data.push(Tag::List as u8);
-                data.extend_from_slice(&list.data.len().to_le_bytes());
-                data.extend_from_slice(list.data);
+                self.push_untagged_bytes(&list.data);
             }
             Datum::Dict(dict) => {
                 data.push(Tag::Dict as u8);
-                data.extend_from_slice(&dict.data.len().to_le_bytes());
-                data.extend_from_slice(dict.data);
+                self.push_untagged_bytes(&dict.data);
             }
             Datum::JsonNull => data.push(Tag::JsonNull as u8),
         }
