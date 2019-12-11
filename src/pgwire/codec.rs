@@ -23,6 +23,7 @@ use tokio::io;
 
 use crate::message::{
     BackendMessage, FieldFormat, FrontendMessage, TransactionStatus, VERSION_CANCEL,
+    VERSION_GSSENC, VERSION_SSL,
 };
 use ore::netio;
 use repr::{Datum, ScalarType};
@@ -68,6 +69,11 @@ impl Codec {
             decode_state: DecodeState::Startup,
         }
     }
+
+    /// Instructs the codec to expect another startup message.
+    pub fn reset_decode_state(&mut self) {
+        self.decode_state = DecodeState::Startup;
+    }
 }
 
 impl Default for Codec {
@@ -81,6 +87,11 @@ impl Encoder for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        if let BackendMessage::EncryptionResponse(enable) = msg {
+            dst.put(if enable { b'Y' } else { b'N' });
+            return Ok(());
+        }
+
         // TODO(benesch): do we need to be smarter about avoiding allocations?
         // At the very least, we won't need a separate buffer when BytesMut
         // automatically grows its capacity (carllerche/bytes#170).
@@ -88,6 +99,7 @@ impl Encoder for Codec {
 
         // Write type byte.
         let byte = match msg {
+            BackendMessage::EncryptionResponse(_) => unreachable!(),
             BackendMessage::AuthenticationOk => b'R',
             BackendMessage::RowDescription(_) => b'T',
             BackendMessage::DataRow(_, _) => b'D',
@@ -115,6 +127,7 @@ impl Encoder for Codec {
 
         // Write message contents.
         match msg {
+            BackendMessage::EncryptionResponse(_) => unreachable!(),
             // psql doesn't actually care about the number of columns.
             // It should be saved in the message if we ever need to care about it; until then,
             // 0 is fine.
@@ -338,6 +351,10 @@ fn decode_startup(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
             conn_id: buf.read_u32()?,
             secret_key: buf.read_u32()?,
         })
+    } else if version == VERSION_SSL {
+        Ok(FrontendMessage::SslRequest)
+    } else if version == VERSION_GSSENC {
+        Ok(FrontendMessage::GssEncRequest)
     } else {
         Ok(FrontendMessage::Startup { version })
     }

@@ -35,6 +35,7 @@ pub const VERSION_2: i32 = 0x20000;
 pub const VERSION_3: i32 = 0x30000;
 pub const VERSION_CANCEL: i32 = (1234 << 16) + 5678;
 pub const VERSION_SSL: i32 = (1234 << 16) + 5679;
+pub const VERSION_GSSENC: i32 = (1234 << 16) + 5680;
 
 pub const VERSIONS: &[i32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_CANCEL, VERSION_SSL];
 
@@ -74,6 +75,12 @@ impl Severity {
 pub enum FrontendMessage {
     /// Begin a connection.
     Startup { version: i32 },
+
+    /// Request SSL encryption for the connection.
+    SslRequest,
+
+    /// Request GSSAPI encryption for the connection.
+    GssEncRequest,
 
     /// Cancel a query that is running on another connection.
     CancelRequest {
@@ -189,6 +196,7 @@ pub enum BackendMessage {
         tag: String,
     },
     EmptyQueryResponse,
+    EncryptionResponse(bool),
     ReadyForQuery(TransactionStatus),
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<FieldValue>>, FieldFormatIter),
