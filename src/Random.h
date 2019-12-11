@@ -46,33 +46,6 @@ public:
     int_distribution(inner_type dist) : inner(dist) {}
 };
 
-/*
-class real_distribution {
-public:
-    using inner_type = std::variant<
-        std::uniform_real_distribution<double>,
-        std::exponential_distribution<double>,
-        std::gamma_distribution<double>,
-        std::normal_distribution<double>,
-        std::chi_squared_distribution<double>,
-        std::cauchy_distribution<double>,
-        std::fisher_f_distribution<double>,
-        std::student_t_distribution<double>>;
-private:
-    inner_type inner;
-
-public:
-    template <class Generator>
-    int operator()(Generator& g) {
-        return std::visit([&g](auto&& arg) {
-            return arg(g);
-        }, inner);
-    }
-
-    explicit real_distribution(inner_type dist) : inner(dist) {}
-};
- */
-
 
 
 // FIXME: This should be a template
