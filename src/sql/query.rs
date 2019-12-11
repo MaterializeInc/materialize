@@ -27,7 +27,7 @@ use std::rc::Rc;
 use failure::{bail, ensure, format_err, ResultExt};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
-    BinaryOperator, DataType, DateTimeField, Expr, Function, Ident, JoinConstraint, JoinOperator,
+    BinaryOperator, DataType, Expr, ExtractField, Function, Ident, JoinConstraint, JoinOperator,
     ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
     TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
@@ -1142,28 +1142,31 @@ fn plan_expr<'a>(
                 }
                 let func = match &typ.scalar_type {
                     ScalarType::Interval => match field {
-                        DateTimeField::Year => UnaryFunc::ExtractIntervalYear,
-                        DateTimeField::Month => UnaryFunc::ExtractIntervalMonth,
-                        DateTimeField::Day => UnaryFunc::ExtractIntervalDay,
-                        DateTimeField::Hour => UnaryFunc::ExtractIntervalHour,
-                        DateTimeField::Minute => UnaryFunc::ExtractIntervalMinute,
-                        DateTimeField::Second => UnaryFunc::ExtractIntervalSecond,
+                        ExtractField::Year => UnaryFunc::ExtractIntervalYear,
+                        ExtractField::Month => UnaryFunc::ExtractIntervalMonth,
+                        ExtractField::Day => UnaryFunc::ExtractIntervalDay,
+                        ExtractField::Hour => UnaryFunc::ExtractIntervalHour,
+                        ExtractField::Minute => UnaryFunc::ExtractIntervalMinute,
+                        ExtractField::Second => UnaryFunc::ExtractIntervalSecond,
+                        _ => failure::bail!("don't support EXTRACT({} ..) yet", field),
                     },
                     ScalarType::Timestamp => match field {
-                        DateTimeField::Year => UnaryFunc::ExtractTimestampYear,
-                        DateTimeField::Month => UnaryFunc::ExtractTimestampMonth,
-                        DateTimeField::Day => UnaryFunc::ExtractTimestampDay,
-                        DateTimeField::Hour => UnaryFunc::ExtractTimestampHour,
-                        DateTimeField::Minute => UnaryFunc::ExtractTimestampMinute,
-                        DateTimeField::Second => UnaryFunc::ExtractTimestampSecond,
+                        ExtractField::Year => UnaryFunc::ExtractTimestampYear,
+                        ExtractField::Month => UnaryFunc::ExtractTimestampMonth,
+                        ExtractField::Day => UnaryFunc::ExtractTimestampDay,
+                        ExtractField::Hour => UnaryFunc::ExtractTimestampHour,
+                        ExtractField::Minute => UnaryFunc::ExtractTimestampMinute,
+                        ExtractField::Second => UnaryFunc::ExtractTimestampSecond,
+                        _ => failure::bail!("don't support EXTRACT({} ..) yet", field),
                     },
                     ScalarType::TimestampTz => match field {
-                        DateTimeField::Year => UnaryFunc::ExtractTimestampTzYear,
-                        DateTimeField::Month => UnaryFunc::ExtractTimestampTzMonth,
-                        DateTimeField::Day => UnaryFunc::ExtractTimestampTzDay,
-                        DateTimeField::Hour => UnaryFunc::ExtractTimestampTzHour,
-                        DateTimeField::Minute => UnaryFunc::ExtractTimestampTzMinute,
-                        DateTimeField::Second => UnaryFunc::ExtractTimestampTzSecond,
+                        ExtractField::Year => UnaryFunc::ExtractTimestampTzYear,
+                        ExtractField::Month => UnaryFunc::ExtractTimestampTzMonth,
+                        ExtractField::Day => UnaryFunc::ExtractTimestampTzDay,
+                        ExtractField::Hour => UnaryFunc::ExtractTimestampTzHour,
+                        ExtractField::Minute => UnaryFunc::ExtractTimestampTzMinute,
+                        ExtractField::Second => UnaryFunc::ExtractTimestampTzSecond,
+                        _ => failure::bail!("don't support EXTRACT({} ..) yet", field),
                     },
                     other => bail!(
                         "EXTRACT expects timestamp, interval, or date input, got {:?}",
