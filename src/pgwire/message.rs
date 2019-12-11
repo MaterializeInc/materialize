@@ -399,7 +399,7 @@ impl FieldValue {
     pub fn from_datum(datum: Datum, typ: &ColumnType) -> Option<FieldValue> {
         if let Datum::Null = datum {
             None
-        } else if let ScalarType::Json = &typ.scalar_type {
+        } else if let ScalarType::Jsonb = &typ.scalar_type {
             let string = expr::datum_to_serde(datum).unwrap().to_string();
             Some(FieldValue::Jsonb(string))
         } else {
@@ -462,14 +462,8 @@ impl FieldValue {
             FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),
             FieldValue::Float8(f) => format!("{}", f).into_bytes().into(),
             FieldValue::Numeric(n) => format!("{}", n).into_bytes().into(),
-            FieldValue::Text(ref s) => s.as_bytes().into(),
-            FieldValue::Jsonb(s) => {
-                // https://github.com/postgres/postgres/blob/14aec03502302eff6c67981d8fd121175c436ce9/src/backend/utils/adt/jsonb.c#L148
-                let version = 1;
-                let mut buf: Vec<u8> = vec![version];
-                buf.extend_from_slice(s.as_bytes());
-                buf.into()
-            }
+            FieldValue::Text(s) => s.as_bytes().into(),
+            FieldValue::Jsonb(s) => s.as_bytes().into(),
         }
     }
 

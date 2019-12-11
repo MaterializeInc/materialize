@@ -87,6 +87,12 @@ pub const NUMERIC: PgType = PgType {
     typlen: -1,
 };
 
+/// Json in binary serialization
+pub const JSONB: PgType = PgType {
+    oid: 3802,
+    typlen: -1,
+};
+
 // /// A pseudo-type representing a composite record (i.e., a tuple) of any type.
 // pub const RECORD: PgType = PgType {
 //     oid: 2249,
@@ -115,7 +121,7 @@ impl From<&ScalarType> for PgType {
             ScalarType::Interval => INTERVAL,
             ScalarType::Bytes => BYTEA,
             ScalarType::String => TEXT,
-            ScalarType::Json => panic!("TODO (jamii)"),
+            ScalarType::Jsonb => JSONB,
         }
     }
 }

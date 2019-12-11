@@ -2655,8 +2655,8 @@ where
         (Interval, String) => expr.call_unary(CastIntervalToString),
         (String, Bytes) => expr.call_unary(CastStringToBytes),
         (Bytes, String) => expr.call_unary(CastBytesToString),
-        (String, Json) => expr.call_unary(CastStringToJson),
-        (Json, String) => expr.call_unary(CastJsonToString),
+        (String, Jsonb) => expr.call_unary(CastStringToJsonb),
+        (Jsonb, String) => expr.call_unary(CastJsonbToString),
         (Null, _) => {
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }
@@ -2756,7 +2756,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::TimestampTz => ScalarType::TimestampTz,
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
-        DataType::Custom(name) if name.to_string() == "jsonb" => ScalarType::Json,
+        DataType::Custom(name) if name.to_string() == "jsonb" => ScalarType::Jsonb,
         other @ DataType::Array(_)
         | other @ DataType::Binary(..)
         | other @ DataType::Blob(_)

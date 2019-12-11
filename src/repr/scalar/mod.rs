@@ -246,12 +246,13 @@ impl<'a> Datum<'a> {
 
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
-            if let ScalarType::Json = scalar_type {
+            if let ScalarType::Jsonb = scalar_type {
                 // json type checking
                 match datum {
                     Datum::JsonNull
                     | Datum::False
                     | Datum::True
+                    | Datum::Int64(_)
                     | Datum::Float64(_)
                     | Datum::String(_) => true,
                     Datum::List(list) => list
@@ -531,7 +532,7 @@ pub enum ScalarType {
     String,
     /// Json behaves like postgres' jsonb type but is stored as Datum::JsonNull/True/False/String/Float64/List/Dict.
     /// The sql type system is responsible for preventing these being used as normal sql datums without casting.
-    Json,
+    Jsonb,
 }
 
 impl<'a> ScalarType {
@@ -559,7 +560,7 @@ impl<'a> ScalarType {
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
             ScalarType::Bytes => Datum::Bytes(&[]),
             ScalarType::String => Datum::String(""),
-            ScalarType::Json => Datum::JsonNull,
+            ScalarType::Jsonb => Datum::JsonNull,
         }
     }
 }
@@ -585,7 +586,7 @@ impl PartialEq for ScalarType {
             | (Interval, Interval)
             | (Bytes, Bytes)
             | (String, String)
-            | (Json, Json) => true,
+            | (Jsonb, Jsonb) => true,
 
             (Null, _)
             | (Bool, _)
@@ -600,7 +601,7 @@ impl PartialEq for ScalarType {
             | (Interval, _)
             | (Bytes, _)
             | (String, _)
-            | (Json, _) => false,
+            | (Jsonb, _) => false,
         }
     }
 }
@@ -627,7 +628,7 @@ impl Hash for ScalarType {
             Interval => state.write_u8(10),
             Bytes => state.write_u8(11),
             String => state.write_u8(12),
-            Json => state.write_u8(13),
+            Jsonb => state.write_u8(13),
         }
     }
 }
@@ -654,7 +655,7 @@ impl fmt::Display for ScalarType {
             Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
-            Json => f.write_str("json"),
+            Jsonb => f.write_str("json"),
         }
     }
 }

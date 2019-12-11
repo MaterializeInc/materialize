@@ -12,6 +12,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
+use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
@@ -409,9 +410,13 @@ pub fn serde_to_datum<'a>(
             }
         }
         Value::Number(n) => {
-            Datum::Float64(OrderedFloat(n.as_f64().ok_or_else(|| {
-                failure::format_err!("{} is out of range for json number", n)
-            })?))
+            if let Some(i) = n.as_i64() {
+                Datum::Int64(i)
+            } else if let Some(f) = n.as_f64() {
+                Datum::Float64(OrderedFloat(f))
+            } else {
+                bail!("{} is out of range for json number", n)
+            }
         }
         Value::String(s) => Datum::String(temp_storage.push_string(&s)),
         Value::Array(array) => {
@@ -438,6 +443,7 @@ pub fn datum_to_serde(datum: Datum) -> Result<serde_json::Value, failure::Error>
         Datum::JsonNull => Value::Null,
         Datum::True => Value::Bool(true),
         Datum::False => Value::Bool(false),
+        Datum::Int64(i) => Value::Number(i.into()),
         Datum::Float64(f) => Value::Number(
             serde_json::Number::from_f64(f.into())
                 .ok_or_else(|| failure::format_err!("Not a valid json number: {}", f))?,
@@ -458,7 +464,7 @@ pub fn datum_to_serde(datum: Datum) -> Result<serde_json::Value, failure::Error>
 }
 
 // TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
-pub fn cast_string_to_json<'a>(
+pub fn cast_string_to_jsonb<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
     temp_storage: &mut PackableRow<'a>,
@@ -473,7 +479,7 @@ pub fn cast_string_to_json<'a>(
 }
 
 // TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
-pub fn cast_json_to_string<'a>(
+pub fn cast_jsonb_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
     temp_storage: &mut PackableRow<'a>,
@@ -1696,8 +1702,8 @@ pub enum UnaryFunc {
     CastTimestampTzToString,
     CastIntervalToString,
     CastBytesToString,
-    CastStringToJson,
-    CastJsonToString,
+    CastStringToJsonb,
+    CastJsonbToString,
     CeilFloat32,
     CeilFloat64,
     FloorFloat32,
@@ -1773,8 +1779,8 @@ impl UnaryFunc {
             UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string,
             UnaryFunc::CastIntervalToString => cast_interval_to_string,
             UnaryFunc::CastBytesToString => cast_bytes_to_string,
-            UnaryFunc::CastStringToJson => cast_string_to_json,
-            UnaryFunc::CastJsonToString => cast_json_to_string,
+            UnaryFunc::CastStringToJsonb => cast_string_to_jsonb,
+            UnaryFunc::CastJsonbToString => cast_jsonb_to_string,
             UnaryFunc::CeilFloat32 => ceil_float32,
             UnaryFunc::CeilFloat64 => ceil_float64,
             UnaryFunc::FloorFloat32 => floor_float32,
@@ -1890,9 +1896,9 @@ impl UnaryFunc {
             }
 
             // can return null for invalid json
-            CastStringToJson => ColumnType::new(ScalarType::Json).nullable(true),
+            CastStringToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
             // can return null for nan/infinity
-            CastJsonToString => ColumnType::new(ScalarType::String).nullable(true),
+            CastJsonbToString => ColumnType::new(ScalarType::String).nullable(true),
 
             CeilFloat32 | FloorFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
@@ -1990,8 +1996,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastTimestampTzToString => f.write_str("tstztostr"),
             UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
-            UnaryFunc::CastStringToJson => f.write_str("strtojson"),
-            UnaryFunc::CastJsonToString => f.write_str("jsontostr"),
+            UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
+            UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
