@@ -286,6 +286,9 @@ impl Catalog {
     /// be collected into the `to_remove` vector. In either mode, the identifier
     /// that corresponds to `name` is included in `to_remove`.
     ///
+    /// Note that even in RemoveMode::Restrict, dependent indexes do not hinder
+    /// view removal and will be removed along with the view.
+    ///
     /// To actually remove the views, call [`Catalog::remove`] on each
     /// name in `to_remove`.
     pub fn plan_remove(
@@ -300,16 +303,21 @@ impl Catalog {
         };
         match mode {
             RemoveMode::Restrict => {
-                if !metadata
-                    .used_by
-                    .iter()
-                    .all(|u| to_remove.iter().any(|r| r == u))
-                {
-                    bail!(
-                        "cannot delete {}: still depended upon by catalog item '{}'",
-                        name,
-                        self.by_id[&metadata.used_by[0]].name()
-                    )
+                for user in metadata.used_by.iter() {
+                    match self.by_id[user].item() {
+                        CatalogItem::Index { .. } => {
+                            to_remove.push(*user);
+                        }
+                        _ => {
+                            if !to_remove.iter().any(|r| r == user) {
+                                bail!(
+                                    "cannot delete {}: still depended upon by catalog item '{}'",
+                                    name,
+                                    self.by_id[user].name()
+                                )
+                            }
+                        }
+                    }
                 }
                 to_remove.push(metadata.id);
                 Ok(())
