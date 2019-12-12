@@ -26,6 +26,7 @@ use repr::{Datum, Row, RowPacker, RowUnpacker};
 
 use super::sink;
 use super::source;
+use super::source::FileReadStyle;
 use crate::arrangement::manager::{KeysValsSpine, TraceManager, WithDrop};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
@@ -75,16 +76,21 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                     }
                     SourceConnector::File(c) => match c.format {
                         FileFormat::Csv(n_cols) => {
-                            let read_file = worker_index == 0;
-                            let stream = source::csv(
+                            let read_style = if worker_index != 0 {
+                                FileReadStyle::None
+                            } else if c.tail {
+                                FileReadStyle::TailFollowFd
+                            } else {
+                                FileReadStyle::ReadOnce
+                            };
+                            source::csv(
                                 region,
                                 format!("csv-{}", src_id),
                                 c.path,
                                 n_cols,
                                 executor.clone(),
-                                read_file,
-                            );
-                            (stream, None)
+                                read_style,
+                            )
                         }
                     },
                 };

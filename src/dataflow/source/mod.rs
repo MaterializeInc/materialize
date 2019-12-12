@@ -13,6 +13,7 @@ mod kafka;
 mod util;
 
 pub use csv_file::csv;
+pub use csv_file::FileReadStyle;
 pub use kafka::kafka;
 
 pub type SharedCapability = Rc<RefCell<Capability<Timestamp>>>;
