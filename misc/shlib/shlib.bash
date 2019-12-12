@@ -123,6 +123,13 @@ uf() {
     echo -ne "\e[32m$*\e[0m"
 }
 
+# [u]sage-[o]ption: Paint the argument as an option
+#
+# In usage text, write: "usage: $0 `uf --FLAG` `uo OPT`"
+uo() {
+    echo -ne "\e[32m$*\e[0m"
+}
+
 # [u]sage-[w]arn: Paint the argument as a warning
 #
 # In usage text, write: "usage: $0 `uw WILL DELETE EVERYTHING`"
