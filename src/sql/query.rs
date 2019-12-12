@@ -2337,6 +2337,9 @@ fn plan_json_op(
             rexpr.call_unary(UnaryFunc::CastStringToJsonb),
             BinaryFunc::JsonbContainsJsonb,
         ),
+        (ContainsJson, String, Jsonb) => lexpr
+            .call_unary(UnaryFunc::CastStringToJsonb)
+            .call_binary(rexpr, BinaryFunc::JsonbContainsJsonb),
         (ContainsJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         (ContainedInJson, Jsonb, Jsonb) => rexpr.call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
@@ -2344,6 +2347,9 @@ fn plan_json_op(
             lexpr.call_unary(UnaryFunc::CastStringToJsonb),
             BinaryFunc::JsonbContainsJsonb,
         ),
+        (ContainedInJson, Jsonb, String) => rexpr
+            .call_unary(UnaryFunc::CastStringToJsonb)
+            .call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
         (ContainedInJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         (Delete, Jsonb, Int32) => lexpr.call_binary(
