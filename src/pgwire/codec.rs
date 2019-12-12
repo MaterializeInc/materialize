@@ -22,8 +22,8 @@ use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
 use crate::message::{
-    BackendMessage, FieldFormat, FrontendMessage, TransactionStatus, VERSION_CANCEL,
-    VERSION_GSSENC, VERSION_SSL,
+    BackendMessage, EncryptionType, FieldFormat, FrontendMessage, TransactionStatus,
+    VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL,
 };
 use ore::netio;
 use repr::{Datum, ScalarType};
@@ -87,8 +87,12 @@ impl Encoder for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
-        if let BackendMessage::EncryptionResponse(enable) = msg {
-            dst.put(if enable { b'Y' } else { b'N' });
+        if let BackendMessage::EncryptionResponse(typ) = msg {
+            dst.put(match typ {
+                EncryptionType::None => b'N',
+                EncryptionType::Ssl => b'S',
+                EncryptionType::GssApi => b'G',
+            });
             return Ok(());
         }
 
