@@ -497,10 +497,10 @@ pub fn cast_jsonb_to_string_unless_string<'a>(
     eval_env: &EvalEnv,
     temp_storage: &mut PackableRow<'a>,
 ) -> Datum<'a> {
-    if let Datum::String(_) = a {
-        a
-    } else {
-        cast_jsonb_to_string(a, eval_env, temp_storage)
+    match a {
+        Datum::JsonNull => Datum::Null,
+        Datum::String(_) => a,
+        _ => cast_jsonb_to_string(a, eval_env, temp_storage),
     }
 }
 
