@@ -133,14 +133,70 @@ mod tests {
     use failure::{bail, Error};
     use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
     use serde_protobuf::descriptor::{
-        Descriptors, FieldDescriptor, FieldLabel, InternalFieldType, MessageDescriptor,
+        Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor, MessageId
     };
+
+    fn sanity_check_relation(
+        relation: &RelationDesc,
+        message: &MessageDescriptor,
+        descriptors: &Descriptors,
+    ) -> Result<(), Error> {
+        for (field_descriptor, (column_name, column_type)) in
+            message.fields().iter().zip(relation.iter())
+        {
+            if let Some(column_name) = column_name {
+                assert_eq!(field_descriptor.name(), column_name.as_str());
+            } else {
+                bail!(
+                    "Missing name in relation for field {}",
+                    field_descriptor.name()
+                );
+            }
+
+            match (
+                field_descriptor.field_type(descriptors),
+                field_descriptor.field_label(),
+                &column_type.scalar_type,
+            ) {
+                (FieldType::Bool, FieldLabel::Optional, ScalarType::Bool) 
+                | (FieldType::Int32, FieldLabel::Optional, ScalarType::Int32)
+                | (FieldType::SInt32, FieldLabel::Optional, ScalarType::Int32)
+                | (FieldType::SFixed32, FieldLabel::Optional, ScalarType::Int32)
+                | (FieldType::Int64, FieldLabel::Optional, ScalarType::Int64)
+                | (FieldType::SInt64, FieldLabel::Optional, ScalarType::Int64)
+                | (FieldType::SFixed64, FieldLabel::Optional, ScalarType::Int64)
+                | (FieldType::Float, FieldLabel::Optional, ScalarType::Float32)
+                | (FieldType::Double, FieldLabel::Optional, ScalarType::Float64)
+                | (FieldType::UInt32, FieldLabel::Optional, ScalarType::Decimal(38, 0))
+                | (FieldType::Fixed32, FieldLabel::Optional, ScalarType::Decimal(38,0))
+                | (FieldType::UInt64, FieldLabel::Optional, ScalarType::Decimal(38, 0))
+                | (FieldType::Fixed64, FieldLabel::Optional, ScalarType::Decimal(38,0))
+                | (FieldType::String, FieldLabel::Optional, &ScalarType::String)
+                | (FieldType::Bytes, FieldLabel::Optional, ScalarType::Bytes)
+                | (FieldType::Message(_), FieldLabel::Optional, ScalarType::Jsonb) => (),
+
+                (ft, FieldLabel::Optional, st) => bail!("Incorrect protobuf optional type {:?} mapping to Materialize type {:?}", ft, st),
+                (ft, FieldLabel::Repeated, ScalarType::Jsonb) => {
+                    match ft {
+                        FieldType::UnresolvedMessage(_) | FieldType::UnresolvedEnum(_) | FieldType::Group | FieldType::Enum(_) => {
+                            bail!("Unsupported repeated type {:?}", ft)
+                        }
+                        _ => (),
+                    }
+                }
+                (ft, label, st) => bail!(
+                    "Mismatched field types for proto field {:?} proto type {:?} label {:?} relationtype {:?}",
+                    field_descriptor.name(), ft, label, st
+                ),
+            }
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn test_proto_schema_parsing() -> Result<(), failure::Error> {
         let mut descriptors = Descriptors::new();
-        println!("{:?}", descriptors);
-
         let mut m1 = MessageDescriptor::new(".test.message1");
         m1.add_field(FieldDescriptor::new(
             "name",
@@ -158,24 +214,45 @@ mod tests {
         ));
         descriptors.add_message(m1);
 
-        let relation = super::validate_proto_schema(".test.message1", &descriptors)
+        let mut relation = super::validate_proto_schema(".test.message1", &descriptors)
             .expect("Failed to parse descriptor");
-        let expected_column_types = vec![
-            ColumnType {
-                nullable: false,
-                scalar_type: ScalarType::String,
-            },
-            ColumnType {
-                nullable: false,
-                scalar_type: ScalarType::Decimal(38, 0),
-            },
-        ];
-        let expected_relation = RelationDesc::new(
-            RelationType::new(expected_column_types),
-            vec![Some("name".clone()), Some("age".clone())],
-        );
 
-        assert_eq!(relation, expected_relation);
+        sanity_check_relation(
+            &relation,
+            descriptors
+                .message_by_name(".test.message1")
+                .expect("message should be in the descriptor set"),
+            &descriptors,
+        )?;
+
+        let mut m2 = MessageDescriptor::new(".test.message2");
+        m2.add_field(FieldDescriptor::new(
+            "ids",
+            1,
+            FieldLabel::Repeated,
+            InternalFieldType::Int32,
+            None,
+        ));
+
+        m2.add_field(FieldDescriptor::new(
+            "nested",
+            1,
+            FieldLabel::Repeated,
+            InternalFieldType::Bytes,
+            None,
+        ));
+        descriptors.add_message(m2);
+
+        relation = super::validate_proto_schema(".test.message2", &descriptors)
+            .expect("Failed to parse descriptor");
+
+        sanity_check_relation(
+            &relation,
+            descriptors
+                .message_by_name(".test.message2")
+                .expect("message should be in the descriptor set"),
+            &descriptors,
+        )?;
 
         Ok(())
     }
