@@ -414,8 +414,8 @@ fn push_column(
                 None => row.push(Datum::Null),
                 Some(d) => {
                     let d = d.unpack();
-                    let mut significand =
-                        i128::from(d.lo) + (i128::from(d.mid) << 32) + (i128::from(d.hi) << 64);
+                    let mut significand = if d.is_negative { -1 } else { 1 }
+                        * (i128::from(d.lo) + (i128::from(d.mid) << 32) + (i128::from(d.hi) << 64));
                     // TODO(jamii) lots of potential for unchecked edge cases here eg 10^scale_correction could overflow
                     // current representation is `significand * 10^current_scale`
                     // want to get to `significand2 * 10^desired_scale`
