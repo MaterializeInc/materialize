@@ -5,7 +5,7 @@
 
 //! Management of arrangements while building a dataflow.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::{timestamp::Refines, Timestamp};
@@ -51,10 +51,10 @@ where
     /// Dataflow local collections.
     pub collections: HashMap<P, Collection<S, V, Diff>>,
     /// Dataflow local arrangements.
-    pub local: HashMap<P, HashMap<Vec<ScalarExpr>, Arrangement<S, V>>>,
+    pub local: HashMap<P, BTreeMap<Vec<ScalarExpr>, Arrangement<S, V>>>,
     /// Imported arrangements.
     #[allow(clippy::type_complexity)] // TODO(fms): fix or ignore lint globally.
-    pub trace: HashMap<P, HashMap<Vec<ScalarExpr>, ArrangementImport<S, V, T>>>,
+    pub trace: HashMap<P, BTreeMap<Vec<ScalarExpr>, ArrangementImport<S, V, T>>>,
 }
 
 impl<S: Scope, P, V: Data, T> Context<S, P, V, T>
@@ -116,7 +116,7 @@ where
     pub fn get_all_local(
         &self,
         relation_expr: &P,
-    ) -> Option<&HashMap<Vec<ScalarExpr>, Arrangement<S, V>>> {
+    ) -> Option<&BTreeMap<Vec<ScalarExpr>, Arrangement<S, V>>> {
         self.local.get(relation_expr)
     }
 
@@ -179,7 +179,7 @@ where
     ) {
         self.local
             .entry(relation_expr.clone())
-            .or_insert_with(|| HashMap::new())
+            .or_insert_with(|| BTreeMap::new())
             .insert(keys.to_vec(), arranged);
     }
 
@@ -202,7 +202,7 @@ where
     ) {
         self.trace
             .entry(relation_expr.clone())
-            .or_insert_with(|| HashMap::new())
+            .or_insert_with(|| BTreeMap::new())
             .insert(keys.to_vec(), arranged);
     }
 
