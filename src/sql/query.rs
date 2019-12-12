@@ -1894,9 +1894,20 @@ fn plan_binary_op<'a>(
         Or => plan_boolean_op(catalog, ecx, BooleanOp::Or, left, right),
 
         Plus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Plus, left, right),
-        // because our type inference is kind of hacky, we can't just dispatch on type here
-        Minus => plan_json_op(catalog, ecx, JsonOp::Delete, left, right)
-            .or_else(|_| plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right)),
+        Minus => {
+            // TODO(jamii) We can't just dispatch on type here because our type inference is kind of hacky
+            // but backtracking doesn't quite work either because parameter types are set in a mutable global map during planning.
+            // This calls for a bidirectional type inference - https://github.com/MaterializeInc/materialize/issues/1274
+            let old_param_types = ecx.qcx.param_types.borrow().clone();
+            let plan = plan_json_op(catalog, ecx, JsonOp::Delete, left, right);
+            match plan {
+                Ok(plan) => Ok(plan),
+                Err(_) => {
+                    *ecx.qcx.param_types.borrow_mut() = old_param_types;
+                    plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right)
+                }
+            }
+        }
         Multiply => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Multiply, left, right),
         Divide => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Divide, left, right),
         Modulus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Modulo, left, right),
