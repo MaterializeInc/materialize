@@ -40,7 +40,7 @@ use coord::ExecuteResponse;
 use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
+use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use sql::{Session, Statement};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -184,7 +184,7 @@ impl fmt::Display for Outcome<'_> {
                 actual_output,
             } => write!(
                 f,
-                "OutputFailure!{}expected: {:?}{}actually: {}{}actual raw: {:?}",
+                "OutputFailure!{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
                 INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
             Bail { cause } => write!(f, "Bail! {}", cause),
@@ -284,60 +284,59 @@ fn format_row(
     sort: &Sort,
 ) -> Vec<String> {
     let row = izip!(slt_types, col_types, row.iter()).map(|(slt_typ, col_typ, datum)| {
-        match (slt_typ, datum) {
-            // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
-            (_, Datum::Null) => "NULL".to_owned(),
-            (Type::Integer, Datum::Int64(i)) => format!("{}", i),
-            (Type::Integer, Datum::Int32(i)) => format!("{}", i),
-            (Type::Real, Datum::Float64(f)) => match mode {
-                Mode::Standard => format!("{:.3}", f),
-                Mode::Cockroach => format!("{}", f),
-            },
-            (Type::Real, Datum::Decimal(d)) => {
-                let (_precision, scale) = col_typ.scalar_type.unwrap_decimal_parts();
-                let d = d.with_scale(scale);
-                match mode {
-                    Mode::Standard => format!("{:.3}", d),
-                    Mode::Cockroach => format!("{}", d),
+        if let Datum::Null = datum {
+            "NULL".to_owned()
+        } else if let ScalarType::Jsonb = col_typ.scalar_type {
+            expr::datum_to_serde(datum).to_string()
+        } else {
+            match (slt_typ, datum) {
+                // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
+                (Type::Integer, Datum::Int64(i)) => format!("{}", i),
+                (Type::Integer, Datum::Int32(i)) => format!("{}", i),
+                (Type::Real, Datum::Float64(f)) => match mode {
+                    Mode::Standard => format!("{:.3}", f),
+                    Mode::Cockroach => format!("{}", f),
+                },
+                (Type::Real, Datum::Decimal(d)) => {
+                    let (_precision, scale) = col_typ.scalar_type.unwrap_decimal_parts();
+                    let d = d.with_scale(scale);
+                    match mode {
+                        Mode::Standard => format!("{:.3}", d),
+                        Mode::Cockroach => format!("{}", d),
+                    }
                 }
-            }
-            (Type::Text, Datum::String(string)) => {
-                if string.is_empty() {
-                    "(empty)".to_owned()
-                } else {
-                    (*string).to_owned()
+                (Type::Text, Datum::String(string)) => {
+                    if string.is_empty() {
+                        "(empty)".to_owned()
+                    } else {
+                        (*string).to_owned()
+                    }
                 }
-            }
-            (Type::Text, Datum::Int32(chr)) => std::char::from_u32(chr as u32)
-                .map(|chr| format!("{}", chr))
-                .unwrap_or_else(|| format!("Invalid utf8 character: {}", chr)),
-            (Type::Bool, Datum::False) => "false".to_owned(),
-            (Type::Bool, Datum::True) => "true".to_owned(),
+                (Type::Text, Datum::Int32(chr)) => std::char::from_u32(chr as u32)
+                    .map(|chr| format!("{}", chr))
+                    .unwrap_or_else(|| format!("Invalid utf8 character: {}", chr)),
+                (Type::Bool, Datum::False) => "false".to_owned(),
+                (Type::Bool, Datum::True) => "true".to_owned(),
 
-            // weird type coercions that sqllogictest doesn't document
-            (Type::Integer, Datum::Decimal(d)) => {
-                let (_precision, scale) = col_typ.scalar_type.unwrap_decimal_parts();
-                let d = d.with_scale(scale);
-                format!("{:.0}", d)
+                // weird type coercions that sqllogictest doesn't document
+                (Type::Integer, Datum::Decimal(d)) => {
+                    let (_precision, scale) = col_typ.scalar_type.unwrap_decimal_parts();
+                    let d = d.with_scale(scale);
+                    format!("{:.0}", d)
+                }
+                (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
+                (Type::Integer, Datum::String(_)) => "0".to_owned(),
+                (Type::Integer, Datum::False) => "0".to_owned(),
+                (Type::Integer, Datum::True) => "1".to_owned(),
+                (Type::Real, Datum::Int64(i)) => format!("{:.3}", i),
+                (Type::Text, Datum::Int64(i)) => format!("{}", i),
+                (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
+                (Type::Text, Datum::Date(d)) => d.to_string(),
+                (Type::Text, Datum::Timestamp(d)) => d.to_string(),
+                (Type::Text, Datum::TimestampTz(d)) => d.to_string(),
+                (Type::Text, Datum::Interval(iv)) => iv.to_string(),
+                other => panic!("Don't know how to format {:?}", other),
             }
-            (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
-            (Type::Integer, Datum::String(_)) => "0".to_owned(),
-            (Type::Integer, Datum::False) => "0".to_owned(),
-            (Type::Integer, Datum::True) => "1".to_owned(),
-            (Type::Real, Datum::Int64(i)) => format!("{:.3}", i),
-            (Type::Text, Datum::Int64(i)) => format!("{}", i),
-            (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
-            (Type::Text, Datum::Date(d)) => d.to_string(),
-            (Type::Text, Datum::Timestamp(d)) => d.to_string(),
-            (Type::Text, Datum::TimestampTz(d)) => d.to_string(),
-            (Type::Text, Datum::Interval(iv)) => iv.to_string(),
-            // json
-            (Type::Text, Datum::True)
-            | (Type::Text, Datum::False)
-            | (Type::Text, Datum::JsonNull)
-            | (Type::Text, Datum::List(_))
-            | (Type::Text, Datum::Dict(_)) => expr::datum_to_serde(datum).to_string(),
-            other => panic!("Don't know how to format {:?}", other),
         }
     });
     if mode == Mode::Cockroach && sort.yes() {
