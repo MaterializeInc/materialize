@@ -12,25 +12,27 @@
 extern crate prometheus;
 
 use std::cmp::min;
-use std::collections::HashMap;
+use std::convert::Infallible;
 use std::thread;
 use std::time::Duration;
 
 use chrono::Utc;
 use env_logger::{Builder as LogBuilder, Env, Target};
-use log::{error, info};
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Response, Server};
+use log::{error, info, warn};
 use postgres::Connection;
-use prometheus::Histogram;
+use prometheus::{Encoder, Histogram};
 
 static MAX_BACKOFF: Duration = Duration::from_secs(60);
+static METRICS_PORT: u16 = 16875;
 
 #[derive(Debug)]
 struct Config {
-    pushgateway_url: String,
     materialized_url: String,
 }
 
-fn main() -> Result<(), failure::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
         .target(Target::Stdout)
         .init();
@@ -40,12 +42,6 @@ fn main() -> Result<(), failure::Error> {
 
     let mut opts = getopts::Options::new();
     opts.optflag("h", "help", "show this usage information");
-    opts.optopt(
-        "",
-        "pushgateway-url",
-        "url of the prometheus pushgateway to send metrics to",
-        "URL",
-    );
     opts.optopt(
         "",
         "materialized-url",
@@ -58,18 +54,22 @@ fn main() -> Result<(), failure::Error> {
         return Ok(());
     }
     let config = Config {
-        pushgateway_url: popts
-            .opt_get_default("pushgateway-url", "http://pushgateway:9091".to_owned())?,
         materialized_url: popts.opt_get_default(
             "materialized-url",
             "postgres://ignoreuser@materialized:6875/tpcch".to_owned(),
         )?,
     };
 
-    measure_peek_times(&config);
+    // these appear to need to be in this order for both the metrics server and the peek
+    // client to start up
+    let server = thread::spawn(|| serve_metrics().unwrap());
+    let peek_fast = measure_peek_times(&config);
+    peek_fast.join().unwrap();
+    server.join().unwrap();
+    Ok(())
 }
 
-fn measure_peek_times(config: &Config) -> ! {
+fn measure_peek_times(config: &Config) -> thread::JoinHandle<()> {
     let postgres_connection = create_postgres_connection(config);
     try_initialize(&postgres_connection);
 
@@ -94,26 +94,7 @@ fn measure_peek_times(config: &Config) -> ! {
                 backoff = get_baseline_backoff();
             }
         }
-    });
-
-    let mut count = 0;
-    loop {
-        if let Err(err) = prometheus::push_metrics(
-            "mz_client_peek",
-            HashMap::new(),
-            &config.pushgateway_url,
-            prometheus::gather(),
-            None,
-        ) {
-            error!("Error pushing metrics: {}", err.to_string())
-        } else {
-            count += 1;
-        }
-        if count % 60 == 0 {
-            info!("pushed metrics {} times", count);
-        }
-        thread::sleep(Duration::from_secs(1));
-    }
+    })
 }
 
 fn get_baseline_backoff() -> Duration {
@@ -165,7 +146,7 @@ fn try_initialize(postgres_connection: &Connection) {
         &[],
     ) {
         Ok(_) => info!("Created sources"),
-        Err(err) => error!("IGNORING CREATE VIEW error: {}", err),
+        Err(err) => warn!("trying to create sources: {}", err),
     }
     match postgres_connection.execute(
         "CREATE VIEW q01 as SELECT
@@ -184,6 +165,31 @@ fn try_initialize(postgres_connection: &Connection) {
         &[],
     ) {
         Ok(_) => info!("created view q01"),
-        Err(err) => error!("IGNORING CREATE VIEW error: {}", err),
+        Err(err) => warn!("trying to create view: {}", err),
     }
+}
+
+fn serve_metrics() -> Result<(), failure::Error> {
+    info!("serving prometheus metrics on port {}", METRICS_PORT);
+    let addr = ([0, 0, 0, 0], METRICS_PORT).into();
+
+    let make_service = make_service_fn(|_conn| {
+        async {
+            Ok::<_, Infallible>(service_fn(|_req| {
+                async {
+                    let metrics = prometheus::gather();
+                    let encoder = prometheus::TextEncoder::new();
+                    let mut buffer = Vec::new();
+
+                    encoder
+                        .encode(&metrics, &mut buffer)
+                        .unwrap_or_else(|e| error!("error gathering metrics: {}", e));
+                    Ok::<_, Infallible>(Response::new(Body::from(buffer)))
+                }
+            }))
+        }
+    });
+    let mut rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(Server::bind(&addr).serve(make_service))?;
+    Ok(())
 }
