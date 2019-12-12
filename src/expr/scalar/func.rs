@@ -492,6 +492,18 @@ pub fn cast_jsonb_to_string<'a>(
     Datum::String(temp_storage.push_string(&datum_to_serde(a).to_string()))
 }
 
+pub fn cast_jsonb_to_string_unless_string<'a>(
+    a: Datum<'a>,
+    eval_env: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    if let Datum::String(_) = a {
+        a
+    } else {
+        cast_jsonb_to_string(a, eval_env, temp_storage)
+    }
+}
+
 pub fn add_int32<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -2002,6 +2014,7 @@ pub enum UnaryFunc {
     CastBytesToString,
     CastStringToJsonb,
     CastJsonbToString,
+    CastJsonbToStringUnlessString,
     CeilFloat32,
     CeilFloat64,
     FloorFloat32,
@@ -2089,6 +2102,7 @@ impl UnaryFunc {
             UnaryFunc::CastBytesToString => cast_bytes_to_string,
             UnaryFunc::CastStringToJsonb => cast_string_to_jsonb,
             UnaryFunc::CastJsonbToString => cast_jsonb_to_string,
+            UnaryFunc::CastJsonbToStringUnlessString => cast_jsonb_to_string_unless_string,
             UnaryFunc::CeilFloat32 => ceil_float32,
             UnaryFunc::CeilFloat64 => ceil_float64,
             UnaryFunc::FloorFloat32 => floor_float32,
@@ -2216,7 +2230,9 @@ impl UnaryFunc {
             // can return null for invalid json
             CastStringToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
             // can return null for nan/infinity
-            CastJsonbToString => ColumnType::new(ScalarType::String).nullable(true),
+            CastJsonbToString | CastJsonbToStringUnlessString => {
+                ColumnType::new(ScalarType::String).nullable(true)
+            }
 
             CeilFloat32 | FloorFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
@@ -2326,6 +2342,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
             UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
+            UnaryFunc::CastJsonbToStringUnlessString => f.write_str("jsonbtostr?"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
