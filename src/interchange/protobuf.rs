@@ -133,7 +133,8 @@ mod tests {
     use failure::{bail, Error};
     use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
     use serde_protobuf::descriptor::{
-        Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor, MessageId
+        Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
+        MessageId,
     };
 
     fn sanity_check_relation(
@@ -158,7 +159,7 @@ mod tests {
                 field_descriptor.field_label(),
                 &column_type.scalar_type,
             ) {
-                (FieldType::Bool, FieldLabel::Optional, ScalarType::Bool) 
+                (FieldType::Bool, FieldLabel::Optional, ScalarType::Bool)
                 | (FieldType::Int32, FieldLabel::Optional, ScalarType::Int32)
                 | (FieldType::SInt32, FieldLabel::Optional, ScalarType::Int32)
                 | (FieldType::SFixed32, FieldLabel::Optional, ScalarType::Int32)
