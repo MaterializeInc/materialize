@@ -27,7 +27,7 @@ services:
     command: -w1
     environment:
       # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
-      - MZ_LOG=info
+      - MZ_LOG=pgwire=debug,info
       # We want this to eventually count up to the size of the largest batch in an
       # arrangement. This number represents a tradeoff between proactive merging (which
       # takes time) and low latency.
