@@ -98,14 +98,14 @@ ci_collapsed_heading "Preparing Docker context"
     mv target/release/materialized misc/docker/ci-materialized
     mv target/release/testdrive misc/docker/ci-testdrive
     mv target/release/sqllogictest misc/docker/ci-sqllogictest
-    mv target/release/metrics misc/docker/ci-metrics
+    mv target/release/peeker misc/docker/ci-peeker
 }
 
 images=(
     materialized
     testdrive
     sqllogictest
-    metrics
+    peeker
     cargo-test
 )
 

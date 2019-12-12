@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 
 IMAGES=(
     materialize/materialized:latest
-    materialize/metrics:latest
+    materialize/peeker:latest
     materialize/chbenchmark:latest
 )
 
@@ -36,7 +36,7 @@ main() {
             elif [[ $1 = :load: ]]; then
                 bring_up_source_data
                 bring_up_introspection
-                dc_up metrics
+                dc_up peeker
                 load_test
             else
                 dc_up "$@"

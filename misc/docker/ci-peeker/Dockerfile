@@ -7,6 +7,6 @@ FROM ubuntu:bionic
 
 RUN apt-get update && apt-get install -qy postgresql-client
 
-COPY metrics /usr/local/bin
+COPY peeker /usr/local/bin
 
-ENTRYPOINT ["metrics"]
+ENTRYPOINT ["peeker"]

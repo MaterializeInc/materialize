@@ -223,8 +223,8 @@ services:
     image: prom/pushgateway:v0.9.1
     ports:
       - *pushgateway
-  metrics:
-    image: materialize/metrics:latest
+  peeker:
+    image: materialize/peeker:latest
     init: true
     depends_on:
       - materialized
