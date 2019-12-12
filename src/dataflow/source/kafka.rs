@@ -17,7 +17,7 @@ use super::{SharedCapability, SourceStatus};
 use dataflow_types::{KafkaSourceConnector, Timestamp};
 
 use lazy_static::lazy_static;
-use prometheus::IntCounter;
+use prometheus::{register_int_counter, IntCounter};
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
