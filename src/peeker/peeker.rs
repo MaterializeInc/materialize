@@ -20,12 +20,32 @@ use chrono::Utc;
 use env_logger::{Builder as LogBuilder, Env, Target};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Response, Server};
+use lazy_static::lazy_static;
 use log::{error, info, warn};
 use postgres::Connection;
-use prometheus::{Encoder, Histogram};
+use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, Encoder, HistogramVec};
 
 static MAX_BACKOFF: Duration = Duration::from_secs(60);
 static METRICS_PORT: u16 = 16875;
+
+lazy_static! {
+    static ref HISTOGRAM_UNLABELED: HistogramVec = register_histogram_vec!(
+        "mz_client_peek_seconds",
+        "how long peeks took",
+        &["query"],
+        vec![
+            0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
+            0.500, 1.0
+        ]
+    )
+    .expect("can create histogram");
+    static ref ERRORS_UNLABELED: CounterVec = register_counter_vec!(
+        "mz_client_error_count",
+        "number of errors encountered",
+        &["query"]
+    )
+    .expect("can create histogram");
+}
 
 #[derive(Debug)]
 struct Config {
@@ -75,20 +95,23 @@ fn measure_peek_times(config: &Config) -> thread::JoinHandle<()> {
 
     thread::spawn(move || {
         let query = "SELECT * FROM q01;";
-        let histogram = create_histogram(query);
+        let histogram = HISTOGRAM_UNLABELED.with_label_values(&[query]);
+        let error_count = ERRORS_UNLABELED.with_label_values(&[query]);
         let mut backoff = get_baseline_backoff();
         let mut last_was_failure = false;
         loop {
-            let query_result = {
-                // Drop is observe for prometheus::Histogram
-                let _timer = prometheus::Histogram::start_timer(&histogram);
-                postgres_connection.query(query, &[])
-            };
+            let timer = prometheus::Histogram::start_timer(&histogram);
+            let query_result = postgres_connection.query(query, &[]);
 
-            if let Err(err) = query_result {
-                last_was_failure = true;
-                print_error_and_backoff(&mut backoff, err.to_string());
-                try_initialize(&postgres_connection);
+            match query_result {
+                Ok(_) => drop(timer),
+                Err(err) => {
+                    timer.stop_and_discard();
+                    error_count.inc();
+                    last_was_failure = true;
+                    print_error_and_backoff(&mut backoff, err.to_string());
+                    try_initialize(&postgres_connection);
+                }
             }
             if !last_was_failure {
                 backoff = get_baseline_backoff();
@@ -113,26 +136,12 @@ fn create_postgres_connection(config: &Config) -> Connection {
 
 fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
     let current_backoff = min(*backoff, MAX_BACKOFF);
-    println!(
-        "{}. Sleeping for {:#?} seconds.\n",
+    warn!(
+        "{}. Sleeping for {:#?} seconds",
         error_message, current_backoff
     );
     thread::sleep(current_backoff);
     *backoff = Duration::from_secs(backoff.as_secs() * 2);
-}
-
-fn create_histogram(query: &str) -> Histogram {
-    let hist_vec = register_histogram_vec!(
-        "mz_client_peek_seconds",
-        "how long peeks took",
-        &["query"],
-        vec![
-            0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
-            0.500, 1.0
-        ]
-    )
-    .expect("can create histogram");
-    hist_vec.with_label_values(&[query])
 }
 
 /// Try to build the views and sources that are needed for this script
