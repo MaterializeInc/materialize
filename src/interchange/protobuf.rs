@@ -42,16 +42,25 @@ fn validate_proto_field(
         FieldLabel::Optional => {
             match field.field_type(descriptors) {
                 FieldType::Bool => ScalarType::Bool,
+                FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
+                FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
+                FieldType::Float => ScalarType::Float32,
+                FieldType::Double => ScalarType::Float64,
                 FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
                     ScalarType::Decimal(38, 0)
                 } // is that right
+                FieldType::String => ScalarType::String,
+                FieldType::Bytes => ScalarType::Bytes,
                 FieldType::Message(m) => {
                     for f in m.fields().iter() {
                         validate_proto_field_resolved(&f, descriptors)?;
                     }
                     ScalarType::Jsonb
                 }
-                _ => bail!("todo write the rest of it"),
+                FieldType::Enum(_) => bail!("Nested enums are currently unsupported"),
+                FieldType::Group => bail!("Unions are currently not supported"),
+                FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
+                FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
             }
         }
     })
@@ -64,16 +73,32 @@ fn validate_proto_field_resolved(
     Ok(match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated | FieldLabel::Optional => match field.field_type(descriptors) {
-            FieldType::UnresolvedMessage(a) => bail!("Nested message type {} unresolved", a),
-            FieldType::UnresolvedEnum(e) => bail!("Unresolved enum type {}", e),
-            FieldType::Group => bail!("Unions are currently not supported"),
+            FieldType::Bool
+            | FieldType::Int32
+            | FieldType::SInt32
+            | FieldType::SFixed32
+            | FieldType::Int64
+            | FieldType::SInt64
+            | FieldType::SFixed64
+            | FieldType::UInt32
+            | FieldType::Fixed32
+            | FieldType::UInt64
+            | FieldType::Fixed64
+            | FieldType::Float
+            | FieldType::Double
+            | FieldType::String
+            | FieldType::Bytes => (),
+
             FieldType::Message(m) => {
                 for f in m.fields().iter() {
                     validate_proto_field_resolved(&f, descriptors)?;
                 }
                 ()
             }
-            _ => (),
+            FieldType::Enum(_) => bail!("Nested enums are currently unsupported"),
+            FieldType::Group => bail!("Unions are currently not supported"),
+            FieldType::UnresolvedMessage(a) => bail!("Nested message type {} unresolved", a),
+            FieldType::UnresolvedEnum(e) => bail!("Unresolved enum type {}", e),
         },
     })
 }
@@ -105,11 +130,11 @@ fn validate_proto_schema(
 
 #[cfg(test)]
 mod tests {
-use failure::{bail, Error};
-use serde_protobuf::descriptor::{
-    Descriptors, FieldDescriptor, FieldLabel, InternalFieldType, MessageDescriptor,
-};
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+    use failure::{bail, Error};
+    use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+    use serde_protobuf::descriptor::{
+        Descriptors, FieldDescriptor, FieldLabel, InternalFieldType, MessageDescriptor,
+    };
 
     #[test]
     fn test_proto_schema_parsing() -> Result<(), failure::Error> {
@@ -117,22 +142,41 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, Scalar
         println!("{:?}", descriptors);
 
         let mut m1 = MessageDescriptor::new(".test.message1");
-        m1.add_field(FieldDescriptor::new("name", 1, FieldLabel::Optional, InternalFieldType::String, None));
-        m1.add_field(FieldDescriptor::new("age", 2, FieldLabel::Optional, InternalFieldType::UInt32, None));
+        m1.add_field(FieldDescriptor::new(
+            "name",
+            1,
+            FieldLabel::Optional,
+            InternalFieldType::String,
+            None,
+        ));
+        m1.add_field(FieldDescriptor::new(
+            "age",
+            2,
+            FieldLabel::Optional,
+            InternalFieldType::UInt32,
+            None,
+        ));
         descriptors.add_message(m1);
 
-        let relation = super::validate_proto_schema(".test.message1", &descriptors).expect("Failed to parse descriptor");
-        let expected_column_types = vec![ColumnType { nullable: false, scalar_type: ScalarType::String }, ColumnType { nullable: false, scalar_type: ScalarType::Decimal(38, 0) }];
+        let relation = super::validate_proto_schema(".test.message1", &descriptors)
+            .expect("Failed to parse descriptor");
+        let expected_column_types = vec![
+            ColumnType {
+                nullable: false,
+                scalar_type: ScalarType::String,
+            },
+            ColumnType {
+                nullable: false,
+                scalar_type: ScalarType::Decimal(38, 0),
+            },
+        ];
         let expected_relation = RelationDesc::new(
             RelationType::new(expected_column_types),
             vec![Some("name".clone()), Some("age".clone())],
         );
 
         assert_eq!(relation, expected_relation);
-        
 
         Ok(())
     }
 }
-
-
