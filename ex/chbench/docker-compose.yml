@@ -185,7 +185,6 @@ services:
       - materialized
       - prometheus_sql_exporter
       - prometheus_sql_exporter_mysql_tpcch
-      - metrics
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
   prometheus_sql_exporter:

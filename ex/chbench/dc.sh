@@ -26,6 +26,18 @@ main() {
         up)
             if [[ $# -eq 0 ]]; then
                 bring_up
+            elif [[ $1 = :demo: ]]; then
+                # currently just the same as the default
+                bring_up
+            elif [[ $1 = :init: ]]; then
+                initialize_warehouse
+            elif [[ $1 = :minimal-connected: || $1 = :mc: ]]; then
+                bring_up_source_data
+            elif [[ $1 = :load: ]]; then
+                bring_up_source_data
+                bring_up_introspection
+                dc_up metrics
+                load_test
             else
                 dc_up "$@"
             fi ;;
@@ -68,8 +80,18 @@ Possible COMMANDs:
  Cluster commands:
 
     `us up \[SERVICE..\]`           With args: Start the list of services
-                             With no args: Start the cluster, doing everything
-                               `uw \*except\*` the chbench gen step from the readme
+                             With no args: Start the cluster, bringing up introspection and
+                             metabase but no load generators.
+                             `uw WARNING:` you must still perform the 'chbench gen' step from the
+                             README at least once before we have any source chbench data.
+                               Special args:
+                                 `uo :init:` -- one-time setup that must be run before
+                                 performing anything else or after running 'nuke'
+                                 `uo :demo:` -- Set things up for a demo
+                                 `uo :load:` -- bring up everything and then start the
+                                 peek-metrics and load-test containers
+                                 `uo :minimal-connected:`/`uo :mc:` -- bring up just mysql and
+                                 kafka containers with no grafana.
     `us down \[SERVICE..\]`         With args: Stop the list of services, without removing them
                              With no args: Stop the cluster, removing containers, volumes, etc
 
@@ -92,27 +114,23 @@ Possible COMMANDs:
 ########################################
 # Commands
 
-dc_up() {
-    runv docker-compose up -d --build "$@"
-}
+# Top-level commands
+#
+# These should not be called by other functions
 
-# Run docker-compose stop
-dc_stop() {
-    runv docker-compose stop "$@"
-}
-
-
+# Default: start everything
 bring_up() {
     bring_up_source_data
     echo "materialize and ingstion should be running fine, bringing up introspection and metabase"
-    dc_up metabase grafana
+    bring_up_introspection
+    dc_up metabase
 }
 
 bring_up_source_data() {
     for image in "${IMAGES[@]}"; do
         # if we are running with `:local` images then we don't need to pull, so check
         # that `<tag>:latest` is actually in the compose file
-        if (grep "$image" docker-compose.yml >/dev/null 2>&1); then
+        if (grep "${image}" docker-compose.yml chbench/Dockerfile >/dev/null 2>&1); then
             runv docker pull "$image"
         fi
     done
@@ -125,6 +143,32 @@ bring_up_source_data() {
     echo "Waiting for schema registry to be fully up"
     sleep 5
     docker-compose logs --tail 5 schema-registry
+}
+
+bring_up_introspection() {
+    dc_up grafana
+}
+
+# Create source data and tables for MYSQL
+initialize_warehouse() {
+    if ! (docker ps | grep chbench_mysql >/dev/null); then
+        dc_up mysql
+        echo "sleeping for awhile to allow mysql to come up"
+        sleep 15
+    fi
+    runv docker-compose run chbench gen --warehouses=1
+}
+
+# helper/individual step commands
+
+# Start a single service and all its dependencies
+dc_up() {
+    runv docker-compose up -d --build "$@"
+}
+
+# Run docker-compose stop
+dc_stop() {
+    runv docker-compose stop "$@"
 }
 
 dc_run() {
