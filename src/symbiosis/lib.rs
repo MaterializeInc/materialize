@@ -207,11 +207,20 @@ END $$;
                                     bail!("internal error: table {} missing from catalog", name);
                                 }
                             }
-                            Some(entry) => items.push(entry.id()),
+                            Some(entry) => {
+                                catalog.plan_remove(
+                                    &name,
+                                    catalog::RemoveMode::from_cascade(true),
+                                    &mut items,
+                                )?;
+                                items.push(entry.id());
+                            }
                         },
                         Err(e) => bail!("unable to drop invalid name {}: {}", name, e),
                     }
                 }
+                items.sort();
+                items.dedup();
                 Plan::DropItems(items, ObjectType::Table)
             }
             Statement::Delete { table_name, .. } => {
