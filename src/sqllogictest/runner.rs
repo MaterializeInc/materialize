@@ -398,12 +398,18 @@ impl State {
                 sql,
             } => match self.run_statement(*expected_error, *rows_affected, sql)? {
                 Outcome::Success => Ok(Outcome::Success),
-                // If we failed to execute a statement, running the rest of the
-                // tests in this file will probably cause false positives, so
-                // just give up on the file entirely.
-                other => Ok(Outcome::Bail {
-                    cause: Box::new(other),
-                }),
+                other => {
+                    if expected_error.is_some() {
+                        Ok(other)
+                    } else {
+                        // If we failed to execute a statement that was supposed to succeed,
+                        // running the rest of the tests in this file will probably cause
+                        // false positives, so just give up on the file entirely.
+                        Ok(Outcome::Bail {
+                            cause: Box::new(other),
+                        })
+                    }
+                }
             },
             Record::Query { sql, output } => self.run_query(sql, output),
             _ => Ok(Outcome::Success),
