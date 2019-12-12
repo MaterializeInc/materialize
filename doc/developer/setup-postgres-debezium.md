@@ -17,17 +17,21 @@ can be consumed by Materialize.
     brew install postgres
     ```
 
-1. Set the Write Ahead Log level (wal_level) to logical. Restart PostgreSQL.
+1. Set the Write Ahead Log level (wal_level) to logical.
 
     ```shell
-    psql> ALTER SYSTEM set wal_level to logical;
-    psql> SHOW wal_level;
-     wal_level
-    -----------
-     logical
-    (1 row)
+    psql
+    ```
 
-    bash> brew services restart postgres
+    ```postgresql
+    ALTER SYSTEM set wal_level to logical;
+    SHOW wal_level;
+    ```
+
+1. Restart PostgreSQL.
+
+    ```shell
+    brew services restart postgres
     ```
 
 1. Create a `tpch` database.
@@ -36,19 +40,19 @@ can be consumed by Materialize.
     psql
     ```
 
-    ```mysql
+    ```postgresql
     CREATE DATABASE tpch;
     ```
 
 1. Switch your connection to the tpch database.
 
-    ```mysql
+    ```postgresql
     \c tpch;
     ```
 
 1. Create a tpch schema and a user that Debezium will connect as.
 
-    ```mysql
+    ```postgresql
     CREATE SCHEMA tpch;
     CREATE USER debezium WITH SUPERUSER PASSWORD 'debezium';
     GRANT ALL PRIVILEGES ON DATABASE "tpch" to debezium;
@@ -92,7 +96,7 @@ can be consumed by Materialize.
 
 ## Loading TPCH
 
-To test that your local MySQL/Debezium actually works with Materialize, we'll
+To test that your local PostgreSQL/Debezium actually works with Materialize, we'll
 have Materialize ingest the TPCH `lineitem` table.
 
 **!NOTE!** If you run into problems, check out the **Troubleshooting** section
@@ -105,7 +109,7 @@ answer in their once you solve it.
     confluent local stop connect && confluent local start connect
     ```
 
-1. Connect MySQL and Kafka via Debezium.
+1. Connect PostgreSQL and Kafka via Debezium.
 
     ```shell
     curl -H 'Content-Type: application/json' localhost:8083/connectors --data '{
@@ -169,7 +173,7 @@ answer in their once you solve it.
     been imported.
 
     Naturally, if this works at all, it indicates that Debezium is dutifully
-    getting data out of MySQL. You could, at this point, tear down the setup
+    getting data out of PostgreSQL. You could, at this point, tear down the setup
     that is loading `lineitem` into Materialize.
 
 ## Troubleshooting
