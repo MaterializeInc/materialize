@@ -1894,7 +1894,9 @@ fn plan_binary_op<'a>(
         Or => plan_boolean_op(catalog, ecx, BooleanOp::Or, left, right),
 
         Plus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Plus, left, right),
-        Minus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right),
+        // because our type inference is kind of hacky, we can't just dispatch on type here
+        Minus => plan_json_op(catalog, ecx, JsonOp::Delete, left, right)
+            .or_else(|_| plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right)),
         Multiply => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Multiply, left, right),
         Divide => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Divide, left, right),
         Modulus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Modulo, left, right),
@@ -2324,7 +2326,7 @@ fn plan_json_op(
             .call_unary(UnaryFunc::CastJsonbToString),
         (GetAsText, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
-        (ContainsField, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsField),
+        (ContainsField, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsString),
         (ContainsField, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         (Concat, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat),
@@ -2336,11 +2338,22 @@ fn plan_json_op(
         (ContainedInJson, Jsonb, Jsonb) => rexpr.call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
         (ContainedInJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
-        // TODO(jamii) all of these
-        (GetPath, _, _) => bail!("Unsupported json operator: {}", op),
-        (GetPathAsText, _, _) => bail!("Unsupported json operator: {}", op),
+        (Delete, Jsonb, Int32) => lexpr.call_binary(
+            rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
+            BinaryFunc::JsonbDeleteInt64,
+        ),
+        (Delete, Jsonb, Int64) => lexpr.call_binary(rexpr, BinaryFunc::JsonbDeleteInt64),
+        (Delete, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbDeleteString),
+        // TODO(jamii) there should be corresponding overloads for Array(Int64) and Array(String)
+        (Delete, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        // TODO(jamii) these require sql arrays
         (ContainsAnyFields, _, _) => bail!("Unsupported json operator: {}", op),
         (ContainsAllFields, _, _) => bail!("Unsupported json operator: {}", op),
+
+        // TODO(jamii) these require json paths
+        (GetPath, _, _) => bail!("Unsupported json operator: {}", op),
+        (GetPathAsText, _, _) => bail!("Unsupported json operator: {}", op),
         (DeletePath, _, _) => bail!("Unsupported json operator: {}", op),
         (ContainsPath, _, _) => bail!("Unsupported json operator: {}", op),
         (ApplyPathPredicate, _, _) => bail!("Unsupported json operator: {}", op),
@@ -2642,6 +2655,7 @@ enum JsonOp {
     DeletePath,
     ContainsPath,
     ApplyPathPredicate,
+    Delete,
 }
 
 impl fmt::Display for JsonOp {
@@ -2661,6 +2675,7 @@ impl fmt::Display for JsonOp {
             DeletePath => f.write_str("#-"),
             ContainsPath => f.write_str("@?"),
             ApplyPathPredicate => f.write_str("@@"),
+            Delete => f.write_str("-"),
         }
     }
 }

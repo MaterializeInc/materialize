@@ -1046,7 +1046,7 @@ pub fn jsonb_get_string<'a>(
     }
 }
 
-pub fn jsonb_contains_field<'a>(
+pub fn jsonb_contains_string<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
@@ -1121,6 +1121,52 @@ pub fn jsonb_concat<'a>(
         (a, Datum::List(list_b)) => {
             let elems = Some(a).into_iter().chain(list_b.iter());
             Datum::List(temp_storage.push_list(elems))
+        }
+        _ => Datum::Null,
+    }
+}
+
+pub fn jsonb_delete_int64<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    match a {
+        Datum::List(list) => {
+            let i = if i >= 0 {
+                i
+            } else {
+                // index backwards from the end
+                (list.iter().count() as i64) + i
+            } as usize;
+            let elems = list
+                .iter()
+                .enumerate()
+                .filter(|(i2, _e)| i != *i2)
+                .map(|(_, e)| e);
+            Datum::List(temp_storage.push_list(elems))
+        }
+        _ => Datum::Null,
+    }
+}
+
+pub fn jsonb_delete_string<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    match a {
+        Datum::List(list) => {
+            let elems = list.iter().filter(|e| b != *e);
+            Datum::List(temp_storage.push_list(elems))
+        }
+        Datum::Dict(dict) => {
+            let k = b.unwrap_str();
+            let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
+            Datum::Dict(temp_storage.push_dict(pairs))
         }
         _ => Datum::Null,
     }
@@ -1606,9 +1652,11 @@ pub enum BinaryFunc {
     CastDecimalToString,
     JsonbGetInt64,
     JsonbGetString,
-    JsonbContainsField,
+    JsonbContainsString,
     JsonbConcat,
     JsonbContainsJsonb,
+    JsonbDeleteInt64,
+    JsonbDeleteString,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1716,9 +1764,11 @@ impl BinaryFunc {
             BinaryFunc::CastDecimalToString => cast_decimal_to_string,
             BinaryFunc::JsonbGetInt64 => jsonb_get_int64,
             BinaryFunc::JsonbGetString => jsonb_get_string,
-            BinaryFunc::JsonbContainsField => jsonb_contains_field,
+            BinaryFunc::JsonbContainsString => jsonb_contains_string,
             BinaryFunc::JsonbConcat => jsonb_concat,
             BinaryFunc::JsonbContainsJsonb => jsonb_contains_jsonb,
+            BinaryFunc::JsonbDeleteInt64 => jsonb_delete_int64,
+            BinaryFunc::JsonbDeleteString => jsonb_delete_string,
         }
     }
 
@@ -1818,11 +1868,11 @@ impl BinaryFunc {
 
             DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(true),
 
-            JsonbGetInt64 | JsonbGetString | JsonbConcat => {
+            JsonbGetInt64 | JsonbGetString | JsonbConcat | JsonbDeleteInt64 | JsonbDeleteString => {
                 ColumnType::new(ScalarType::Jsonb).nullable(true)
             }
 
-            JsonbContainsField | JsonbContainsJsonb => {
+            JsonbContainsString | JsonbContainsJsonb => {
                 ColumnType::new(ScalarType::Bool).nullable(in_nullable)
             }
         }
@@ -1887,9 +1937,11 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::CastDecimalToString => f.write_str("dectostr"),
             BinaryFunc::JsonbGetInt64 => f.write_str("b->i64"),
             BinaryFunc::JsonbGetString => f.write_str("b->str"),
-            BinaryFunc::JsonbContainsField => f.write_str("b?"),
+            BinaryFunc::JsonbContainsString => f.write_str("b?"),
             BinaryFunc::JsonbConcat => f.write_str("b||"),
             BinaryFunc::JsonbContainsJsonb => f.write_str("b<@"),
+            BinaryFunc::JsonbDeleteInt64 => f.write_str("b-int64"),
+            BinaryFunc::JsonbDeleteString => f.write_str("b-string"),
         }
     }
 }
