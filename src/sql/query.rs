@@ -1884,7 +1884,20 @@ fn plan_binary_op<'a>(
         Or => plan_boolean_op(catalog, ecx, BooleanOp::Or, left, right),
 
         Plus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Plus, left, right),
-        Minus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right),
+        Minus => {
+            // TODO(jamii) We can't just dispatch on type here because our type inference is kind of hacky
+            // but backtracking doesn't quite work either because parameter types are set in a mutable global map during planning.
+            // This calls for a bidirectional type inference - https://github.com/MaterializeInc/materialize/issues/1274
+            let old_param_types = ecx.qcx.param_types.borrow().clone();
+            let plan = plan_json_op(catalog, ecx, JsonOp::Delete, left, right);
+            match plan {
+                Ok(plan) => Ok(plan),
+                Err(_) => {
+                    *ecx.qcx.param_types.borrow_mut() = old_param_types;
+                    plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right)
+                }
+            }
+        }
         Multiply => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Multiply, left, right),
         Divide => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Divide, left, right),
         Modulus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Modulo, left, right),
@@ -1898,6 +1911,22 @@ fn plan_binary_op<'a>(
 
         Like => plan_like(catalog, ecx, left, right, false),
         NotLike => plan_like(catalog, ecx, left, right, true),
+
+        JsonGet => plan_json_op(catalog, ecx, JsonOp::Get, left, right),
+        JsonGetAsText => plan_json_op(catalog, ecx, JsonOp::GetAsText, left, right),
+        JsonGetPath => plan_json_op(catalog, ecx, JsonOp::GetPath, left, right),
+        JsonGetPathAsText => plan_json_op(catalog, ecx, JsonOp::GetPathAsText, left, right),
+        JsonContainsJson => plan_json_op(catalog, ecx, JsonOp::ContainsJson, left, right),
+        JsonContainedInJson => plan_json_op(catalog, ecx, JsonOp::ContainedInJson, left, right),
+        JsonContainsField => plan_json_op(catalog, ecx, JsonOp::ContainsField, left, right),
+        JsonContainsAnyFields => plan_json_op(catalog, ecx, JsonOp::ContainsAnyFields, left, right),
+        JsonContainsAllFields => plan_json_op(catalog, ecx, JsonOp::ContainsAllFields, left, right),
+        JsonConcat => plan_json_op(catalog, ecx, JsonOp::Concat, left, right),
+        JsonDeletePath => plan_json_op(catalog, ecx, JsonOp::DeletePath, left, right),
+        JsonContainsPath => plan_json_op(catalog, ecx, JsonOp::ContainsPath, left, right),
+        JsonApplyPathPredicate => {
+            plan_json_op(catalog, ecx, JsonOp::ApplyPathPredicate, left, right)
+        }
     }
 }
 
@@ -2260,6 +2289,92 @@ fn plan_like<'a>(
     Ok(expr)
 }
 
+fn plan_json_op(
+    catalog: &Catalog,
+    ecx: &ExprContext,
+    op: JsonOp,
+    left: &Expr,
+    right: &Expr,
+) -> Result<ScalarExpr, failure::Error> {
+    use JsonOp::*;
+    use ScalarType::*;
+
+    let lexpr = plan_expr(catalog, ecx, left, Some(ScalarType::String))?;
+    let ltype = ecx.column_type(&lexpr);
+    let rexpr = plan_expr(catalog, ecx, right, Some(ScalarType::String))?;
+    let rtype = ecx.column_type(&rexpr);
+
+    Ok(match (op, &ltype.scalar_type, &rtype.scalar_type) {
+        (Get, Jsonb, Int32) => lexpr.call_binary(
+            rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
+            BinaryFunc::JsonbGetInt64,
+        ),
+        (Get, Jsonb, Int64) => lexpr.call_binary(rexpr, BinaryFunc::JsonbGetInt64),
+        (Get, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbGetString),
+        (Get, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        (GetAsText, Jsonb, Int32) => lexpr
+            .call_binary(
+                rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
+                BinaryFunc::JsonbGetInt64,
+            )
+            .call_unary(UnaryFunc::CastJsonbToStringUnlessString),
+        (GetAsText, Jsonb, Int64) => lexpr
+            .call_binary(rexpr, BinaryFunc::JsonbGetInt64)
+            .call_unary(UnaryFunc::CastJsonbToStringUnlessString),
+        (GetAsText, Jsonb, String) => lexpr
+            .call_binary(rexpr, BinaryFunc::JsonbGetString)
+            .call_unary(UnaryFunc::CastJsonbToStringUnlessString),
+        (GetAsText, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        (ContainsField, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsString),
+        (ContainsField, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        (Concat, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat),
+        (Concat, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        (ContainsJson, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsJsonb),
+        (ContainsJson, Jsonb, String) => lexpr.call_binary(
+            rexpr.call_unary(UnaryFunc::CastStringToJsonb),
+            BinaryFunc::JsonbContainsJsonb,
+        ),
+        (ContainsJson, String, Jsonb) => lexpr
+            .call_unary(UnaryFunc::CastStringToJsonb)
+            .call_binary(rexpr, BinaryFunc::JsonbContainsJsonb),
+        (ContainsJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        (ContainedInJson, Jsonb, Jsonb) => rexpr.call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
+        (ContainedInJson, String, Jsonb) => rexpr.call_binary(
+            lexpr.call_unary(UnaryFunc::CastStringToJsonb),
+            BinaryFunc::JsonbContainsJsonb,
+        ),
+        (ContainedInJson, Jsonb, String) => rexpr
+            .call_unary(UnaryFunc::CastStringToJsonb)
+            .call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
+        (ContainedInJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        (Delete, Jsonb, Int32) => lexpr.call_binary(
+            rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
+            BinaryFunc::JsonbDeleteInt64,
+        ),
+        (Delete, Jsonb, Int64) => lexpr.call_binary(rexpr, BinaryFunc::JsonbDeleteInt64),
+        (Delete, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbDeleteString),
+        // TODO(jamii) there should be corresponding overloads for Array(Int64) and Array(String)
+        (Delete, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
+
+        // TODO(jamii) these require sql arrays
+        (ContainsAnyFields, _, _) => bail!("Unsupported json operator: {}", op),
+        (ContainsAllFields, _, _) => bail!("Unsupported json operator: {}", op),
+
+        // TODO(jamii) these require json paths
+        (GetPath, _, _) => bail!("Unsupported json operator: {}", op),
+        (GetPathAsText, _, _) => bail!("Unsupported json operator: {}", op),
+        (DeletePath, _, _) => bail!("Unsupported json operator: {}", op),
+        (ContainsPath, _, _) => bail!("Unsupported json operator: {}", op),
+        (ApplyPathPredicate, _, _) => bail!("Unsupported json operator: {}", op),
+    })
+}
+
 fn plan_between<'a>(
     catalog: &Catalog,
     ecx: &ExprContext,
@@ -2497,7 +2612,6 @@ enum BooleanOp {
     Or,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum ComparisonOp {
     Lt,
     LtEq,
@@ -2537,6 +2651,46 @@ impl fmt::Display for ArithmeticOp {
             ArithmeticOp::Multiply => f.write_str("*"),
             ArithmeticOp::Divide => f.write_str("/"),
             ArithmeticOp::Modulo => f.write_str("%"),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum JsonOp {
+    Get,
+    GetAsText,
+    GetPath,
+    GetPathAsText,
+    ContainsJson,
+    ContainedInJson,
+    ContainsField,
+    ContainsAnyFields,
+    ContainsAllFields,
+    Concat,
+    DeletePath,
+    ContainsPath,
+    ApplyPathPredicate,
+    Delete,
+}
+
+impl fmt::Display for JsonOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use JsonOp::*;
+        match self {
+            Get => f.write_str("->"),
+            GetAsText => f.write_str("->>"),
+            GetPath => f.write_str("#>"),
+            GetPathAsText => f.write_str("#>>"),
+            ContainsJson => f.write_str("@>"),
+            ContainedInJson => f.write_str("<@"),
+            ContainsField => f.write_str("?"),
+            ContainsAnyFields => f.write_str("?|"),
+            ContainsAllFields => f.write_str("?&"),
+            Concat => f.write_str("||"),
+            DeletePath => f.write_str("#-"),
+            ContainsPath => f.write_str("@?"),
+            ApplyPathPredicate => f.write_str("@@"),
+            Delete => f.write_str("-"),
         }
     }
 }
@@ -2773,7 +2927,12 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::TimestampTz => ScalarType::TimestampTz,
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => ScalarType::Jsonb,
+        DataType::Custom(name)
+            if name.to_string().to_lowercase() == "jsonb"
+                || name.to_string().to_lowercase() == "json" =>
+        {
+            ScalarType::Jsonb
+        }
         other @ DataType::Array(_)
         | other @ DataType::Binary(..)
         | other @ DataType::Blob(_)

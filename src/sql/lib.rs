@@ -12,7 +12,7 @@ use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 use ::expr::GlobalId;
 use catalog::{Catalog, CatalogEntry};
 use repr::{QualName, RelationDesc, Row, ScalarType};
-use sqlparser::dialect::AnsiDialect;
+use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser as SqlParser;
 
 pub use session::{PreparedStatement, Session, TransactionStatus};
@@ -94,7 +94,7 @@ pub struct Params {
 
 /// Parses a raw SQL string into a [`Statement`].
 pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
-    Ok(SqlParser::parse_sql(&AnsiDialect {}, sql)?)
+    Ok(SqlParser::parse_sql(&PostgreSqlDialect {}, sql)?)
 }
 
 /// Produces a [`Plan`] from a [`Statement`].

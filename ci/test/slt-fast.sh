@@ -91,8 +91,8 @@ tests=(
     test/cockroach/insert.slt
     test/cockroach/int_size.slt
     # test/cockroach/join.slt
-    test/cockroach/json_builtins.slt
-    test/cockroach/json.slt
+    # test/cockroach/json_builtins.slt
+    # test/cockroach/json.slt
     test/cockroach/like.slt
     test/cockroach/limit.slt
     # test/cockroach/lookup_join.slt

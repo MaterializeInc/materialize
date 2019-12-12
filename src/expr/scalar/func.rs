@@ -492,6 +492,18 @@ pub fn cast_jsonb_to_string<'a>(
     Datum::String(temp_storage.push_string(&datum_to_serde(a).to_string()))
 }
 
+pub fn cast_jsonb_to_string_unless_string<'a>(
+    a: Datum<'a>,
+    eval_env: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    match a {
+        Datum::JsonNull => Datum::Null,
+        Datum::String(_) => a,
+        _ => cast_jsonb_to_string(a, eval_env, temp_storage),
+    }
+}
+
 pub fn add_int32<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -1001,6 +1013,177 @@ pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut PackableRow<'a>)
     Datum::from(a >= b)
 }
 
+pub fn jsonb_get_int64<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    match a {
+        Datum::List(list) => {
+            let i = if i >= 0 {
+                i
+            } else {
+                // index backwards from the end
+                (list.iter().count() as i64) + i
+            };
+            list.iter().nth(i as usize).unwrap_or(Datum::Null)
+        }
+        Datum::Dict(_) => Datum::Null,
+        _ => {
+            if i == 0 || i == -1 {
+                // I have no idea why postgres does this, but we're stuck with it
+                a
+            } else {
+                Datum::Null
+            }
+        }
+    }
+}
+
+pub fn jsonb_get_string<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let k = b.unwrap_str();
+    match a {
+        Datum::Dict(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
+            Some((_k, v)) => v,
+            None => Datum::Null,
+        },
+        _ => Datum::Null,
+    }
+}
+
+pub fn jsonb_contains_string<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let k = b.unwrap_str();
+    // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
+    match a {
+        Datum::List(list) => list.iter().any(|k2| b == k2).into(),
+        Datum::Dict(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
+        Datum::String(string) => (string == k).into(),
+        _ => false.into(),
+    }
+}
+
+// TODO(jamii) nested loops are possibly not the fastest way to do this
+pub fn jsonb_contains_jsonb<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    _: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
+    fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
+        match (a, b) {
+            (Datum::JsonNull, Datum::JsonNull) => true,
+            (Datum::False, Datum::False) => true,
+            (Datum::True, Datum::True) => true,
+            (Datum::Float64(a), Datum::Float64(b)) => (a == b),
+            (Datum::String(a), Datum::String(b)) => (a == b),
+            (Datum::List(a), Datum::List(b)) => b
+                .iter()
+                .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false))),
+            (Datum::Dict(a), Datum::Dict(b)) => b.iter().all(|(b_key, b_val)| {
+                a.iter()
+                    .any(|(a_key, a_val)| (a_key == b_key) && contains(a_val, b_val, false))
+            }),
+
+            // fun special case
+            (Datum::List(a), b) => {
+                at_top_level && a.iter().any(|a_elem| contains(a_elem, b, false))
+            }
+
+            _ => false,
+        }
+    }
+    contains(a, b, true).into()
+}
+
+pub fn jsonb_concat<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    match (a, b) {
+        (Datum::Dict(dict_a), Datum::Dict(dict_b)) => {
+            let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
+            // stable sort, so if keys collide dedup prefers dict_b
+            pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
+            pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
+            Datum::Dict(temp_storage.push_dict(pairs))
+        }
+        (Datum::List(list_a), Datum::List(list_b)) => {
+            let elems = list_a.iter().chain(list_b.iter());
+            Datum::List(temp_storage.push_list(elems))
+        }
+        (Datum::List(list_a), b) => {
+            let elems = list_a.iter().chain(Some(b).into_iter());
+            Datum::List(temp_storage.push_list(elems))
+        }
+        (a, Datum::List(list_b)) => {
+            let elems = Some(a).into_iter().chain(list_b.iter());
+            Datum::List(temp_storage.push_list(elems))
+        }
+        _ => Datum::Null,
+    }
+}
+
+pub fn jsonb_delete_int64<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    match a {
+        Datum::List(list) => {
+            let i = if i >= 0 {
+                i
+            } else {
+                // index backwards from the end
+                (list.iter().count() as i64) + i
+            } as usize;
+            let elems = list
+                .iter()
+                .enumerate()
+                .filter(|(i2, _e)| i != *i2)
+                .map(|(_, e)| e);
+            Datum::List(temp_storage.push_list(elems))
+        }
+        _ => Datum::Null,
+    }
+}
+
+pub fn jsonb_delete_string<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &mut PackableRow<'a>,
+) -> Datum<'a> {
+    match a {
+        Datum::List(list) => {
+            let elems = list.iter().filter(|e| b != *e);
+            Datum::List(temp_storage.push_list(elems))
+        }
+        Datum::Dict(dict) => {
+            let k = b.unwrap_str();
+            let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
+            Datum::Dict(temp_storage.push_dict(pairs))
+        }
+        _ => Datum::Null,
+    }
+}
+
 pub fn to_char<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
@@ -1479,6 +1662,13 @@ pub enum BinaryFunc {
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     CastDecimalToString,
+    JsonbGetInt64,
+    JsonbGetString,
+    JsonbContainsString,
+    JsonbConcat,
+    JsonbContainsJsonb,
+    JsonbDeleteInt64,
+    JsonbDeleteString,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1584,6 +1774,13 @@ impl BinaryFunc {
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
             BinaryFunc::CastDecimalToString => cast_decimal_to_string,
+            BinaryFunc::JsonbGetInt64 => jsonb_get_int64,
+            BinaryFunc::JsonbGetString => jsonb_get_string,
+            BinaryFunc::JsonbContainsString => jsonb_contains_string,
+            BinaryFunc::JsonbConcat => jsonb_concat,
+            BinaryFunc::JsonbContainsJsonb => jsonb_contains_jsonb,
+            BinaryFunc::JsonbDeleteInt64 => jsonb_delete_int64,
+            BinaryFunc::JsonbDeleteString => jsonb_delete_string,
         }
     }
 
@@ -1682,6 +1879,14 @@ impl BinaryFunc {
             | SubTimestampTzInterval => input1_type,
 
             DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(true),
+
+            JsonbGetInt64 | JsonbGetString | JsonbConcat | JsonbDeleteInt64 | JsonbDeleteString => {
+                ColumnType::new(ScalarType::Jsonb).nullable(true)
+            }
+
+            JsonbContainsString | JsonbContainsJsonb => {
+                ColumnType::new(ScalarType::Bool).nullable(in_nullable)
+            }
         }
     }
 
@@ -1742,6 +1947,13 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::CastDecimalToString => f.write_str("dectostr"),
+            BinaryFunc::JsonbGetInt64 => f.write_str("b->i64"),
+            BinaryFunc::JsonbGetString => f.write_str("b->str"),
+            BinaryFunc::JsonbContainsString => f.write_str("b?"),
+            BinaryFunc::JsonbConcat => f.write_str("b||"),
+            BinaryFunc::JsonbContainsJsonb => f.write_str("b<@"),
+            BinaryFunc::JsonbDeleteInt64 => f.write_str("b-int64"),
+            BinaryFunc::JsonbDeleteString => f.write_str("b-string"),
         }
     }
 }
@@ -1802,6 +2014,7 @@ pub enum UnaryFunc {
     CastBytesToString,
     CastStringToJsonb,
     CastJsonbToString,
+    CastJsonbToStringUnlessString,
     CeilFloat32,
     CeilFloat64,
     FloorFloat32,
@@ -1889,6 +2102,7 @@ impl UnaryFunc {
             UnaryFunc::CastBytesToString => cast_bytes_to_string,
             UnaryFunc::CastStringToJsonb => cast_string_to_jsonb,
             UnaryFunc::CastJsonbToString => cast_jsonb_to_string,
+            UnaryFunc::CastJsonbToStringUnlessString => cast_jsonb_to_string_unless_string,
             UnaryFunc::CeilFloat32 => ceil_float32,
             UnaryFunc::CeilFloat64 => ceil_float64,
             UnaryFunc::FloorFloat32 => floor_float32,
@@ -2016,7 +2230,9 @@ impl UnaryFunc {
             // can return null for invalid json
             CastStringToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
             // can return null for nan/infinity
-            CastJsonbToString => ColumnType::new(ScalarType::String).nullable(true),
+            CastJsonbToString | CastJsonbToStringUnlessString => {
+                ColumnType::new(ScalarType::String).nullable(true)
+            }
 
             CeilFloat32 | FloorFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
@@ -2126,6 +2342,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
             UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
+            UnaryFunc::CastJsonbToStringUnlessString => f.write_str("jsonbtostr?"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),

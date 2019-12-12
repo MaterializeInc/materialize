@@ -332,7 +332,7 @@ impl<'a> DatumList<'a> {
         DatumList { data: &[] }
     }
 
-    pub fn iter(&'a self) -> DatumListIter<'a> {
+    pub fn iter(&self) -> DatumListIter<'a> {
         DatumListIter {
             data: self.data,
             offset: 0,
@@ -364,7 +364,7 @@ impl<'a> DatumDict<'a> {
         DatumDict { data: &[] }
     }
 
-    pub fn iter(&'a self) -> DatumDictIter<'a> {
+    pub fn iter(&self) -> DatumDictIter<'a> {
         DatumDictIter {
             data: self.data,
             offset: 0,
