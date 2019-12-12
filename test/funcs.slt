@@ -183,42 +183,42 @@ SELECT ceil(cast(1 AS bigint))
 ----
 1
 
-#query R
-#SELECT floor(NULL)
-#----
-#NULL
+query R
+SELECT floor(NULL)
+----
+NULL
 
-#query R
-#SELECT ceil(NULL)
-#----
-#NULL
+query R
+SELECT ceil(NULL)
+----
+NULL
 
-#statement ok
-#CREATE TABLE null_test (
-#    decimal_col Decimal(14, 2),
-#    float_col float
-#)
+statement ok
+CREATE TABLE null_test (
+   decimal_col decimal(14, 2),
+   float_col float
+)
 
-#statement ok
-#INSERT INTO null_test VALUES (5.06, -1.59), (-12.58, NULL), (2.96, 2.2), (NULL, 23.8), (-9.4, -48.2)
+statement ok
+INSERT INTO null_test VALUES (5.06, -1.59), (-12.58, NULL), (2.96, 2.2), (NULL, 23.8), (-9.4, -48.2)
 
-#query RR rowsort
-#SELECT floor(decimal_col), floor(float_col) from null_test;
-#----
-#-10.00  -49
-#-13.00  NULL
-#2.00    2
-#5.00    -2
-#NULL    23
+query RR rowsort
+SELECT floor(decimal_col), floor(float_col) FROM null_test
+----
+-10.00  -49
+-13.00  NULL
+2.00    2
+5.00    -2
+NULL    23
 
-#query RR rowsort
-#SELECT ceil(decimal_col), ceil(float_col) from null_test;
-#----
-#-9.00  -48
-#-12.00  NULL
-#3.00    3
-#6.00    -1
-#NULL    24
+query RR rowsort
+SELECT ceil(decimal_col), ceil(float_col) FROM null_test
+----
+-12.00  NULL
+-9.00  -48
+3.00    3
+6.00    -1
+NULL    24
 
 # Tests for the sqrt function.
 #
