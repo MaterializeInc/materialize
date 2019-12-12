@@ -1434,36 +1434,19 @@ fn plan_function<'a>(
                     bail!("ceil expects 1 argument, got {}", sql_func.args.len());
                 }
                 let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
-                let typ = ecx.column_type(&expr);
-                let expr = match typ.scalar_type {
-                    ScalarType::Float32 => ScalarExpr::CallUnary {
-                        func: UnaryFunc::CeilFloat32,
-                        expr: Box::new(expr),
-                    },
-                    ScalarType::Float64 => ScalarExpr::CallUnary {
-                        func: UnaryFunc::CeilFloat64,
-                        expr: Box::new(expr),
-                    },
-                    ScalarType::Decimal(_, scale) => ScalarExpr::CallBinary {
-                        func: BinaryFunc::CeilDecimal,
-                        expr1: Box::new(expr),
-                        expr2: Box::new(ScalarExpr::literal(
+                let expr = promote_number_floatdec(ecx, "ceil", expr)?;
+                Ok(match ecx.column_type(&expr).scalar_type {
+                    ScalarType::Float32 => expr.call_unary(UnaryFunc::CeilFloat32),
+                    ScalarType::Float64 => expr.call_unary(UnaryFunc::CeilFloat64),
+                    ScalarType::Decimal(_, scale) => expr.call_binary(
+                        ScalarExpr::literal(
                             Datum::from(scale as i32),
                             ColumnType::new(ScalarType::Null), // ignored
-                        )),
-                    },
-                    // Postgres converts these to doubles when floor is called
-                    ScalarType::Int32 => ScalarExpr::CallUnary {
-                        func: UnaryFunc::CastInt32ToFloat64,
-                        expr: Box::new(expr),
-                    },
-                    ScalarType::Int64 => ScalarExpr::CallUnary {
-                        func: UnaryFunc::CastInt64ToFloat64,
-                        expr: Box::new(expr),
-                    },
-                    _ => bail!("ceil only accepts decimals and floats, not type {:?}", typ),
-                };
-                Ok(expr)
+                        ),
+                        BinaryFunc::CeilDecimal,
+                    ),
+                    _ => unreachable!(),
+                })
             }
 
             "coalesce" => {
@@ -1498,36 +1481,19 @@ fn plan_function<'a>(
                     bail!("floor expects 1 argument, got {}", sql_func.args.len());
                 }
                 let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
-                let typ = ecx.column_type(&expr);
-                let expr = match typ.scalar_type {
-                    ScalarType::Float32 => ScalarExpr::CallUnary {
-                        func: UnaryFunc::FloorFloat32,
-                        expr: Box::new(expr),
-                    },
-                    ScalarType::Float64 => ScalarExpr::CallUnary {
-                        func: UnaryFunc::FloorFloat64,
-                        expr: Box::new(expr),
-                    },
-                    ScalarType::Decimal(_, scale) => ScalarExpr::CallBinary {
-                        func: BinaryFunc::FloorDecimal,
-                        expr1: Box::new(expr),
-                        expr2: Box::new(ScalarExpr::literal(
+                let expr = promote_number_floatdec(ecx, "floor", expr)?;
+                Ok(match ecx.column_type(&expr).scalar_type {
+                    ScalarType::Float32 => expr.call_unary(UnaryFunc::FloorFloat32),
+                    ScalarType::Float64 => expr.call_unary(UnaryFunc::FloorFloat64),
+                    ScalarType::Decimal(_, scale) => expr.call_binary(
+                        ScalarExpr::literal(
                             Datum::from(scale as i32),
                             ColumnType::new(ScalarType::Null), // ignored
-                        )),
-                    },
-                    // Postgres converts these to doubles when floor is called
-                    ScalarType::Int32 => ScalarExpr::CallUnary {
-                        func: UnaryFunc::CastInt32ToFloat64,
-                        expr: Box::new(expr),
-                    },
-                    ScalarType::Int64 => ScalarExpr::CallUnary {
-                        func: UnaryFunc::CastInt64ToFloat64,
-                        expr: Box::new(expr),
-                    },
-                    _ => bail!("floor only accepts numbers, not type {:?}", typ),
-                };
-                Ok(expr)
+                        ),
+                        BinaryFunc::FloorDecimal,
+                    ),
+                    _ => unreachable!(),
+                })
             }
 
             "mod" => {
@@ -2853,11 +2819,8 @@ where
     S: fmt::Display + Copy,
 {
     Ok(match ecx.column_type(&expr).scalar_type {
-        ScalarType::Null
-        | ScalarType::Float32
-        | ScalarType::Float64
-        | ScalarType::Decimal(_, _) => expr,
-        ScalarType::Int32 | ScalarType::Int64 => {
+        ScalarType::Float32 | ScalarType::Float64 | ScalarType::Decimal(_, _) => expr,
+        ScalarType::Null | ScalarType::Int32 | ScalarType::Int64 => {
             plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
         }
         other => bail!("{} has non-numeric type {:?}", name, other),
@@ -2873,8 +2836,10 @@ where
     S: fmt::Display + Copy,
 {
     Ok(match ecx.column_type(&expr).scalar_type {
-        ScalarType::Null | ScalarType::Int64 => expr,
-        ScalarType::Int32 => plan_cast_internal(ecx, name, expr, ScalarType::Int64)?,
+        ScalarType::Int64 => expr,
+        ScalarType::Null | ScalarType::Int32 => {
+            plan_cast_internal(ecx, name, expr, ScalarType::Int64)?
+        }
         other => bail!("{} has non-integer type {:?}", name, other,),
     })
 }
