@@ -5,6 +5,9 @@ use protoc::Protoc;
 use serde_protobuf::descriptor::{
     Descriptors, FieldDescriptor, FieldLabel, FieldType, MessageDescriptor,
 };
+use serde_protobuf::de::Deserializer;
+use serde::de::Deserialize;
+use serde_value::Value;
 
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
@@ -128,6 +131,34 @@ fn validate_proto_schema(
     ))
 }
 
+// Manages required metadata to read protobuf
+#[derive(Debug)]
+pub struct Decoder {
+    pub descriptors: Descriptors,
+    pub message_name: String,
+}
+
+impl Decoder {
+    pub fn new(message_name: &str, descriptors: Descriptors) -> Decoder {
+        // It's assumed that we've already validated that the message exists in
+        // the descriptor set and is valid
+
+        Decoder {
+            descriptors: descriptors,
+            message_name: message_name.to_string(),
+        }
+    }
+
+    pub fn decode(&self, mut bytes: &[u8]) -> Result<(), failure::Error> {
+        let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
+        let mut deserializer = Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream).expect("Creating a input stream to parse protobuf");
+        let value = Value::deserialize(&mut deserializer);
+        println!("{:?}", value);
+
+        Ok(())
+    }
+}
+         
 #[cfg(test)]
 mod tests {
     use failure::{bail, Error};
