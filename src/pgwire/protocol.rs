@@ -32,8 +32,8 @@ use sql::Session;
 
 use crate::codec::Codec;
 use crate::message::{
-    self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, ParameterDescription,
-    Severity, VERSIONS, VERSION_3,
+    self, BackendMessage, EncryptionType, FieldFormat, FieldFormatIter, FrontendMessage,
+    ParameterDescription, Severity, VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
 
@@ -382,7 +382,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             }
             FrontendMessage::GssEncRequest | FrontendMessage::SslRequest => {
                 transition!(SendEncryptionResponse {
-                    send: conn.send(BackendMessage::EncryptionResponse(false)),
+                    send: conn.send(BackendMessage::EncryptionResponse(EncryptionType::None)),
                     session: state.session,
                 })
             }

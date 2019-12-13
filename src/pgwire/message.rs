@@ -185,10 +185,16 @@ pub enum FrontendMessage {
     Terminate,
 }
 
+#[derive(Debug)]
+pub enum EncryptionType {
+    None,
+    Ssl,
+    GssApi,
+}
+
 /// Internal representation of a backend [message]
 ///
 /// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum BackendMessage {
     AuthenticationOk,
@@ -196,7 +202,7 @@ pub enum BackendMessage {
         tag: String,
     },
     EmptyQueryResponse,
-    EncryptionResponse(bool),
+    EncryptionResponse(EncryptionType),
     ReadyForQuery(TransactionStatus),
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<FieldValue>>, FieldFormatIter),
