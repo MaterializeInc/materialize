@@ -35,7 +35,7 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source, SourceConnector,
+    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source, SourceConnector,
     TailSinkConnector, Timestamp, Update, View,
 };
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr};
@@ -77,12 +77,12 @@ where
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
     views: HashMap<GlobalId, ViewState>,
-    /// Each source name maps to a source and re-written name (for auto-created views).
-    sources: HashMap<GlobalId, (dataflow_types::Source, Option<GlobalId>)>,
+    /// Each source name maps to a source.
+    sources: HashMap<GlobalId, dataflow_types::Source>,
     /// Maps (view id, keys index is arranged on) -> (how many aliases it has, id of the first alias)
-    indexes: HashMap<(GlobalId, Vec<ScalarExpr>), (usize, GlobalId)>,
+    indexes: HashMap<IndexDesc, (usize, GlobalId)>,
     /// Maps (id corresponding to an index name) -> (view id, keys index is arranged on)
-    index_aliases: HashMap<GlobalId, (GlobalId, Vec<ScalarExpr>)>,
+    index_aliases: HashMap<GlobalId, IndexDesc>,
     since_updates: Vec<(GlobalId, Vec<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
@@ -162,25 +162,15 @@ where
             for (id, name, item) in catalog_entries {
                 match item {
                     CatalogItem::Source(source) => {
-                        match id {
-                            GlobalId::User(_) => coord.create_sources_id(vec![(id, source)]),
-                            GlobalId::System(_) => {
-                                // Insert with 1 second compaction latency.
-                                coord.insert_source(id, Some(1_000));
-                            }
-                        }
+                        coord.sources.insert(id, source);
                     }
                     CatalogItem::View(view) => {
-                        let dataflow =
-                            DataflowDesc::new(name.to_string()).add_view(id, view.clone());
-                        coord.create_dataflows(vec![dataflow]);
+                        coord.insert_view(id, view);
                     }
                     CatalogItem::Sink(sink) => {
-                        let dataflow =
-                            DataflowDesc::new(name.to_string()).add_sink(id, sink.clone());
-                        coord.create_dataflows(vec![dataflow]);
+                        coord.create_sink_dataflow(name, id, sink);
                     }
-                    CatalogItem::Index(index) => coord.create_index(id, &name, index.desc),
+                    CatalogItem::Index(index) => coord.create_index_dataflow(name, id, index),
                 }
             }
 
@@ -342,23 +332,40 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         Ok(match plan {
             Plan::CreateTable { name, desc } => {
-                self.create_sources(vec![(
-                    name,
-                    Source {
-                        connector: SourceConnector::Local,
-                        desc,
-                    },
-                )])?;
+                let source = Source {
+                    connector: SourceConnector::Local,
+                    desc,
+                };
+                let source_name = name.with_trailing_string("_SRC");
+                let source_id = self.register_source(&source_name, &source)?;
+                self.sources.insert(source_id, source);
+                // Tables must always be mirrored if we don't want to change sqlite
+                // tests to select from a view instead of the table
+                // For the sqlite tests to work properly, the mirrored view takes on the name of
+                // the table, and the source gets a different name
+                let view = View {
+                    raw_sql: "<created by CREATE TABLE>".to_string(),
+                    relation_expr: RelationExpr::global_get(source_id, desc.typ().clone()),
+                    eval_env: EvalEnv::default(),
+                    desc: desc,
+                };
+                let view_id = self.register_view(&name, &view)?;
+                self.create_materialized_view_dataflow(name, view_id, view, None)?;
                 ExecuteResponse::CreatedTable
             }
 
             Plan::CreateSource(name, source) => {
-                self.create_sources(vec![(name, source)])?;
+                // TODO (materialize#1019): remove all the mirroring code
+                let source_id = self.register_source(&name, &source)?;
+                self.sources.insert(source_id, source.clone());
                 ExecuteResponse::CreatedSource
             }
 
             Plan::CreateSources(sources) => {
-                self.create_sources(sources.clone())?;
+                for (name, source) in sources.iter() {
+                    let source_id = self.register_source(&name, source)?;
+                    self.sources.insert(source_id, source.clone());
+                }
                 send_immediate_rows(
                     sources
                         .iter()
@@ -376,33 +383,19 @@ where
                     self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
                     true,
                 );
-                self.create_dataflows(vec![DataflowDesc::new(name.to_string()).add_sink(id, sink)]);
+                self.create_sink_dataflow(name, id, sink);
                 ExecuteResponse::CreatedSink
             }
 
             Plan::CreateView(name, view) => {
-                let id = self
-                    .catalog
-                    .insert(name.clone(), CatalogItem::View(view.clone()))?;
-                self.report_catalog_update(
-                    id,
-                    self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
-                    true,
-                );
-                self.create_dataflows(vec![DataflowDesc::new(name.to_string()).add_view(id, view)]);
+                let id = self.register_view(&name, &view)?;
+                self.create_materialized_view_dataflow(name, id, view, None)?;
                 ExecuteResponse::CreatedView
             }
 
             Plan::CreateIndex(name, index) => {
-                let id = self
-                    .catalog
-                    .insert(name.clone(), CatalogItem::Index(index.clone()))?;
-                self.report_catalog_update(
-                    id,
-                    self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
-                    true,
-                );
-                self.create_index(id, &name, index.desc);
+                let id = self.register_index(&name, &index)?;
+                self.create_index_dataflow(name, id, index);
                 ExecuteResponse::CreatedIndex
             }
 
@@ -420,13 +413,8 @@ where
                 let mut indexes_to_drop = Vec::new();
                 for id in ids {
                     // TODO: Test if a name was installed and error if not?
-                    if let Some((_source, new_id)) = self.sources.remove(&id) {
+                    if self.sources.remove(&id).is_some() {
                         sources_to_drop.push(id);
-                        if let Some(id) = new_id {
-                            views_to_drop.push(id);
-                        } else {
-                            panic!("Attempting to drop an uninstalled source: {}", id);
-                        }
                     } else if self.views.contains_key(&id) {
                         views_to_drop.push(id);
                     } else {
@@ -522,17 +510,10 @@ where
 
                     // Create a transient view if the peek is not of a base relation.
                     if let RelationExpr::Get {
-                        id: Id::Global(mut id),
+                        id: Id::Global(id),
                         typ: _,
                     } = source
                     {
-                        // If `name` is a source, we'll need to rename it.
-                        if let Some((_source, rename)) = self.sources.get(&id) {
-                            if let Some(rename) = rename {
-                                id = *rename;
-                            }
-                        }
-
                         // Fast path. We can just look at the existing dataflow directly.
                         broadcast(
                             &mut self.broadcast_tx,
@@ -572,11 +553,7 @@ where
                             desc,
                             eval_env: eval_env.clone(),
                         };
-                        let dataflow = DataflowDesc::new(format!("temp-view-{}", view_id))
-                            .add_view(view_id, view)
-                            .as_of(Some(vec![timestamp.clone()]));
-
-                        self.create_dataflows(vec![dataflow]);
+                        self.create_materialized_view_dataflow(format!("temp-view-{}", view_id).lit(), view_id, view, Some(vec![timestamp.clone()]))?;
                         broadcast(
                             &mut self.broadcast_tx,
                             SequencedCommand::Peek {
@@ -617,27 +594,18 @@ where
             }
 
             Plan::Tail(source) => {
-                let mut source_id = source.id();
+                let source_id = source.id();
 
-                // Auto-generate a name for the sink based on the name of the
-                // source. This uses the pre-rewrite source ID.
-                let tail_name = format!(
+                let sink_name = format!(
                     "tail-source-{}",
                     self.catalog
                         .humanize_id(Id::Global(source_id))
                         .expect("Source id is known to exist in catalog")
                 );
-
-                // Now find the materialized view associated with the source.
-                if let Some((_source, rename)) = self.sources.get(&source_id) {
-                    if let Some(rename) = rename {
-                        source_id = rename.clone();
-                    }
-                }
-
                 let sink_id = self.catalog.allocate_id();
                 self.active_tails.insert(conn_id, sink_id);
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+                // TODO: account for non-materialized view
                 let since = self
                     .upper_of(&source_id)
                     .expect("name missing at coordinator")
@@ -648,12 +616,7 @@ where
                     from: (source_id, source.desc()?.clone()),
                     connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                 };
-                let dataflow = DataflowDesc::new(tail_name).add_sink(sink_id, sink);
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::CreateDataflows(vec![dataflow]),
-                );
-
+                self.create_sink_dataflow(sink_name.lit(), sink_id, sink);
                 ExecuteResponse::Tailing { rx }
             }
 
@@ -692,7 +655,7 @@ where
                 let local_inputs = self
                     .sources
                     .iter()
-                    .filter_map(|(name, (src, _view))| match src.connector {
+                    .filter_map(|(name, src)| match src.connector {
                         SourceConnector::Local => Some(name),
                         _ => None,
                     });
@@ -716,168 +679,213 @@ where
         })
     }
 
-    /// Create sources as described by `sources`.
+    /// Register sources as described by `sources`.
     ///
     /// This method installs descriptions of each source in `sources` in the
     /// coordinator, so that they can be recovered when used by name in views.
-    /// The method also creates a view for each source which mirrors the
-    /// contents.
-    fn create_sources(
+    fn register_source(
         &mut self,
-        sources: Vec<(QualName, dataflow_types::Source)>,
-    ) -> Result<(), failure::Error> {
-        let mut source_ids = Vec::with_capacity(sources.len());
-        for (name, source) in sources {
-            let id = self
-                .catalog
-                .insert(name.clone(), CatalogItem::Source(source.clone()))?;
-            self.report_catalog_update(
-                id,
-                self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
-                true,
-            );
-            source_ids.push((id, source));
+        name: &QualName,
+        source: &dataflow_types::Source,
+    ) -> Result<GlobalId, failure::Error> {
+        let id = self
+            .catalog
+            .insert(name.clone(), CatalogItem::Source(source.clone()))?;
+        self.report_catalog_update(
+            id,
+            self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
+            true,
+        );
+        Ok(id)
+    }
+
+    fn register_view(
+        &mut self,
+        name: &QualName,
+        view: &dataflow_types::View,
+    ) -> Result<GlobalId, failure::Error> {
+        let id = self
+            .catalog
+            .insert(name.clone(), CatalogItem::View(view.clone()))?;
+        self.report_catalog_update(
+            id,
+            self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
+            true,
+        );
+        Ok(id)
+    }
+
+    fn register_index(
+        &mut self,
+        name: &QualName,
+        index: &dataflow_types::Index
+    ) -> Result<GlobalId, failure::Error> {
+        let id = self
+            .catalog
+            .insert(name.clone(), CatalogItem::Index(index.clone()))?;
+        self.report_catalog_update(
+            id,
+            self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
+            true,
+        );
+        Ok(id)
+    }
+
+    fn import_source_or_view (
+        &mut self,
+        id: &GlobalId,
+        dataflow: &mut DataflowDesc,
+    ) {
+        if dataflow.objects_to_build.iter().find(|bd| &bd.id == id).is_some() ||
+            dataflow.source_imports.iter().find(|(i, _)| i == id).is_some() {
+            return;
         }
-        self.create_sources_id(source_ids);
+        if let Some(source) = self.sources.get(id) {
+            dataflow.add_source_import(*id, source.clone());
+        } else {
+            let view_item = self.catalog.get_by_id(id).item().clone();
+            match view_item {
+                CatalogItem::View(view) => {
+                    if let Some(materialization_state) = &self.views[id].materialization {
+                        let keys = materialization_state.get_primary_key();
+                        dataflow.add_index_import(IndexDesc { on_id: *id, keys: keys.to_vec() }, view.desc.typ().clone());
+                    } else {
+                        self.build_view_collection(id, &view, dataflow);
+                    }
+                }
+                _ => unreachable!()
+            }   
+        }
+    }
+
+    fn build_view_collection(
+        &mut self,
+        id: &GlobalId,
+        view: &dataflow_types::View,
+        dataflow: &mut DataflowDesc,
+    ) {
+        let mut view_to_build = view.clone();
+        // Collect names of sources used
+        view_to_build.relation_expr.visit(&mut |e| {
+            if let RelationExpr::Get {
+                id: Id::Global(id),
+                typ: _,
+            } = e
+            {
+                self.import_source_or_view(id, dataflow);
+            }
+        });
+        self.optimizer.optimize(&mut view_to_build.relation_expr, &view_to_build.eval_env);
+        dataflow.add_view_to_build(*id, view_to_build);
+    }
+
+    fn build_arrangement(
+        &mut self,
+        id: &GlobalId,
+        index: &dataflow_types::Index,
+        dataflow: &mut DataflowDesc,
+    ) {
+        self.import_source_or_view(&index.desc.on_id, dataflow);
+        dataflow.add_index_to_build(*id, index.clone());
+    }
+
+    fn auto_materialize_view(
+        &mut self,
+        view_name: &QualName,
+        id: &GlobalId,
+        view: &dataflow_types::View,
+        dataflow: &mut DataflowDesc,
+        temp: bool,
+    ) -> Result<(GlobalId, IndexDesc), failure::Error> {
+        self.build_view_collection(id, view, dataflow);
+        let keys = if let Some(keys) = view.desc.typ().keys.first() {
+            keys.clone()
+        } else {
+            (0..view.desc.typ().column_types.len()).collect()
+        };
+        let index_name = view_name.with_trailing_string("_PRIMARY_IDX");
+        let raw_keys = keys.iter().map(|k|
+            dataflow_types::KeySql {
+                raw_sql: view.desc.get_name(k).as_ref().unwrap_or(&ColumnName::from(k.to_string())).to_string(),
+                is_column_name: true,
+                nullable: view.desc.typ().column_types[*k].nullable,
+            }
+        ).collect::<Vec<_>>();
+        let index_desc = IndexDesc{on_id: *id, keys: keys.iter().map(|k| ScalarExpr::Column(*k)).collect::<Vec<_>>()};
+        let index = dataflow_types::Index {
+            desc: index_desc,
+            raw_keys,
+            relation_type: view.desc.typ().clone(),
+            eval_env: EvalEnv::default(),
+        };
+        let index_id = if temp {
+            self.catalog.allocate_id()
+        } else {
+            self.register_index(&index_name, &index)?
+        };
+        self.build_arrangement(&index_id, &index, dataflow);
+        dataflow.add_index_export(index.desc.clone(), view.desc.typ().clone());
+        Ok((index_id, index.desc.clone()))
+    }
+
+    fn create_materialized_view_dataflow(
+        &mut self,
+        view_name: QualName,
+        id: GlobalId,
+        view: dataflow_types::View,
+        as_of: Option<Vec<Timestamp>>
+    ) -> Result<(), failure::Error> {
+        self.insert_view(id, view.clone());
+        let mut dataflow = DataflowDesc::new(view_name.to_string());
+        let (index_id, materialized_index) = self.auto_materialize_view(&view_name, &id, &view, &mut dataflow, as_of.is_some())?;
+        dataflow.as_of(as_of);
+        // TODO: should we still support creating multiple dataflows with a single command,
+        // Or should it all be compacted into a single DataflowDesc with multiple exports?
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CreateDataflows(vec![dataflow]),
+        );
+        self.add_index_to_view(index_id, materialized_index);
         Ok(())
     }
 
-    // Like `create_sources`, but for when the source IDs have already been
-    // assigned.
-    fn create_sources_id(&mut self, sources: Vec<(GlobalId, dataflow_types::Source)>) {
-        let dataflows: Vec<_> = sources
-            .into_iter()
-            .map(|(source_id, source)| {
-                // Effecting policy, we mirror all sources with a view.
-                let view_id = self.catalog.allocate_id();
-                self.sources
-                    .insert(source_id, (source.clone(), Some(view_id)));
-                let dataflow_name = self.catalog.humanize_id(Id::Global(source_id)).unwrap();
-                DataflowDesc::new(dataflow_name)
-                    .add_view(
-                        view_id,
-                        View {
-                            relation_expr: RelationExpr::Get {
-                                id: Id::Global(source_id),
-                                typ: source.desc.typ().clone(),
-                            },
-                            raw_sql: "<created by CREATE SOURCE>".to_string(),
-                            desc: source.desc.clone(),
-                            eval_env: EvalEnv::default(),
-                        },
-                    )
-                    .add_source(source_id, source.clone())
-            })
-            .collect();
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(dataflows.clone()),
-        );
-        for dataflow in dataflows.iter() {
-            for (source_id, source) in &dataflow.sources {
-                if let SourceConnector::Local = source.connector {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AdvanceTime {
-                            id: *source_id,
-                            to: self.local_input_time,
-                        },
-                    );
-                }
-            }
-            self.insert_views(dataflow);
-        }
-    }
-
-    fn create_index(
+    fn create_index_dataflow(
         &mut self,
-        idx_id: GlobalId,
-        name: &QualName,
-        mut idx: dataflow_types::IndexDesc,
+        name: QualName,
+        id: GlobalId,
+        index: dataflow_types::Index,
     ) {
-        // Rewrite the source used.
-        if let Some((_source, new_id)) = self.sources.get(&idx.on_id) {
-            // If the source has a corresponding view, use its name instead.
-            if let Some(new_id) = new_id {
-                idx.on_id = *new_id;
-            } else {
-                panic!("create_index called on bare source");
-            }
-        }
-        let trace_key = (idx.on_id.clone(), idx.keys.clone());
-        self.index_aliases.insert(idx_id, trace_key.clone());
+        self.index_aliases.insert(id, index.desc.clone());
 
-        if let Some((count, _id)) = self.indexes.get_mut(&trace_key) {
+        if let Some((count, _id)) = self.indexes.get_mut(&index.desc) {
             // just increment the count. no need to build a duplicate index
             *count += 1;
             return;
         }
-        self.indexes.insert(trace_key, (1, idx_id));
-        let dataflows = vec![DataflowDesc::new(name.to_string()).add_index(idx_id, idx)];
+
+        let mut dataflow = DataflowDesc::new(name.to_string());
+        self.build_arrangement(&id, &index, &mut dataflow);    
+        dataflow.add_index_export(index.desc.clone(), index.relation_type);
         broadcast(
             &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(dataflows),
+            SequencedCommand::CreateDataflows(vec![dataflow]),
         );
+        self.add_index_to_view(id, index.desc);
     }
 
-    pub fn create_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) {
-        for dataflow in dataflows.iter_mut() {
-            // Check for sources before optimization, to provide a consistent
-            // dependency experience. Perhaps change the order if we are ok
-            // with that.
-            let mut sources = Vec::new();
-            for (_id, view) in dataflow.views.iter_mut() {
-                // Collect names of sources used, rewrite them...
-                view.relation_expr.visit_mut(&mut |e| {
-                    if let RelationExpr::Get {
-                        id: Id::Global(id),
-                        typ: _,
-                    } = e
-                    {
-                        if let Some((_source, new_id)) = self.sources.get(id) {
-                            // If the source has a corresponding view, use its name instead.
-                            if let Some(new_id) = new_id {
-                                *id = *new_id;
-                            } else {
-                                sources.push(*id);
-                            }
-                        }
-                    }
-                })
-            }
-            for (_sink_id, sink) in dataflow.sinks.iter_mut() {
-                let (source_id, _) = &mut sink.from;
-                // If the source has a corresponding view, use its name instead.
-                if let Some((_source, new_id)) = self.sources.get(source_id) {
-                    // If the source has a corresponding view, use its name instead.
-                    if let Some(new_id) = new_id {
-                        *source_id = *new_id;
-                    } else {
-                        sources.push(*source_id);
-                    }
-                }
-            }
-            sources.sort();
-            sources.dedup();
-            for id in sources {
-                dataflow
-                    .sources
-                    .push((id, self.sources.get(&id).unwrap().0.clone()));
-            }
-
-            // Now optimize the query expression.
-            for (_id, view) in dataflow.views.iter_mut() {
-                self.optimizer
-                    .optimize(&mut view.relation_expr, &view.eval_env);
-            }
-        }
+    fn create_sink_dataflow(
+        &mut self,
+        name: QualName,
+        id: GlobalId,
+        sink: dataflow_types::Sink,
+    ) {
+        let mut dataflow = DataflowDesc::new(name.to_string());
+        self.import_source_or_view(&sink.from.0, &mut dataflow);
+        dataflow.add_sink_export(id, sink.clone());
         broadcast(
             &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(dataflows.clone()),
+            SequencedCommand::CreateDataflows(vec![dataflow]),
         );
-        for dataflow in dataflows.iter() {
-            self.insert_views(dataflow);
-        }
     }
 
     pub fn drop_views(&mut self, dataflow_names: Vec<GlobalId>) {
@@ -1031,7 +1039,7 @@ where
         source.global_uses(&mut uses_ids);
         uses_ids.sort();
         uses_ids.dedup();
-
+ 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
         let timestamp = match when {
@@ -1053,12 +1061,7 @@ where
                         }
                     }
                     PeekWhen::Immediately => {
-                        for mut id in uses_ids.iter().cloned() {
-                            if let Some((_source, rename)) = &self.sources.get(&id) {
-                                if let Some(rename) = rename {
-                                    id = *rename;
-                                }
-                            }
+                        for id in uses_ids.iter().cloned() {
                             sources.insert(id);
                         }
                     }
@@ -1094,12 +1097,7 @@ where
         // This bound is determined by the arrangements contributing to the query,
         // and does not depend on the transitive sources.
         let mut since = Antichain::from_elem(0);
-        for mut id in uses_ids {
-            if let Some((_source, rename)) = &self.sources.get(&id) {
-                if let Some(rename) = rename {
-                    id = *rename;
-                }
-            }
+        for id in uses_ids {
             let prior_since = std::mem::replace(&mut since, Antichain::new());
             let view_since = self.since_of(&id).expect("Since missing at coordinator");
             // To track the join of `since` we should replace with the pointwise
@@ -1135,22 +1133,14 @@ where
         sources: &mut HashSet<GlobalId>,
         reached: &mut HashSet<GlobalId>,
     ) {
-        if let Some((_source, rename)) = self.sources.get(&id) {
-            if let Some(rename) = rename {
-                self.sources_frontier(*rename, sources, reached);
+        reached.insert(id);
+        if let Some(view) = self.views.get(&id) {
+            if view.depends_on_source {
+                sources.insert(id);
             } else {
-                panic!("sources_frontier called on bare source");
-            }
-        } else {
-            reached.insert(id);
-            if let Some(view) = self.views.get(&id) {
-                if view.depends_on_source {
-                    sources.insert(id);
-                } else {
-                    for id in view.uses.iter() {
-                        if !reached.contains(id) {
-                            self.sources_frontier(*id, sources, reached);
-                        }
+                for id in view.uses.iter() {
+                    if !reached.contains(id) {
+                        self.sources_frontier(*id, sources, reached);
                     }
                 }
             }
@@ -1160,35 +1150,37 @@ where
     /// Updates the upper frontier of a named view.
     pub fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
         if let Some(entry) = self.views.get_mut(name) {
-            let changes: Vec<_> = entry.upper.update_iter(changes.drain()).collect();
-            if !changes.is_empty() {
-                if self.log {
-                    for (time, change) in changes {
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                name.clone(),
-                                time,
-                                change,
-                            )),
-                        );
+            if let Some(materialization_state) = entry.materialization.as_mut() {
+                let changes: Vec<_> = materialization_state.upper.update_iter(changes.drain()).collect();
+                if !changes.is_empty() {
+                    if self.log {
+                        for (time, change) in changes {
+                            broadcast(
+                                &mut self.broadcast_tx,
+                                SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                    name.clone(),
+                                    time,
+                                    change,
+                                )),
+                            );
+                        }
                     }
-                }
-
-                // Advance the compaction frontier to trail the new frontier.
-                // If the compaction latency is `None` compaction messages are
-                // not emitted, and the trace should be broadly useable.
-                // TODO: If the frontier advances surprisingly quickly, e.g. in
-                // the case of a constant collection, this compaction is actively
-                // harmful. We should reconsider compaction policy with an eye
-                // towards minimizing unexpected screw-ups.
-                if let Some(compaction_latency_ms) = entry.compaction_latency_ms {
-                    let mut since = Antichain::new();
-                    for time in entry.upper.frontier().iter() {
-                        since.insert(time.saturating_sub(compaction_latency_ms));
+    
+                    // Advance the compaction frontier to trail the new frontier.
+                    // If the compaction latency is `None` compaction messages are
+                    // not emitted, and the trace should be broadly useable.
+                    // TODO: If the frontier advances surprisingly quickly, e.g. in
+                    // the case of a constant collection, this compaction is actively
+                    // harmful. We should reconsider compaction policy with an eye
+                    // towards minimizing unexpected screw-ups.
+                    if let Some(compaction_latency_ms) = materialization_state.compaction_latency_ms {
+                        let mut since = Antichain::new();
+                        for time in materialization_state.upper.frontier().iter() {
+                            since.insert(time.saturating_sub(compaction_latency_ms));
+                        }
+                        self.since_updates
+                            .push((name.clone(), since.elements().to_vec()));
                     }
-                    self.since_updates
-                        .push((name.clone(), since.elements().to_vec()));
                 }
             }
         }
@@ -1196,7 +1188,9 @@ where
 
     /// The upper frontier of a maintained view, if it exists.
     fn upper_of(&self, name: &GlobalId) -> Option<AntichainRef<Timestamp>> {
-        self.views.get(name).map(|v| v.upper.frontier())
+        if let Some(view_state) = self.views.get(name).as_mut() {
+            view_state.materialization.as_ref().map(|m| m.upper.frontier())
+        } else { None }
     }
 
     /// Updates the since frontier of a named view.
@@ -1208,80 +1202,91 @@ where
     #[allow(dead_code)]
     fn update_since(&mut self, name: &GlobalId, since: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
-            entry.since.clear();
-            entry.since.extend(since.iter().cloned());
+            if let Some(materialization_state) = entry.materialization.as_mut() {
+                materialization_state.since.clear();
+                materialization_state.since.extend(since.iter().cloned());
+            }
         }
     }
 
     /// The since frontier of a maintained view, if it exists.
     #[allow(dead_code)]
     fn since_of(&self, name: &GlobalId) -> Option<&Antichain<Timestamp>> {
-        self.views.get(name).map(|v| &v.since)
+        if let Some(view_state) = self.views.get(name) {
+            view_state.materialization.as_ref().map(|m| &m.since)
+        } else { None }
     }
 
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    fn insert_views(&mut self, dataflow: &DataflowDesc) {
-        let contains_sources = !dataflow.sources.is_empty();
-        for (view_id, view) in dataflow.views.iter() {
-            self.remove_view(view_id);
-            let mut viewstate = ViewState::from_view(view, self.num_timely_workers);
-            viewstate.depends_on_source = contains_sources;
-            if self.log {
-                for time in viewstate.upper.frontier().iter() {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            *view_id,
-                            time.clone(),
-                            1,
-                        )),
-                    );
-                }
+    fn insert_view(&mut self, view_id: GlobalId, view: dataflow_types::View) {
+        let mut contains_sources = false;
+        view.relation_expr.visit(&mut |e| {
+            // Some `Get` expressions are for let bindings, and should not be loaded.
+            // We might want explicitly enumerate assets to import.
+            if let RelationExpr::Get {
+                id: Id::Global(id),
+                typ: _,
+            } = e
+            {
+                contains_sources |= match self.catalog.get_by_id(id).item() {
+                    CatalogItem::Source(_source) => true,
+                    _ => false
+                };
             }
-            self.views.insert(*view_id, viewstate);
-        }
+        });
+        self.remove_view(&view_id);
+        let mut viewstate = ViewState::from_view(&view);
+        viewstate.depends_on_source = contains_sources;
+        self.views.insert(view_id, viewstate);
     }
 
-    /// Inserts a source into the coordinator.
-    ///
-    /// Unlike `insert_view`, this method can be called without a dataflow argument.
-    /// This is most commonly used for internal sources such as logging.
-    fn insert_source(&mut self, name: GlobalId, compaction_ms: Option<Timestamp>) {
-        self.remove_view(&name);
-        let mut viewstate = ViewState::new(self.num_timely_workers);
-        if self.log {
-            for time in viewstate.upper.frontier().iter() {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                        name.clone(),
-                        time.clone(),
-                        1,
-                    )),
-                );
+    /// Add an index to a view in the coordinator.
+    fn add_index_to_view(&mut self, id: GlobalId, desc: IndexDesc) {
+        if let Some(viewstate) = self.views.get_mut(&desc.on_id) {
+            match viewstate.materialization.as_mut() {
+                Some(materialization_state) => {
+                    materialization_state.add_index(&desc.keys);
+                }
+                None => {
+                    let materialization_state = MaterializationState::new(self.num_timely_workers, &desc.keys);
+                    if self.log {
+                        for time in materialization_state.upper.frontier().iter() {
+                            broadcast(
+                                &mut self.broadcast_tx,
+                                SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                    desc.on_id,
+                                    time.clone(),
+                                    1,
+                                )),
+                            );
+                        }
+                    }
+                    viewstate.materialization = Some(materialization_state);
+                }
             }
-        }
-        viewstate.set_compaction_latency(compaction_ms);
-        self.views.insert(name, viewstate);
+            self.indexes.insert(desc, (1, id));
+        } else { unreachable!() };
     }
 
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
     fn remove_view(&mut self, name: &GlobalId) {
-        if let Some(state) = self.views.remove(name) {
+        if let Some(view_state) = self.views.remove(name) {
             if self.log {
-                for time in state.upper.frontier().iter() {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            name.clone(),
-                            time.clone(),
-                            -1,
-                        )),
-                    );
+                if let Some(materialization_state) = view_state.materialization {
+                    for time in materialization_state.upper.frontier().iter() {
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                name.clone(),
+                                time.clone(),
+                                -1,
+                            )),
+                        );
+                    }
                 }
             }
         }
@@ -1376,10 +1381,13 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     ExecuteResponse::SendRows(Box::pin(rx.err_into()))
 }
 
-/// Per-view state.
-pub struct ViewState {
-    /// Names of views on which this view depends.
-    uses: Vec<GlobalId>,
+pub struct MaterializationState {
+    // TODO(andiwang): Change all `primary_idx_keys` to a single Vec<ScalarExpr> so that only one
+    // primary index is allowed?
+    /// Currently all indexes are primary indexes
+    primary_idx_keys: Vec<Vec<ScalarExpr>>,
+    /// No secondary indexes exist yet
+    // secondary_idxes: Vec<Vec<ScalarExpr>>,
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
     upper: MutableAntichain<Timestamp>,
@@ -1393,40 +1401,69 @@ pub struct ViewState {
     /// This timestamp drives the advancement of the since frontier as a
     /// function of the upper frontier, trailing it by exactly this much.
     compaction_latency_ms: Option<Timestamp>,
+}
+
+impl MaterializationState {
+    /// Creates an empty view state from a number of workers.
+    pub fn new(workers: usize, primary_idx: &[ScalarExpr]) -> Self {
+        let mut upper = MutableAntichain::new();
+        upper.update_iter(Some((0, workers as i64)));
+        Self {
+            primary_idx_keys: vec![primary_idx.to_owned()],
+            //secondary_idxes: Vec::new(),
+            upper,
+            since: Antichain::from_elem(0),
+            compaction_latency_ms: Some(60_000),
+        }
+    }
+
+    pub fn add_index(&mut self, primary_idx: &[ScalarExpr]) {
+        self.primary_idx_keys.push(primary_idx.to_owned());
+    }
+
+    pub fn get_primary_key(&self) -> &Vec<ScalarExpr> {
+        &self.primary_idx_keys[0]
+    }
+
+    /// Sets the latency behind the collection frontier at which compaction occurs.
+    pub fn set_compaction_latency(&mut self, latency_ms: Option<Timestamp>) {
+        self.compaction_latency_ms = latency_ms;
+    }
+}
+
+/// Per-view state.
+pub struct ViewState {
+    /// Names of views on which this view depends.
+    uses: Vec<GlobalId>,
     /// True if the dataflow defining the view may depend on a source, which
     /// leads us to include the frontier of the view in timestamp selection,
     /// as the view cannot be expected to advance its frontier simply because
     /// its input views advance.
     depends_on_source: bool,
+    // TODO(andiwang): make views not necessarily materialized
+    /// None if not materialized
+    materialization: Option<MaterializationState>,
 }
 
-impl ViewState {
-    /// Creates an empty view state from a number of workers.
-    pub fn new(workers: usize) -> Self {
-        let mut upper = MutableAntichain::new();
-        upper.update_iter(Some((0, workers as i64)));
-        Self {
+impl Default for ViewState {
+    fn default() -> Self {
+        ViewState {
             uses: Vec::new(),
-            upper,
-            since: Antichain::from_elem(0),
-            compaction_latency_ms: Some(60_000),
             depends_on_source: true,
+            materialization: None,
         }
     }
+}
 
+impl ViewState {    
     /// Creates view state from a view, and number of workers.
-    pub fn from_view(view: &View, workers: usize) -> Self {
-        let mut view_state = Self::new(workers);
+    pub fn from_view(view: &View) -> Self {
+        let mut view_state = Self::default();
         let mut out = Vec::new();
         view.relation_expr.global_uses(&mut out);
         out.sort();
         out.dedup();
         view_state.uses = out;
         view_state
-    }
-
-    /// Sets the latency behind the collection frontier at which compaction occurs.
-    pub fn set_compaction_latency(&mut self, latency_ms: Option<Timestamp>) {
-        self.compaction_latency_ms = latency_ms;
     }
 }

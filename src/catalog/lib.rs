@@ -211,6 +211,10 @@ impl Catalog {
             .ok_or_else(|| failure::err_msg(format!("catalog item '{}' does not exist", name)))
     }
 
+    pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
+        &self.by_id[id]
+    }
+
     /// Inserts a new catalog item, returning an error if a catalog item with
     /// the same name already exists.
     ///

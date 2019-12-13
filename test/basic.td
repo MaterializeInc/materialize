@@ -41,9 +41,12 @@ Source   Create Source
 ------------------
 data  "kafka://${testdrive.kafka-addr-resolved}/testdrive-data-${testdrive.seed}"
 
-> PEEK data
+> CREATE VIEW data_view as SELECT * from data
+
+> PEEK data_view
 a b
 ---
+
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 {"before": null, "after": {"a": 1, "b": 1}}
@@ -54,7 +57,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> PEEK data
+> PEEK data_view
 a b
 ---
 1 1

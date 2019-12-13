@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
+    compare_columns, DataflowDesc, Diff, IndexDesc, PeekResponse, RowSetFinishing, Timestamp, Update,
 };
 use expr::{EvalEnv, GlobalId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -92,7 +92,7 @@ pub enum SequencedCommand {
     /// Drop the sinks bound to these names.
     DropSinks(Vec<GlobalId>),
     /// Drop the indexes bound to these names.
-    DropIndexes(Vec<(GlobalId, Vec<expr::ScalarExpr>)>),
+    DropIndexes(Vec<IndexDesc>),
     /// Peek at a materialized view.
     Peek {
         id: GlobalId,
@@ -303,7 +303,7 @@ where
                     move |time, data| m_logger.publish_batch(time, data),
                 );
 
-            // Install traces as maintained views.
+            // Install traces as maintained indexes
             for (log, (key, trace)) in t_traces {
                 self.traces
                     .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
@@ -421,18 +421,23 @@ where
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     if let Some(logger) = self.materialized_logger.as_mut() {
-                        for (view_id, _view) in dataflow.views.iter() {
-                            if self.traces.traces.contains_key(&view_id) {
-                                panic!("View already installed: {}", view_id);
+                        for build_desc in dataflow.objects_to_build.iter() {
+                            if build_desc.typ.is_some() {
+                                //TODO: should Dataflow events track view creation?
+                                if self.traces.traces.contains_key(&build_desc.id) {
+                                    panic!("View already installed: {}", build_desc.id);
+                                }
+                                logger.log(MaterializedEvent::Dataflow(build_desc.id, true));
                             }
-                            logger.log(MaterializedEvent::Dataflow(*view_id, true));
                         }
                     }
-                    for (view_id, _view) in dataflow.views.iter() {
-                        let prior = self
+
+                    for (index_desc, _) in dataflow.index_exports.iter() {
+                        if !self.reported_frontiers.contains_key(&index_desc.on_id) {
+                            self
                             .reported_frontiers
-                            .insert(*view_id, Antichain::from_elem(0));
-                        assert!(prior == None);
+                            .insert(index_desc.on_id, Antichain::from_elem(0));
+                        }
                     }
 
                     render::build_dataflow(
@@ -459,10 +464,10 @@ where
                         if let Some(logger) = self.materialized_logger.as_mut() {
                             logger.log(MaterializedEvent::Dataflow(id, false));
                         }
+                        self.reported_frontiers
+                            .remove(&id)
+                            .expect("Dropped view with no frontier");
                     }
-                    self.reported_frontiers
-                        .remove(&id)
-                        .expect("Dropped view with no frontier");
                 }
             }
 
@@ -472,9 +477,9 @@ where
                 }
             }
 
-            SequencedCommand::DropIndexes(trace_keys) => {
-                for (id, keys) in trace_keys {
-                    self.traces.del_user_trace(id, &keys);
+            SequencedCommand::DropIndexes(index_descs) => {
+                for index_desc in index_descs {
+                    self.traces.del_trace(&index_desc);
                 }
             }
 

@@ -112,14 +112,6 @@ where
         }
     }
 
-    /// Enumerates all local arrangements for a supplied expression.
-    pub fn get_all_local(
-        &self,
-        relation_expr: &P,
-    ) -> Option<&BTreeMap<Vec<ScalarExpr>, Arrangement<S, V>>> {
-        self.local.get(relation_expr)
-    }
-
     /// Convenience method for accessing `arrangement` when all keys are plain columns
     pub fn arrangement_columns(
         &self,

@@ -44,8 +44,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 
 > CREATE INDEX i ON v(a)
 
-> CREATE INDEX i2 ON s("Y")
-
 # Test that creating objects of the same name does not work
 
 ! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c
@@ -84,8 +82,8 @@ $ set dummy={
 ! CREATE SOURCE v2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${dummy}'
 catalog item 'v2' already exists
 
-! CREATE SOURCE i2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${dummy}'
-catalog item 'i2' already exists
+! CREATE SOURCE i FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${dummy}'
+catalog item 'i' already exists
 
 ! CREATE INDEX s ON v2(x)
 catalog item 's' already exists
@@ -131,8 +129,6 @@ s is not of type VIEW
 s is not of type VIEW
 
 # Delete objects
-
-> DROP INDEX i2
 
 > DROP INDEX i
 

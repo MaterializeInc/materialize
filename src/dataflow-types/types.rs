@@ -146,17 +146,25 @@ impl RowSetFinishing {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BuildDesc {
+    pub id: GlobalId,
+    pub relation_expr: RelationExpr,
+    pub eval_env: EvalEnv,
+    /// is_some if building a view, none otherwise
+    pub typ: Option<RelationType>,
+}
+
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
-    /// Sources used by the dataflow.
-    pub sources: Vec<(GlobalId, Source)>,
-    /// Views produced by the dataflow.
-    pub views: Vec<(GlobalId, View)>,
-    /// Sinks internal to the dataflow.
-    pub sinks: Vec<(GlobalId, Sink)>,
-    /// Indexes used by the dataflow.
-    pub indexes: Vec<(GlobalId, IndexDesc)>,
+    pub source_imports: Vec<(GlobalId, Source)>,
+    pub index_imports: Vec<(IndexDesc, RelationType)>,
+    /// Views and indexes to be built and stored in the local context.
+    /// Objects must be built in the specific order as the Vec
+    pub objects_to_build: Vec<BuildDesc>,
+    pub index_exports: Vec<(IndexDesc, RelationType)>,
+    pub sink_exports: Vec<(GlobalId, Sink)>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// This is logically equivalent to a timely dataflow `Antichain`,
@@ -173,43 +181,45 @@ impl DataflowDesc {
         dd
     }
 
-    /// Collects the IDs of the dataflows that this dataflow depends upon.
-    pub fn uses(&self) -> Vec<GlobalId> {
-        let mut out = Vec::new();
-        for (_id, view) in self.views.iter() {
-            view.relation_expr.global_uses(&mut out);
-        }
-        for (_id, index) in self.indexes.iter() {
-            out.push(index.on_id);
-        }
-        out.sort();
-        out.dedup();
-        out
+    pub fn add_source_import(&mut self, id: GlobalId, source: Source) {
+        self.source_imports.push((id, source));
     }
 
-    pub fn add_source(mut self, id: GlobalId, source: Source) -> Self {
-        self.sources.push((id, source));
-        self
+    pub fn add_index_import(&mut self, index: IndexDesc, typ: RelationType) {
+        self.index_imports.push((index, typ));
     }
 
-    pub fn add_view(mut self, id: GlobalId, view: View) -> Self {
-        self.views.push((id, view));
-        self
+    pub fn add_view_to_build(&mut self, id: GlobalId, view: View) {
+        self.objects_to_build.push(BuildDesc {
+            id,
+            relation_expr: view.relation_expr,
+            eval_env: view.eval_env,
+            typ: Some(view.desc.typ().clone()),
+        });
     }
 
-    pub fn add_sink(mut self, id: GlobalId, sink: Sink) -> Self {
-        self.sinks.push((id, sink));
-        self
+    pub fn add_index_to_build(&mut self, id: GlobalId, index: Index) {
+        self.objects_to_build.push(BuildDesc {
+            id,
+            relation_expr: RelationExpr::ArrangeBy {
+                input: Box::new(RelationExpr::global_get(index.desc.on_id, index.relation_type)),
+                keys: index.desc.keys,
+            },
+            eval_env: index.eval_env,
+            typ: None,
+        });
     }
 
-    pub fn add_index(mut self, id: GlobalId, index: IndexDesc) -> Self {
-        self.indexes.push((id, index));
-        self
+    pub fn add_index_export(&mut self, index: IndexDesc, typ: RelationType) {
+        self.index_exports.push((index, typ));
     }
 
-    pub fn as_of(mut self, as_of: Option<Vec<Timestamp>>) -> Self {
+    pub fn add_sink_export(&mut self, id: GlobalId, sink: Sink) {
+        self.sink_exports.push((id, sink));
+    }
+
+    pub fn as_of(&mut self, as_of: Option<Vec<Timestamp>>) {
         self.as_of = as_of;
-        self
     }
 }
 
@@ -337,17 +347,13 @@ pub struct KeySql {
     pub nullable: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
-    /// Types of the columns of the `on_id` collection.
-    pub relation_type: RelationType,
     /// Numbers of the columns to be arranged, in order of decreasing primacy.
     /// the columns to evaluate and arrange on.
     pub keys: Vec<ScalarExpr>,
-    /// The evaluation environment for the expressions in `funcs`.
-    pub eval_env: EvalEnv,
 }
 
 /// An index is an arrangement of a dataflow
@@ -357,4 +363,8 @@ pub struct Index {
     pub desc: IndexDesc,
     /// the human-friendly description on each column for `SHOW INDEXES` to show
     pub raw_keys: Vec<KeySql>,
+    /// Types of the columns of the `on_id` collection.
+    pub relation_type: RelationType,
+    /// The evaluation environment for the expressions in `funcs`.
+    pub eval_env: EvalEnv,
 }

@@ -331,7 +331,7 @@ fn handle_show_indexes(
                 && entry.uses() == vec![from_entry.id()]
         })
         .flat_map(|entry| match entry.item() {
-            CatalogItem::Index(dataflow_types::Index { desc: _, raw_keys }) => {
+            CatalogItem::Index(dataflow_types::Index { raw_keys, .. }) => {
                 let mut row_subset = Vec::new();
                 for (seq_in_index, key_sql) in raw_keys.iter().enumerate() {
                     let (col_name, func) = if key_sql.is_column_name {
@@ -765,10 +765,10 @@ fn handle_create_dataflow(
             let index = Index {
                 desc: IndexDesc {
                     on_id: catalog_entry.id(),
-                    relation_type: on_relation_type.clone(),
                     keys,
-                    eval_env: EvalEnv::default(),
                 },
+                relation_type: on_relation_type.clone(),
+                eval_env: EvalEnv::default(),
                 raw_keys,
             };
             Ok(Plan::CreateIndex(name, index))

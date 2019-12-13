@@ -60,7 +60,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
             let mut source_tokens = Vec::new();
             // Load declared sources into the rendering context.
-            for (src_id, src) in dataflow.sources {
+            for (src_id, src) in dataflow.source_imports {
                 let (stream, capability) = match src.connector {
                     SourceConnector::Local => {
                         let ((handle, capability), stream) = region.new_unordered_input();
@@ -109,10 +109,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                 // Introduce the stream by name, as an unarranged collection.
                 context.collections.insert(
-                    RelationExpr::Get {
-                        id: Id::Global(src_id),
-                        typ: src.desc.typ().clone(),
-                    },
+                    RelationExpr::global_get(src_id, src.desc.typ().clone()),
                     stream.as_collection(),
                 );
                 source_tokens.push(capability);
@@ -120,15 +117,35 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
             let source_tokens = Rc::new(source_tokens);
 
-            for (view_id, view) in dataflow.views {
-                let mut tokens = Vec::new();
-                let as_of = dataflow
-                    .as_of
-                    .as_ref()
-                    .map(|x| x.to_vec())
-                    .unwrap_or_else(|| vec![0]);
+            let as_of = dataflow
+                .as_of
+                .as_ref()
+                .map(|x| x.to_vec())
+                .unwrap_or_else(|| vec![0]);
 
-                view.relation_expr.visit(&mut |e| {
+            // TODO (andiwang): what in the world do we do with these tokens?
+            let mut tokens = Vec::new();
+
+            for (index_desc, typ) in dataflow.index_imports {
+                if let Some(trace) = manager.get_by_keys_mut(&index_desc) {
+                    let token = trace.to_drop().clone();
+                    let (arranged, button) = trace.import_frontier_core(
+                        scope,
+                        &format!("Index({}, {:?})", index_desc.on_id, index_desc.keys),
+                        as_of.clone(),
+                    );
+                    let arranged = arranged.enter(region);
+                    let get_expr = RelationExpr::global_get(index_desc.on_id, typ);
+                    context.set_trace(&get_expr, &index_desc.keys, arranged);
+                    tokens.push((button.press_on_drop(), token));
+                }
+            }
+
+            // Capture both the tokens of imported traces and those of sources.
+            let tokens = Rc::new((tokens, source_tokens.clone()));
+
+            for object in dataflow.objects_to_build {
+                object.relation_expr.visit(&mut |e| {
                     // Some `Get` expressions are for let bindings, and should not be loaded.
                     // We might want explicitly enumerate assets to import.
                     if let RelationExpr::Get {
@@ -136,148 +153,56 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         typ: _,
                     } = e
                     {
-                        // Import arrangements for this collection.
-                        // TODO: we could import only used arrangements.
-                        if let Some(traces) = manager.get_all_keyed(*id) {
-                            for (key, trace) in traces {
-                                let token = trace.to_drop().clone();
-                                let (arranged, button) = trace.import_frontier_core(
-                                    scope,
-                                    &format!("View({}, {:?})", id, key),
-                                    as_of.clone(),
-                                );
-                                let arranged = arranged.enter(region);
-                                context.set_trace(&e, &key, arranged);
-                                tokens.push((button.press_on_drop(), token));
-                            }
-
-                            // Log the dependency.
-                            if let Some(logger) = logger {
-                                logger.log(MaterializedEvent::DataflowDependency {
-                                    dataflow: view_id,
-                                    source: *id,
-                                });
-                            }
+                        // Log the dependency.
+                        if let Some(logger) = logger {
+                            logger.log(MaterializedEvent::DataflowDependency {
+                                dataflow: object.id,
+                                source: *id,
+                            });
                         }
                     }
                 });
 
-                // Capture both the tokens of imported traces and those of sources.
-                let tokens = Rc::new((tokens, source_tokens.clone()));
-
-                context.ensure_rendered(&view.relation_expr, &view.eval_env, region, worker_index);
-
-                // Having ensured that `view.relation_expr` is rendered, we can now extract it
-                // or re-arrange it by other keys. The only information we have at the moment
-                // is whether the dataflow results in an arranged form of the expression.
-
-                if let Some(arrangements) = context.get_all_local(&view.relation_expr) {
-                    if arrangements.is_empty() {
-                        panic!("Lied to about arrangement availability");
-                    }
-                    // TODO: This stores all arrangements. Should we store fewer?
-                    for (key, arrangement) in arrangements {
-                        manager.set_by_keys(
-                            view_id,
-                            key,
-                            WithDrop::new(arrangement.trace.clone(), tokens.clone()),
-                        );
-                    }
+                if let Some(typ) = object.typ {
+                    context.ensure_rendered(&object.relation_expr, &object.eval_env, region, worker_index);
+                    context.collections.insert(RelationExpr::global_get(object.id, typ.clone()), context.collection(&object.relation_expr).unwrap()); 
                 } else {
-                    let mut keys = view.relation_expr.typ().keys.clone();
-                    if keys.is_empty() {
-                        keys.push((0..view.relation_expr.arity()).collect::<Vec<_>>());
-                    }
-                    for key in keys {
-                        let key_clone = key.clone();
-                        let arrangement = context
-                            .collection(&view.relation_expr)
-                            .expect("Render failed to produce collection")
-                            .map(move |row| {
-                                let datums = row.unpack();
-                                let key_row = Row::pack(key.iter().map(|k| datums[*k]));
-                                (key_row, row)
-                            })
-                            .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view_id));
-                        manager.set_by_columns(
-                            view_id,
-                            &key_clone[..],
-                            WithDrop::new(arrangement.trace, tokens.clone()),
+                    context.render_arranged(
+                        &object.relation_expr,
+                        &object.eval_env,
+                        region,
+                        worker_index,
+                        Some(&object.id.to_string()),
+                    );   
+                }
+            }
+
+            for (index_desc, typ) in dataflow.index_exports {
+                let get_expr = RelationExpr::global_get(index_desc.on_id, typ);
+                match context.arrangement(&get_expr, &index_desc.keys) {
+                    Some(ArrangementFlavor::Local(local)) => {
+                        manager.set_by_keys(
+                            &index_desc,
+                            WithDrop::new(local.trace.clone(), tokens.clone()),
                         );
                     }
-                }
+                    Some(ArrangementFlavor::Trace(_)) => {
+                        // do nothing. there already exists an system
+                        // index on the same keys
+                    }
+                    None => {
+                        panic!("Arrangement alarmingly absent!");
+                    }
+                };
             }
 
-            for (idx_id, idx) in dataflow.indexes {
-                let mut tokens = Vec::new();
-                // TODO (wangandi) for the function-based column case,
-                // think about checking if there is another index
-                // with the function pre-rendered
-                let (key, trace) = manager.get_default_with_key(idx.on_id).unwrap();
-                let token = trace.to_drop().clone();
-                let (arranged, button) = trace.import_frontier_core(
-                    scope,
-                    &format!("View({}, {:?})", &idx.on_id, key),
-                    vec![0],
-                );
-                let arranged = arranged.enter(region);
-                let get_expr = RelationExpr::Get {
-                    id: expr::Id::Global(idx.on_id),
-                    typ: idx.relation_type.clone(),
-                };
-                context.set_trace(&get_expr, &key, arranged);
-                tokens.push((button.press_on_drop(), token));
-
-                // Capture both the tokens of imported traces and those of sources.
-                let tokens = Rc::new((tokens, source_tokens.clone()));
-
-                let arrange_expr = RelationExpr::ArrangeBy {
-                    input: Box::new(get_expr),
-                    keys: idx.keys.clone(),
-                };
-
-                context.render_arranged(
-                    &arrange_expr,
-                    &idx.eval_env,
-                    region,
-                    worker_index,
-                    Some(&idx_id.to_string()),
-                );
-
-                if let RelationExpr::ArrangeBy { input, keys } = arrange_expr {
-                    match context.arrangement(&input, &keys[..]) {
-                        Some(ArrangementFlavor::Local(local)) => {
-                            manager.set_user_created(
-                                idx.on_id,
-                                &idx.keys,
-                                WithDrop::new(local.trace.clone(), tokens.clone()),
-                            );
-                        }
-                        Some(ArrangementFlavor::Trace(_)) => {
-                            // do nothing. there already exists an system
-                            // index on the same keys
-                        }
-                        None => {
-                            panic!("Arrangement alarmingly absent!");
-                        }
-                    };
-                }
-            }
-
-            for (sink_id, sink) in dataflow.sinks {
-                let (_keys, trace) = manager
-                    .get_default_with_key(sink.from.0)
-                    .expect("No arrangements");
-                let token = trace.to_drop().clone();
-                let (arrangement, button) =
-                    trace.import_core(scope, &format!("Import({:?})", sink.from));
+            for (sink_id, sink) in dataflow.sink_exports {
+                let collection = context.collection(&RelationExpr::global_get(sink.from.0, sink.from.1.typ().clone())).expect("No arrangements");
 
                 match sink.connector {
-                    SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, sink_id, c),
-                    SinkConnector::Tail(c) => sink::tail(&arrangement.stream, sink_id, c),
+                    SinkConnector::Kafka(c) => sink::kafka(&collection.inner, sink_id, c),
+                    SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
                 }
-
-                dataflow_drops.insert(sink_id, Box::new((token, button.press_on_drop())));
             }
         });
     })
