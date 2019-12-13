@@ -2884,6 +2884,7 @@ dependencies = [
 name = "sql-parser"
 version = "0.1.0"
 dependencies = [
+ "failure",
  "log",
  "matches",
  "simple_logger",

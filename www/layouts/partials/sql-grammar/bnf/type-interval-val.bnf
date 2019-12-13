@@ -1,0 +1,2 @@
+type_interval ::=
+  'INTERVAL' "'" time_expr+ "'" ( ( head_time_unit 'TO' )? tail_time_unit )?

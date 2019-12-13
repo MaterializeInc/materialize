@@ -1,0 +1,2 @@
+type_interval ::=
+ ('+' | '-')? ('Y-M' | 'H:M:S.NS' | (int ('.' frac)? time_unit?))

@@ -24,225 +24,285 @@ pub struct IntervalValue {
     pub value: String,
     /// the fully parsed date time
     pub parsed: ParsedDateTime,
-    /// The unit of the first field in the interval. `INTERVAL 'T' MINUTE`
-    /// means `T` is in minutes
-    pub leading_field: DateTimeField,
-    /// How many digits the leading field is allowed to occupy.
-    ///
-    /// The interval `INTERVAL '1234' MINUTE(3)` is **illegal**, but `INTERVAL
-    /// '123' MINUTE(3)` is fine.
-    ///
-    /// This parser does not do any validation that fields fit.
-    pub leading_precision: Option<u64>,
-    /// How much precision to keep track of
-    ///
-    /// If this is ommitted, then you are supposed to ignore all of the
-    /// non-lead fields. If it is less precise than the final field, you
-    /// are supposed to ignore the final field.
-    ///
-    /// For the following specifications:
-    ///
-    /// * `INTERVAL '1:1:1' HOURS TO SECONDS` the `last_field` gets
-    ///   `Some(DateTimeField::Second)` and interpreters should generate an
-    ///   interval equivalent to `3661` seconds.
-    /// * In `INTERVAL '1:1:1' HOURS` the `last_field` gets `None` and
-    ///   interpreters should generate an interval equivalent to `3600`
-    ///   seconds.
-    /// * In `INTERVAL '1:1:1' HOURS TO MINUTES` the interval should be
-    ///   equivalent to `3660` seconds.
-    pub last_field: Option<DateTimeField>,
-    /// The seconds precision can be specified in SQL source as
-    /// `INTERVAL '__' SECOND(_, x)` (in which case the `leading_field`
-    /// will be `Second` and the `last_field` will be `None`),
-    /// or as `__ TO SECOND(x)`.
-    pub fractional_seconds_precision: Option<u64>,
+    /// The most significant DateTimeField to propagate to Interval in
+    /// compute_interval.
+    pub precision_high: DateTimeField,
+    /// The least significant DateTimeField to propagate to Interval in
+    /// compute_interval.
+    /// precision_low is also used to provide a TimeUnit if the final
+    /// part of `value` is ambiguous, e.g. INTERVAL '1-2 3' DAY uses
+    /// 'day' as the TimeUnit for 3.
+    pub precision_low: DateTimeField,
+    /// Nanosecond precision can be specified in SQL source as
+    /// `INTERVAL '__' SECOND(_)`.
+    pub nanosecond_precision: Option<u64>,
+}
+
+impl Default for IntervalValue {
+    fn default() -> Self {
+        Self {
+            value: String::default(),
+            parsed: ParsedDateTime::default(),
+            precision_high: DateTimeField::Year,
+            precision_low: DateTimeField::Second,
+            nanosecond_precision: None,
+        }
+    }
 }
 
 impl IntervalValue {
-    /// Get Either the number of Months or the Duration specified by this interval
-    ///
-    /// This computes the fiels permissively: it assumes that the leading field
-    /// (i.e. the lead in `INTERVAL 'str' LEAD [TO LAST]`) is valid and parses
-    /// all field in the `str` starting at the leading field, ignoring the
-    /// truncation that should be specified by `LAST`.
-    ///
-    /// See also the related [`fields_match_precision`] function that will give
-    /// an error if the interval string does not exactly match the `FROM TO
-    /// LAST` spec.
-    ///
-    /// # Errors
-    ///
-    /// If a required field is missing (i.e. there is no value) or the `TO
-    /// LAST` field is larger than the `LEAD`.
-    pub fn computed_permissive(&self) -> Result<Interval, ValueError> {
+    /// Compute an Interval from an IntervalValue.
+    pub fn compute_interval(&self) -> Result<Interval, ValueError> {
         use DateTimeField::*;
-        match &self.leading_field {
-            Year => match &self.last_field {
-                Some(Month) => Ok(Interval::Months(
-                    self.parsed.positivity() * self.parsed.year.unwrap_or(0) as i64 * 12
-                        + self.parsed.month.unwrap_or(0) as i64,
-                )),
-                Some(Year) | None => self
-                    .parsed
-                    .year
-                    .ok_or_else(|| ValueError("No YEAR provided".into()))
-                    .map(|year| Interval::Months(self.parsed.positivity() * year as i64 * 12)),
-                Some(invalid) => Err(ValueError(format!(
-                    "Invalid specifier for YEAR precision: {}",
-                    &invalid
-                ))),
-            },
-            Month => match &self.last_field {
-                Some(Month) | None => self
-                    .parsed
-                    .month
-                    .ok_or_else(|| ValueError("No MONTH provided".into()))
-                    .map(|m| Interval::Months(self.parsed.positivity() * m as i64)),
-                Some(invalid) => Err(ValueError(format!(
-                    "Invalid specifier for MONTH precision: {}",
-                    &invalid
-                ))),
-            },
-            durationlike_field => {
-                let mut seconds = 0u64;
-                match self.units_of(&durationlike_field) {
-                    Some(time) => seconds += time * seconds_multiplier(&durationlike_field),
-                    None => {
-                        return Err(ValueError(format!(
-                            "No {} provided in value string for {}",
-                            durationlike_field, self.value
-                        )))
-                    }
+        let mut months = 0i64;
+        let mut seconds = 0i64;
+        let mut nanos = 0i64;
+
+        let mut add_field = |d: DateTimeField| -> Result<(), ValueError> {
+            match d {
+                Year => {
+                    let (y, y_f) = self.units_of(Year);
+                    // months += y * 12
+                    match y.unwrap_or(0).checked_mul(12) {
+                        Some(y_m) => match months.checked_add(y_m) {
+                            Some(total_m) => months = total_m,
+                            None => {
+                                return Err(ValueError(format!(
+                                "INTERVAL '{}' overflows maximum months; cannot exceed {} months",
+                                self.value,
+                                std::i64::MAX,
+                            )))
+                            }
+                        },
+                        None => {
+                            return Err(ValueError(format!(
+                                "{} overflows maximum months; cannot exceed {} months",
+                                self.value,
+                                std::i64::MAX,
+                            )))
+                        }
+                    };
+
+                    // months += y_f * 12 / 1_000_000_000
+                    match y_f.unwrap_or(0).checked_mul(12) {
+                        Some(y_f_m) => match months.checked_add(y_f_m / 1_000_000_000) {
+                            Some(total_m) => months = total_m,
+                            None => {
+                                return Err(ValueError(format!(
+                                "INTERVAL '{}' overflows maximum months; cannot exceed {} months",
+                                self.value,
+                                std::i64::MAX,
+                            )))
+                            }
+                        },
+                        None => {
+                            return Err(ValueError(
+                                "Intermediate overflow in YEAR fraction".to_string(),
+                            ))
+                        }
+                    };
+                    Ok(())
                 }
-                let min_field = &self
-                    .last_field
-                    .clone()
-                    .unwrap_or_else(|| durationlike_field.clone());
-                for field in durationlike_field
-                    .clone()
-                    .into_iter()
-                    .take_while(|f| f <= min_field)
-                {
-                    if let Some(time) = self.units_of(&field) {
-                        seconds += time * seconds_multiplier(&field);
+                Month => {
+                    let (m, m_f) = self.units_of(Month);
+
+                    match months.checked_add(m.unwrap_or(0)) {
+                        Some(total_m) => months = total_m,
+                        None => {
+                            return Err(ValueError(format!(
+                                "INTERVAL '{}' overflows maximum months; cannot exceed {} months",
+                                self.value,
+                                std::i64::MAX,
+                            )))
+                        }
                     }
+
+                    // Postgres treats months as having 30 days.
+                    match m_f.unwrap_or(0).checked_mul(30 * seconds_multiplier(Day)) {
+                        Some(m_f_ns) => {
+                            // seconds += m_f * 30 * seconds_multiplier(Day) / 1_000_000_000;
+                            match seconds.checked_add(m_f_ns / 1_000_000_000) {
+                                Some(total_s) => seconds = total_s,
+                                None => {
+                                    return Err(ValueError(format!(
+                                        "INTERVAL '{}' overflows maximum seconds; cannot exceed {} seconds",
+                                        self.value,
+                                        std::i64::MAX,
+                                    )))
+                                }
+                            }
+                            // nanos += m_f * 30 * seconds_multiplier(Day) % 1_000_000_000;
+                            match nanos.checked_add(m_f_ns % 1_000_000_000) {
+                                Some(total_n) => nanos = total_n,
+                                None => {
+                                    return Err(ValueError(format!(
+                                        "INTERVAL '{}' overflows maximum nanoseconds; cannot exceed {} nanoseconds",
+                                        self.value,
+                                        std::i64::MAX,
+                                    )))
+                                }
+                            }
+                        }
+                        None => {
+                            return Err(ValueError(
+                                "Intermediate overflow in MONTH fraction".to_string(),
+                            ))
+                        }
+                    };
+                    Ok(())
                 }
-                let duration = match (min_field, self.parsed.nano) {
-                    (DateTimeField::Second, Some(nanos)) => Duration::new(seconds, nanos),
-                    (_, _) => Duration::from_secs(seconds),
-                };
-                Ok(Interval::Duration {
-                    is_positive: self.parsed.is_positive,
-                    duration,
-                })
+                dhms => {
+                    let (t, t_f) = self.units_of(dhms);
+
+                    // seconds += t * seconds_multiplier(dhms);
+                    match t.unwrap_or(0).checked_mul(seconds_multiplier(d)) {
+                        Some(t_s) => match seconds.checked_add(t_s) {
+                            Some(total_s) => seconds = total_s,
+                            None => {
+                                return Err(ValueError(format!(
+                                "INTERVAL '{}' overflows maximum seconds; cannot exceed {} seconds",
+                                self.value,
+                                std::i64::MAX,
+                            )))
+                            }
+                        },
+                        None => {
+                            return Err(ValueError(format!(
+                                "INTERVAL '{}' overflows maximum seconds; cannot exceed {} seconds",
+                                self.value,
+                                std::i64::MAX,
+                            )))
+                        }
+                    };
+
+                    match t_f.unwrap_or(0).checked_mul(seconds_multiplier(d)) {
+                        Some(t_f_ns) => {
+                            // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000;
+                            match seconds.checked_add(t_f_ns / 1_000_000_000) {
+                                Some(total_s) => seconds = total_s,
+                                None => {return Err(ValueError(format!(
+                                    "INTERVAL '{}' overflows maximum seconds; cannot exceed {} seconds",
+                                    self.value,
+                                    std::i64::MAX,
+                                )))
+                                }
+                            }
+                            // nanos += t_f * seconds_multiplier(dhms) % 1_000_000_000;
+                            match nanos.checked_add(t_f_ns % 1_000_000_000) {
+                                Some(total_n) => {
+                                    nanos = total_n;
+                                },
+                                None => {return Err(ValueError(format!(
+                                    "INTERVAL '{}' overflows maximum nanoseconds; cannot exceed {} nanoseconds",
+                                    self.value,
+                                    std::i64::MAX,
+                                )))
+                                }
+                            }
+                        }
+                        None => {
+                            return Err(ValueError(format!(
+                                "Intermediate overflow in {} fraction",
+                                d,
+                            )))
+                        }
+                    };
+                    Ok(())
+                }
+            }
+        };
+
+        add_field(Year)?;
+
+        for field in Year.into_iter().take_while(|f| *f <= Second) {
+            add_field(field)?;
+        }
+
+        // Truncate from precision_high.
+        match self.precision_high {
+            Year => {}
+            Month => {
+                months %= 12;
+            }
+            Day => {
+                months = 0;
+            }
+            hms => {
+                months = 0;
+                seconds %= seconds_multiplier(hms.next_largest());
             }
         }
+
+        // Truncate to precision_low.
+        match self.precision_low {
+            Year => {
+                months -= months % 12;
+                seconds = 0;
+                nanos = 0;
+            }
+            Month => {
+                seconds = 0;
+                nanos = 0;
+            }
+            // Round nanos
+            Second => {
+                let default_precision = 6;
+                let precision = match self.nanosecond_precision {
+                    Some(p) => p,
+                    None => default_precision,
+                };
+
+                if precision > default_precision {
+                    return Err(ValueError(format!(
+                        "SECOND precision must be (0, 6), have SECOND({})",
+                        precision
+                    )));
+                }
+
+                // Check if value should round up to nearest fractional place.
+                let remainder = nanos % 10_i64.pow(9 - precision as u32);
+                if remainder / 10_i64.pow(8 - precision as u32) > 4 {
+                    nanos += 10_i64.pow(9 - precision as u32);
+                }
+
+                nanos -= remainder;
+            }
+            dhm => {
+                seconds -= seconds % seconds_multiplier(dhm);
+                nanos = 0;
+            }
+        }
+
+        // Handle negative seconds with positive nanos or vice versa.
+        if nanos < 0 && seconds > 0 {
+            nanos += 1_000_000_000_i64;
+            seconds -= 1;
+        } else if nanos > 0 && seconds < 0 {
+            nanos -= 1_000_000_000_i64;
+            seconds += 1;
+        }
+
+        Ok(Interval {
+            months,
+            duration: Duration::new(seconds.abs() as u64, nanos.abs() as u32),
+            is_positive_dur: seconds >= 0 && nanos >= 0,
+        })
     }
 
     /// Retrieve the number that we parsed out of the literal string for the `field`
-    fn units_of(&self, field: &DateTimeField) -> Option<u64> {
+    fn units_of(&self, field: DateTimeField) -> (Option<i64>, Option<i64>) {
         match field {
-            DateTimeField::Year => self.parsed.year,
-            DateTimeField::Month => self.parsed.month,
-            DateTimeField::Day => self.parsed.day,
-            DateTimeField::Hour => self.parsed.hour,
-            DateTimeField::Minute => self.parsed.minute,
-            DateTimeField::Second => self.parsed.second,
+            DateTimeField::Year => (self.parsed.year, self.parsed.year_frac),
+            DateTimeField::Month => (self.parsed.month, self.parsed.month_frac),
+            DateTimeField::Day => (self.parsed.day, self.parsed.day_frac),
+            DateTimeField::Hour => (self.parsed.hour, self.parsed.hour_frac),
+            DateTimeField::Minute => (self.parsed.minute, self.parsed.minute_frac),
+            DateTimeField::Second => (self.parsed.second, self.parsed.nano),
         }
-    }
-
-    /// Verify that the fields in me make sense
-    ///
-    /// Returns Ok if the fields are fully specified, otherwise an error
-    ///
-    /// # Examples
-    ///
-    /// ```sql
-    /// INTERVAL '1 5' DAY TO HOUR -- Ok
-    /// INTERVAL '1 5' DAY         -- Err
-    /// INTERVAL '1:2:3' HOUR TO SECOND   -- Ok
-    /// INTERVAL '1:2:3' HOUR TO MINUTE   -- Err
-    /// INTERVAL '1:2:3' MINUTE TO SECOND -- Err
-    /// INTERVAL '1:2:3' DAY TO SECOND    -- Err
-    /// ```
-    pub fn fields_match_precision(&self) -> Result<(), ValueError> {
-        let mut errors = vec![];
-        let last_field = self
-            .last_field
-            .as_ref()
-            .unwrap_or_else(|| &self.leading_field);
-        let mut extra_leading_fields = vec![];
-        let mut extra_trailing_fields = vec![];
-        // check for more data in the input string than was requested in <FIELD> TO <FIELD>
-        for field in std::iter::once(DateTimeField::Year).chain(DateTimeField::Year.into_iter()) {
-            if self.units_of(&field).is_none() {
-                continue;
-            }
-
-            if field < self.leading_field {
-                extra_leading_fields.push(field.clone());
-            }
-            if field > *last_field {
-                extra_trailing_fields.push(field.clone());
-            }
-        }
-
-        if !extra_leading_fields.is_empty() {
-            errors.push(format!(
-                "The interval string '{}' specifies {}s but the significance requested is {}",
-                self.value,
-                fields_msg(extra_leading_fields.into_iter()),
-                self.leading_field
-            ));
-        }
-        if !extra_trailing_fields.is_empty() {
-            errors.push(format!(
-                "The interval string '{}' specifies {}s but the requested precision would truncate to {}",
-                self.value, fields_msg(extra_trailing_fields.into_iter()), last_field
-            ));
-        }
-
-        // check for data requested by the <FIELD> TO <FIELD> that does not exist in the data
-        let missing_fields = match (
-            self.units_of(&self.leading_field),
-            self.units_of(&last_field),
-        ) {
-            (Some(_), Some(_)) => vec![],
-            (None, Some(_)) => vec![&self.leading_field],
-            (Some(_), None) => vec![last_field],
-            (None, None) => vec![&self.leading_field, last_field],
-        };
-
-        if !missing_fields.is_empty() {
-            errors.push(format!(
-                "The interval string '{}' provides {} - which does not include the requested field(s) {}",
-                self.value, self.present_fields(), fields_msg(missing_fields.into_iter().cloned())));
-        }
-
-        if !errors.is_empty() {
-            Err(ValueError(errors.join("; ")))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn present_fields(&self) -> String {
-        fields_msg(
-            std::iter::once(DateTimeField::Year)
-                .chain(DateTimeField::Year.into_iter())
-                .filter(|field| self.units_of(&field).is_some()),
-        )
     }
 }
 
-fn fields_msg(fields: impl Iterator<Item = DateTimeField>) -> String {
-    fields
-        .map(|field: DateTimeField| field.to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn seconds_multiplier(field: &DateTimeField) -> u64 {
+fn seconds_multiplier(field: DateTimeField) -> i64 {
     match field {
         DateTimeField::Day => 60 * 60 * 24,
         DateTimeField::Hour => 60 * 60,
@@ -261,14 +321,22 @@ fn seconds_multiplier(field: &DateTimeField) -> u64 {
 /// Intervals of unit [`DateTimeField::Day`] or smaller are semantically a
 /// multiple of seconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Interval {
+pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
-    Months(i64),
-    /// An actual timespan, possibly negative, because why not
-    Duration {
-        is_positive: bool,
-        duration: Duration,
-    },
+    pub months: i64,
+    /// An actual timespan, possibly negative
+    pub duration: Duration,
+    pub is_positive_dur: bool,
+}
+
+impl Default for Interval {
+    fn default() -> Self {
+        Self {
+            months: 0,
+            duration: Duration::default(),
+            is_positive_dur: true,
+        }
+    }
 }
 
 /// The fields of a Date
@@ -297,7 +365,6 @@ pub struct ParsedTimestamp {
     pub nano: u32,
     pub timezone_offset_second: i64,
 }
-
 /// All of the fields that can appear in a literal `DATE`, `TIMESTAMP` or `INTERVAL` string
 ///
 /// This is only used in an `Interval`, which can have any contiguous set of
@@ -305,36 +372,34 @@ pub struct ParsedTimestamp {
 /// [`ParsedTimestamp`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParsedDateTime {
-    pub is_positive: bool,
-    pub year: Option<u64>,
-    pub month: Option<u64>,
-    pub day: Option<u64>,
-    pub hour: Option<u64>,
-    pub minute: Option<u64>,
-    pub second: Option<u64>,
-    pub nano: Option<u32>,
+    pub year: Option<i64>,
+    pub year_frac: Option<i64>,
+    pub month: Option<i64>,
+    pub month_frac: Option<i64>,
+    pub day: Option<i64>,
+    pub day_frac: Option<i64>,
+    pub hour: Option<i64>,
+    pub hour_frac: Option<i64>,
+    pub minute: Option<i64>,
+    pub minute_frac: Option<i64>,
+    pub second: Option<i64>,
+    pub nano: Option<i64>,
     pub timezone_offset_second: Option<i64>,
-}
-
-impl ParsedDateTime {
-    /// `1` if is_positive, else `-1`
-    pub(crate) fn positivity(&self) -> i64 {
-        match self.is_positive {
-            true => 1,
-            false => -1,
-        }
-    }
 }
 
 impl Default for ParsedDateTime {
     fn default() -> ParsedDateTime {
         ParsedDateTime {
-            is_positive: true,
             year: None,
+            year_frac: None,
             month: None,
+            month_frac: None,
             day: None,
+            day_frac: None,
             hour: None,
+            hour_frac: None,
             minute: None,
+            minute_frac: None,
             second: None,
             nano: None,
             timezone_offset_second: None,
@@ -342,7 +407,62 @@ impl Default for ParsedDateTime {
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+impl ParsedDateTime {
+    // Write to the specified field of a ParsedDateTime iff it is currently set
+    // to None; otherwise generate an error to propagate to the user.
+    pub fn write_field_iff_none(
+        &mut self,
+        d: DateTimeField,
+        v: Option<i64>,
+        f: Option<i64>,
+    ) -> Result<(), failure::Error> {
+        use DateTimeField::*;
+
+        match d {
+            Year if self.year.is_none() => {
+                self.year = v;
+                self.year_frac = f;
+            }
+            Month if self.month.is_none() => {
+                self.month = v;
+                self.month_frac = f;
+            }
+            Day if self.day.is_none() => {
+                self.day = v;
+                self.day_frac = f;
+            }
+            Hour if self.hour.is_none() => {
+                self.hour = v;
+                self.hour_frac = f;
+            }
+            Minute if self.minute.is_none() => {
+                self.minute = v;
+                self.minute_frac = f;
+            }
+            Second => {
+                if v.is_some() {
+                    if self.second.is_none() {
+                        self.second = v;
+                    } else {
+                        failure::bail!("SECOND field set twice")
+                    }
+                }
+
+                if f.is_some() {
+                    if self.nano.is_none() {
+                        self.nano = f;
+                    } else {
+                        failure::bail!("NANOSECOND field set twice")
+                    }
+                }
+            }
+            _ => failure::bail!("{} field set twice", d),
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
     Year,
     Month,
@@ -374,6 +494,37 @@ impl IntoIterator for DateTimeField {
     }
 }
 
+impl FromStr for DateTimeField {
+    type Err = failure::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_ref() {
+            "YEAR" | "YEARS" | "Y" => Ok(Self::Year),
+            "MONTH" | "MONTHS" | "MON" => Ok(Self::Month),
+            "DAY" | "DAYS" | "D" => Ok(Self::Day),
+            "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
+            "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
+            "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
+            _ => failure::bail!("invalid DateTimeField: {}", s),
+        }
+    }
+}
+
+impl DateTimeField {
+    // Iterate the DateTimeField to the next value.
+    pub fn next_smallest(self) -> Self {
+        self.into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("Cannot get smaller DateTimeField than {}", self))
+    }
+    // Iterate the DateTimeField to the prior value.
+    pub fn next_largest(self) -> Self {
+        self.into_iter()
+            .next_back()
+            .unwrap_or_else(|| panic!("Cannot get larger DateTimeField than {}", self))
+    }
+}
+
 /// An iterator over DateTimeFields
 ///
 /// Always starts with the value smaller than the current one.
@@ -399,6 +550,22 @@ impl Iterator for DateTimeFieldIterator {
             Some(Hour) => Some(Minute),
             Some(Minute) => Some(Second),
             Some(Second) => None,
+            None => None,
+        };
+        self.0.clone()
+    }
+}
+
+impl DoubleEndedIterator for DateTimeFieldIterator {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        use DateTimeField::*;
+        self.0 = match self.0 {
+            Some(Year) => None,
+            Some(Month) => Some(Year),
+            Some(Day) => Some(Month),
+            Some(Hour) => Some(Day),
+            Some(Minute) => Some(Hour),
+            Some(Second) => Some(Minute),
             None => None,
         };
         self.0.clone()

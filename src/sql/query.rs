@@ -2068,6 +2068,7 @@ fn plan_unary_op<'a>(
             ScalarType::Float32 => UnaryFunc::NegFloat32,
             ScalarType::Float64 => UnaryFunc::NegFloat64,
             ScalarType::Decimal(_, _) => UnaryFunc::NegDecimal,
+            ScalarType::Interval => UnaryFunc::NegInterval,
             _ => bail!("cannot negate {:?}", typ.scalar_type),
         },
     };
@@ -2777,8 +2778,7 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
         ),
         Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
         Value::Interval(iv) => {
-            iv.fields_match_precision()?;
-            let i = iv.computed_permissive()?;
+            let i = iv.compute_interval()?;
             (Datum::Interval(i.into()), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Null),

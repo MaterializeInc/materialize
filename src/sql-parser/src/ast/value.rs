@@ -62,7 +62,7 @@ pub enum Value {
     ///
     /// ```text
     /// INTERVAL '<value>' <leading_field> [ (<leading_precision>) ]
-    ///     [ TO <last_field> [ (<fractional_seconds_precision>) ] ]
+    ///     [ TO <last_field> [ (<nanosecond_precision>) ] ]
     /// ```
     /// e.g. `INTERVAL '123:45.67' MINUTE(3) TO SECOND(2)`.
     ///
@@ -96,44 +96,37 @@ impl fmt::Display for Value {
             Value::Interval(IntervalValue {
                 parsed: _,
                 value,
-                leading_field: DateTimeField::Second,
-                leading_precision: Some(leading_precision),
-                last_field,
-                fractional_seconds_precision: Some(fractional_seconds_precision),
-            }) => {
-                // When the leading field is SECOND, the parser guarantees that
-                // the last field is None.
-                assert!(last_field.is_none());
-                write!(
-                    f,
-                    "INTERVAL '{}' SECOND ({}, {})",
-                    escape_single_quote_string(value),
-                    leading_precision,
-                    fractional_seconds_precision
-                )
-            }
+                precision_high: _,
+                precision_low: _,
+                nanosecond_precision: Some(nanosecond_precision),
+            }) => write!(
+                f,
+                "INTERVAL '{}' SECOND ({})",
+                escape_single_quote_string(value),
+                nanosecond_precision
+            ),
             Value::Interval(IntervalValue {
                 parsed: _,
                 value,
-                leading_field,
-                leading_precision,
-                last_field,
-                fractional_seconds_precision,
+                precision_high,
+                precision_low,
+                nanosecond_precision,
             }) => {
-                write!(
-                    f,
-                    "INTERVAL '{}' {}",
-                    escape_single_quote_string(value),
-                    leading_field
-                )?;
-                if let Some(leading_precision) = leading_precision {
-                    write!(f, " ({})", leading_precision)?;
-                }
-                if let Some(last_field) = last_field {
-                    write!(f, " TO {}", last_field)?;
-                }
-                if let Some(fractional_seconds_precision) = fractional_seconds_precision {
-                    write!(f, " ({})", fractional_seconds_precision)?;
+                write!(f, "INTERVAL '{}'", escape_single_quote_string(value),)?;
+                match (precision_high, precision_low, nanosecond_precision) {
+                    (DateTimeField::Year, DateTimeField::Second, None) => {}
+                    (DateTimeField::Year, DateTimeField::Second, Some(ns)) => {
+                        write!(f, " SECOND({})", ns)?;
+                    }
+                    (DateTimeField::Year, low, None) => {
+                        write!(f, " {}", low)?;
+                    }
+                    (high, low, None) => {
+                        write!(f, " {} TO {}", high, low)?;
+                    }
+                    (high, low, Some(ns)) => {
+                        write!(f, " {} TO {}({})", high, low, ns)?;
+                    }
                 }
                 Ok(())
             }
@@ -177,25 +170,13 @@ pub fn escape_single_quote_string(s: &str) -> EscapeSingleQuoteString<'_> {
 mod test {
     use super::*;
 
-    /// An extremely default interval value
-    fn ivalue() -> IntervalValue {
-        IntervalValue {
-            value: "".into(),
-            parsed: ParsedDateTime::default(),
-            leading_field: DateTimeField::Year,
-            leading_precision: None,
-            last_field: None,
-            fractional_seconds_precision: None,
-        }
-    }
-
     #[test]
     fn interval_values() {
-        let mut iv = ivalue();
+        let mut iv = IntervalValue::default();
         iv.parsed.year = None;
-        match iv.computed_permissive() {
-            Err(ValueError { .. }) => {}
-            Ok(why) => panic!("should not be okay: {:?}", why),
+        match iv.compute_interval() {
+            Ok(_) => {}
+            Err(e) => panic!("should not error: {:?}", e),
         }
     }
 

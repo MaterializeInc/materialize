@@ -795,7 +795,10 @@ mod tests {
         let row = Row::pack(&[
             Datum::Null,
             Datum::Int32(-42),
-            Datum::Interval(Interval::Months(312)),
+            Datum::Interval(Interval {
+                months: 312,
+                ..Default::default()
+            }),
         ]);
         assert_eq!(arena.push_row(row.clone()).unpack(), row.unpack());
     }
@@ -833,10 +836,13 @@ mod tests {
                 NaiveDateTime::from_timestamp(61, 0),
                 Utc,
             )),
-            Datum::Interval(Interval::Months(312)),
-            Datum::Interval(Interval::Duration {
-                is_positive: true,
+            Datum::Interval(Interval {
+                months: 312,
+                ..Default::default()
+            }),
+            Datum::Interval(Interval {
                 duration: std::time::Duration::from_nanos(1_012_312),
+                ..Default::default()
             }),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1, 255]),
