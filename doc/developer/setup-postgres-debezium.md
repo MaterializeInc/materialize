@@ -7,6 +7,10 @@ configure it with Debezium.
 MySQL and Postgres. Ultimately, CDC lets PostgreSQL publish to Kafka, which in turn
 can be consumed by Materialize.
 
+**!NOTE!** If you run into problems, check out the **Troubleshooting** section
+at the bottom. If you don't see a solution to your problem there, throw the
+answer in their once you solve it.
+
 ## Setup
 
 ### Manual
@@ -33,6 +37,67 @@ can be consumed by Materialize.
     ```shell
     brew services restart postgres
     ```
+
+1. Download the Debezium PostgreSQL connector and place the `debezium-connector-postgres`
+   directory in `/usr/local/opt/confluent-platform/share/java/`. If this directory doesn't
+   exist, put the contents of the `tar` into the `share/java` directory under
+   your Confluent install directory. In other words, replace
+   `/usr/local/opt/confluent-platform` in the path above with the path to
+   where you installed Confluent.
+
+    ```shell
+    curl -O https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/0.10.0.Final/debezium-connector-postgres-0.10.0.Final-plugin.tar.gz
+
+    tar -zxvf debezium-connector-postgres-0.10.0.Final-plugin.tar.gz
+    rm debezium-connector-postgres-0.10.0.Final-plugin.tar.gz
+    if [ -d "/usr/local/opt/confluent-platform/share/java/" ]; then
+      mv debezium-connector-postgres /usr/local/opt/confluent-platform/share/java
+    else
+      echo "Move debezium-connector-postgres into the share/java directory under your Confluent install directory"
+    fi
+    ```
+
+1. Start/restart Kafka Connect.
+
+    ```shell
+    confluent local stop connect && confluent local start connect
+    ```
+
+1. Connect PostgreSQL and Kafka via Debezium.
+
+    ```shell
+    curl -H 'Content-Type: application/json' localhost:8083/connectors --data '{
+      "name": "psql-connector",
+      "config": {
+        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+        "database.hostname": "localhost",
+        "database.port": "5432",
+        "database.user": "debezium",
+        "database.password": "debezium",
+        "database.dbname" : "tpch",
+        "database.server.name": "tpch",
+        "plugin.name": "pgoutput",
+        "slot.name" : "tester",
+        "database.history.kafka.bootstrap.servers": "localhost:9092",
+        "database.history.kafka.topic": "tpch-history"
+      }
+    }'
+    ```
+
+    If you get an error that the Debezium PostgreSQL connector doesn't exist, check
+    out the `Failed to find any class that implements Connector and which name
+    matches io.debezium.connector.postgresql.PostgresConnector` section below.
+
+1. Watch the Connect log file and look for messages from Debezium.
+
+    ```shell
+    confluent local log connect
+    ```
+
+## Loading TPCH
+
+To test that your local PostgreSQL/Debezium actually works with Materialize, we'll
+have Materialize ingest the TPCH `lineitem` table.
 
 1. Create a `tpch` database.
 
@@ -72,73 +137,8 @@ can be consumed by Materialize.
     psql -h localhost -d tpch -f postgres_ddl.sql
     ```
 
-1. Download the Debezium PostgreSQL connector and place the `debezium-connector-postgres`
-   directory in `/usr/local/opt/confluent-platform/share/java/`. If this directory doesn't
-   exist, put the contents of the `tar` into the `share/java` directory under
-   your Confluent install directory. In other words, replace
-   `/usr/local/opt/confluent-platform` in the path above with the path to
-   where you installed Confluent.
-
-    ```shell
-    curl -O https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/0.10.0.Final/debezium-connector-postgres-0.10.0.Final-plugin.tar.gz
-
-    tar -zxvf debezium-connector-postgres-0.10.0.Final-plugin.tar.gz
-    rm debezium-connector-postgres-0.10.0.Final-plugin.tar.gz
-    if [ -d "/usr/local/opt/confluent-platform/share/java/" ]; then
-      mv debezium-connector-postgres /usr/local/opt/confluent-platform/share/java
-    else
-      echo "Move debezium-connector-postgres into the share/java directory under your Confluent install directory"
-    fi
-    ```
-
     **Note that Debezium versions before 1.0 mishandled dates in a way that
     can cause incorrect results when loading data into Materialize.**
-
-## Loading TPCH
-
-To test that your local PostgreSQL/Debezium actually works with Materialize, we'll
-have Materialize ingest the TPCH `lineitem` table.
-
-**!NOTE!** If you run into problems, check out the **Troubleshooting** section
-at the bottom. If you don't see a solution to your problem there, throw the
-answer in their once you solve it.
-
-1. Start/restart Kafka Connect.
-
-    ```shell
-    confluent local stop connect && confluent local start connect
-    ```
-
-1. Connect PostgreSQL and Kafka via Debezium.
-
-    ```shell
-    curl -H 'Content-Type: application/json' localhost:8083/connectors --data '{
-      "name": "psql-connector",
-      "config": {
-        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-        "database.hostname": "localhost",
-        "database.port": "5432",
-        "database.user": "debezium",
-        "database.password": "debezium",
-        "database.dbname" : "tpch",
-        "database.server.name": "tpch",
-        "plugin.name": "pgoutput",
-        "slot.name" : "tester",
-        "database.history.kafka.bootstrap.servers": "localhost:9092",
-        "database.history.kafka.topic": "tpch-history"
-      }
-    }'
-    ```
-
-    If you get an error that the Debezium PostgreSQL connector doesn't exist, check
-    out the `Failed to find any class that implements Connector and which name
-    matches io.debezium.connector.postgresql.PostgresConnector` section below.
-
-1. Watch the Connect log file and look for messages from Debezium.
-
-    ```shell
-    confluent local log connect
-    ```
 
 1.  In a new shell (#2), read the actual data out of Kafka once Debezium
     finishes its first snapshot.
