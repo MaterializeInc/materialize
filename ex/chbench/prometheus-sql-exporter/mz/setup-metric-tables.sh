@@ -20,12 +20,16 @@ exec_sql() {
 
 exec_sql mz_perf_dependency_frontiers 'CREATE VIEW mz_perf_dependency_frontiers AS
 SELECT DISTINCT
-       ldd.dataflow as dataflow, lf_source.name as source,
+       coalesce(mcn.name, ldd.dataflow) as dataflow,
+       coalesce(mcn_source.name, lf_source.name) as source,
        lf_source.time - lf_df.time as lag_ms
   FROM
        mz_view_dependencies ldd
   JOIN mz_view_frontiers lf_source ON ldd.source = lf_source.name
-  JOIN mz_view_frontiers lf_df ON ldd.dataflow=lf_df.name;'
+  JOIN mz_view_frontiers lf_df ON ldd.dataflow = lf_df.name
+  LEFT JOIN mz_catalog_names mcn ON mcn.global_id = ldd.dataflow
+  LEFT JOIN mz_catalog_names mcn_source ON mcn_source.global_id = lf_source.name
+  ;'
 
 # operator operator is due to issue #1217
 exec_sql mz_perf_arrangement_records 'CREATE VIEW mz_perf_arrangement_records AS
