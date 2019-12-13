@@ -26,6 +26,18 @@ main() {
         up)
             if [[ $# -eq 0 ]]; then
                 bring_up
+            elif [[ $1 = :demo: ]]; then
+                # currently just the same as the default
+                bring_up
+            elif [[ $1 = :init: ]]; then
+                initialize_warehouse
+            elif [[ $1 = :minimal-connected: || $1 = :mc: ]]; then
+                bring_up_source_data
+            elif [[ $1 = :load: ]]; then
+                bring_up_source_data
+                bring_up_introspection
+                dc_up metrics
+                load_test
             else
                 dc_up "$@"
             fi ;;
@@ -42,6 +54,7 @@ main() {
             dc_logs "$@" ;;
         nuke) nuke_docker ;;
         load-test) load_test;;
+        demo-load) demo_load;;
         run)
             if [[ $# -eq 0 ]]; then
                 usage
@@ -67,8 +80,18 @@ Possible COMMANDs:
  Cluster commands:
 
     `us up \[SERVICE..\]`           With args: Start the list of services
-                             With no args: Start the cluster, doing everything
-                               `uw \*except\*` the chbench gen step from the readme
+                             With no args: Start the cluster, bringing up introspection and
+                             metabase but no load generators.
+                             `uw WARNING:` you must still perform the 'chbench gen' step from the
+                             README at least once before we have any source chbench data.
+                               Special args:
+                                 `uo :init:` -- one-time setup that must be run before
+                                 performing anything else or after running 'nuke'
+                                 `uo :demo:` -- Set things up for a demo
+                                 `uo :load:` -- bring up everything and then start the
+                                 peek-metrics and load-test containers
+                                 `uo :minimal-connected:`/`uo :mc:` -- bring up just mysql and
+                                 kafka containers with no grafana.
     `us down \[SERVICE..\]`         With args: Stop the list of services, without removing them
                              With no args: Stop the cluster, removing containers, volumes, etc
 
@@ -79,8 +102,9 @@ Possible COMMANDs:
     `us restart \(SERVICE\|all\)`         Restart either SERVICE or all services. This preserves data in
                                     volumes (kafka, debezium, etc)
     `us load-test`                     Run a long-running load test, modify this file to change parameters
-    `us logs SERVICE \[NUM LINES..\]`    Equivalent of 'docker-compose logs SERVICE'. To print a limited number of
-                                    log messages, enter the number after the SERVICE.
+    `us demo-load`                     Generate a lot of changes to be used in the demo
+    `us logs SERVICE \[NUM LINES..\]`    Equivalent of 'docker-compose logs SERVICE'. To print a limited
+                                    number of log messages, enter the number after the SERVICE.
 
  Danger Zone:
 
@@ -90,6 +114,54 @@ Possible COMMANDs:
 ########################################
 # Commands
 
+# Top-level commands
+#
+# These should not be called by other functions
+
+# Default: start everything
+bring_up() {
+    bring_up_source_data
+    echo "materialize and ingstion should be running fine, bringing up introspection and metabase"
+    bring_up_introspection
+    dc_up metabase
+}
+
+bring_up_source_data() {
+    for image in "${IMAGES[@]}"; do
+        # if we are running with `:local` images then we don't need to pull, so check
+        # that `<tag>:latest` is actually in the compose file
+        if (grep "${image}" docker-compose.yml chbench/Dockerfile >/dev/null 2>&1); then
+            runv docker pull "$image"
+        fi
+    done
+    dc_up materialized mysql
+    echo "Waiting for mysql to come up"
+    sleep 5
+    runv docker-compose logs --tail 5 materialized
+    runv docker-compose logs --tail 5 mysql
+    dc_up connector
+    echo "Waiting for schema registry to be fully up"
+    sleep 5
+    docker-compose logs --tail 5 schema-registry
+}
+
+bring_up_introspection() {
+    dc_up grafana
+}
+
+# Create source data and tables for MYSQL
+initialize_warehouse() {
+    if ! (docker ps | grep chbench_mysql >/dev/null); then
+        dc_up mysql
+        echo "sleeping for awhile to allow mysql to come up"
+        sleep 15
+    fi
+    runv docker-compose run chbench gen --warehouses=1
+}
+
+# helper/individual step commands
+
+# Start a single service and all its dependencies
 dc_up() {
     runv docker-compose up -d --build "$@"
 }
@@ -99,30 +171,8 @@ dc_stop() {
     runv docker-compose stop "$@"
 }
 
-
-bring_up() {
-    for image in "${IMAGES[@]}"; do
-        # if we are running with `:local` images then we don't need to pull, so check
-        # that `<tag>:latest` is actually in the compose file
-        if (grep "$image" docker-compose.yml >/dev/null 2>&1); then
-            runv docker pull "$image"
-        fi
-    done
-    dc_up materialized mysql
-    docker-compose logs materialized | tail -n 5
-    echo "Waiting for mysql to come up"
-    sleep 5
-    docker-compose logs mysql | tail -n 5
-    dc_up connector
-    echo "Waiting for schema registry to be fully up"
-    sleep 5
-    docker-compose logs schema-registry | tail -n 5
-    echo "Materialize and all chbench should be running fine, bringing up metrics"
-    dc_up grafana
-}
-
 dc_run() {
-    runv docker-compose run --service-ports "$@"
+    runv docker-compose run --use-aliases --service-ports "$@"
 }
 
 dc_logs() {
@@ -163,6 +213,18 @@ load_test() {
         --peek-conns=5 --flush-every=30 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
         --min-delay=0.05 --max-delay=0.1 -l /dev/stdout \
+        --config-file-path=/etc/chbenchmark/mz-default.cfg
+}
+
+# Generate changes for the demo
+demo_load() {
+    runv docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    runv docker-compose run -d chbench run \
+        --mz-sources --mz-views=q01 \
+        --dsn=mysql --gen-dir=/var/lib/mysql-files \
+        --peek-conns=0 --flush-every=30 \
+        --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
+        --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
         --config-file-path=/etc/chbenchmark/mz-default.cfg
 }
 
