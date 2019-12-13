@@ -247,7 +247,7 @@ impl LogVariant {
 
             LogVariant::Materialized(MaterializedLog::Catalog) => RelationDesc::empty()
                 .add_column("global_id", ScalarType::String)
-                .add_column("name", ScalarType::Int64),
+                .add_column("name", ScalarType::String),
         }
     }
 
