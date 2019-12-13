@@ -2946,7 +2946,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#0e64a990e6a5433b4da17f508dc50270fa672476"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#ed5574cb0cd2465517a242b0db6386f29a41b9d2"
 dependencies = [
  "log",
 ]

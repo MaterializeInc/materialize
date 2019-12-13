@@ -212,6 +212,51 @@ SELECT 1.0 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1
 ----
 1.000000000000
 
+### e-notation ###
+query R
+SELECT 0.03142529E2;
+----
+3.142529
+
+query R
+SELECT 314.2529E-2;
+----
+3.142529
+
+query R
+SELECT -314.2529E-2;
+----
+-3.142529
+
+query R
+SELECT 3.14E37;
+----
+31400000000000000000000000000000000000
+
+query R
+SELECT 3.14E-36;
+----
+0.00000000000000000000000000000000000314
+
+# Column rename instead of double exponentiation
+query R
+SELECT 0.03142529E2E2;
+----
+3.142529
+
+# Only allow one negative sign in exponent
+query R
+SELECT 314.2529E-2-2;
+----
+1.142529
+
+# Overflow
+statement error numeric literal overflows i128
+select 3.14E40;
+
+statement error numeric literal exceeds maximum precision
+select 3.14E-40;
+
 ### float64 to decimal ###
 
 query R

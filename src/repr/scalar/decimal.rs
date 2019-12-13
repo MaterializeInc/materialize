@@ -358,45 +358,115 @@ impl FromStr for Decimal {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut significand: i128 = 0;
         let mut precision = 0;
-        let mut scale = 0;
+        let mut scale: u8 = 0;
         let mut seen_decimal = false;
         let mut negative = false;
-        for c in s.chars() {
-            if c == '.' {
-                if seen_decimal {
-                    bail!("more than one decimal point in numeric literal: {}", s)
-                }
-                seen_decimal = true;
-                continue;
-            }
-            if c == '-' {
-                if negative {
-                    bail!("negative multiple times in decimal!: {}", s);
-                }
-                negative = true;
-                continue;
-            }
+        let mut seen_e_notation = false;
+        let mut e_exponent: u8 = 0;
+        let mut e_negative = false;
 
-            precision += 1;
-            if seen_decimal {
-                scale += 1;
-            }
+        let mut z = s.chars().peekable();
 
-            let digit = c
-                .to_digit(10)
-                .ok_or_else(|| format_err!("invalid digit in numeric literal: {}", s))?;
-            significand = significand
-                .checked_mul(10)
-                .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
-            significand = significand
-                .checked_add(i128::from(digit))
-                .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+        if let Some('-') = z.peek() {
+            // Consume the negative sign.
+            z.next();
+            negative = true;
+        }
+
+        while let Some(&ch) = z.peek() {
+            match ch {
+                '0'..='9' => {
+                    let digit = ch
+                        .to_digit(10)
+                        .ok_or_else(|| format_err!("invalid digit in numeric literal: {}", s))?;
+                    precision += 1;
+                    if seen_decimal {
+                        scale += 1;
+                    }
+                    significand = significand
+                        .checked_mul(10)
+                        .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+                    significand = significand
+                        .checked_add(i128::from(digit))
+                        .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+                }
+                '.' => {
+                    if !seen_decimal {
+                        seen_decimal = true;
+                    } else {
+                        bail!("multiple decimal points in numeric literal: {}", s)
+                    }
+                }
+                _ => break,
+            }
+            z.next();
+        }
+
+        // Check for e-notation.
+        // Note that 'e' is changed to 'E' during parsing step.
+        if let Some('E') = z.peek() {
+            // Consume the e-notation signifier.
+            z.next();
+            seen_e_notation = true;
+            if let Some('-') = z.peek() {
+                // Consume the negative sign.
+                z.next();
+                e_negative = true;
+            }
+            while let Some(&ch) = z.peek() {
+                match ch {
+                    '0'..='9' => {
+                        let digit = ch.to_digit(10).ok_or_else(|| {
+                            format_err!("invalid digit in numeric literal: {}", s)
+                        })?;
+                        e_exponent = e_exponent.checked_mul(10).ok_or_else(|| {
+                            format_err!("exponent in e-notation overflows u8: {}", s)
+                        })?;
+                        e_exponent = e_exponent.checked_add(digit as u8).ok_or_else(|| {
+                            format_err!("exponent in e-notation overflows u8: {}", s)
+                        })?;
+                    }
+                    _ => break,
+                }
+                z.next();
+            }
+        }
+
+        if z.peek().is_some() {
+            bail!("malformed numeric literal: {}", s);
+        }
+
+        if precision > MAX_DECIMAL_PRECISION {
+            bail!("numeric literal exceeds maximum precision: {}", s);
         }
         if negative {
             significand *= -1;
         }
-        if precision > MAX_DECIMAL_PRECISION {
-            bail!("numeric literal exceeds maximum precision: {}", s);
+        if seen_e_notation {
+            if e_negative {
+                scale = scale.checked_add(e_exponent).ok_or_else(|| {
+                    format_err!("numeric literal exceeds maximum precision: {}", s)
+                })?;
+                if scale > MAX_DECIMAL_PRECISION {
+                    bail!("numeric literal exceeds maximum precision: {}", s);
+                }
+            } else if scale > e_exponent {
+                scale -= e_exponent;
+            } else {
+                e_exponent -= scale;
+                scale = 0;
+                let p = 10_i128.checked_pow(e_exponent as u32).ok_or_else(|| {
+                    format_err!(
+                        "exponent in numeric literal {} overflows i128: 10^{}",
+                        s,
+                        e_exponent
+                    )
+                })?;
+
+                significand = significand
+                    .checked_mul(p)
+                    .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+            }
         }
         Ok(Decimal { scale, significand })
     }
@@ -454,6 +524,10 @@ mod tests {
     fn test_parse_decimal() {
         let pos = Significand::new(12345).with_scale(2);
         let parsed: Decimal = "123.45".parse().unwrap();
+        assert_eq!(pos.significand(), parsed.significand());
+        assert_eq!(pos.scale(), parsed.scale());
+
+        let pos = Decimal::from_str("12345E-2").unwrap();
         assert_eq!(pos.significand(), parsed.significand());
         assert_eq!(pos.scale(), parsed.scale());
 
