@@ -586,10 +586,7 @@ where
                                 eval_env,
                             },
                         );
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::DropViews(vec![view_id]),
-                        );
+                        self.drop_views(vec![view_id]);
                     }
 
                     let rows_rx = rows_rx
