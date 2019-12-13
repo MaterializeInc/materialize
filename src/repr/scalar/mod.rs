@@ -244,6 +244,20 @@ impl<'a> Datum<'a> {
         }
     }
 
+    pub fn unwrap_list(&self) -> DatumList<'a> {
+        match self {
+            Datum::List(list) => *list,
+            _ => panic!("Datum::unwrap_list called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_dict(&self) -> DatumDict<'a> {
+        match self {
+            Datum::Dict(dict) => *dict,
+            _ => panic!("Datum::unwrap_dict called on {:?}", self),
+        }
+    }
+
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
             if let ScalarType::Jsonb = scalar_type {

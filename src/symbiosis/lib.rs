@@ -447,7 +447,7 @@ fn push_column(
             let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
             if let Some(serde) = serde {
                 let mut temp_storage = RowPacker::new();
-                let datum = expr::serde_to_datum(&mut temp_storage.packable(), serde).unwrap();
+                let datum = expr::serde_to_datum(&mut temp_storage.arena(), serde).unwrap();
                 row.push(datum)
             } else {
                 row.push(Datum::Null)

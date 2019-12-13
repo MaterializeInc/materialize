@@ -690,7 +690,7 @@ impl PendingPeek {
                 let datums = unpacker.unpack(row);
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
-                let temp_storage = &mut temp_storage.packable();
+                let temp_storage = &mut temp_storage.arena();
                 if self.filter.iter().all(|predicate| {
                     predicate.eval(&datums, &self.eval_env, temp_storage) == Datum::True
                 }) {

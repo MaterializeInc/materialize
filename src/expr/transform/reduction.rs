@@ -63,7 +63,7 @@ impl FoldConstants {
                             .map(|i| datums[*i].clone())
                             .collect::<Vec<_>>();
                         let mut temp_storage = RowPacker::new();
-                        let temp_storage = &mut temp_storage.packable();
+                        let temp_storage = &mut temp_storage.arena();
                         let mut packer = RowPacker::new();
                         let val = aggregates
                             .iter()
@@ -84,7 +84,7 @@ impl FoldConstants {
                         .into_iter()
                         .map(|(key, vals)| {
                             let mut temp_storage = RowPacker::new();
-                            let temp_storage = &mut temp_storage.packable();
+                            let temp_storage = &mut temp_storage.arena();
                             let row = Row::pack(key.into_iter().chain(
                                 aggregates.iter().enumerate().map(|(i, agg)| {
                                     (agg.func.func())(
@@ -135,7 +135,7 @@ impl FoldConstants {
                         .map(|(input_row, diff)| {
                             let mut unpacked = input_row.unpack();
                             let mut temp_storage = RowPacker::new();
-                            let temp_storage = &mut temp_storage.packable();
+                            let temp_storage = &mut temp_storage.arena();
                             for scalar in scalars.iter() {
                                 unpacked.push(scalar.eval(&unpacked, env, temp_storage))
                             }
@@ -167,7 +167,7 @@ impl FoldConstants {
                         .filter(|(row, _diff)| {
                             let datums = row.unpack();
                             let mut temp_storage = RowPacker::new();
-                            let temp_storage = &mut temp_storage.packable();
+                            let temp_storage = &mut temp_storage.arena();
                             predicates
                                 .iter()
                                 .all(|p| p.eval(&datums, env, temp_storage) == Datum::True)
