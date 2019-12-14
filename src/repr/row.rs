@@ -127,8 +127,17 @@ pub struct RowPacker {
 /// let row = packable.finish();
 /// ```
 #[derive(Debug)]
+#[must_use]
 pub struct PackableRow<'a> {
     data: &'a mut Vec<u8>,
+}
+
+/// `RowArena` is used to allocate temporary data for building `Datum`s.
+#[derive(Debug)]
+pub struct RowArena<'a> {
+    data: &'a mut Vec<u8>,
+    owned_bytes: Vec<Box<[u8]>>,
+    owned_rows: Vec<Row>,
 }
 
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
@@ -167,6 +176,9 @@ enum Tag {
     Dict,
     JsonNull,
 }
+
+// --------------------------------------------------------------------------------
+// reading data
 
 /// Reads a `Copy` value starting at byte `offset`.
 ///
@@ -284,6 +296,99 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::JsonNull => Datum::JsonNull,
     }
 }
+
+// --------------------------------------------------------------------------------
+// writing data
+
+// See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
+// #[inline(always)]
+// fn push_copy<T>(data: &mut Vec<u8>, t: T)
+// where
+//     T: Copy + Sized,
+// {
+//     data.extend_from_slice(&unsafe { transmute::<T, [u8; size_of::<T>()]>(t) })
+// }
+fn assert_is_copy<T: Copy>(_t: T) {}
+macro_rules! push_copy {
+    ($data:expr, $t:expr, $T:ty) => {
+        let t: $T = $t;
+        assert_is_copy(t);
+        $data.extend_from_slice(&unsafe { transmute::<_, [u8; size_of::<$T>()]>(t) })
+    };
+}
+
+fn push_untagged_bytes(data: &mut Vec<u8>, bytes: &[u8]) {
+    push_copy!(data, bytes.len(), usize);
+    data.extend_from_slice(bytes);
+}
+
+fn push_untagged_string(data: &mut Vec<u8>, string: &str) {
+    push_untagged_bytes(data, string.as_bytes())
+}
+
+fn push_datum(data: &mut Vec<u8>, datum: Datum) {
+    match datum {
+        Datum::Null => data.push(Tag::Null as u8),
+        Datum::False => data.push(Tag::False as u8),
+        Datum::True => data.push(Tag::True as u8),
+        Datum::Int32(i) => {
+            data.push(Tag::Int32 as u8);
+            push_copy!(data, i, i32);
+        }
+        Datum::Int64(i) => {
+            data.push(Tag::Int64 as u8);
+            push_copy!(data, i, i64);
+        }
+        Datum::Float32(f) => {
+            data.push(Tag::Float32 as u8);
+            push_copy!(data, f.to_bits(), u32);
+        }
+        Datum::Float64(f) => {
+            data.push(Tag::Float64 as u8);
+            push_copy!(data, f.to_bits(), u64);
+        }
+        Datum::Date(d) => {
+            data.push(Tag::Date as u8);
+            push_copy!(data, d, NaiveDate);
+        }
+        Datum::Timestamp(t) => {
+            data.push(Tag::Timestamp as u8);
+            push_copy!(data, t, NaiveDateTime);
+        }
+        Datum::TimestampTz(t) => {
+            data.push(Tag::TimestampTz as u8);
+            push_copy!(data, t, DateTime<Utc>);
+        }
+        Datum::Interval(i) => {
+            data.push(Tag::Interval as u8);
+            push_copy!(data, i, Interval);
+        }
+        Datum::Decimal(s) => {
+            data.push(Tag::Decimal as u8);
+            push_copy!(data, s, Significand);
+        }
+        Datum::Bytes(bytes) => {
+            data.push(Tag::Bytes as u8);
+            push_untagged_bytes(data, bytes);
+        }
+        Datum::String(string) => {
+            data.push(Tag::String as u8);
+            push_untagged_string(data, string);
+        }
+        Datum::List(list) => {
+            data.push(Tag::List as u8);
+            push_untagged_bytes(data, &list.data);
+        }
+        Datum::Dict(dict) => {
+            data.push(Tag::Dict as u8);
+            push_untagged_bytes(data, &dict.data);
+        }
+        Datum::JsonNull => data.push(Tag::JsonNull as u8),
+    }
+}
+
+// --------------------------------------------------------------------------------
+// public api
 
 impl Row {
     /// Take some `Datum`s and pack them into a `Row`.
@@ -411,210 +516,30 @@ impl RowPacker {
         packable.finish()
     }
 
-    /// Clears and then borrows the internal buffer from `self`.
+    /// Borrows the internal buffer from `self`.
     ///
-    /// You can mutate this buffer in the same way as a row, and clone it to make a new row.
+    /// You can mutate this buffer in the same way as a row, and clone it to make a new row. The buffer will be cleared on drop.
     ///
     /// There are some awkward cases where this function is needed, but prefer `RowPacker::pack` where possible.
     pub fn packable(&mut self) -> PackableRow {
-        // we could clear on Drop instead, but having a custom Drop impl disables NLL which makes PackableRow unpleasant to use
-        self.data.clear();
         PackableRow {
             data: &mut self.data,
+        }
+    }
+
+    pub fn arena(&mut self) -> RowArena {
+        RowArena {
+            data: &mut self.data,
+            owned_bytes: vec![],
+            owned_rows: vec![],
         }
     }
 }
 
 impl<'a> PackableRow<'a> {
-    fn push_untagged_bytes(&mut self, bytes: &[u8]) -> &'a [u8] {
-        let data = &mut self.data;
-        data.extend_from_slice(&bytes.len().to_le_bytes());
-        let start = data.len();
-        data.extend_from_slice(bytes);
-        let backed_bytes = &data[start..(start + bytes.len())];
-        unsafe {
-            // it's safe to return &'a because so long as this PackableRow exists we will only ever append to self.data
-            transmute::<&[u8], &'a [u8]>(backed_bytes)
-        }
-    }
-
-    fn push_untagged_string(&mut self, string: &str) -> &'a str {
-        let backed_bytes = self.push_untagged_bytes(string.as_bytes());
-        unsafe { std::str::from_utf8_unchecked(backed_bytes) }
-    }
-
-    /// Push `Datum::Bytes(bytes)` onto the end of `self` and return a reference to the stored bytes
-    ///
-    /// ```compile_fail
-    /// use repr::RowPacker;
-    /// let mut packer = RowPacker::new();
-    /// let mut packable = packer.packable();
-    /// let s = packable.push_bytes(&[1,2,3]);
-    /// packer.packable(); // clears the storage for s
-    /// println!("{:?}", s);
-    /// ```
-    pub fn push_bytes(&mut self, bytes: &[u8]) -> &'a [u8] {
-        self.data.push(Tag::Bytes as u8);
-        self.push_untagged_bytes(bytes)
-    }
-
-    /// Push `Datum::String(string)` onto the end of `self` and return a reference to the stored string
-    ///
-    /// ```compile_fail
-    /// use repr::RowPacker;
-    /// let mut packer = RowPacker::new();
-    /// let mut packable = packer.packable();
-    /// let s = packable.push_string("foo");
-    /// packer.packable(); // clears the storage for s
-    /// println!("{}", s);
-    /// ```
-    pub fn push_string(&mut self, string: &str) -> &'a str {
-        self.data.push(Tag::String as u8);
-        self.push_untagged_string(string)
-    }
-
-    /// Push an iterator of `Datum`s onto the end of `self` and return a `DatumList` referencing the stored `Datum`s
-    pub fn push_list<'b, I, D>(&mut self, iter: I) -> DatumList<'a>
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'b>>,
-    {
-        self.data.push(Tag::List as u8);
-        // write a dummy len, will fix it up later
-        let len_start = self.data.len();
-        self.data.extend_from_slice(&0usize.to_le_bytes());
-        let data_start = self.data.len();
-        for datum in iter {
-            self.push(*datum.borrow());
-        }
-        let len = self.data.len() - data_start;
-        // fix up the len
-        self.data[len_start..data_start].copy_from_slice(&len.to_le_bytes());
-        let backed_bytes = &self.data[data_start..(data_start + len)];
-        DatumList {
-            data: unsafe {
-                // it's safe to return &'a because so long as this PackableRow exists we will only ever append to self.data
-                transmute::<&[u8], &'a [u8]>(backed_bytes)
-            },
-        }
-    }
-
-    /// Push an iterator of `(&str, Datum)` pairs onto the end of `self` and return a `DatumDict` referencing the stored pairs
-    pub fn push_dict<'b, I, SD, S, D>(&mut self, iter: I) -> DatumDict<'a>
-    where
-        I: IntoIterator<Item = SD>,
-        SD: Borrow<(S, D)>,
-        S: Borrow<str>,
-        D: Borrow<Datum<'b>>,
-    {
-        self.data.push(Tag::Dict as u8);
-        // write a dummy len, will fix it up later
-        let len_start = self.data.len();
-        self.data.extend_from_slice(&0usize.to_le_bytes());
-        let data_start = self.data.len();
-        for pair in iter {
-            let (key, datum) = pair.borrow();
-            self.push_untagged_string(key.borrow());
-            self.push(*datum.borrow());
-        }
-        let len = self.data.len() - data_start;
-        // fix up the len
-        self.data[len_start..data_start].copy_from_slice(&len.to_le_bytes());
-        let backed_bytes = &self.data[data_start..(data_start + len)];
-        let dict = DatumDict {
-            data: unsafe {
-                // it's safe to return &'a because so long as this PackableRow exists we will only ever append to self.data
-                transmute::<&[u8], &'a [u8]>(backed_bytes)
-            },
-        };
-        if cfg!(debug_assertions) {
-            let mut prev_key = None;
-            for (key, _val) in dict.iter() {
-                if let Some(prev_key) = prev_key {
-                    debug_assert!(
-                        prev_key < key,
-                        "Dict keys must be unique and given in ascending order: {} came before {}",
-                        prev_key,
-                        key
-                    );
-                }
-                prev_key = Some(key);
-            }
-        }
-        dict
-    }
-
     /// Push `datum` onto the end of `self`
     pub fn push(&mut self, datum: Datum) {
-        let data = &mut self.data;
-        match datum {
-            Datum::Null => data.push(Tag::Null as u8),
-            Datum::False => data.push(Tag::False as u8),
-            Datum::True => data.push(Tag::True as u8),
-            Datum::Int32(i) => {
-                data.push(Tag::Int32 as u8);
-                data.extend_from_slice(&i.to_le_bytes());
-            }
-            Datum::Int64(i) => {
-                data.push(Tag::Int64 as u8);
-                data.extend_from_slice(&i.to_le_bytes());
-            }
-            Datum::Float32(f) => {
-                data.push(Tag::Float32 as u8);
-                data.extend_from_slice(&f.to_bits().to_le_bytes());
-            }
-            Datum::Float64(f) => {
-                data.push(Tag::Float64 as u8);
-                data.extend_from_slice(&f.to_bits().to_le_bytes());
-            }
-            Datum::Date(d) => {
-                data.push(Tag::Date as u8);
-                data.extend_from_slice(&unsafe {
-                    transmute::<NaiveDate, [u8; size_of::<NaiveDate>()]>(d)
-                });
-            }
-            Datum::Timestamp(t) => {
-                data.push(Tag::Timestamp as u8);
-                data.extend_from_slice(&unsafe {
-                    transmute::<NaiveDateTime, [u8; size_of::<NaiveDateTime>()]>(t)
-                });
-            }
-            Datum::TimestampTz(t) => {
-                data.push(Tag::TimestampTz as u8);
-                data.extend_from_slice(&unsafe {
-                    transmute::<DateTime<Utc>, [u8; size_of::<DateTime<Utc>>()]>(t)
-                });
-            }
-            Datum::Interval(i) => {
-                data.push(Tag::Interval as u8);
-                data.extend_from_slice(&unsafe {
-                    transmute::<Interval, [u8; size_of::<Interval>()]>(i)
-                });
-            }
-            Datum::Decimal(s) => {
-                data.push(Tag::Decimal as u8);
-                data.extend_from_slice(&unsafe {
-                    transmute::<Significand, [u8; size_of::<Significand>()]>(s)
-                });
-            }
-            Datum::Bytes(bytes) => {
-                data.push(Tag::Bytes as u8);
-                self.push_untagged_bytes(bytes);
-            }
-            Datum::String(string) => {
-                data.push(Tag::String as u8);
-                self.push_untagged_string(string);
-            }
-            Datum::List(list) => {
-                data.push(Tag::List as u8);
-                self.push_untagged_bytes(&list.data);
-            }
-            Datum::Dict(dict) => {
-                data.push(Tag::Dict as u8);
-                self.push_untagged_bytes(&dict.data);
-            }
-            Datum::JsonNull => data.push(Tag::JsonNull as u8),
-        }
+        push_datum(&mut self.data, datum)
     }
 
     pub fn extend<'b, I, D>(&mut self, iter: I)
@@ -631,6 +556,12 @@ impl<'a> PackableRow<'a> {
         Row {
             data: self.data.clone().into_boxed_slice(),
         }
+    }
+}
+
+impl Drop for PackableRow<'_> {
+    fn drop(&mut self) {
+        self.data.clear()
     }
 }
 
@@ -679,6 +610,112 @@ impl Drop for UnpackedRow<'_> {
     }
 }
 
+impl<'a> RowArena<'a> {
+    /// Take ownership of `bytes`, for the lifetime of the arena
+    #[allow(clippy::transmute_ptr_to_ptr)]
+    pub fn push_bytes(&mut self, bytes: Vec<u8>) -> &'a [u8] {
+        self.owned_bytes.push(bytes.into_boxed_slice());
+        let owned_bytes = &self.owned_bytes[self.owned_bytes.len() - 1];
+        unsafe {
+            // this is safe because we only ever append to self.owned_bytes
+            transmute::<&[u8], &'a [u8]>(owned_bytes)
+        }
+    }
+
+    /// Take ownership of `string`, for the lifetime of the arena
+    pub fn push_string(&mut self, string: String) -> &'a str {
+        let owned_bytes = self.push_bytes(string.into_bytes());
+        unsafe {
+            // this is safe because we know it was a String just before
+            std::str::from_utf8_unchecked(owned_bytes)
+        }
+    }
+
+    /// Take ownership of `row`, for the lifetime of the arena
+    pub fn push_row(&mut self, row: Row) -> &'a Row {
+        self.owned_rows.push(row);
+        let owned_row = &self.owned_rows[self.owned_rows.len() - 1];
+        unsafe {
+            // this is safe because we only ever append to self.owned_rows
+            transmute::<&Row, &'a Row>(owned_row)
+        }
+    }
+
+    /// Allocate a `DatumList` from an iterator of `Datum`s
+    ///
+    /// Note: using this method to build up deeply nested data-structures produces a lot of copying. It may be more efficient to go via the unsafe interface in this module.
+    #[allow(clippy::range_plus_one)]
+    pub fn push_list<'b, I, D>(&mut self, iter: I) -> DatumList<'a>
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'b>>,
+    {
+        self.data.push(Tag::List as u8);
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
+        for datum in iter {
+            push_datum(&mut self.data, *datum.borrow());
+        }
+        // fix up the len
+        let len = self.data.len() - 1 - size_of::<usize>();
+        self.data[1..(1 + size_of::<usize>())].copy_from_slice(&len.to_le_bytes());
+        let row = self.push_row(Row {
+            data: self.data.clone().into_boxed_slice(),
+        });
+        self.data.clear();
+        row.unpack_first().unwrap_list()
+    }
+
+    /// Allocate a `DatumDict` from an iterator of `(&str, Datum)` pairs
+    ///
+    /// The pairs MUST be sorted by key and not contain duplicate keys
+    ///
+    /// Note: using this method to build up deeply nested data-structures produces a lot of copying. It may be more efficient to go via the unsafe interface in this module.
+    #[allow(clippy::range_plus_one)]
+    pub fn push_dict<'b, I, SD, S, D>(&mut self, iter: I) -> DatumDict<'a>
+    where
+        I: IntoIterator<Item = SD>,
+        SD: Borrow<(S, D)>,
+        S: Borrow<str>,
+        D: Borrow<Datum<'b>>,
+    {
+        self.data.push(Tag::Dict as u8);
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
+        for pair in iter {
+            let (key, datum) = pair.borrow();
+            push_untagged_string(&mut self.data, key.borrow());
+            push_datum(&mut self.data, *datum.borrow());
+        }
+        // fix up the len
+        let len = self.data.len() - 1 - size_of::<usize>();
+        self.data[1..(1 + size_of::<usize>())].copy_from_slice(&len.to_le_bytes());
+        let row = self.push_row(Row {
+            data: self.data.clone().into_boxed_slice(),
+        });
+        self.data.clear();
+        let dict = row.unpack_first().unwrap_dict();
+
+        // if in debug mode, sanity check keys
+        if cfg!(debug_assertions) {
+            let mut prev_key = None;
+            for (key, _val) in dict.iter() {
+                if let Some(prev_key) = prev_key {
+                    debug_assert!(
+                        prev_key < key,
+                        "Dict keys must be unique and given in ascending order: {} came before {}",
+                        prev_key,
+                        key
+                    );
+                }
+                prev_key = Some(key);
+            }
+        }
+
+        dict
+    }
+}
+
 impl Default for RowPacker {
     fn default() -> RowPacker {
         RowPacker::new()
@@ -706,36 +743,31 @@ mod tests {
     }
 
     #[test]
-    fn miri_test_push() {
+    fn miri_test_arena() {
         let mut packer = RowPacker::new();
-        let mut packable = packer.packable();
+        let mut arena = packer.arena();
 
-        assert_eq!(packable.push_string(""), "");
-        assert_eq!(packable.push_string("العَرَبِيَّة"), "العَرَبِيَّة");
+        assert_eq!(arena.push_string("".to_owned()), "");
+        assert_eq!(arena.push_string("العَرَبِيَّة".to_owned()), "العَرَبِيَّة");
 
-        assert_eq!(packable.push_bytes(&[]), &[]);
-        assert_eq!(packable.push_bytes(&[0, 2, 1, 255]), &[0, 2, 1, 255]);
+        assert_eq!(arena.push_bytes(vec![]), &[]);
+        assert_eq!(arena.push_bytes(vec![0, 2, 1, 255]), &[0, 2, 1, 255]);
 
-        assert_eq!(
-            packable.push_list(&[]).iter().collect::<Vec<Datum>>(),
-            vec![]
-        );
+        let list: &[Datum] = &[];
+        assert_eq!(arena.push_list(list).iter().collect::<Vec<Datum>>(), vec![]);
         let list = vec![
             Datum::Null,
             Datum::Int32(-42),
             Datum::Interval(Interval::Months(312)),
         ];
         assert_eq!(
-            packable.push_list(&list).iter().collect::<Vec<Datum>>(),
+            arena.push_list(list.clone()).iter().collect::<Vec<Datum>>(),
             list
         );
 
         let dict: &[(&str, Datum)] = &[];
         assert_eq!(
-            packable
-                .push_dict(dict)
-                .iter()
-                .collect::<Vec<(&str, Datum)>>(),
+            arena.push_dict(dict).iter().collect::<Vec<(&str, Datum)>>(),
             vec![]
         );
         let dict = vec![
@@ -744,8 +776,8 @@ mod tests {
             ("null", Datum::Null),
         ];
         assert_eq!(
-            packable
-                .push_dict(&dict)
+            arena
+                .push_dict(dict.clone())
                 .iter()
                 .collect::<Vec<(&str, Datum)>>(),
             dict

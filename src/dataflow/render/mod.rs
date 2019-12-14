@@ -358,7 +358,7 @@ where
                     let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |input_row| {
                         let mut datums = unpacker.unpack(&input_row);
-                        let temp_storage = &mut temp_storage.packable();
+                        let temp_storage = &mut temp_storage.arena();
                         for scalar in &scalars {
                             let datum = scalar.eval(&datums, &env, temp_storage);
                             // Scalar is allowed to see the outputs of previous scalars.
@@ -381,7 +381,7 @@ where
                     let collection = self.collection(input).unwrap().filter(move |input_row| {
                         let datums = unpacker.unpack(input_row);
                         predicates.iter().all(|predicate| {
-                            let temp_storage = &mut temp_storage.packable();
+                            let temp_storage = &mut temp_storage.arena();
                             match predicate.eval(&datums, &env, temp_storage) {
                                 Datum::True => true,
                                 Datum::False | Datum::Null => false,
@@ -459,7 +459,7 @@ where
                 let keyed = built
                     .map(move |row| {
                         let datums = unpacker.unpack(&row);
-                        let temp_storage = &mut eval_packer.packable();
+                        let temp_storage = &mut eval_packer.arena();
                         let key_row = key_row_packer
                             .pack(keys2.iter().map(|k| k.eval(&datums, &env, temp_storage)));
                         drop(datums);
@@ -807,7 +807,7 @@ where
                             // consider restructuring the plan to pre-distinct the right
                             // data and then use a non-distinctness-requiring aggregation.
 
-                            let temp_storage = &mut temp_storage.packable();
+                            let temp_storage = &mut temp_storage.arena();
                             let eval = aggregate.expr.eval(&datums, &env, temp_storage);
 
                             // Non-Abelian values cannot be accumulated, and just need to
@@ -982,7 +982,7 @@ where
                                                     }
                                                 })
                                                 .collect::<HashSet<_>>();
-                                            let temp_storage = &mut temp_storage.packable();
+                                            let temp_storage = &mut temp_storage.arena();
                                             result.push((agg.func.func())(iter, &env, temp_storage));
                                         } else {
                                             let iter = source.iter().flat_map(|(v, w)| {
@@ -990,7 +990,7 @@ where
                                                 std::iter::repeat(v.iter().nth(non_abelian_pos).unwrap())
                                                     .take(std::cmp::max(w[0], 0) as usize)
                                             });
-                                            let temp_storage = &mut temp_storage.packable();
+                                            let temp_storage = &mut temp_storage.arena();
                                             result.push((agg.func.func())(iter, &env, temp_storage));
                                         }
                                         non_abelian_pos += 1;

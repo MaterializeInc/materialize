@@ -9,7 +9,7 @@ use std::mem;
 use chrono::{DateTime, Utc};
 use pretty::{DocAllocator, DocBuilder};
 use repr::regex::Regex;
-use repr::{ColumnType, Datum, PackableRow, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 use serde::{Deserialize, Serialize};
 
 use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
@@ -249,10 +249,7 @@ impl ScalarExpr {
         let empty = RelationType::new(vec![]);
         let mut temp_storage = RowPacker::new();
         let mut eval = move |e: &ScalarExpr| {
-            ScalarExpr::literal(
-                e.eval(&[], env, &mut temp_storage.packable()),
-                e.typ(&empty),
-            )
+            ScalarExpr::literal(e.eval(&[], env, &mut temp_storage.arena()), e.typ(&empty))
         };
         self.visit_mut(&mut |e| match e {
             ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => (),
@@ -270,7 +267,7 @@ impl ScalarExpr {
                 } else if *func == BinaryFunc::MatchRegex && expr2.is_literal() {
                     // we can at least precompile the regex
                     let mut temp_storage = RowPacker::new();
-                    let temp_storage = &mut temp_storage.packable();
+                    let temp_storage = &mut temp_storage.arena();
                     *e = match expr2.eval(&[], env, temp_storage) {
                         Datum::Null => null(),
                         Datum::String(string) => {
@@ -286,7 +283,7 @@ impl ScalarExpr {
                     };
                 } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
                     let mut temp_storage = RowPacker::new();
-                    let temp_storage = &mut temp_storage.packable();
+                    let temp_storage = &mut temp_storage.arena();
                     *e = match expr1.eval(&[], env, temp_storage) {
                         Datum::Null => null(),
                         Datum::String(s) => match s.parse::<DateTruncTo>() {
@@ -322,7 +319,7 @@ impl ScalarExpr {
             ScalarExpr::If { cond, then, els } => {
                 if cond.is_literal() {
                     let mut temp_storage = RowPacker::new();
-                    let temp_storage = &mut temp_storage.packable();
+                    let temp_storage = &mut temp_storage.arena();
                     match cond.eval(&[], env, temp_storage) {
                         Datum::True if then.is_literal() => *e = eval(then),
                         Datum::False | Datum::Null if els.is_literal() => *e = eval(els),
@@ -411,7 +408,7 @@ impl ScalarExpr {
         &'a self,
         datums: &[Datum<'a>],
         env: &EvalEnv,
-        temp_storage: &mut PackableRow<'a>,
+        temp_storage: &mut RowArena<'a>,
     ) -> Datum<'a> {
         match self {
             ScalarExpr::Column(index) => datums[*index].clone(),
