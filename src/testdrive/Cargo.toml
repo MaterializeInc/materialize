@@ -32,7 +32,7 @@ sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rand = "0.7.2"
 rdkafka = { version = "0.22", features = ["cmake_build"] }
 regex = "1"
-reqwest = "0.9.22"
+reqwest = "0.9.24"
 rust_decimal = { version = "1.0", features = ["postgres"] }
 termcolor = "1.0.5"
 
