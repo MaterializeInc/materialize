@@ -205,7 +205,7 @@ where
     });
     let stream = stream.unary(
         Exchange::new(|x: &String| x.hashed()),
-        "CvsDecode",
+        "CsvDecode",
         |_, _| {
             move |input, output| {
                 input.for_each(|cap, lines| {
