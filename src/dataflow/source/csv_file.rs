@@ -195,7 +195,7 @@ where
                                 cur,
                             );
                         };
-                        output.session(cap).give(line);
+                        output.session(cap).give(line.into_bytes());
                     }
                     None => return SourceStatus::Done,
                 }
@@ -204,7 +204,7 @@ where
         }
     });
     let stream = stream.unary(
-        Exchange::new(|x: &String| x.hashed()),
+        Exchange::new(|x: &Vec<u8>| x.hashed()),
         "CvsDecode",
         |_, _| {
             move |input, output| {
@@ -218,7 +218,7 @@ where
                     for line in &*lines {
                         let mut csv_reader = csv::ReaderBuilder::new()
                             .has_headers(false)
-                            .from_reader(line.as_bytes());
+                            .from_reader(line.as_slice());
                         for result in csv_reader.records() {
                             let record = result.unwrap();
                             if record.len() != n_cols {
