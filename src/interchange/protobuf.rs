@@ -13,7 +13,8 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, Scalar
 
 // Takes a path to a .proto spec and attempts to generate a binary file
 // containing a set of descriptors for the message (and any nested messages)
-// defined in the spec. Only used for test purposes
+// defined in the spec. Only useful for test purposes and currently unused
+#[allow(dead_code)]
 fn generate_descriptors(proto_path: &str, out: &str) -> Descriptors {
     let protoc = Protoc::from_env_path();
     let descriptor_set_out_args = protoc::DescriptorSetOutArgs {
@@ -106,7 +107,7 @@ fn validate_proto_field_resolved(
     })
 }
 
-fn validate_proto_schema(
+pub fn validate_proto_schema(
     message_name: &str,
     descriptors: &Descriptors,
 ) -> Result<RelationDesc, Error> {
@@ -118,6 +119,8 @@ fn validate_proto_schema(
         .iter()
         .map(|f| {
             Ok(ColumnType {
+                /// TODO(rkhaitan) Need to handle mullable correctly for fields
+                /// with defaults
                 nullable: false,
                 scalar_type: validate_proto_field(&f, descriptors)?,
             })
@@ -134,8 +137,9 @@ fn validate_proto_schema(
 // Manages required metadata to read protobuf
 #[derive(Debug)]
 pub struct Decoder {
-    pub descriptors: Descriptors,
-    pub message_name: String,
+    descriptors: Descriptors,
+    message_name: String,
+    packer: RowPacker,
 }
 
 impl Decoder {
@@ -146,17 +150,17 @@ impl Decoder {
         Decoder {
             descriptors: descriptors,
             message_name: message_name.to_string(),
+            packer: RowPacker::new(),
         }
     }
 
-    pub fn decode(&self, mut bytes: &[u8]) -> Result<(), failure::Error> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, failure::Error> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
         let mut deserializer =
             Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
                 .expect("Creating a input stream to parse protobuf");
         let deserialized_message =
             Value::deserialize(&mut deserializer).expect("Deserializing into rust object");
-        println!("{:?}", deserialized_message);
 
         fn value_to_datum(v: &Value) -> Result<Datum<'_>, failure::Error> {
             match v {
@@ -168,45 +172,52 @@ impl Decoder {
             }
         };
 
-        if let Value::Map(deserialized_message) = deserialized_message {
-            for f in self
-                .descriptors
-                .message_by_name(&self.message_name)
-                .expect("Expected to get the message name")
-                .fields()
-                .iter()
-            {
-                println!("key: {:?}", f.name());
+        fn extract_row(
+            deserialized_message: Value,
+            packer: &mut RowPacker,
+            message_descriptors: &MessageDescriptor,
+        ) -> Result<Option<Row>, failure::Error> {
+            let deserialized_message = match deserialized_message {
+                Value::Map(deserialized_message) => deserialized_message,
+                _ => bail!("Deserialization failed with an unsupported top level object type"),
+            };
 
+            let mut row = packer.packable();
+
+            for f in message_descriptors.fields().iter() {
                 let key = Value::String(f.name().to_string());
-
                 let value = deserialized_message.get(&key);
 
                 if let Some(Value::Option(Some(value))) = value {
-                    println!("value: {:?}", value);
-
-                    let datum = value_to_datum(&value);
-                    println!("datum {:?}", datum);
+                    row.push(value_to_datum(&value)?);
+                } else {
+                    bail!("Missing field {:?}", f);
                 }
             }
-        }
 
-        Ok(())
+            Ok(Some(row.finish()))
+        };
+
+        extract_row(
+            deserialized_message,
+            &mut self.packer,
+            &self
+                .descriptors
+                .message_by_name(&self.message_name)
+                .expect("Message should be included in the descriptor set"),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::test_proto_schemas;
     use crate::test_proto_schemas::{file_descriptor_proto, TestRecord};
     use failure::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
     use protobuf::{Message, RepeatedField};
-    use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
-    use serde_protobuf::descriptor::{
-        Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
-        MessageId,
-    };
+    use serde_protobuf::descriptor::{Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor};
+
+    use repr::{Datum, RelationDesc, ScalarType};
 
     fn sanity_check_relation(
         relation: &RelationDesc,
@@ -264,7 +275,8 @@ mod tests {
         }
 
         Ok(())
-    }
+
+     }
 
     #[test]
     fn test_proto_schema_parsing() -> Result<(), failure::Error> {
@@ -341,26 +353,19 @@ mod tests {
 
         let mut repeated_field = RepeatedField::<FileDescriptorProto>::new();
         let file_descriptor_proto = file_descriptor_proto().clone();
-        println!("file descriptor proto {:?}", file_descriptor_proto);
         repeated_field.push(file_descriptor_proto);
-
-        println!("repeated field {:?}", repeated_field);
 
         let mut file_descriptor_set: FileDescriptorSet = FileDescriptorSet::new();
         file_descriptor_set.set_file(repeated_field);
 
-        println!("file descriptor set {:?}", file_descriptor_set);
-
         let descriptors = Descriptors::from_proto(&file_descriptor_set);
 
-        println!("descriptors: {:?}", descriptors);
+        let mut decoder = super::Decoder::new(".TestRecord", descriptors);
+        let row = decoder.decode(&bytes).expect("deserialize protobuf into a row").unwrap();
+        let datums = row.iter().collect::<Vec<_>>();
 
-        let decoder = super::Decoder {
-            descriptors: descriptors,
-            message_name: ".TestRecord".to_string(),
-        };
-        println!("decoder {:?}", decoder);
+        let expected = vec![Datum::Int32(1), Datum::String("one")];
 
-        decoder.decode(&bytes);
+        assert_eq!(datums, expected);
     }
 }
