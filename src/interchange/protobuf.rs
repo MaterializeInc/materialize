@@ -167,8 +167,12 @@ impl Decoder {
                 Value::Bool(true) => Ok(Datum::True),
                 Value::Bool(false) => Ok(Datum::False),
                 Value::I32(i) => Ok(Datum::Int32(*i)),
+                Value::I64(i) => Ok(Datum::Int64(*i)),
+                Value::F32(f) => Ok(Datum::Float32((*f).into())),
+                Value::F64(f) => Ok(Datum::Float64((*f).into())),
                 Value::String(s) => Ok(Datum::String(s)),
-                _ => bail!("TODO write the rest of this function"),
+                Value::Bytes(b) => Ok(Datum::Bytes(b)),
+                _ => bail!("Unsupported types from serde_value"),
             }
         };
 
@@ -215,7 +219,9 @@ mod tests {
     use failure::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
     use protobuf::{Message, RepeatedField};
-    use serde_protobuf::descriptor::{Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor};
+    use serde_protobuf::descriptor::{
+        Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
+    };
 
     use repr::{Datum, RelationDesc, ScalarType};
 
@@ -275,8 +281,7 @@ mod tests {
         }
 
         Ok(())
-
-     }
+    }
 
     #[test]
     fn test_proto_schema_parsing() -> Result<(), failure::Error> {
@@ -361,7 +366,10 @@ mod tests {
         let descriptors = Descriptors::from_proto(&file_descriptor_set);
 
         let mut decoder = super::Decoder::new(".TestRecord", descriptors);
-        let row = decoder.decode(&bytes).expect("deserialize protobuf into a row").unwrap();
+        let row = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
         let datums = row.iter().collect::<Vec<_>>();
 
         let expected = vec![Datum::Int32(1), Datum::String("one")];
