@@ -191,7 +191,6 @@ where
             while let Ok(msg) = rx.try_recv() {
                 match msg {
                     FileReaderMessage::Line(s) => {
-                        eprintln!("Got line: {}", s);
                         let ms = SystemTime::now()
                             .duration_since(UNIX_EPOCH)
                             .expect("System time seems to be before 1970.")
@@ -210,7 +209,7 @@ where
                         };
                         output.session(cap).give(s)
                     }
-                    FileReaderMessage::Eof => unimplemented!(),
+                    FileReaderMessage::Eof => cap.downgrade(&std::u64::MAX),
                 }
             }
         }
