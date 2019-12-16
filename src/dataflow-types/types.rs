@@ -222,6 +222,8 @@ impl DataflowDesc {
     }
 }
 
+/// A description of how each row should be decoded, from a string of bytes to a sequence of
+/// Differential updates.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataEncoding {
@@ -229,6 +231,9 @@ pub enum DataEncoding {
     Csv(CsvEncoding),
 }
 
+/// Encoding in Avro format.
+///
+/// Assumes Debezium-style `before: ..., after: ...` structure.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AvroEncoding {
@@ -237,6 +242,7 @@ pub struct AvroEncoding {
     pub schema_registry_url: Option<Url>,
 }
 
+/// Encoding in CSV format, with no headers, and `n_cols` columns per row.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CsvEncoding {
