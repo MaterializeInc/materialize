@@ -306,7 +306,7 @@ where
 
                     let collection = rows
                         .to_stream(scope)
-                        .map(|(x, diff)| (x, Default::default(), diff))
+                        .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
                         .as_collection();
 
                     self.collections.insert(relation_expr.clone(), collection);
