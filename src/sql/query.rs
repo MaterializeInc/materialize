@@ -833,22 +833,25 @@ fn plan_join_constraint<'a>(
                 allow_subqueries: true,
             };
             let on = plan_expr(catalog, ecx, expr, Some(ScalarType::Bool))?;
-            for (l, r) in find_trivial_column_equivalences(&on) {
-                // When we can statically prove that two columns are
-                // equivalent after a join, the right column becomes
-                // unnamable and the left column assumes both names. This
-                // permits queries like
-                //
-                //     SELECT rhs.a FROM lhs JOIN rhs ON lhs.a = rhs.a
-                //     GROUP BY lhs.a
-                //
-                // which otherwise would fail because rhs.a appears to be
-                // a column that does not appear in the GROUP BY.
-                //
-                // Note that this is a MySQL-ism; PostgreSQL does not do
-                // this sort of equivalence detection for ON constraints.
-                let right_names = std::mem::replace(&mut product_scope.items[r].names, Vec::new());
-                product_scope.items[l].names.extend(right_names);
+            if kind == JoinKind::Inner {
+                for (l, r) in find_trivial_column_equivalences(&on) {
+                    // When we can statically prove that two columns are
+                    // equivalent after a join, the right column becomes
+                    // unnamable and the left column assumes both names. This
+                    // permits queries like
+                    //
+                    //     SELECT rhs.a FROM lhs JOIN rhs ON lhs.a = rhs.a
+                    //     GROUP BY lhs.a
+                    //
+                    // which otherwise would fail because rhs.a appears to be
+                    // a column that does not appear in the GROUP BY.
+                    //
+                    // Note that this is a MySQL-ism; PostgreSQL does not do
+                    // this sort of equivalence detection for ON constraints.
+                    let right_names =
+                        std::mem::replace(&mut product_scope.items[r].names, Vec::new());
+                    product_scope.items[l].names.extend(right_names);
+                }
             }
             let joined = RelationExpr::Join {
                 left: Box::new(left),
