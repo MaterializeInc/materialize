@@ -21,7 +21,7 @@ use tokio::io::{self, AsyncRead};
 use tokio::task;
 use tokio_util::codec::{FramedRead, LinesCodec};
 
-use dataflow_types::{Timestamp};
+use dataflow_types::Timestamp;
 
 use crate::source::util::source;
 use crate::source::{SharedCapability, SourceStatus};

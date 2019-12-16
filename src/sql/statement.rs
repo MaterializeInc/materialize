@@ -21,9 +21,9 @@ use url::Url;
 
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
-    AvroEncoding, CsvEncoding, DataEncoding, FileSourceConnector, Index, IndexDesc,
-    KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, ExternalSourceConnector,
-    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
+    AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
+    IndexDesc, KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, RowSetFinishing, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::avro;
