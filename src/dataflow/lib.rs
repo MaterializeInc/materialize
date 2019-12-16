@@ -14,6 +14,7 @@
 extern crate prometheus;
 
 mod arrangement;
+mod decode;
 mod render;
 mod sink;
 mod source;
