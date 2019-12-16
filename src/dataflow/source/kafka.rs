@@ -14,8 +14,7 @@ use timely::scheduling::activate::SyncActivator;
 
 use super::util::source;
 use super::{SharedCapability, SourceStatus};
-use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
-use repr::Row;
+use dataflow_types::{KafkaSourceConnector, Timestamp};
 
 use lazy_static::lazy_static;
 use prometheus::IntCounter;

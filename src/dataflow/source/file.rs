@@ -21,10 +21,8 @@ use tokio::io::{self, AsyncRead};
 use tokio::task;
 use tokio_util::codec::{FramedRead, LinesCodec};
 
-use dataflow_types::{Diff, Timestamp};
-use repr::Row;
+use dataflow_types::{Timestamp};
 
-use crate::decode;
 use crate::source::util::source;
 use crate::source::{SharedCapability, SourceStatus};
 
@@ -151,7 +149,7 @@ async fn read_file_task(
     }
 }
 
-pub fn csv<G>(
+pub fn file<G>(
     region: &G,
     name: String,
     path: PathBuf,

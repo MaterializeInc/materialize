@@ -22,7 +22,7 @@ use url::Url;
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, FileSourceConnector, Index, IndexDesc,
-    KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, RemoteSourceConnector,
+    KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, ExternalSourceConnector,
     RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
@@ -418,11 +418,11 @@ fn handle_show_create_source(
         if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
             match connector {
                 SourceConnector::Local => String::from("local://"),
-                SourceConnector::Remote(
-                    RemoteSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
+                SourceConnector::External(
+                    ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
                     _,
                 ) => format!("kafka://{}/{}", addr, topic),
-                SourceConnector::Remote(RemoteSourceConnector::File(c), _) => {
+                SourceConnector::External(ExternalSourceConnector::File(c), _) => {
                     // TODO https://github.com/MaterializeInc/materialize/issues/1093
                     format!("file://{}", c.path.to_string_lossy())
                 }
@@ -564,8 +564,8 @@ fn handle_create_dataflow(
                                 .collect();
                             let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
                             let source = Source {
-                                connector: SourceConnector::Remote(
-                                    RemoteSourceConnector::File(FileSourceConnector {
+                                connector: SourceConnector::External(
+                                    ExternalSourceConnector::File(FileSourceConnector {
                                         path: path.clone().try_into()?,
                                         tail,
                                     }),
@@ -859,8 +859,8 @@ fn build_kafka_source(
     }
 
     Ok(Source {
-        connector: SourceConnector::Remote(
-            RemoteSourceConnector::Kafka(KafkaSourceConnector {
+        connector: SourceConnector::External(
+            ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,
             }),

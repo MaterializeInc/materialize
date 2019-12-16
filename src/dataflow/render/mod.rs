@@ -68,9 +68,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         }
                         (stream, None)
                     }
-                    SourceConnector::Remote(connector, format) => {
+                    SourceConnector::External(connector, format) => {
                         let (source, cap) = match connector {
-                            RemoteSourceConnector::Kafka(c) => {
+                            ExternalSourceConnector::Kafka(c) => {
                                 // Distribute read responsibility among workers.
                                 use differential_dataflow::hashable::Hashable;
                                 let hash = src_id.hashed() as usize;
@@ -82,7 +82,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     read_from_kafka,
                                 )
                             }
-                            RemoteSourceConnector::File(c) => {
+                            ExternalSourceConnector::File(c) => {
                                 let read_style = if worker_index != 0 {
                                     FileReadStyle::None
                                 } else if c.tail {
@@ -90,7 +90,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 } else {
                                     FileReadStyle::ReadOnce
                                 };
-                                source::csv(
+                                source::file(
                                     region,
                                     format!("csv-{}", src_id),
                                     c.path,

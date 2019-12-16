@@ -275,12 +275,12 @@ pub struct View {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SourceConnector {
-    Remote(RemoteSourceConnector, DataEncoding),
+    External(ExternalSourceConnector, DataEncoding),
     Local,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum RemoteSourceConnector {
+pub enum ExternalSourceConnector {
     Kafka(KafkaSourceConnector),
     File(FileSourceConnector),
 }
