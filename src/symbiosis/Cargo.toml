@@ -23,4 +23,4 @@ sql = { path = "../sql" }
 expr = { path = "../expr" }
 serde_json = "1.0"
 whoami = "0.6"
-log = "0.4.8"
+log = "0.4.10"
