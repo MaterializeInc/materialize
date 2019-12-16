@@ -24,7 +24,8 @@
 //!
 //! ```
 //! use comm::{broadcast, Switchboard};
-//! use futures::{Future, Sink, Stream};
+//! use futures::sink::SinkExt;
+//! use futures::stream::StreamExt;
 //!
 //! struct UniversalAnswersToken;
 //!
@@ -37,21 +38,27 @@
 //!     }
 //! }
 //!
-//! let (switchboard, _runtime) = Switchboard::local()?;
-//! let tx = switchboard.broadcast_tx(UniversalAnswersToken);
-//! let rx = switchboard.broadcast_rx(UniversalAnswersToken);
-//! tx.send(42).wait()?;
-//! assert_eq!(rx.wait().next().transpose()?, Some(42));
+//! let (switchboard, mut runtime) = Switchboard::local()?;
+//! let mut tx = switchboard.broadcast_tx(UniversalAnswersToken);
+//! let mut rx = switchboard.broadcast_rx(UniversalAnswersToken);
+//! runtime.block_on(tx.send(42))?;
+//! assert_eq!(runtime.block_on(rx.next()).transpose()?, Some(42));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use futures::{stream, try_ready, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use serde::{Deserialize, Serialize};
-use std::error::Error;
 use std::fmt;
-use tokio::io;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use futures::future::{self, BoxFuture, TryFutureExt};
+use futures::ready;
+use futures::sink::{Sink, SinkExt};
+use futures::stream::{FuturesUnordered, Stream, StreamExt, TryStreamExt};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::error::Error;
 use crate::mpsc;
 use crate::protocol::{self, SendSink};
 use crate::switchboard::Switchboard;
@@ -59,7 +66,7 @@ use crate::switchboard::Switchboard;
 /// The capability to construct a particular broadcast sender or receiver.
 pub trait Token {
     /// The type of the items that will be sent along the channel.
-    type Item: Serialize + for<'de> Deserialize<'de> + Send + Clone;
+    type Item: Serialize + for<'de> Deserialize<'de> + Send + Unpin + Clone;
 
     /// Whether transmissions on this channel should be sent only to peers or
     /// sent also to the receiver on the broadcasting node. By default, loopback
@@ -100,10 +107,7 @@ pub struct Sender<D> {
 }
 
 enum SenderState<D> {
-    Connecting {
-        future: Box<dyn Future<Item = SendSink<D>, Error = bincode::Error> + Send>,
-        item: Option<D>,
-    },
+    Connecting(BoxFuture<'static, Result<SendSink<D>, bincode::Error>>),
     Ready(SendSink<D>),
 }
 
@@ -118,70 +122,64 @@ impl<D> fmt::Debug for SenderState<D> {
 
 impl<D> Sender<D>
 where
-    D: Serialize + for<'de> Deserialize<'de> + Send + Clone + 'static,
+    D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + Clone + 'static,
 {
-    pub(crate) fn new<'a, C, I>(uuid: Uuid, addrs: I) -> Sender<D>
+    pub(crate) fn new<C, I>(uuid: Uuid, addrs: I) -> Sender<D>
     where
         C: protocol::Connection,
-        I: IntoIterator<Item = &'a C::Addr>,
+        I: IntoIterator<Item = C::Addr>,
     {
-        let conns = stream::futures_unordered(
-            addrs
-                .into_iter()
-                .map(|addr| protocol::connect_channel::<C, D>(addr, uuid)),
-        )
-        // TODO(benesch): this might be more efficient with a multi-fanout that
-        // could fan out to multiple streams at once. Not clear what the
-        // performance of this binary tree of fanouts is.
-        .fold(
-            Box::new(ore::future::dev_null()) as SendSink<D>,
-            |memo, sink| -> Result<SendSink<D>, io::Error> { Ok(Box::new(memo.fanout(sink))) },
-        )
-        .from_err();
+        let conns = addrs
+            .into_iter()
+            .map(|addr| protocol::connect_channel::<C, D>(addr, uuid))
+            .collect::<FuturesUnordered<_>>()
+            // TODO(benesch): this might be more efficient with a multi-fanout that
+            // could fan out to multiple streams at once. Not clear what the
+            // performance of this binary tree of fanouts is.
+            .try_fold(
+                Box::pin(ore::future::dev_null()) as SendSink<D>,
+                |memo, sink| future::ok(Box::pin(memo.fanout(sink)) as SendSink<D>),
+            )
+            .err_into();
 
         Sender {
-            state: SenderState::Connecting {
-                future: Box::new(conns),
-                item: None,
-            },
+            state: SenderState::Connecting(Box::pin(conns)),
         }
     }
 }
 
-impl<D> Sink for Sender<D> {
-    type SinkItem = D;
-    type SinkError = bincode::Error;
+impl<D> Sink<D> for Sender<D> {
+    type Error = Error;
 
-    fn start_send(&mut self, item: D) -> StartSend<Self::SinkItem, Self::SinkError> {
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
         match &mut self.state {
-            SenderState::Connecting { item: Some(_), .. } => Ok(AsyncSink::NotReady(item)),
-            SenderState::Connecting {
-                item: state_item @ None,
-                ..
-            } => {
-                state_item.replace(item);
-                Ok(AsyncSink::Ready)
+            SenderState::Connecting(fut) => {
+                let sink = ready!(Pin::new(fut).poll(cx))?;
+                self.state = SenderState::Ready(sink);
+                Poll::Ready(Ok(()))
             }
-            SenderState::Ready(sink) => sink.start_send(item),
+            SenderState::Ready(sink) => Pin::new(sink).poll_ready(cx),
         }
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        loop {
-            match &mut self.state {
-                SenderState::Connecting { future, item: None } => {
-                    self.state = SenderState::Ready(try_ready!(future.poll()));
-                }
-                SenderState::Connecting {
-                    future,
-                    item: item @ Some(_),
-                } => {
-                    let mut sink = try_ready!(future.poll());
-                    sink.start_send(item.take().unwrap()).unwrap();
-                    self.state = SenderState::Ready(sink);
-                }
-                SenderState::Ready(sink) => return sink.poll_complete(),
-            }
+    fn start_send(mut self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
+        match &mut self.state {
+            SenderState::Connecting(_) => panic!("sending to not ready sink"),
+            SenderState::Ready(sink) => Pin::new(sink).start_send(item),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        match &mut self.state {
+            SenderState::Connecting(_) => Poll::Ready(Ok(())),
+            SenderState::Ready(sink) => Pin::new(sink).poll_flush(cx),
+        }
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        match &mut self.state {
+            SenderState::Connecting(_) => self.poll_ready(cx),
+            SenderState::Ready(sink) => Pin::new(sink).poll_close(cx),
         }
     }
 }
@@ -194,10 +192,10 @@ pub struct Receiver<D>(mpsc::Receiver<D>);
 
 impl<D> Receiver<D>
 where
-    D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+    D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
 {
     pub(crate) fn new<C>(
-        conn_rx: impl Stream<Item = protocol::Framed<C>, Error = ()> + Send + 'static,
+        conn_rx: impl Stream<Item = protocol::Framed<C>> + Send + Unpin + 'static,
         switchboard: Switchboard<C>,
     ) -> Receiver<D>
     where
@@ -212,17 +210,16 @@ where
     pub fn fanout(self) -> FanoutReceiverBuilder<D> {
         FanoutReceiverBuilder {
             stream: self,
-            sink: Some(Box::new(ore::future::dev_null())),
+            sink: Some(Box::pin(ore::future::dev_null())),
         }
     }
 }
 
 impl<D> Stream for Receiver<D> {
-    type Item = D;
-    type Error = bincode::Error;
+    type Item = Result<D, Error>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.0.poll()
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx)
     }
 }
 
@@ -233,43 +230,43 @@ impl<D> Stream for Receiver<D> {
 /// the transmissions to be routed appropriately.
 pub struct FanoutReceiverBuilder<D> {
     stream: Receiver<D>,
-    sink: Option<Box<dyn Sink<SinkItem = D, SinkError = futures::sync::mpsc::SendError<D>> + Send>>,
+    sink: Option<Pin<Box<dyn Sink<D, Error = FanoutError> + Send>>>,
 }
 
 impl<D> FanoutReceiverBuilder<D>
 where
-    D: Send + Clone + 'static,
+    D: Send + Unpin + Clone + 'static,
 {
     /// Acquires a new receiver.
-    pub fn attach(&mut self) -> futures::sync::mpsc::UnboundedReceiver<D> {
-        let (tx, rx) = futures::sync::mpsc::unbounded();
+    pub fn attach(&mut self) -> futures::channel::mpsc::UnboundedReceiver<D> {
+        let (tx, rx) = futures::channel::mpsc::unbounded();
         // TODO(benesch): this might be more efficient with a multi-fanout that
         // could fan out to multiple streams at once. Not clear what the
         // performance of this binary tree of fanouts is.
-        self.sink = Some(Box::new(self.sink.take().unwrap().fanout(tx)));
+        self.sink = Some(Box::pin(
+            self.sink.take().unwrap().fanout(tx.sink_err_into()),
+        ));
         rx
     }
 
     /// Consumes the builder and returns a future that will shuttle messages
     /// to the fanned-out receivers until the channel is closed.
-    pub fn shuttle(self) -> impl Future<Item = (), Error = FanoutError<D>> {
-        self.stream
-            .from_err()
-            .forward(self.sink.unwrap())
-            .map(|_| ())
+    pub fn shuttle(self) -> impl Future<Output = Result<(), FanoutError>> {
+        self.stream.err_into().forward(self.sink.unwrap())
     }
 }
 
 /// The error returned while shuttling messages to fanned-out broadcast
 /// receivers.
-pub enum FanoutError<D> {
+#[derive(Debug)]
+pub enum FanoutError {
     /// An error occurred while receiving messages from upstream.
-    ReceiveError(bincode::Error),
+    ReceiveError(Error),
     /// An error occurred while sending messages downstream.
-    SendError(futures::sync::mpsc::SendError<D>),
+    SendError(futures::channel::mpsc::SendError),
 }
 
-impl<D> fmt::Display for FanoutError<D> {
+impl fmt::Display for FanoutError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             FanoutError::ReceiveError(err) => write!(f, "fanout error: receive error: {}", err),
@@ -278,25 +275,16 @@ impl<D> fmt::Display for FanoutError<D> {
     }
 }
 
-impl<D> fmt::Debug for FanoutError<D> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            FanoutError::ReceiveError(err) => write!(f, "fanout error: receive error: {:?}", err),
-            FanoutError::SendError(err) => write!(f, "fanout error: send error: {:?}", err),
-        }
-    }
-}
-
-impl<D> From<bincode::Error> for FanoutError<D> {
-    fn from(err: bincode::Error) -> FanoutError<D> {
+impl From<Error> for FanoutError {
+    fn from(err: Error) -> FanoutError {
         FanoutError::ReceiveError(err)
     }
 }
 
-impl<D> From<futures::sync::mpsc::SendError<D>> for FanoutError<D> {
-    fn from(err: futures::sync::mpsc::SendError<D>) -> FanoutError<D> {
+impl From<futures::channel::mpsc::SendError> for FanoutError {
+    fn from(err: futures::channel::mpsc::SendError) -> FanoutError {
         FanoutError::SendError(err)
     }
 }
 
-impl<D> Error for FanoutError<D> {}
+impl std::error::Error for FanoutError {}

@@ -35,8 +35,8 @@ where
         self.0.remove(&key);
     }
 
-    pub fn add_dest(&mut self, key: K) -> futures::sync::mpsc::UnboundedReceiver<C> {
-        let (conn_tx, conn_rx) = futures::sync::mpsc::unbounded();
+    pub fn add_dest(&mut self, key: K) -> futures::channel::mpsc::UnboundedReceiver<C> {
+        let (conn_tx, conn_rx) = futures::channel::mpsc::unbounded();
         match self.0.entry(key) {
             hash_map::Entry::Occupied(mut entry) => match entry.get_mut() {
                 RoutingTableEntry::AwaitingRx(conns) => {
@@ -71,7 +71,7 @@ enum RoutingTableEntry<C> {
     /// simultaneously.
     AwaitingRx(Vec<C>),
     /// A receiver has been constructed and is awaiting an incoming connection.
-    AwaitingConn(futures::sync::mpsc::UnboundedSender<C>),
+    AwaitingConn(futures::channel::mpsc::UnboundedSender<C>),
     /// The channel is no longer awaiting an incoming connection. It may be
     /// actively receiving messages, or it may be closed, but either way
     /// new connections will not be attached to the channel receiver.

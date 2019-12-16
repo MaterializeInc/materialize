@@ -3,31 +3,35 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use futures::{future, Future, Poll};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use futures::future::{self, BoxFuture, TryFutureExt};
 use hyper::service;
 use hyper::{Body, Method, Request, Response};
 use prometheus::Encoder;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-struct FutureResponse(Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send>);
+struct FutureResponse(BoxFuture<'static, Result<Response<Body>, failure::Error>>);
 
 impl From<Response<Body>> for FutureResponse {
     fn from(res: Response<Body>) -> FutureResponse {
-        FutureResponse(Box::new(future::ok(res)))
+        FutureResponse(Box::pin(future::ok(res)))
     }
 }
 
 impl From<Result<Response<Body>, failure::Error>> for FutureResponse {
     fn from(res: Result<Response<Body>, failure::Error>) -> FutureResponse {
-        FutureResponse(Box::new(future::result(res)))
+        FutureResponse(Box::pin(future::ready(res)))
     }
 }
 
 impl Future for FutureResponse {
-    type Item = Response<Body>;
-    type Error = failure::Error;
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0.poll()
+    type Output = Result<Response<Body>, failure::Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx)
     }
 }
 
@@ -44,10 +48,10 @@ pub fn match_handshake(buf: &[u8]) -> bool {
     METHODS.contains(&buf)
 }
 
-pub fn handle_connection<A: 'static + AsyncRead + AsyncWrite>(
+pub async fn handle_connection<A: 'static + AsyncRead + AsyncWrite + Unpin>(
     a: A,
     gather_metrics: bool,
-) -> impl Future<Item = (), Error = failure::Error> {
+) -> Result<(), failure::Error> {
     let svc =
         service::service_fn(
             move |req: Request<Body>| match (req.method(), req.uri().path()) {
@@ -57,7 +61,7 @@ pub fn handle_connection<A: 'static + AsyncRead + AsyncWrite>(
             },
         );
     let http = hyper::server::conn::Http::new();
-    http.serve_connection(a, svc).from_err()
+    http.serve_connection(a, svc).err_into().await
 }
 
 fn handle_home(_: Request<Body>) -> FutureResponse {

@@ -20,9 +20,9 @@ coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.6"
-futures = "0.1"
+futures = "0.3"
 getopts = "0.2"
-hyper = "0.12"
+hyper = "0.13.0"
 jemallocator = { version = "0.3.0", features = ["profiling"] }
 lazy_static = "1.4.0"
 log = "0.4"
@@ -31,7 +31,7 @@ parse_duration = "2.0.1"
 pgwire = { path = "../pgwire" }
 prometheus = { version = "0.7.0", default-features = false, features = ["process"] }
 tempfile = "3.1"
-tokio = "0.1"
+tokio = "0.2"
 
 [dev-dependencies]
 chrono = "0.4"

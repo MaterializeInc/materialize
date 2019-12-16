@@ -3,79 +3,34 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::convert::TryInto;
-use std::io::Write;
 use std::iter;
+use std::mem;
 use std::sync::Arc;
+use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use failure::format_err;
-use futures::sink::Send as SinkSend;
+use failure::bail;
+use futures::sink::SinkExt;
 use futures::stream;
-use futures::sync::mpsc::UnboundedSender;
-use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use lazy_static::lazy_static;
 use log::{debug, trace};
-use prometheus::{Histogram, HistogramTimer};
-use prometheus_static_metric::make_static_metric;
-use state_machine_future::StateMachineFuture as Smf;
-use state_machine_future::{transition, RentToOwn};
-use tokio::codec::Framed;
-use tokio::io;
+use prometheus::{histogram_opts, register_histogram_vec};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::codec::Framed;
 
-use coord::{self, ExecuteResponse};
-use dataflow_types::{PeekResponse, Update};
-use ore::future::{Recv, StreamExt};
+use coord::ExecuteResponse;
+use dataflow_types::PeekResponse;
+use ore::future::OreTryStreamExt;
 use repr::{RelationDesc, Row};
 use sql::Session;
 
-use crate::codec::Codec;
+use crate::codec::{Codec, RawParameterBytes};
+use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::{
-    self, BackendMessage, EncryptionType, FieldFormat, FieldFormatIter, FrontendMessage,
-    ParameterDescription, Severity, VERSIONS, VERSION_3,
+    self, BackendMessage, EncryptionType, FieldFormat, FrontendMessage, ParameterDescription,
+    Severity, VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
-
-make_static_metric! {
-    struct CommandDurations: Histogram {
-        "command" => {
-            bind,
-            bind_error,
-            close_portal,
-            close_statement,
-            describe_portal,
-            describe_statement,
-            describe_statement_error,
-            execute,
-            parse,
-            portal_continue,
-            simple_query,
-            peek_response,
-            set_variable,
-            fatal_error,
-        }
-    }
-}
-
-lazy_static! {
-    static ref COMMAND_DURATIONS_VEC: prometheus::HistogramVec = register_histogram_vec!(
-        "mz_command_durations",
-        "how long individual commands took",
-        &["command"],
-        ore::prometheus_util::HISTOGRAM_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref COMMAND_DURATIONS: CommandDurations = CommandDurations::from(&COMMAND_DURATIONS_VEC);
-}
-
-pub struct Context {
-    pub conn_id: u32,
-    pub conn_secrets: SecretManager,
-    pub cmdq_tx: UnboundedSender<coord::Command>,
-    /// If true, we gather prometheus metrics
-    pub gather_metrics: bool,
-}
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -97,1280 +52,695 @@ pub fn match_handshake(buf: &[u8]) -> bool {
     VERSIONS.contains(&version)
 }
 
-/// A trait representing a pgwire connection.
-///
-/// Implementors of this trait provide both a [`futures::Stream`] of pgwire frontend
-/// messages and a [`futures::Sink`] of pgwire backend messages.
-///
-/// This trait exists primarly to ease the pain of writing type declarations
-/// for [`StateMachine`]. When trait aliases land ([#41517]), this trait can
-/// be replaced with a non-public trait alias.
-///
-/// [#41517]: https://github.com/rust-lang/rust/issues/41517
-pub trait Conn:
-    Stream<Item = FrontendMessage, Error = io::Error>
-    + Sink<SinkItem = BackendMessage, SinkError = io::Error>
-    + Send
-{
-    fn codec_mut(&mut self) -> &mut Codec;
+lazy_static! {
+    static ref COMMAND_DURATIONS: prometheus::HistogramVec = register_histogram_vec!(
+        "mz_command_durations",
+        "how long individual commands took",
+        &["command", "status"],
+        ore::stats::HISTOGRAM_BUCKETS.to_vec()
+    )
+    .unwrap();
 }
 
-impl<A> Conn for Framed<A, Codec>
+/// Handles an incoming pgwire connection.
+pub async fn serve<A>(
+    conn: A,
+    cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
+    gather_metrics: bool,
+) -> Result<(), failure::Error>
 where
-    A: AsyncWrite + AsyncRead + 'static + Send,
+    A: AsyncRead + AsyncWrite + Unpin,
 {
-    fn codec_mut(&mut self) -> &mut Codec {
-        Framed::codec_mut(self)
+    lazy_static! {
+        static ref CONN_ID_ALLOCATOR: IdAllocator = IdAllocator::new(1, 1 << 16);
+        static ref CONN_SECRETS: SecretManager = SecretManager::new();
     }
-}
 
-type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + Send>;
-
-/// A state machine that drives the pgwire backend.
-///
-/// Much of the state machine boilerplate is generated automatically with the
-/// help of the [`state_machine_future`] package. There is a bit too much magic
-/// in this approach for my taste, but attempting to write a futures-driven
-/// server without it is unbelievably painful. Consider revisiting once
-/// async/await support lands in stable.
-#[derive(Smf)]
-#[state_machine_future(context = "Context")]
-pub enum StateMachine<A: Conn + 'static> {
-    // Startup.
-    #[state_machine_future(start, transitions(RecvStartup))]
-    Start { stream: A, session: Session },
-
-    #[state_machine_future(transitions(
-        SendReadyForQuery,
-        SendEncryptionResponse,
-        SendFatalError,
-        Done,
-        Error
-    ))]
-    RecvStartup { recv: Recv<A>, session: Session },
-
-    #[state_machine_future(transitions(RecvStartup))]
-    SendEncryptionResponse { send: SinkSend<A>, session: Session },
-
-    // Shared query flow.
-    #[state_machine_future(transitions(RecvQuery, SendError, Error))]
-    SendReadyForQuery {
-        send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
-        session: Session,
-    },
-
-    #[state_machine_future(transitions(
-        HandleQuery,
-        RecvQuery,
-        SendCommandComplete,
-        SendError,
-        SendFatalError,
-        SendReadyForQuery,
-        SendSimpleComplete,
-        SendParameterDescription,
-        SendDescribeResponse,
-        HandleParse,
-        Error,
-        Done
-    ))]
-    RecvQuery { recv: Recv<A>, session: Session },
-
-    #[state_machine_future(transitions(
-        SendCommandComplete,
-        SendRowDescription,
-        StartCopyOut,
-        SendError,
-        SendParameterStatus,
-        WaitForRows,
-        Error
-    ))]
-    HandleQuery {
-        conn: A,
-        rx: futures::sync::oneshot::Receiver<coord::Response<ExecuteResponse>>,
-        field_formats: Option<Vec<FieldFormat>>,
-        row_desc: Option<RelationDesc>,
-        extended: bool,
-        max_rows: Option<i32>,
-        portal_name: String,
-        timer: Option<HistogramTimer>,
-    },
-
-    #[state_machine_future(transitions(SendSimpleComplete, HandleQuery, SendError))]
-    HandleParse {
-        conn: A,
-        rx: futures::sync::oneshot::Receiver<coord::Response<()>>,
-        extended: bool,
-        timer: Option<HistogramTimer>,
-    },
-
-    /// Wait for the dataflow layer to send us rows
-    #[state_machine_future(transitions(WaitForRows, SendCommandComplete, SendError, Error))]
-    WaitForRows {
-        conn: A,
-        session: Session,
-        row_desc: RelationDesc,
-        rows_rx: coord::RowsFuture,
-        max_rows: Option<i32>,
-        field_formats: Option<Vec<FieldFormat>>,
-        extended: bool,
-        portal_name: String,
-        timer: Option<HistogramTimer>,
-    },
-
-    #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
-    SendRowDescription {
-        send: SinkSend<A>,
-        session: Session,
-        row_desc: RelationDesc,
-        rows_rx: coord::RowsFuture,
-        max_rows: Option<i32>,
-        portal_name: String,
-        timer: Option<HistogramTimer>,
-    },
-
-    /// Send something to the client, and transition to `RecvQuery`
-    #[state_machine_future(transitions(SendReadyForQuery, RecvQuery, Error))]
-    SendCommandComplete {
-        send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
-        session: Session,
-        extended: bool,
-        /// Timer to end when the command is complete
-        timer: Option<HistogramTimer>,
-    },
-
-    // Extended-only query flow.
-    /// Send something simple to the client, and transition to `RecvQuery`
-    ///
-    /// e.g. `ParseComplete`, `BindComplete`, `CloseComplete`
-    #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
-    SendSimpleComplete {
-        send: SinkSend<A>,
-        session: Session,
-        timer: Option<HistogramTimer>,
-    },
-
-    #[state_machine_future(transitions(RecvQuery, Error))]
-    SendDescribeResponse {
-        send: SinkSend<A>,
-        session: Session,
-        timer: Option<HistogramTimer>,
-    },
-
-    #[state_machine_future(transitions(SendDescribeResponse, SendFatalError, Error))]
-    SendParameterDescription {
-        send: SinkSend<A>,
-        session: Session,
-        name: String,
-        timer: Option<HistogramTimer>,
-    },
-
-    #[state_machine_future(transitions(SendReadyForQuery, DrainUntilSync))]
-    DrainUntilSync { recv: Recv<A>, session: Session },
-
-    // COPY operations.
-    #[state_machine_future(transitions(WaitForUpdates, Error))]
-    StartCopyOut {
-        send: SinkSend<A>,
-        session: Session,
-        rx: comm::mpsc::Receiver<Vec<Update>>,
-    },
-
-    #[state_machine_future(transitions(
-        WaitForUpdates,
-        SendUpdates,
-        SendError,
-        SendReadyForQuery,
-        Error
-    ))]
-    WaitForUpdates {
-        conn: A,
-        session: Session,
-        rx: comm::mpsc::Receiver<Vec<Update>>,
-    },
-
-    #[state_machine_future(transitions(SendError, Error, WaitForUpdates))]
-    SendUpdates {
-        send: Box<dyn Future<Item = (MessageStream, A), Error = failure::Error> + Send>,
-        session: Session,
-        rx: comm::mpsc::Receiver<Vec<Update>>,
-    },
-
-    // Asynchronous operations.
-    #[state_machine_future(transitions(SendCommandComplete))]
-    SendParameterStatus {
-        send: SinkSend<A>,
-        session: Session,
-        extended: bool,
-        timer: Option<HistogramTimer>,
-    },
-
-    // Errors and termination.
-    #[state_machine_future(transitions(DrainUntilSync, SendReadyForQuery, Done, Error))]
-    SendError {
-        send: SinkSend<A>,
-        session: Session,
-        extended: bool,
-        timer: Option<HistogramTimer>,
-    },
-
-    #[state_machine_future(transitions(Done, Error))]
-    SendFatalError {
-        send: SinkSend<A>,
-        timer: Option<HistogramTimer>,
-    },
-
-    #[state_machine_future(ready)]
-    Done(()),
-
-    #[state_machine_future(error)]
-    Error(failure::Error),
-}
-
-fn format_update(update: Update) -> BackendMessage {
-    let mut buf: Vec<u8> = Vec::new();
-    let format_result: csv::Result<()> = {
-        let mut wtr = csv::WriterBuilder::new()
-            .terminator(csv::Terminator::Any(b' '))
-            .from_writer(&mut buf);
-        wtr.serialize(&update.row)
-            .and_then(|_| wtr.flush().map_err(|err| From::from(err)))
+    let conn_id = match CONN_ID_ALLOCATOR.alloc() {
+        Ok(id) => id,
+        Err(IdExhaustionError) => {
+            bail!("maximum number of connections reached");
+        }
     };
-    BackendMessage::CopyData(match format_result {
-        Ok(()) => match writeln!(&mut buf, " (Diff: {} at {})", update.diff, update.timestamp) {
-            Ok(_) => buf,
-            Err(e) => e.to_string().into_bytes(),
-        },
-        Err(e) => e.to_string().into_bytes(),
-    })
+    CONN_SECRETS.generate(conn_id);
+
+    let mut machine = StateMachine {
+        conn: &mut Framed::new(conn, Codec::new()),
+        conn_id,
+        conn_secrets: CONN_SECRETS.clone(),
+        cmdq_tx,
+        gather_metrics,
+    };
+    let res = machine.start(Session::default()).await;
+
+    CONN_ID_ALLOCATOR.free(conn_id);
+    CONN_SECRETS.free(conn_id);
+    Ok(res?)
 }
 
-impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
-    // Startup.
+#[derive(Debug)]
+enum State {
+    Startup(Session),
+    Ready(Session),
+    Drain(Session),
+    Done,
+}
 
-    fn poll_start<'s, 'c>(
-        state: &'s mut RentToOwn<'s, Start<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterStart<A>, failure::Error> {
-        trace!("cid={} start", cx.conn_id);
-        let state = state.take();
-        transition!(RecvStartup {
-            recv: state.stream.recv(),
-            session: state.session,
-        })
+impl State {
+    fn take(&mut self) -> State {
+        mem::replace(self, State::Done)
+    }
+}
+
+pub struct StateMachine<'a, A> {
+    conn: &'a mut Framed<A, Codec>,
+    conn_id: u32,
+    conn_secrets: SecretManager,
+    cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
+    gather_metrics: bool,
+}
+
+impl<'a, A> StateMachine<'a, A>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    async fn start(&mut self, session: Session) -> Result<(), comm::Error> {
+        let mut state = State::Startup(session);
+
+        loop {
+            state = match state.take() {
+                State::Startup(session) => self.advance_startup(session).await?,
+                State::Ready(session) => self.advance_ready(session).await?,
+                State::Drain(session) => self.advance_drain(session).await?,
+                State::Done => return Ok(()),
+            };
+            if let State::Startup(_) = state {
+                // If we haven't left the startup state, we need to tell the
+                // decoder to expect another startup message, as startup
+                // messages don't have a message type header.
+                self.conn.codec_mut().reset_decode_state();
+            }
+        }
     }
 
-    fn poll_recv_startup<'s, 'c>(
-        state: &'s mut RentToOwn<'s, RecvStartup<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterRecvStartup<A>, failure::Error> {
-        let (msg, conn) = try_ready!(state.recv.poll());
-        trace!("cid={} recv startup: {:?}", cx.conn_id, msg);
-        let state = state.take();
-        let version = match msg {
-            FrontendMessage::Startup { version } => version,
+    async fn advance_startup(&mut self, session: Session) -> Result<State, comm::Error> {
+        match self.try_recv().await? {
+            FrontendMessage::Startup { version } => self.startup(session, version).await,
             FrontendMessage::CancelRequest {
                 conn_id,
                 secret_key,
-            } => {
-                if cx.conn_secrets.verify(conn_id, secret_key) {
-                    cx.cmdq_tx
-                        .unbounded_send(coord::Command::CancelRequest { conn_id })?;
-                }
-                // For security, the client is not told whether the cancel
-                // request succeeds or fails.
-                transition!(Done(()))
-            }
+            } => self.cancel_request(conn_id, secret_key).await,
             FrontendMessage::GssEncRequest | FrontendMessage::SslRequest => {
-                transition!(SendEncryptionResponse {
-                    send: conn.send(BackendMessage::EncryptionResponse(EncryptionType::None)),
-                    session: state.session,
-                })
+                self.encryption_request(session).await
             }
-
-            _ => {
-                let timer = start_timer(&cx, &COMMAND_DURATIONS.fatal_error);
-                transition!(send_fatal_error(
-                    conn,
-                    "08P01",
-                    "invalid frontend message flow at startup",
-                    timer,
-                ))
-            }
-        };
-
-        if version != VERSION_3 {
-            let timer = start_timer(&cx, &COMMAND_DURATIONS.fatal_error);
-            transition!(send_fatal_error(
-                conn,
-                "08004",
-                "server does not support the client's requested protocol version",
-                timer
-            ));
+            _ => self.fatal("08P01", "invalid startup message flow").await,
         }
-
-        let messages: Vec<_> = iter::once(BackendMessage::AuthenticationOk)
-            .chain(
-                state
-                    .session
-                    .notify_vars()
-                    .iter()
-                    .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
-            )
-            .chain(iter::once(BackendMessage::BackendKeyData {
-                conn_id: cx.conn_id,
-                secret_key: cx.conn_secrets.get(cx.conn_id).unwrap(),
-            }))
-            .chain(iter::once(BackendMessage::ReadyForQuery(
-                state.session.transaction().into(),
-            )))
-            .collect();
-
-        transition!(SendReadyForQuery {
-            send: Box::new(
-                stream::iter_ok(messages)
-                    .forward(conn)
-                    .map(|(_, conn)| conn)
-            ),
-            session: state.session,
-        })
     }
 
-    fn poll_send_encryption_response<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendEncryptionResponse<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendEncryptionResponse<A>, failure::Error> {
-        let mut conn = try_ready!(state.send.poll());
-        conn.codec_mut().reset_decode_state();
-        let state = state.take();
-        transition!(RecvStartup {
-            recv: conn.recv(),
-            session: state.session,
-        })
-    }
+    async fn advance_ready(&mut self, session: Session) -> Result<State, comm::Error> {
+        let message = self.try_recv().await?;
+        let timer = Instant::now();
+        let name = message.name();
 
-    // Shared query flow.
-
-    fn poll_send_ready_for_query<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendReadyForQuery<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendReadyForQuery<A>, failure::Error> {
-        trace!("cid={} send ready for query", cx.conn_id);
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        transition!(recv_query(conn, state.session))
-    }
-
-    fn poll_recv_query<'s, 'c>(
-        state: &'s mut RentToOwn<'s, RecvQuery<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterRecvQuery<A>, failure::Error> {
-        let (msg, conn) = try_ready!(state.recv.poll());
-        trace!("cid={} recv query: {:?}", cx.conn_id, msg);
-        let mut state = state.take();
-        match msg {
-            FrontendMessage::Query { sql } => {
-                debug!("query sql: {}", sql);
-                let timer = start_timer(&cx, &COMMAND_DURATIONS.simple_query);
-                let (tx, rx) = futures::sync::oneshot::channel();
-                cx.cmdq_tx.unbounded_send(coord::Command::Parse {
-                    name: "".into(),
-                    sql,
-                    session: state.session,
-                    tx,
-                })?;
-                transition!(HandleParse {
-                    conn,
-                    rx,
-                    timer,
-                    extended: false,
-                })
-            }
-            FrontendMessage::Parse { name, sql, .. } => {
-                debug!("parse sql: {}", sql);
-                let timer = start_timer(&cx, &COMMAND_DURATIONS.parse);
-                let (tx, rx) = futures::sync::oneshot::channel();
-                cx.cmdq_tx.unbounded_send(coord::Command::Parse {
-                    name,
-                    sql,
-                    session: state.session,
-                    tx,
-                })?;
-                transition!(HandleParse {
-                    conn,
-                    rx,
-                    timer,
-                    extended: true
-                })
-            }
-            FrontendMessage::CloseStatement { name } => {
-                let timer = start_timer(&cx, &COMMAND_DURATIONS.close_statement);
-                state.session.remove_prepared_statement(&name);
-                transition!(send_simple_complete(
-                    conn,
-                    state.session,
-                    BackendMessage::CloseComplete,
-                    timer,
-                ));
-            }
-            FrontendMessage::ClosePortal { name } => {
-                let timer = start_timer(&cx, &COMMAND_DURATIONS.close_portal);
-                state.session.remove_portal(&name);
-                transition!(send_simple_complete(
-                    conn,
-                    state.session,
-                    BackendMessage::CloseComplete,
-                    timer,
-                ));
-            }
-            FrontendMessage::DescribePortal { name } => {
-                let timer = start_timer(&cx, &COMMAND_DURATIONS.describe_portal);
-                Ok(Async::Ready(send_describe_response(
-                    conn,
-                    state.session,
-                    name,
-                    DescribeKind::Portal,
-                    cx.conn_id,
-                    timer,
-                )))
-            }
-            FrontendMessage::DescribeStatement { name } => {
-                match state.session.get_prepared_statement(&name) {
-                    Some(stmt) => {
-                        let timer = start_timer(&cx, &COMMAND_DURATIONS.describe_statement);
-                        transition!(SendParameterDescription {
-                            send: conn.send(BackendMessage::ParameterDescription(
-                                stmt.param_types()
-                                    .iter()
-                                    .map(ParameterDescription::from)
-                                    .collect(),
-                            )),
-                            session: state.session,
-                            name,
-                            timer,
-                        });
-                    }
-                    None => {
-                        let timer = start_timer(&cx, &COMMAND_DURATIONS.describe_statement_error);
-                        transition!(send_fatal_error(
-                            conn,
-                            "26000",
-                            "prepared statement does not exist",
-                            timer
-                        ))
-                    }
-                }
-            }
+        let next_state = match message {
+            FrontendMessage::Query { sql } => self.query(session, sql).await?,
+            FrontendMessage::Parse { name, sql, .. } => self.parse(session, name, sql).await?,
             FrontendMessage::Bind {
                 portal_name,
                 statement_name,
                 raw_parameter_bytes,
-                return_field_formats,
+                result_formats,
             } => {
-                let mut session = state.session;
-                let fmts = return_field_formats.iter().map(bool::from).collect();
-                let stmt = session.get_prepared_statement(&statement_name).unwrap();
-                let param_types = stmt.param_types();
-                match raw_parameter_bytes.decode_parameters(param_types) {
-                    Ok(parameters) => {
-                        let timer = start_timer(&cx, &COMMAND_DURATIONS.bind);
-                        trace!(
-                            "cid={} handle bind statement={:?} portal={:?} parameters={:?} return_field_formats={:?}",
-                            cx.conn_id,
-                            statement_name,
-                            portal_name,
-                            parameters,
-                            return_field_formats
-                        );
-                        session.set_portal(portal_name, statement_name, parameters, fmts)?;
-                        transition!(send_simple_complete(
-                            conn,
-                            session,
-                            BackendMessage::BindComplete,
-                            timer,
-                        ));
-                    }
-                    Err(err) => {
-                        let timer = start_timer(&cx, &COMMAND_DURATIONS.bind_error);
-                        trace!(
-                            "cid={} handle bind err={:?} statement={:?} portal={:?} return_field_formats={:?}",
-                            cx.conn_id,
-                            err,
-                            statement_name,
-                            portal_name,
-                            return_field_formats
-                        );
-                        transition!(send_fatal_error(conn, "08P01", err.to_string(), timer))
-                    }
-                }
+                self.bind(
+                    session,
+                    portal_name,
+                    statement_name,
+                    raw_parameter_bytes,
+                    result_formats,
+                )
+                .await?
             }
             FrontendMessage::Execute {
                 portal_name,
                 max_rows,
-            } => {
-                {
-                    let portal = state
-                        .session
-                        .get_portal_mut(&portal_name)
-                        .ok_or_else(|| format_err!("portal {:?} does not exist", portal_name))?;
-                    portal.set_max_rows(
-                        max_rows
-                            .try_into()
-                            .map_err(|e| format_err!("got invalid max_rows count: {}", e))?,
-                    );
-                }
-                let row_desc = state
-                    .session
-                    .get_prepared_statement_for_portal(&portal_name)
-                    .and_then(|stmt| stmt.desc().cloned());
-                let portal = state
-                    .session
-                    .get_portal_mut(&portal_name)
-                    .ok_or_else(|| format_err!("portal {:?} does not exist", portal_name))?;
-                let field_formats: Option<Vec<_>> = Some(
-                    portal
-                        .return_field_formats
-                        .iter()
-                        .map(FieldFormat::from)
-                        .collect(),
-                );
-                if portal.remaining_rows.is_some() {
-                    let timer = start_timer(&cx, &COMMAND_DURATIONS.portal_continue);
-                    // If the portal contains some rows then we return those instead of
-                    // requesting new ones from the dataflow layer
-                    let rows = portal.remaining_rows.take().unwrap();
-                    transition!(send_rows(
-                        conn,
-                        state.session,
-                        rows,
-                        row_desc.expect("portal should have a row description on resumption"),
-                        portal_name,
-                        field_formats,
-                        true,
-                        cx.conn_id,
-                        timer,
-                    )?)
-                } else {
-                    let timer = start_timer(&cx, &COMMAND_DURATIONS.execute);
-                    let (tx, rx) = futures::sync::oneshot::channel();
-                    cx.cmdq_tx.unbounded_send(coord::Command::Execute {
-                        portal_name: portal_name.clone(),
-                        session: state.session,
-                        conn_id: cx.conn_id,
-                        tx,
-                    })?;
-                    transition!(HandleQuery {
-                        rx,
-                        conn,
-                        row_desc,
-                        field_formats,
-                        extended: true,
-                        max_rows: Some(max_rows),
-                        portal_name,
-                        timer,
-                    })
-                }
+            } => self.execute(session, portal_name, max_rows).await?,
+            FrontendMessage::DescribeStatement { name } => {
+                self.describe_statement(session, name).await?
             }
-            FrontendMessage::Sync => transition!(send_ready_for_query(conn, state.session)),
-            FrontendMessage::Terminate => transition!(Done(())),
-            _ => {
-                let timer = start_timer(&cx, &COMMAND_DURATIONS.fatal_error);
-                transition!(send_fatal_error(
-                    conn,
-                    "08P01",
-                    "invalid frontend message flow",
-                    timer
-                ))
-            }
-        }
-    }
-
-    fn poll_handle_query<'s, 'c>(
-        state: &'s mut RentToOwn<'s, HandleQuery<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterHandleQuery<A>, failure::Error> {
-        match state.rx.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(coord::Response {
-                result: Ok(response),
-                session,
-            })) => {
-                trace!("cid={} poll handle query", cx.conn_id);
-                let state = state.take();
-
-                macro_rules! command_complete {
-                    ($cmd:expr) => {
-                        transition!(SendCommandComplete {
-                            send: Box::new(
-                                state
-                                    .conn
-                                    .send(BackendMessage::CommandComplete { tag: $cmd.into() })
-                            ),
-                            session,
-                            extended: state.extended,
-                            timer: state.timer,
-                        })
-                    };
-                }
-
-                match response {
-                    ExecuteResponse::CreatedIndex => command_complete!("CREATE INDEX"),
-                    ExecuteResponse::CreatedSource => command_complete!("CREATE SOURCE"),
-                    ExecuteResponse::CreatedSink => command_complete!("CREATE SINK"),
-                    ExecuteResponse::CreatedTable => command_complete!("CREATE TABLE"),
-                    ExecuteResponse::CreatedView => command_complete!("CREATE VIEW"),
-                    ExecuteResponse::Deleted(n) => {
-                        command_complete!(format!("DELETE {}", n));
-                    }
-                    ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
-                    ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
-                    ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
-                    ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
-                    ExecuteResponse::EmptyQuery => transition!(SendCommandComplete {
-                        send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
-                        session,
-                        extended: state.extended,
-                        timer: state.timer,
-                    }),
-                    ExecuteResponse::Inserted(n) => {
-                        // "On successful completion, an INSERT command returns a
-                        // command tag of the form `INSERT <oid> <count>`."
-                        //     -- https://www.postgresql.org/docs/11/sql-insert.html
-                        //
-                        // OIDs are a PostgreSQL-specific historical quirk, but we
-                        // can return a 0 OID to indicate that the table does not
-                        // have OIDs.
-                        command_complete!(format!("INSERT 0 {}", n));
-                    }
-                    ExecuteResponse::SendRows(rx) => {
-                        let row_desc = state
-                            .row_desc
-                            .expect("missing row description during ExecuteResponse::SendRows");
-                        let portal_name = state.portal_name;
-                        if state.extended {
-                            trace!("cid={} handle extended: send rows", cx.conn_id);
-                            transition!(WaitForRows {
-                                session,
-                                conn: state.conn,
-                                row_desc,
-                                rows_rx: rx,
-                                max_rows: state.max_rows,
-                                portal_name,
-                                field_formats: state.field_formats,
-                                extended: true,
-                                timer: state.timer
-                            })
-                        } else {
-                            transition!(SendRowDescription {
-                                send: state.conn.send(BackendMessage::RowDescription(
-                                    super::message::row_description_from_desc(&row_desc)
-                                )),
-                                session,
-                                row_desc,
-                                max_rows: state.max_rows,
-                                portal_name,
-                                rows_rx: rx,
-                                timer: state.timer,
-                            })
-                        }
-                    }
-                    ExecuteResponse::SetVariable { name } => {
-                        let qn = name.to_string();
-                        if let Some(var) = session.notify_vars().iter().find(|v| v.name() == qn) {
-                            trace!("cid={} sending parameter status for {}", cx.conn_id, name);
-                            let timer = start_timer(&cx, &COMMAND_DURATIONS.set_variable);
-                            transition!(SendParameterStatus {
-                                send: state
-                                    .conn
-                                    .send(BackendMessage::ParameterStatus(var.name(), var.value())),
-                                session,
-                                extended: state.extended,
-                                timer,
-                            })
-                        } else {
-                            command_complete!("SET")
-                        }
-                    }
-                    ExecuteResponse::StartTransaction => {
-                        // PgJDBC expects "BEGIN", not "START TRANSACTION".
-                        // The two actions are equivalent in PostgreSQL.
-                        command_complete!("BEGIN")
-                    }
-                    ExecuteResponse::Commit => command_complete!("COMMIT TRANSACTION"),
-                    ExecuteResponse::Rollback => command_complete!("ROLLBACK TRANSACTION"),
-                    ExecuteResponse::Tailing { rx } => transition!(StartCopyOut {
-                        send: state.conn.send(BackendMessage::CopyOutResponse),
-                        session,
-                        rx,
-                    }),
-                    ExecuteResponse::Updated(n) => {
-                        command_complete!(format!("UPDATE {}", n));
-                    }
-                }
-            }
-            Ok(Async::Ready(coord::Response {
-                result: Err(err),
-                session,
-            })) => {
-                let state = state.take();
-                transition!(send_error(
-                    state.conn,
-                    session,
-                    state.extended,
-                    "99999",
-                    err.to_string(),
-                    state.timer,
-                ));
-            }
-            Err(futures::sync::oneshot::Canceled) => {
-                panic!("Connection to sql planner closed unexpectedly")
-            }
-        }
-    }
-
-    fn poll_handle_parse<'s, 'c>(
-        state: &'s mut RentToOwn<'s, HandleParse<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterHandleParse<A>, failure::Error> {
-        match try_ready!(state.rx.poll()) {
-            coord::Response {
-                result: Ok(()),
-                mut session,
-            } => {
-                let state = state.take();
-                if state.extended {
-                    transition!(send_simple_complete(
-                        state.conn,
-                        session,
-                        BackendMessage::ParseComplete,
-                        state.timer,
-                    ))
-                } else {
-                    let statement_name = String::from("");
-                    let stmt = session
-                        .get_prepared_statement(&statement_name)
-                        .expect("unnamed statement to be present during simple query flow");
-                    let row_desc = stmt.desc().cloned();
-                    let portal_name = String::from("");
-                    let params = vec![];
-                    let fmts = vec![];
-                    session
-                        .set_portal(portal_name.clone(), statement_name, params, fmts)
-                        .expect("unnamed statement to be present during simple query flow");
-                    let (tx, rx) = futures::sync::oneshot::channel();
-                    cx.cmdq_tx.unbounded_send(coord::Command::Execute {
-                        portal_name: portal_name.clone(),
-                        session,
-                        conn_id: cx.conn_id,
-                        tx,
-                    })?;
-                    transition!(HandleQuery {
-                        conn: state.conn,
-                        rx,
-                        field_formats: None,
-                        row_desc,
-                        max_rows: None,
-                        extended: false,
-                        portal_name,
-                        timer: state.timer,
-                    })
-                }
-            }
-            coord::Response {
-                result: Err(err),
-                session,
-            } => {
-                let state = state.take();
-                transition!(send_error(
-                    state.conn,
-                    session,
-                    state.extended,
-                    "99999",
-                    err.to_string(),
-                    state.timer,
-                ));
-            }
-        }
-    }
-
-    fn poll_wait_for_rows<'s, 'c>(
-        state: &'s mut RentToOwn<'s, WaitForRows<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterWaitForRows<A>, failure::Error> {
-        match try_ready!(state.rows_rx.poll()) {
-            PeekResponse::Canceled => {
-                let state = state.take();
-                transition!(send_error(
-                    state.conn,
-                    state.session,
-                    state.extended,
-                    "57014",
-                    "canceling statement due to user request",
-                    state.timer,
-                ));
-            }
-            PeekResponse::Rows(rows) => {
-                let state = state.take();
-                let extended = state.extended;
-                let timer = start_timer(&cx, &COMMAND_DURATIONS.peek_response);
-                trace!(
-                    "cid={} wait for rows: count={} max={:?} extended={}",
-                    cx.conn_id,
-                    rows.len(),
-                    state.max_rows,
-                    extended
-                );
-                transition!(send_rows(
-                    state.conn,
-                    state.session,
-                    rows,
-                    state.row_desc,
-                    state.portal_name,
-                    state.field_formats.clone(),
-                    state.extended,
-                    cx.conn_id,
-                    timer,
-                )?)
-            }
-        }
-    }
-
-    fn poll_send_row_description<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendRowDescription<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        trace!("cid={} send row description", cx.conn_id);
-        transition!(WaitForRows {
-            conn,
-            session: state.session,
-            row_desc: state.row_desc,
-            rows_rx: state.rows_rx,
-            field_formats: None,
-            max_rows: state.max_rows,
-            extended: false,
-            portal_name: state.portal_name,
-            timer: state.timer,
-        })
-    }
-
-    fn poll_send_command_complete<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendCommandComplete<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        drop(state.timer);
-        let extended = state.extended;
-        let in_transaction = state.session.transaction();
-        trace!(
-            "cid={} send command complete extended={} transaction={:?}",
-            cx.conn_id,
-            extended,
-            in_transaction,
-        );
-        if extended {
-            transition!(recv_query(conn, state.session))
-        } else {
-            transition!(send_ready_for_query(conn, state.session));
-        }
-    }
-
-    // Extended-only query flow.
-
-    fn poll_send_simple_complete<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendSimpleComplete<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendSimpleComplete<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        trace!("cid={} send cmd complete", cx.conn_id);
-        let state = state.take();
-        drop(state.timer);
-        transition!(recv_query(conn, state.session))
-    }
-
-    fn poll_send_describe_response<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendDescribeResponse<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendDescribeResponse<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        drop(state.timer);
-        trace!("cid={} sent extended row description", cx.conn_id);
-        transition!(recv_query(conn, state.session))
-    }
-
-    fn poll_send_parameter_description<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendParameterDescription<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendParameterDescription<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        Ok(Async::Ready(send_describe_response(
-            conn,
-            state.session,
-            state.name,
-            DescribeKind::Statement,
-            cx.conn_id,
-            state.timer,
-        )))
-    }
-
-    fn poll_drain_until_sync<'s, 'c>(
-        state: &'s mut RentToOwn<'s, DrainUntilSync<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterDrainUntilSync<A>, failure::Error> {
-        let (msg, conn) = try_ready!(state.recv.poll());
-        trace!("cid={} drain until sync msg={:?}", cx.conn_id, msg);
-        match msg {
-            FrontendMessage::Sync => {
-                let state = state.take();
-                transition!(send_ready_for_query(conn, state.session));
-            }
-            _ => {
-                let state = state.take();
-                transition!(drain_until_sync(conn, state.session))
-            }
-        }
-    }
-
-    // COPY operations.
-
-    fn poll_start_copy_out<'s, 'c>(
-        state: &'s mut RentToOwn<'s, StartCopyOut<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterStartCopyOut<A>, failure::Error> {
-        trace!("cid={} starting copy out", cx.conn_id);
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        transition!(wait_for_updates(conn, state.session, state.rx))
-    }
-
-    fn poll_wait_for_updates<'s, 'c>(
-        state: &'s mut RentToOwn<'s, WaitForUpdates<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterWaitForUpdates<A>, failure::Error> {
-        trace!("cid={} wait for updates", cx.conn_id);
-        match state.rx.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(Some(results))) => {
-                let state = state.take();
-                let stream: MessageStream = Box::new(futures::stream::iter_ok(
-                    results.into_iter().map(format_update),
-                ));
-                transition!(SendUpdates {
-                    send: Box::new(stream.forward(state.conn)),
-                    session: state.session,
-                    rx: state.rx,
-                })
-            }
-            Ok(Async::Ready(None)) => {
-                trace!("cid={} update stream finished", cx.conn_id);
-                let state = state.take();
-                transition!(send_ready_for_query(state.conn, state.session));
-            }
-            Err(err) => panic!("error receiving tail results: {}", err),
-        }
-    }
-
-    fn poll_send_updates<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendUpdates<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendUpdates<A>, failure::Error> {
-        let (_, conn) = try_ready!(state.send.poll());
-        let state = state.take();
-        transition!(wait_for_updates(conn, state.session, state.rx))
-    }
-
-    // Asynchronous operations.
-
-    fn poll_send_parameter_status<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendParameterStatus<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendParameterStatus<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        transition!(SendCommandComplete {
-            send: Box::new(conn.send(BackendMessage::CommandComplete { tag: "SET".into() })),
-            session: state.session,
-            extended: state.extended,
-            timer: state.timer,
-        })
-    }
-
-    // Errors and termination.
-
-    fn poll_send_error<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendError<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendError<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        trace!("cid={} send error extended={}", cx.conn_id, state.extended);
-        let mut state = state.take();
-        state.session.fail_transaction();
-        drop(state.timer);
-        if state.extended {
-            transition!(DrainUntilSync {
-                recv: conn.recv(),
-                session: state.session,
-            })
-        } else {
-            transition!(send_ready_for_query(conn, state.session))
-        }
-    }
-
-    fn poll_send_fatal_error<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendFatalError<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendFatalError, failure::Error> {
-        try_ready!(state.send.poll());
-        trace!("cid={} send fatal error", cx.conn_id);
-        let state = state.take();
-        drop(state.timer);
-        transition!(Done(()))
-    }
-}
-
-fn send_ready_for_query<A>(conn: A, session: Session) -> SendReadyForQuery<A>
-where
-    A: Conn + 'static,
-{
-    SendReadyForQuery {
-        send: Box::new(conn.send(BackendMessage::ReadyForQuery(session.transaction().into()))),
-        session,
-    }
-}
-
-fn recv_query<A>(conn: A, session: Session) -> RecvQuery<A>
-where
-    A: Conn + 'static,
-{
-    RecvQuery {
-        recv: conn.recv(),
-        session,
-    }
-}
-
-fn send_simple_complete<A>(
-    conn: A,
-    session: Session,
-    cmd: BackendMessage,
-    timer: Option<HistogramTimer>,
-) -> SendSimpleComplete<A>
-where
-    A: Conn + 'static,
-{
-    SendSimpleComplete {
-        send: conn.send(cmd),
-        session,
-        timer,
-    }
-}
-
-fn drain_until_sync<A>(conn: A, session: Session) -> DrainUntilSync<A>
-where
-    A: Conn + 'static,
-{
-    DrainUntilSync {
-        recv: conn.recv(),
-        session,
-    }
-}
-
-fn wait_for_updates<A>(
-    conn: A,
-    session: Session,
-    rx: comm::mpsc::Receiver<Vec<Update>>,
-) -> WaitForUpdates<A>
-where
-    A: Conn + 'static,
-{
-    WaitForUpdates { conn, session, rx }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn send_rows<A>(
-    conn: A,
-    mut session: Session,
-    mut rows: Vec<Row>,
-    row_desc: RelationDesc,
-    portal_name: String,
-    field_formats: Option<Vec<FieldFormat>>,
-    extended: bool,
-    conn_id: u32,
-    timer: Option<HistogramTimer>,
-) -> Result<SendCommandComplete<A>, failure::Error>
-where
-    A: Conn + 'static,
-{
-    trace!("cid={} send rows extended={}", conn_id, extended);
-    let formats = FieldFormatIter::new(field_formats.map(Arc::new));
-    let portal = session
-        .get_portal(&portal_name)
-        .expect("valid portal name for send rows");
-
-    // if we have more that u32's worth of rows I hope that there's a cap
-    let row_count: u32 = rows.len().try_into().unwrap_or(u32::max_value());
-    let send: Box<dyn futures::Future<Item = _, Error = _> + std::marker::Send + 'static> =
-        match portal.max_rows {
-            Some(max_rows) if max_rows.get() < row_count => {
-                // TODO: once we get async/await this should be possible to do without the intermediate vec
-                let max_rows = max_rows.get() as usize;
-                let send: Vec<_> = rows.drain(..max_rows).collect();
-                session
-                    .get_portal_mut(&portal_name)
-                    .ok_or_else(|| {
-                        failure::format_err!("portal missing after partial send: {:?}", portal_name)
-                    })?
-                    .set_remaining_rows(rows);
-
-                let send = send
-                    .into_iter()
-                    .map(move |row| {
-                        BackendMessage::DataRow(
-                            message::field_values_from_row(row, row_desc.typ()),
-                            formats.fresh(),
-                        )
-                    })
-                    .chain(iter::once(BackendMessage::PortalSuspended));
-                Box::new(stream::iter_ok(send).forward(conn).map(|(_, conn)| conn))
-            }
-            _ => {
-                let send = rows
-                    .into_iter()
-                    .map(move |row| {
-                        BackendMessage::DataRow(
-                            message::field_values_from_row(row, row_desc.typ()),
-                            formats.fresh(),
-                        )
-                    })
-                    .chain(iter::once(BackendMessage::CommandComplete {
-                        tag: "SELECT".into(),
-                    }));
-                Box::new(stream::iter_ok(send).forward(conn).map(|(_, conn)| conn))
-            }
+            FrontendMessage::DescribePortal { name } => self.describe_portal(session, name).await?,
+            FrontendMessage::CloseStatement { name } => self.close_statement(session, name).await?,
+            FrontendMessage::ClosePortal { name } => self.close_portal(session, name).await?,
+            FrontendMessage::Sync => self.sync(session).await?,
+            FrontendMessage::Terminate => State::Done,
+            _ => self.fatal("08P01", "invalid ready message flow").await?,
         };
 
-    Ok(SendCommandComplete {
-        send,
-        session,
-        extended,
-        timer,
-    })
-}
-
-#[derive(Clone, Copy, Debug)]
-enum DescribeKind {
-    Statement,
-    Portal,
-}
-
-fn send_describe_response<A, R>(
-    conn: A,
-    session: Session,
-    name: String,
-    kind: DescribeKind,
-    conn_id: u32,
-    timer: Option<HistogramTimer>,
-) -> R
-where
-    A: Conn + 'static,
-    R: From<SendFatalError<A>> + From<SendDescribeResponse<A>>,
-{
-    trace!(
-        "cid={} send describe response statement_name={:?}",
-        conn_id,
-        name
-    );
-    let stmt = match kind {
-        DescribeKind::Statement => session.get_prepared_statement(&name),
-        DescribeKind::Portal => session
-            .get_portal(&name)
-            .and_then(|portal| session.get_prepared_statement(&portal.statement_name)),
-    };
-    let stmt = match stmt {
-        Some(stmt) => stmt,
-        None => {
-            return send_fatal_error(
-                conn,
-                "26000",
-                "portal or prepared statement does not exist",
-                timer,
-            )
-            .into();
+        if self.gather_metrics {
+            let status = match next_state {
+                State::Startup(_) => unreachable!(),
+                State::Ready(_) | State::Done => "success",
+                State::Drain(_) => "error",
+            };
+            COMMAND_DURATIONS
+                .with_label_values(&[name, status])
+                .observe(timer.elapsed().as_secs_f64());
         }
-    };
-    match stmt.desc() {
-        Some(desc) => {
-            let desc = super::message::row_description_from_desc(&desc);
-            trace!("cid={} sending row description {:?}", conn_id, desc);
-            SendDescribeResponse {
-                send: conn.send(BackendMessage::RowDescription(desc)),
+
+        Ok(next_state)
+    }
+
+    async fn advance_drain(&mut self, session: Session) -> Result<State, comm::Error> {
+        match self.try_recv().await? {
+            FrontendMessage::Sync => self.sync(session).await,
+            _ => Ok(State::Drain(session)),
+        }
+    }
+
+    async fn startup(&mut self, session: Session, version: i32) -> Result<State, comm::Error> {
+        if version != VERSION_3 {
+            return self
+                .fatal(
+                    "08004",
+                    "server does not support the client's requested protocol version",
+                )
+                .await;
+        }
+
+        let mut messages = vec![BackendMessage::AuthenticationOk];
+        messages.extend(
+            session
+                .notify_vars()
+                .iter()
+                .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
+        );
+        messages.push(BackendMessage::BackendKeyData {
+            conn_id: self.conn_id,
+            secret_key: self.conn_secrets.get(self.conn_id).unwrap(),
+        });
+        messages.push(BackendMessage::ReadyForQuery(session.transaction().into()));
+        self.send_all(messages).await?;
+
+        Ok(State::Ready(session))
+    }
+
+    async fn cancel_request(
+        &mut self,
+        conn_id: u32,
+        secret_key: u32,
+    ) -> Result<State, comm::Error> {
+        if self.conn_secrets.verify(conn_id, secret_key) {
+            self.cmdq_tx
+                .send(coord::Command::CancelRequest { conn_id })
+                .await?;
+        }
+        // For security, the client is not told whether the cancel
+        // request succeeds or fails.
+        Ok(State::Done)
+    }
+
+    async fn encryption_request(&mut self, session: Session) -> Result<State, comm::Error> {
+        self.send(BackendMessage::EncryptionResponse(EncryptionType::None))
+            .await?;
+        Ok(State::Startup(session))
+    }
+
+    async fn query(&mut self, session: Session, sql: String) -> Result<State, comm::Error> {
+        let run = async {
+            let stmt_name = String::from("");
+            let portal_name = String::from("");
+
+            // Parse.
+            let (tx, rx) = futures::channel::oneshot::channel();
+            let cmd = coord::Command::Parse {
+                name: stmt_name.clone(),
+                sql,
                 session,
-                timer,
+                tx,
+            };
+            self.cmdq_tx.send(cmd).await?;
+            let mut session = match rx.await? {
+                coord::Response {
+                    result: Ok(()),
+                    session,
+                } => session,
+                coord::Response {
+                    result: Err(err),
+                    session,
+                } => {
+                    return self.error(session, "99999", err.to_string()).await;
+                }
+            };
+
+            let stmt = session.get_prepared_statement(&stmt_name).unwrap();
+            let row_desc = stmt.desc().cloned();
+
+            // Bind.
+            let params = vec![];
+            let result_formats = vec![FieldFormat::Text; stmt.result_width()];
+            session
+                .set_portal(
+                    portal_name.clone(),
+                    stmt_name.clone(),
+                    params,
+                    result_formats,
+                )
+                .expect("unnamed statement to be present during simple query flow");
+
+            // Maybe send row description.
+            if let Some(desc) = &row_desc {
+                self.send(BackendMessage::RowDescription(
+                    message::row_description_from_desc(&desc),
+                ))
+                .await?;
             }
-            .into()
+
+            // Execute.
+            let (tx, rx) = futures::channel::oneshot::channel();
+            self.cmdq_tx
+                .send(coord::Command::Execute {
+                    portal_name: portal_name.clone(),
+                    session,
+                    conn_id: self.conn_id,
+                    tx,
+                })
+                .await?;
+            match rx.await? {
+                coord::Response {
+                    result: Ok(response),
+                    session,
+                } => {
+                    let max_rows = 0;
+                    self.send_execute_response(session, response, row_desc, portal_name, max_rows)
+                        .await
+                }
+                coord::Response {
+                    result: Err(err),
+                    session,
+                } => self.error(session, "99999", err.to_string()).await,
+            }
+        };
+        match run.await? {
+            State::Startup(_) => unreachable!(),
+            State::Ready(session) | State::Drain(session) => self.sync(session).await,
+            State::Done => Ok(State::Done),
         }
-        None => {
-            trace!("cid={} sending no data", conn_id);
-            SendDescribeResponse {
-                send: conn.send(BackendMessage::NoData),
+    }
+
+    async fn parse(
+        &mut self,
+        session: Session,
+        name: String,
+        sql: String,
+    ) -> Result<State, comm::Error> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+
+        let cmd = coord::Command::Parse {
+            name,
+            sql,
+            session,
+            tx,
+        };
+        self.cmdq_tx.send(cmd).await?;
+
+        match rx.await? {
+            coord::Response {
+                result: Ok(()),
                 session,
-                timer,
+            } => {
+                self.send(BackendMessage::ParseComplete).await?;
+                Ok(State::Ready(session))
             }
-            .into()
+            coord::Response {
+                result: Err(err),
+                session,
+            } => self.error(session, "99999", err.to_string()).await,
         }
     }
-}
 
-fn send_error<A>(
-    conn: A,
-    session: Session,
-    extended: bool,
-    code: &'static str,
-    message: impl Into<String>,
-    timer: Option<HistogramTimer>,
-) -> SendError<A>
-where
-    A: Conn + 'static,
-{
-    SendError {
-        send: conn.send(BackendMessage::ErrorResponse {
-            severity: Severity::Error,
-            code,
-            message: message.into(),
-            detail: None,
-        }),
-        session,
-        extended,
-        timer,
+    async fn bind(
+        &mut self,
+        mut session: Session,
+        portal_name: String,
+        statement_name: String,
+        raw_parameter_bytes: RawParameterBytes,
+        result_formats: Vec<FieldFormat>,
+    ) -> Result<State, comm::Error> {
+        let stmt = match session.get_prepared_statement(&statement_name) {
+            Some(stmt) => stmt,
+            None => {
+                return self
+                    .error(session, "26000", "prepared statement does not exist")
+                    .await;
+            }
+        };
+        let param_types = stmt.param_types();
+        let params = match raw_parameter_bytes.decode_parameters(param_types) {
+            Ok(params) => params,
+            Err(err) => return self.error(session, "08P01", err.to_string()).await,
+        };
+        let fmts = match (
+            result_formats.len(),
+            stmt.desc()
+                .map(|desc| desc.typ().column_types.len())
+                .unwrap_or(0),
+        ) {
+            (0, e) => vec![FieldFormat::Text; e],
+            (1, e) => iter::repeat(result_formats[0]).take(e).collect(),
+            (a, e) if a == e => result_formats,
+            (a, e) => {
+                let msg = format!("expected {} field format specifiers, but got {}", e, a);
+                return self.error(session, "08P01", msg).await;
+            }
+        };
+        session
+            .set_portal(portal_name, statement_name, params, fmts)
+            .unwrap();
+        self.send(BackendMessage::BindComplete).await?;
+        Ok(State::Ready(session))
     }
-}
 
-fn send_fatal_error<A>(
-    conn: A,
-    code: &'static str,
-    message: impl Into<String>,
-    timer: Option<HistogramTimer>,
-) -> SendFatalError<A>
-where
-    A: Conn + 'static,
-{
-    SendFatalError {
-        send: conn.send(BackendMessage::ErrorResponse {
-            severity: Severity::Fatal,
-            code,
-            message: message.into(),
-            detail: None,
-        }),
-        timer,
+    async fn execute(
+        &mut self,
+        mut session: Session,
+        portal_name: String,
+        max_rows: i32,
+    ) -> Result<State, comm::Error> {
+        let row_desc = session
+            .get_prepared_statement_for_portal(&portal_name)
+            .and_then(|stmt| stmt.desc().cloned());
+        let portal = match session.get_portal_mut(&portal_name) {
+            Some(portal) => portal,
+            None => {
+                return self.error(session, "26000", "portal does not exist").await;
+            }
+        };
+        if portal.remaining_rows.is_some() {
+            let rows = portal.remaining_rows.take().unwrap();
+            return self
+                .send_rows(
+                    session,
+                    row_desc.expect("portal missing row desc on resumption"),
+                    portal_name,
+                    rows,
+                    max_rows,
+                )
+                .await;
+        }
+
+        let (tx, rx) = futures::channel::oneshot::channel();
+        self.cmdq_tx
+            .send(coord::Command::Execute {
+                portal_name: portal_name.clone(),
+                session,
+                conn_id: self.conn_id,
+                tx,
+            })
+            .await?;
+        match rx.await? {
+            coord::Response {
+                result: Ok(response),
+                session,
+            } => {
+                self.send_execute_response(session, response, row_desc, portal_name, max_rows)
+                    .await
+            }
+            coord::Response {
+                result: Err(err),
+                session,
+            } => self.error(session, "99999", err.to_string()).await,
+        }
     }
-}
 
-fn start_timer(cx: &Context, hist: &Histogram) -> Option<HistogramTimer> {
-    if cx.gather_metrics {
-        Some(Histogram::start_timer(hist))
-    } else {
-        None
+    async fn describe_statement(
+        &mut self,
+        session: Session,
+        name: String,
+    ) -> Result<State, comm::Error> {
+        match session.get_prepared_statement(&name) {
+            Some(stmt) => {
+                self.conn
+                    .send(BackendMessage::ParameterDescription(
+                        stmt.param_types()
+                            .iter()
+                            .map(ParameterDescription::from)
+                            .collect(),
+                    ))
+                    .await?
+            }
+            None => {
+                return self
+                    .error(session, "26000", "prepared statement does not exist")
+                    .await
+            }
+        }
+        self.send_describe_rows(session, name).await
+    }
+
+    async fn describe_portal(
+        &mut self,
+        session: Session,
+        name: String,
+    ) -> Result<State, comm::Error> {
+        let portal = match session.get_portal(&name) {
+            Some(portal) => portal,
+            None => return self.error(session, "26000", "portal does not exist").await,
+        };
+        let stmt_name = portal.statement_name.clone();
+        self.send_describe_rows(session, stmt_name).await
+    }
+
+    async fn close_statement(
+        &mut self,
+        mut session: Session,
+        name: String,
+    ) -> Result<State, comm::Error> {
+        session.remove_prepared_statement(&name);
+        self.send(BackendMessage::CloseComplete).await?;
+        Ok(State::Ready(session))
+    }
+
+    async fn close_portal(
+        &mut self,
+        mut session: Session,
+        name: String,
+    ) -> Result<State, comm::Error> {
+        session.remove_portal(&name);
+        self.send(BackendMessage::CloseComplete).await?;
+        Ok(State::Ready(session))
+    }
+
+    async fn sync(&mut self, session: Session) -> Result<State, comm::Error> {
+        self.conn
+            .send(BackendMessage::ReadyForQuery(session.transaction().into()))
+            .await?;
+        Ok(State::Ready(session))
+    }
+
+    async fn send_describe_rows(
+        &mut self,
+        session: Session,
+        stmt_name: String,
+    ) -> Result<State, comm::Error> {
+        let stmt = session
+            .get_prepared_statement(&stmt_name)
+            .expect("send_describe_statement called incorrectly");
+        match stmt.desc() {
+            Some(desc) => {
+                self.conn
+                    .send(BackendMessage::RowDescription(
+                        message::row_description_from_desc(&desc),
+                    ))
+                    .await?
+            }
+            None => self.send(BackendMessage::NoData).await?,
+        }
+        Ok(State::Ready(session))
+    }
+
+    async fn send_execute_response(
+        &mut self,
+        session: Session,
+        response: ExecuteResponse,
+        row_desc: Option<RelationDesc>,
+        portal_name: String,
+        max_rows: i32,
+    ) -> Result<State, comm::Error> {
+        macro_rules! command_complete {
+            ($($arg:tt)*) => {{
+                // N.B.: the output of format! must be stored into a
+                // variable, or rustc barfs out a completely inscrutable
+                // error: https://github.com/rust-lang/rust/issues/64960.
+                let tag = format!($($arg)*);
+                self.send(BackendMessage::CommandComplete { tag }).await?;
+                Ok(State::Ready(session))
+            }};
+        }
+
+        match response {
+            ExecuteResponse::CreatedIndex => command_complete!("CREATE INDEX"),
+            ExecuteResponse::CreatedSource => command_complete!("CREATE SOURCE"),
+            ExecuteResponse::CreatedSink => command_complete!("CREATE SINK"),
+            ExecuteResponse::CreatedTable => command_complete!("CREATE TABLE"),
+            ExecuteResponse::CreatedView => command_complete!("CREATE VIEW"),
+            ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
+            ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
+            ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
+            ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
+            ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
+            ExecuteResponse::EmptyQuery => {
+                self.send(BackendMessage::EmptyQueryResponse).await?;
+                Ok(State::Ready(session))
+            }
+            ExecuteResponse::Inserted(n) => {
+                // "On successful completion, an INSERT command returns a
+                // command tag of the form `INSERT <oid> <count>`."
+                //     -- https://www.postgresql.org/docs/11/sql-insert.html
+                //
+                // OIDs are a PostgreSQL-specific historical quirk, but we
+                // can return a 0 OID to indicate that the table does not
+                // have OIDs.
+                command_complete!("INSERT 0 {}", n)
+            }
+            ExecuteResponse::SendRows(rx) => {
+                let row_desc =
+                    row_desc.expect("missing row description for ExecuteResponse::send_rows");
+                match rx.await? {
+                    PeekResponse::Canceled => {
+                        self.error(session, "57014", "canceling statement due to user request")
+                            .await
+                    }
+                    PeekResponse::Rows(rows) => {
+                        self.send_rows(session, row_desc, portal_name, rows, max_rows)
+                            .await
+                    }
+                }
+            }
+            ExecuteResponse::SetVariable { name } => {
+                // This code is somewhat awkwardly structured because we
+                // can't hold `var` across an await point.
+                let qn = name.to_string();
+                let msg = if let Some(var) = session.notify_vars().iter().find(|v| v.name() == qn) {
+                    Some(BackendMessage::ParameterStatus(var.name(), var.value()))
+                } else {
+                    None
+                };
+                if let Some(msg) = msg {
+                    self.send(msg).await?;
+                }
+                command_complete!("SET")
+            }
+            ExecuteResponse::StartTransaction => command_complete!("BEGIN"),
+            ExecuteResponse::Commit => command_complete!("COMMIT TRANSACTION"),
+            ExecuteResponse::Rollback => command_complete!("ROLLBACK TRANSACTION"),
+            ExecuteResponse::Tailing { .. } => unimplemented!(),
+            ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
+        }
+    }
+
+    async fn send_rows(
+        &mut self,
+        mut session: Session,
+        row_desc: RelationDesc,
+        portal_name: String,
+        mut rows: Vec<Row>,
+        max_rows: i32,
+    ) -> Result<State, comm::Error> {
+        let portal = session
+            .get_portal_mut(&portal_name)
+            .expect("valid portal name for send rows");
+        let formats: Arc<Vec<FieldFormat>> =
+            Arc::new(portal.result_formats.iter().map(Into::into).collect());
+
+        self.send_all(
+            if max_rows > 0 {
+                rows.drain(..max_rows as usize)
+            } else {
+                rows.drain(..)
+            }
+            .map(move |row| {
+                BackendMessage::DataRow(
+                    message::field_values_from_row(row, row_desc.typ()),
+                    formats.clone(),
+                )
+            }),
+        )
+        .await?;
+
+        if rows.is_empty() {
+            self.send(BackendMessage::CommandComplete {
+                tag: "SELECT".into(),
+            })
+            .await?;
+        } else {
+            portal.set_remaining_rows(rows);
+            self.send(BackendMessage::PortalSuspended).await?;
+        }
+
+        Ok(State::Ready(session))
+    }
+
+    async fn try_recv(&mut self) -> Result<FrontendMessage, comm::Error> {
+        let message = self.conn.try_recv().await?;
+        trace!("cid={} recv={:?}", self.conn_id, message);
+        Ok(message)
+    }
+
+    async fn send(&mut self, message: BackendMessage) -> Result<(), comm::Error> {
+        trace!("cid={} send={:?}", self.conn_id, message);
+        Ok(self.conn.send(message).await?)
+    }
+
+    async fn send_all(
+        &mut self,
+        messages: impl IntoIterator<Item = BackendMessage>,
+    ) -> Result<(), comm::Error> {
+        Ok(self
+            .conn
+            .send_all(&mut stream::iter(messages.into_iter().map(Ok)))
+            .await?)
+    }
+
+    async fn error(
+        &mut self,
+        mut session: Session,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Result<State, comm::Error> {
+        let message = message.into();
+        debug!(
+            "cid={} error code={} message={}",
+            self.conn_id, code, message
+        );
+        self.conn
+            .send(BackendMessage::ErrorResponse {
+                severity: Severity::Error,
+                code,
+                message,
+                detail: None,
+            })
+            .await?;
+        session.fail_transaction();
+        Ok(State::Drain(session))
+    }
+
+    async fn fatal(
+        &mut self,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Result<State, comm::Error> {
+        let message = message.into();
+        debug!(
+            "cid={} fatal code={} message={}",
+            self.conn_id, code, message
+        );
+        self.conn
+            .send(BackendMessage::ErrorResponse {
+                severity: Severity::Fatal,
+                code,
+                message,
+                detail: None,
+            })
+            .await?;
+        Ok(State::Done)
     }
 }

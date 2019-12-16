@@ -76,28 +76,41 @@ impl PreparedStatement {
     pub fn param_types(&self) -> &[ScalarType] {
         &self.param_types
     }
+
+    /// Reports the number of columns in the statement's result set, or zero if
+    /// the statement does not return rows.
+    pub fn result_width(&self) -> usize {
+        self.desc
+            .as_ref()
+            .map(|desc| desc.typ().column_types.len())
+            .unwrap_or(0)
+    }
 }
 
-/// A portal, used by clients to name the target of an Execute statement
+/// Specifies the encoding type for a field.
+#[derive(Debug, Clone, Copy)]
+pub enum FieldFormat {
+    /// Use a textual encoding.
+    Text,
+    /// Use a binary encoding.
+    Binary,
+}
+
+/// A portal represents the execution state of a running or runnable query.
 #[derive(Debug)]
 pub struct Portal {
+    /// The name of the prepared statement that is bound to this portal.
     pub statement_name: String,
-    /// Row containing parameter values to be bound.
+    /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
-    /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
-    pub return_field_formats: Vec<bool>,
-    /// The number of rows to be returned in _this_ execute call
-    pub max_rows: Option<std::num::NonZeroU32>,
-
-    /// RemainingRows is caused by `max_rows` showing up in an Execute
+    /// The desired output format for each column in the result set.
+    pub result_formats: Vec<FieldFormat>,
+    /// The rows that have yet to be delivered to the client, if the portal is
+    /// partially executed.
     pub remaining_rows: Option<Vec<Row>>,
 }
 
 impl Portal {
-    pub fn set_max_rows(&mut self, count: u32) {
-        self.max_rows = std::num::NonZeroU32::new(count);
-    }
-
     pub fn set_remaining_rows(&mut self, rows: Vec<Row>) {
         self.remaining_rows = Some(rows);
     }

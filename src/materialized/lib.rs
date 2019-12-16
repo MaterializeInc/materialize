@@ -12,23 +12,25 @@
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-use failure::format_err;
-use futures::sync::mpsc::{self, UnboundedSender};
-use futures::{Future, Stream};
-use log::error;
 use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tokio::io::{self, AsyncWrite};
+
+use failure::format_err;
+use futures::channel::mpsc::{self, UnboundedSender};
+use futures::future::TryFutureExt;
+use futures::stream::StreamExt;
+use log::error;
+use tokio::io::{self, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Runtime;
 
 use comm::Switchboard;
 use dataflow_types::logging::LoggingConfig;
-use ore::future::FutureExt;
+use ore::future::OreTryFutureExt;
 use ore::netio;
 use ore::netio::{SniffedStream, SniffingStream};
 use ore::option::OptionExt;
@@ -81,41 +83,48 @@ impl Config {
     }
 }
 
-fn handle_connection(
+async fn handle_connection(
     conn: TcpStream,
     switchboard: Switchboard<SniffedStream<TcpStream>>,
     cmd_tx: UnboundedSender<coord::Command>,
     gather_metrics: bool,
-) -> impl Future<Item = (), Error = ()> {
+) {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
     // is a delicate business. Read too many bytes and you'll stall out
     // protocols with small handshakes, like pgwire. Read too few bytes and
     // you won't be able to tell what protocol you have. For now, eight bytes
     // is the magic number, but this may need to change if we learn to speak
     // new protocols.
-    let ss = SniffingStream::new(conn);
-    netio::read_exact_or_eof(ss, [0; 8])
-        .from_err()
-        .and_then(move |(ss, buf, nread)| {
-            let buf = &buf[..nread];
-            if pgwire::match_handshake(buf) {
-                pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).boxed()
-            } else if http::match_handshake(buf) {
-                http::handle_connection(ss.into_sniffed(), gather_metrics).boxed()
-            } else if comm::protocol::match_handshake(buf) {
-                switchboard
-                    .handle_connection(ss.into_sniffed())
-                    .from_err()
-                    .boxed()
-            } else {
-                reject_connection(ss.into_sniffed()).from_err().boxed()
-            }
-        })
-        .map_err(|err| error!("error handling request: {}", err))
-}
+    let mut ss = SniffingStream::new(conn);
+    let mut buf = [0; 8];
+    let nread = match netio::read_exact_or_eof(&mut ss, &mut buf).await {
+        Ok(nread) => nread,
+        Err(err) => {
+            error!("error handling request: {}", err);
+            return;
+        }
+    };
+    let buf = &buf[..nread];
 
-fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::Error> {
-    io::write_all(a, "unknown protocol\n").discard()
+    let res = if pgwire::match_handshake(buf) {
+        pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).await
+    } else if http::match_handshake(buf) {
+        http::handle_connection(ss.into_sniffed(), gather_metrics).await
+    } else if comm::protocol::match_handshake(buf) {
+        switchboard
+            .handle_connection(ss.into_sniffed())
+            .err_into()
+            .await
+    } else {
+        ss.into_sniffed()
+            .write_all(b"unknown protocol\n")
+            .discard()
+            .err_into()
+            .await
+    };
+    if let Err(err) = res {
+        error!("error handling request: {}", err)
+    }
 }
 
 /// Start a `materialized` server.
@@ -129,6 +138,10 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     let is_primary = config.process == 0;
     let num_timely_workers = config.num_timely_workers();
 
+    // Start Tokio runtime.
+    let mut runtime = tokio::runtime::Runtime::new()?;
+    let executor = runtime.handle().clone();
+
     // Initialize network listener.
     let listen_addr = SocketAddr::new(
         match config.addresses[config.process].ip() {
@@ -137,7 +150,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         },
         config.addresses[config.process].port(),
     );
-    let listener = TcpListener::bind(&listen_addr)?;
+    let mut listener = runtime.block_on(TcpListener::bind(&listen_addr))?;
     let local_addr = listener.local_addr()?;
     config.addresses[config.process].set_port(local_addr.port());
 
@@ -147,15 +160,21 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         SocketAddr::new(listen_addr.ip(), local_addr.port()),
     );
 
-    let mut runtime = tokio::runtime::Runtime::new()?;
-    let switchboard = Switchboard::new(config.addresses, config.process, runtime.executor());
+    let switchboard = Switchboard::new(config.addresses, config.process, executor.clone());
     let gather_metrics = config.gather_metrics;
     runtime.spawn({
         let switchboard = switchboard.clone();
         let cmd_tx = Arc::downgrade(&cmd_tx);
-        listener
-            .incoming()
-            .for_each(move |conn| {
+        async move {
+            let mut incoming = listener.incoming();
+            while let Some(conn) = incoming.next().await {
+                let conn = match conn {
+                    Ok(conn) => conn,
+                    Err(err) => {
+                        error!("error accepting connection: {}", err);
+                        continue;
+                    }
+                };
                 // Set TCP_NODELAY to disable tinygram prevention (Nagle's
                 // algorithm), which forces a 40ms delay between each query
                 // on linux. According to John Nagle [0], the true problem
@@ -176,7 +195,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                             (*cmd_tx).clone(),
                             gather_metrics,
                         ));
-                        return Ok(());
+                        continue;
                     }
                 }
                 // When not the primary, or when shutting down, we only need to
@@ -187,9 +206,8 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                         .handle_connection(ss)
                         .map_err(|err| error!("error handling connection: {}", err)),
                 );
-                Ok(())
-            })
-            .map_err(|err| error!("error accepting connection: {}", err))
+            }
+        }
     });
 
     let dataflow_conns = runtime
@@ -212,6 +230,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             logging: logging_config.as_ref(),
             bootstrap_sql: config.bootstrap_sql,
             data_directory: config.data_directory.mz_as_deref(),
+            executor: &executor,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
     } else {
@@ -224,7 +243,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         config.threads,
         config.process,
         switchboard,
-        runtime.executor(),
+        executor,
         logging_config.clone(),
     )
     .map_err(|s| format_err!("{}", s))?;

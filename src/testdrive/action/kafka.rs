@@ -13,25 +13,27 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
+use std::convert::{TryFrom, TryInto};
+use std::num::TryFromIntError;
+use std::time::Duration;
+
 use avro_rs::types::Value as AvroValue;
 use avro_rs::Schema;
 use backoff::{ExponentialBackoff, Operation};
 use byteorder::{NetworkEndian, WriteBytesExt};
-use futures::stream::FuturesUnordered;
-use futures::Future;
+use futures::executor::block_on;
+use futures::future;
+use futures::stream::{FuturesUnordered, TryStreamExt};
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::consumer::Consumer;
 use rdkafka::error::RDKafkaError;
 use rdkafka::producer::FutureRecord;
 use serde_json::Value as JsonValue;
-use std::convert::{TryFrom, TryInto};
-use std::num::TryFromIntError;
-use std::time::Duration;
+
+use ore::collections::CollectionExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-use ore::collections::CollectionExt;
-use ore::future::StreamExt;
 
 pub struct IngestAction {
     topic_prefix: String,
@@ -87,10 +89,11 @@ impl Action for IngestAction {
                 "Deleting stale Kafka topics {}",
                 stale_kafka_topics.join(", ")
             );
-            let res = state
-                .kafka_admin
-                .delete_topics(&stale_kafka_topics, &state.kafka_admin_opts)
-                .wait();
+            let res = block_on(
+                state
+                    .kafka_admin
+                    .delete_topics(&stale_kafka_topics, &state.kafka_admin_opts),
+            );
             let res = match res {
                 Err(err) => return Err(err.to_string()),
                 Ok(res) => res,
@@ -196,10 +199,11 @@ impl Action for IngestAction {
                 // "1" is interpreted as January 1, 1970 00:00:01, which is
                 // breaches the default 7-day retention policy.
                 .set("retention.ms", "-1");
-            let res = state
-                .kafka_admin
-                .create_topics(&[new_topic], &state.kafka_admin_opts)
-                .wait();
+            let res = block_on(
+                state
+                    .kafka_admin
+                    .create_topics(&[new_topic], &state.kafka_admin_opts),
+            );
             let res = match res {
                 Err(err) => return Err(err.to_string()),
                 Ok(res) => res,
@@ -283,7 +287,7 @@ impl Action for IngestAction {
 
         let schema = interchange::avro::parse_schema(&self.schema)
             .map_err(|e| format!("parsing avro schema: {}", e))?;
-        let mut futs = FuturesUnordered::new();
+        let futs = FuturesUnordered::new();
         for row in &self.rows {
             let val = json_to_avro(
                 &serde_json::from_str(row)
@@ -309,7 +313,7 @@ impl Action for IngestAction {
             }
             futs.push(state.kafka_producer.send(record, 1000 /* block_ms */));
         }
-        futs.drain().wait().map_err(|e| e.to_string())
+        block_on(futs.try_for_each(|_| future::ok(()))).map_err(|e| e.to_string())
     }
 }
 

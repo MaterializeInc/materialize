@@ -31,7 +31,7 @@ use std::path::Path;
 use std::thread;
 
 use failure::{bail, ResultExt};
-use futures::Future;
+use futures::executor::block_on;
 use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -41,7 +41,7 @@ use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
-use sql::{Session, Statement};
+use sql::{FieldFormat, Session, Statement};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
@@ -267,7 +267,7 @@ const NUM_TIMELY_WORKERS: usize = 3;
 
 pub(crate) struct State {
     // Drop order matters for these fields.
-    cmd_tx: futures::sync::mpsc::UnboundedSender<coord::Command>,
+    cmd_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     _dataflow_workers: Box<dyn Drop>,
     _coord_thread: JoinOnDropHandle<()>,
     _runtime: tokio::runtime::Runtime,
@@ -358,8 +358,9 @@ impl State {
         let process_id = 0;
 
         let (switchboard, runtime) = comm::Switchboard::local()?;
+        let executor = runtime.handle().clone();
 
-        let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
+        let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
             num_timely_workers: NUM_TIMELY_WORKERS,
@@ -367,6 +368,7 @@ impl State {
             logging: logging_config.as_ref(),
             bootstrap_sql: "".into(),
             data_directory: None,
+            executor: &executor,
         })?;
         let coord_thread = thread::spawn(move || coord.serve(cmd_rx));
 
@@ -375,7 +377,7 @@ impl State {
             NUM_TIMELY_WORKERS,
             process_id,
             switchboard.clone(),
-            runtime.executor(),
+            runtime.handle().clone(),
             logging_config.clone(),
         )
         .unwrap();
@@ -544,7 +546,7 @@ impl State {
         };
 
         // get actual output
-        let raw_output = rows_rx.wait()?.unwrap_rows();
+        let raw_output = block_on(rows_rx)?.unwrap_rows();
 
         // unpack expected output
         let QueryOutput {
@@ -680,7 +682,7 @@ impl State {
 
         // Parse.
         {
-            let (tx, rx) = futures::sync::oneshot::channel();
+            let (tx, rx) = futures::channel::oneshot::channel();
             self.cmd_tx
                 .unbounded_send(coord::Command::Parse {
                     name: statement_name.clone(),
@@ -689,24 +691,24 @@ impl State {
                     tx,
                 })
                 .expect("futures channel should not fail");
-            let resp = rx.wait().expect("futures channel should not fail");
+            let resp = block_on(rx).expect("futures channel should not fail");
             resp.result?;
             mem::replace(&mut self.session, resp.session);
         }
 
         // Bind.
-        let desc = self
+        let stmt = self
             .session
             .get_prepared_statement(&statement_name)
-            .expect("unnamed prepared statement missing")
-            .desc()
-            .cloned();
+            .expect("unnamed prepared statement missing");
+        let desc = stmt.desc().cloned();
+        let result_formats = vec![FieldFormat::Text; stmt.result_width()];
         self.session
-            .set_portal(portal_name.clone(), statement_name, vec![], vec![])?;
+            .set_portal(portal_name.clone(), statement_name, vec![], result_formats)?;
 
         // Execute.
         {
-            let (tx, rx) = futures::sync::oneshot::channel();
+            let (tx, rx) = futures::channel::oneshot::channel();
             self.cmd_tx
                 .unbounded_send(coord::Command::Execute {
                     portal_name,
@@ -715,7 +717,7 @@ impl State {
                     tx,
                 })
                 .expect("futures channel should not fail");
-            let resp = rx.wait().expect("futures channel should not fail");
+            let resp = block_on(rx).expect("futures channel should not fail");
             mem::replace(&mut self.session, resp.session);
             Ok((desc, resp.result?))
         }

@@ -3,14 +3,18 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use comm::{mpsc, Connection, Switchboard};
-use futures::{Future, Sink, Stream};
-use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::net::Ipv4Addr;
 use std::time::Duration;
+
+use futures::sink::SinkExt;
+use futures::stream::{StreamExt, TryStreamExt};
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+
+use comm::{mpsc, Connection, Switchboard};
+use ore::future::OreTryStreamExt;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args().collect();
@@ -24,88 +28,88 @@ fn main() -> Result<(), Box<dyn Error>> {
     let id = popts.opt_get_default("p", 0)?;
     let magic_number = popts.free.get(0).unwrap_or(&"42".into()).parse()?;
 
+    let mut runtime = tokio::runtime::Runtime::new()?;
     let nodes: Vec<_> = (0..n).map(|i| (Ipv4Addr::LOCALHOST, 6876 + i)).collect();
-    let listener = TcpListener::bind(&nodes[id].into())?;
+    let mut listener = runtime.block_on(TcpListener::bind(&nodes[id]))?;
     println!("listening on {}...", listener.local_addr()?);
 
-    let mut runtime = tokio::runtime::Runtime::new()?;
-    let switchboard = Switchboard::new(nodes, id, runtime.executor());
-    {
+    let switchboard = Switchboard::new(nodes, id, runtime.handle().clone());
+    runtime.spawn({
         let switchboard = switchboard.clone();
-        runtime.spawn(
-            listener
-                .incoming()
-                .map_err(|err| panic!("switchboard: accept: {}", err))
-                .for_each(move |conn| switchboard.handle_connection(conn))
-                .map_err(|err| panic!("switchboard: handle connection: {}", err)),
-        );
-    }
+        async move {
+            let mut incoming = listener.incoming();
+            while let Some(conn) = incoming.next().await {
+                let conn = conn.expect("accept failed");
+                switchboard
+                    .handle_connection(conn)
+                    .await
+                    .expect("handle connection failed");
+            }
+        }
+    });
 
-    runtime.block_on(switchboard.rendezvous(Duration::from_secs(30)))?;
+    runtime.block_on(async {
+        switchboard.rendezvous(Duration::from_secs(30)).await?;
 
-    if id == 0 {
-        leader(switchboard, magic_number)
-    } else {
-        follower(switchboard)
-    }
+        if id == 0 {
+            leader(switchboard, magic_number).await
+        } else {
+            follower(switchboard).await
+        }
+    })
 }
 
-fn leader<C>(switchboard: Switchboard<C>, magic_number: usize) -> Result<(), Box<dyn Error>>
+async fn leader<C>(switchboard: Switchboard<C>, magic_number: usize) -> Result<(), Box<dyn Error>>
 where
     C: Connection,
 {
-    let mut broadcast_tx = switchboard.broadcast_tx(BroadcastToken).wait();
-    let mut send = |item| {
-        broadcast_tx.send(item)?;
-        broadcast_tx.flush()
-    };
+    let mut broadcast_tx = switchboard.broadcast_tx(BroadcastToken);
 
     // Step 1. Send some typed data.
-    send(BroadcastMessage::Number(magic_number))?;
+    broadcast_tx
+        .send(BroadcastMessage::Number(magic_number))
+        .await?;
 
     // Step 2. Send along the send half of an MPSC channel.
     let (resp_tx, mut resp_rx) = switchboard.mpsc();
-    send(BroadcastMessage::ResponseChannel(resp_tx))?;
+    broadcast_tx
+        .send(BroadcastMessage::ResponseChannel(resp_tx))
+        .await?;
 
     // Step 3. Wait for every peer to respond.
     for _ in 1..switchboard.size() {
-        resp_rx = resp_rx
-            .into_future()
-            .map_err(|(err, _stream)| err)
-            .wait()?
-            .1;
+        resp_rx.try_recv().await?;
     }
 
     // Step 4. Send shutdown signal.
-    send(BroadcastMessage::Shutdown)?;
+    broadcast_tx.send(BroadcastMessage::Shutdown).await?;
 
     Ok(())
 }
 
-fn follower<C>(switchboard: Switchboard<C>) -> Result<(), Box<dyn Error>>
+async fn follower<C>(switchboard: Switchboard<C>) -> Result<(), Box<dyn Error>>
 where
     C: Connection,
 {
-    let mut rx = switchboard.broadcast_rx(BroadcastToken).wait();
-    let mut recv = || rx.next().transpose().expect("rx error");
+    let mut rx = switchboard.broadcast_rx(BroadcastToken);
 
     // Step 1. Read some typed data.
-    if let Some(BroadcastMessage::Number(n)) = recv() {
+    if let Some(BroadcastMessage::Number(n)) = rx.try_next().await? {
         println!("magic number: {}", n);
     } else {
         panic!("did not receive magic number");
     }
 
     // Step 2. Receive the receive half of an MPSC channel.
-    if let Some(BroadcastMessage::ResponseChannel(tx)) = recv() {
+    if let Some(BroadcastMessage::ResponseChannel(tx)) = rx.try_next().await? {
         // Step 3. Send acknowledgement of MPSC channel.
-        tx.connect().wait()?.send(()).wait()?;
+        tx.connect().await?.send(()).await?;
     } else {
         panic!("did not receive response channel");
     }
 
     // Step 4. Wait for shutdown signal.
-    assert_eq!(recv(), Some(BroadcastMessage::Shutdown));
+    assert_eq!(rx.try_next().await?, Some(BroadcastMessage::Shutdown));
 
     Ok(())
 }

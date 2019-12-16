@@ -14,30 +14,33 @@
 // is rather painful, as the pieces are all interdependent. Logical boundaries
 // are marked with section headers throughout.
 
-use futures::sink::SinkFromErr;
-use futures::stream::{FromErr, Fuse};
-use futures::{future, try_ready, Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-use ore::future::{FutureExt, SinkExt, StreamExt};
-use ore::netio::{SniffedStream, SniffingStream};
-use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::fmt;
 use std::hash::Hash;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::thread;
-use tokio::codec::LengthDelimitedCodec;
-use tokio::executor::Executor;
-use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::net::unix::UnixStream;
-use tokio::net::TcpStream;
-use tokio::runtime::TaskExecutor;
-use tokio_serde_bincode::{ReadBincode, WriteBincode};
+
+use bytes::Bytes;
+use futures::sink::SinkErrInto;
+use futures::stream::{ErrInto, Fuse};
+use futures::{ready, Future, Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+use serde::{Deserialize, Serialize};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::{TcpStream, UnixStream};
+use tokio_serde::formats::SymmetricalBincode as BincodeCodec;
+use tokio_util::codec::LengthDelimitedCodec;
 use uuid::Uuid;
 
+use ore::future::{OreStreamExt, OreTryStreamExt};
+use ore::netio::{SniffedStream, SniffingStream};
+
 use crate::switchboard::Switchboard;
+use crate::Error;
 
 // === Connections and connection pools ===
 //
@@ -53,13 +56,14 @@ use crate::switchboard::Switchboard;
 /// Only [`TcpStream`] and [`SniffedStream`] support is provided at the moment,
 /// but support for any owned, thread-safe type which implements [`AsyncRead`]
 /// and [`AsyncWrite`] can be added trivially, i.e., by implementing this trait.
-pub trait Connection: AsyncRead + AsyncWrite + Send + 'static {
+pub trait Connection: AsyncRead + AsyncWrite + Send + Unpin + 'static {
     /// The type that identifies the endpoint when establishing a connection of
     /// this type.
     type Addr: fmt::Debug
         + Eq
         + PartialEq
         + Hash
+        + Unpin
         + Send
         + Sync
         + Clone
@@ -68,7 +72,9 @@ pub trait Connection: AsyncRead + AsyncWrite + Send + 'static {
         + Into<Addr>;
 
     /// Connects to the specified `addr`.
-    fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send>;
+    fn connect(addr: Self::Addr) -> Pin<Box<dyn Future<Output = Result<Self, io::Error>> + Send>>
+    where
+        Self: Sized;
 
     /// Returns the address of the peer that this connection is connected to.
     fn addr(&self) -> Self::Addr;
@@ -87,8 +93,8 @@ pub trait Connection: AsyncRead + AsyncWrite + Send + 'static {
 impl Connection for TcpStream {
     type Addr = SocketAddr;
 
-    fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
-        Box::new(TcpStream::connect(&addr).map(|conn| {
+    fn connect(addr: Self::Addr) -> Pin<Box<dyn Future<Output = Result<Self, io::Error>> + Send>> {
+        Box::pin(TcpStream::connect(addr).map_ok(|conn| {
             conn.set_nodelay(true).expect("set_nodelay call failed");
             conn
         }))
@@ -112,8 +118,8 @@ where
 {
     type Addr = C::Addr;
 
-    fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
-        Box::new(C::connect(addr).map(|conn| SniffingStream::new(conn).into_sniffed()))
+    fn connect(addr: Self::Addr) -> Pin<Box<dyn Future<Output = Result<Self, io::Error>> + Send>> {
+        Box::pin(C::connect(addr).map_ok(|conn| SniffingStream::new(conn).into_sniffed()))
     }
 
     fn addr(&self) -> Self::Addr {
@@ -124,8 +130,8 @@ where
 impl Connection for UnixStream {
     type Addr = std::path::PathBuf;
 
-    fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
-        Box::new(UnixStream::connect(addr))
+    fn connect(addr: Self::Addr) -> Pin<Box<dyn Future<Output = Result<Self, io::Error>> + Send>> {
+        Box::pin(UnixStream::connect(addr))
     }
 
     fn addr(&self) -> Self::Addr {
@@ -137,7 +143,7 @@ impl Connection for UnixStream {
     }
 }
 
-pub(crate) type Framed<C> = tokio::codec::Framed<C, LengthDelimitedCodec>;
+pub(crate) type Framed<C> = tokio_util::codec::Framed<C, LengthDelimitedCodec>;
 
 /// Frames `conn` using a length-delimited codec. In other words, it transforms
 /// a connection which implements [`AsyncRead`] and [`AsyncWrite`] into an
@@ -320,26 +326,24 @@ enum TrafficType {
     Rendezvous,
 }
 
-pub(crate) fn send_channel_handshake<C>(
-    conn: C,
+pub(crate) async fn send_channel_handshake<C>(
+    mut conn: C,
     uuid: Uuid,
-) -> impl Future<Item = Framed<C>, Error = io::Error>
+) -> Result<Framed<C>, io::Error>
 where
     C: Connection,
 {
     let mut buf = [0; 9];
     (&mut buf[..8]).copy_from_slice(&PROTOCOL_MAGIC);
     buf[8] = TrafficType::Channel.into();
-    io::write_all(conn, buf).and_then(move |(conn, _buf)| {
-        let conn = framed(conn);
-        conn.send(uuid.as_bytes()[..].into())
-    })
+    conn.write_all(&buf).await?;
+    let mut conn = framed(conn);
+    conn.send(Bytes::copy_from_slice(&uuid.as_bytes()[..]))
+        .await?;
+    Ok(conn)
 }
 
-pub(crate) fn send_rendezvous_handshake<C>(
-    conn: C,
-    id: u64,
-) -> impl Future<Item = C, Error = io::Error>
+pub(crate) async fn send_rendezvous_handshake<C>(mut conn: C, id: u64) -> Result<C, io::Error>
 where
     C: Connection,
 {
@@ -347,7 +351,8 @@ where
     (&mut buf[..8]).copy_from_slice(&PROTOCOL_MAGIC);
     buf[8] = TrafficType::Rendezvous.into();
     (&mut buf[9..]).copy_from_slice(&id.to_be_bytes());
-    io::write_all(conn, buf).map(|(conn, _buf)| conn)
+    conn.write_all(&buf).await?;
+    Ok(conn)
 }
 
 pub(crate) enum RecvHandshake<C> {
@@ -355,42 +360,39 @@ pub(crate) enum RecvHandshake<C> {
     Rendezvous(u64, C),
 }
 
-pub(crate) fn recv_handshake<C>(conn: C) -> impl Future<Item = RecvHandshake<C>, Error = io::Error>
+pub(crate) async fn recv_handshake<C>(mut conn: C) -> Result<RecvHandshake<C>, io::Error>
 where
     C: Connection,
 {
-    io::read_exact(conn, [0; 9]).and_then(|(conn, buf)| {
-        assert_eq!(&buf[..8], PROTOCOL_MAGIC);
-        match buf[8].try_into().unwrap() {
-            TrafficType::Channel => recv_channel_handshake(framed(conn)).left(),
-            TrafficType::Rendezvous => recv_rendezvous_handshake(conn).right(),
-        }
-    })
+    let mut buf = [0; 9];
+    conn.read_exact(&mut buf).await?;
+    assert_eq!(&buf[..8], PROTOCOL_MAGIC);
+    match buf[8].try_into().unwrap() {
+        TrafficType::Channel => recv_channel_handshake(framed(conn)).await,
+        TrafficType::Rendezvous => recv_rendezvous_handshake(conn).await,
+    }
 }
 
-pub(crate) fn recv_channel_handshake<C>(
-    conn: Framed<C>,
-) -> impl Future<Item = RecvHandshake<C>, Error = io::Error>
+pub(crate) async fn recv_channel_handshake<C>(
+    mut conn: Framed<C>,
+) -> Result<RecvHandshake<C>, io::Error>
 where
     C: Connection,
 {
-    conn.recv().map(move |(bytes, conn)| {
-        assert_eq!(bytes.len(), 16);
-        let uuid = Uuid::from_slice(&bytes).unwrap();
-        RecvHandshake::Channel(uuid, conn)
-    })
+    let bytes = conn.try_recv().await?;
+    assert_eq!(bytes.len(), 16);
+    let uuid = Uuid::from_slice(&bytes).unwrap();
+    Ok(RecvHandshake::Channel(uuid, conn))
 }
 
-pub(crate) fn recv_rendezvous_handshake<C>(
-    conn: C,
-) -> impl Future<Item = RecvHandshake<C>, Error = io::Error>
+pub(crate) async fn recv_rendezvous_handshake<C>(mut conn: C) -> Result<RecvHandshake<C>, io::Error>
 where
     C: Connection,
 {
-    io::read_exact(conn, [0; 8]).map(move |(conn, buf)| {
-        let id = u64::from_be_bytes(buf);
-        RecvHandshake::Rendezvous(id, conn)
-    })
+    let mut buf = [0; 8];
+    conn.read_exact(&mut buf).await?;
+    let id = u64::from_be_bytes(buf);
+    Ok(RecvHandshake::Rendezvous(id, conn))
 }
 
 /// === Channel traffic handling ===
@@ -415,55 +417,56 @@ pub(crate) enum Message<D> {
     Hangup,
 }
 
-pub(crate) type SendSink<D> = Box<dyn Sink<SinkItem = D, SinkError = bincode::Error> + Send>;
+pub(crate) type SendSink<D> = Pin<Box<dyn Sink<D, Error = Error> + Send>>;
+
+type Bincoder<C, D> = tokio_serde::SymmetricallyFramed<C, D, BincodeCodec<D>>;
 
 /// Creates a new channel directed at the specified `addr` and `uuid`. Returns a
 /// [`Sink`] which encodes incoming `D`s using [bincode] and sends them over the
 /// connection `conn` with a length prefix.
 ///
 /// [bincode]: https://crates.io/crates/bincode
-pub(crate) fn connect_channel<C, D>(
-    addr: &C::Addr,
+pub(crate) async fn connect_channel<C, D>(
+    addr: C::Addr,
     uuid: Uuid,
-) -> impl Future<Item = SendSink<D>, Error = io::Error>
+) -> Result<SendSink<D>, io::Error>
 where
     C: Connection,
-    D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+    D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
 {
     let pool = C::pool();
-    if let Some(conn) = pool.as_ref().and_then(|pool| pool.get(addr.clone())) {
-        conn.send(uuid.as_bytes()[..].into())
-            .map(|conn| encoder(conn, pool).boxed())
-            .left()
+    if let Some(mut conn) = pool.as_ref().and_then(|pool| pool.get(addr.clone())) {
+        conn.send(Bytes::copy_from_slice(&uuid.as_bytes()[..]))
+            .await?;
+        Ok(encoder(conn, pool))
     } else {
-        C::connect(addr)
-            .and_then(move |conn| send_channel_handshake(conn, uuid))
-            .map(|conn| encoder(conn, pool).boxed())
-            .right()
+        let conn = C::connect(addr).await?;
+        let conn = send_channel_handshake(conn, uuid).await?;
+        Ok(encoder(conn, pool))
     }
 }
 
-fn encoder<C, D>(
-    framed: Framed<C>,
-    pool: Option<Pool<C>>,
-) -> impl Sink<SinkItem = D, SinkError = bincode::Error>
+fn encoder<C, D>(framed: Framed<C>, pool: Option<Pool<C>>) -> SendSink<D>
 where
     C: Connection,
-    D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+    D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
 {
-    Encoder {
-        inner: Some(WriteBincode::new(framed.sink_from_err::<bincode::Error>())),
+    Box::pin(Encoder {
+        inner: Some(Bincoder::new(
+            framed.sink_err_into(),
+            BincodeCodec::default(),
+        )),
         hangup_started: false,
         pool,
-    }
+    })
 }
 
 struct Encoder<C, D>
 where
     C: Connection,
-    D: Serialize + Send + 'static,
+    D: Serialize + Send + Unpin + 'static,
 {
-    inner: Option<WriteBincode<SinkFromErr<Framed<C>, bincode::Error>, Message<D>>>,
+    inner: Option<Bincoder<SinkErrInto<Framed<C>, Bytes, Error>, Message<D>>>,
     hangup_started: bool,
     pool: Option<Pool<C>>,
 }
@@ -471,72 +474,64 @@ where
 impl<C, D> Encoder<C, D>
 where
     C: Connection,
-    D: Serialize + Send + 'static,
+    D: Serialize + Send + Unpin + 'static,
 {
-    fn inner_mut(&mut self) -> &mut impl Sink<SinkItem = Message<D>, SinkError = bincode::Error> {
-        self.inner.as_mut().unwrap()
+    fn inner_pin(
+        &mut self,
+    ) -> Pin<&mut Bincoder<SinkErrInto<Framed<C>, Bytes, Error>, Message<D>>> {
+        Pin::new(self.inner.as_mut().unwrap())
     }
 }
 
-impl<C, D> Sink for Encoder<C, D>
+impl<C, D> Sink<D> for Encoder<C, D>
 where
     C: Connection,
-    D: Serialize + Send + 'static,
+    D: Serialize + Send + Unpin + 'static,
 {
-    type SinkItem = D;
-    type SinkError = bincode::Error;
+    type Error = Error;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<D, bincode::Error> {
-        match self.inner_mut().start_send(Message::Data(item)) {
-            Ok(AsyncSink::NotReady(Message::Data(d))) => Ok(AsyncSink::NotReady(d)),
-            Ok(AsyncSink::NotReady(Message::Hangup)) => unreachable!(),
-            Ok(AsyncSink::Ready) => Ok(AsyncSink::Ready),
-            Err(err) => Err(err),
-        }
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.inner_pin().poll_ready(cx)
     }
 
-    fn poll_complete(&mut self) -> Poll<(), bincode::Error> {
-        self.inner_mut().poll_complete()
+    fn start_send(mut self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
+        self.inner_pin().start_send(Message::Data(item))
     }
 
-    fn close(&mut self) -> Poll<(), bincode::Error> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.inner_pin().poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
         // Don't bother hanging up this connection if there's no pool, since
         // we won't be reusing it.
         if self.pool.is_some() && !self.hangup_started {
-            match self.inner_mut().start_send(Message::Hangup) {
-                Ok(AsyncSink::Ready) => {
-                    self.hangup_started = true;
-                }
-                Ok(AsyncSink::NotReady(_)) => return Ok(Async::NotReady),
-                Err(err) => return Err(err),
-            }
+            ready!(self.inner_pin().poll_ready(cx))?;
+            self.inner_pin().start_send(Message::Hangup)?;
+            self.hangup_started = true;
         }
-        match self.inner_mut().poll_complete() {
-            Ok(Async::Ready(())) => {
-                let inner = self.inner.take().unwrap();
-                if let Some(pool) = &mut self.pool {
-                    let inner = inner.into_inner(); // unwrap WriteBincode
-                    let inner = inner.into_inner(); // unwrap SinkFromErr
-                    pool.put(inner);
-                }
-                Ok(Async::Ready(()))
-            }
-            other => other,
+        ready!(self.inner_pin().poll_flush(cx))?;
+        let inner = self.inner.take().unwrap();
+        if let Some(pool) = &mut self.pool {
+            let inner = inner.into_inner(); // unwrap WriteBincode
+            let inner = inner.into_inner(); // unwrap SinkErrInto
+            pool.put(inner);
         }
+        Poll::Ready(Ok(()))
     }
 }
 
 impl<C, D> Drop for Encoder<C, D>
 where
     C: Connection,
-    D: Serialize + Send + 'static,
+    D: Serialize + Send + Unpin + 'static,
 {
     fn drop(&mut self) {
         // NOTE(benesch): it is conceivable that not everyone will want to
         // attempt a synchronous hangup when dropping an encoder, but for now
         // it's convenient.
         if self.inner.is_some() {
-            future::poll_fn(|| self.close()).wait().unwrap();
+            let _ = futures::executor::block_on(self.close());
         }
     }
 }
@@ -546,13 +541,13 @@ where
 pub(crate) fn decoder<C, D>(
     conn: Framed<C>,
     switchboard: Switchboard<C>,
-) -> impl Stream<Item = D, Error = bincode::Error>
+) -> impl Stream<Item = Result<D, Error>>
 where
     C: Connection,
-    D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+    D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
 {
     let decoder = Decoder {
-        inner: Some(ReadBincode::new(conn.from_err())),
+        inner: Some(Bincoder::new(conn.err_into(), BincodeCodec::default())),
         switchboard: switchboard.clone(),
     };
     DrainOnDrop::new(decoder, switchboard.executor().clone())
@@ -561,50 +556,48 @@ where
 struct Decoder<C, D>
 where
     C: Connection,
-    D: Serialize + for<'de> Deserialize<'de> + Send,
+    D: Serialize + for<'de> Deserialize<'de> + Send + Unpin,
 {
-    inner: Option<ReadBincode<FromErr<Framed<C>, bincode::Error>, Message<D>>>,
+    inner: Option<Bincoder<ErrInto<Framed<C>, bincode::Error>, Message<D>>>,
     switchboard: Switchboard<C>,
 }
 
 impl<C, D> Stream for Decoder<C, D>
 where
     C: Connection,
-    D: Serialize + for<'de> Deserialize<'de> + Send,
+    D: Serialize + for<'de> Deserialize<'de> + Send + Unpin,
 {
-    type Item = D;
-    type Error = bincode::Error;
+    type Item = Result<D, Error>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match try_ready!(self.inner.as_mut().unwrap().poll()) {
-            None => Ok(Async::Ready(None)),
-            Some(Message::Data(d)) => Ok(Async::Ready(Some(d))),
-            Some(Message::Hangup) => {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        match ready!(Pin::new(&mut self.inner.as_mut().unwrap()).poll_next(cx)) {
+            None => Poll::Ready(None),
+            Some(Ok(Message::Data(d))) => Poll::Ready(Some(Ok(d))),
+            Some(Ok(Message::Hangup)) => {
                 let inner = self.inner.take().unwrap();
                 let conn = inner.into_inner().into_inner();
                 let recycle = self.switchboard.recycle_connection(conn).map_err(|_| ());
-                try_spawn(&mut self.switchboard.executor().clone(), recycle);
-                Ok(Async::Ready(None))
+                let _ = self.switchboard.executor().clone().spawn(recycle);
+                Poll::Ready(None)
             }
+            Some(Err(err)) => Poll::Ready(Some(Err(err.into()))),
         }
     }
 }
 
 struct DrainOnDrop<S>
 where
-    S: Stream + Send + 'static,
-    S::Error: fmt::Display,
+    S: Stream + Send + Unpin + 'static,
 {
     inner: Option<Fuse<S>>,
-    executor: TaskExecutor,
+    executor: tokio::runtime::Handle,
 }
 
 impl<S> DrainOnDrop<S>
 where
-    S: Stream + Send + 'static,
-    S::Error: fmt::Display,
+    S: Stream + Send + Unpin + 'static,
 {
-    fn new(inner: S, executor: TaskExecutor) -> DrainOnDrop<S> {
+    fn new(inner: S, executor: tokio::runtime::Handle) -> DrainOnDrop<S> {
         DrainOnDrop {
             inner: Some(inner.fuse()),
             executor,
@@ -614,35 +607,22 @@ where
 
 impl<S> Stream for DrainOnDrop<S>
 where
-    S: Stream + Send + 'static,
-    S::Error: fmt::Display,
+    S: Stream + Send + Unpin + 'static,
 {
     type Item = S::Item;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.inner.as_mut().unwrap().poll()
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        Pin::new(self.inner.as_mut().unwrap()).poll_next(cx)
     }
 }
 
 impl<S> Drop for DrainOnDrop<S>
 where
-    S: Stream + Send + 'static,
-    S::Error: fmt::Display,
+    S: Stream + Send + Unpin + 'static,
 {
     fn drop(&mut self) {
         let inner = self.inner.take().unwrap();
-        let drain = inner.map_err(|_| ()).drain();
-        try_spawn(&mut self.executor, drain);
+        let drain = inner.drain();
+        let _ = self.executor.spawn(drain);
     }
-}
-
-// Attempt to spawn `future` on `executor`, but don't panic if the executor
-// is shut down.
-fn try_spawn<E, F>(executor: &mut E, future: F)
-where
-    E: Executor,
-    F: Future<Item = (), Error = ()> + Send + 'static,
-{
-    let _ = executor.spawn(future.boxed());
 }

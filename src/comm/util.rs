@@ -5,12 +5,12 @@
 
 //! Communication utilities.
 
-use futures::{Async, Future, Poll};
-use std::cmp;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use std::time::{Duration, Instant};
 use tokio::io;
-use tokio::timer::{Delay, Timeout};
+use tokio::time::{Delay, Duration, Instant, Timeout};
 
 use crate::protocol;
 
@@ -37,10 +37,13 @@ where
     /// `addr` until the connection succeeds or the timeout elapses.
     pub fn new(addr: C::Addr, timeout: impl Into<Option<Duration>>) -> TryConnectFuture<C> {
         let deadline = match timeout.into() {
-            None => Instant::now() + Duration::from_secs(60 * 60 * 24 * 365 * 100), // approximately forever
+            // If no deadline, set one of approximately forever. Don't increase
+            // this value beyond one year, though, or you'll run into
+            // https://github.com/tokio-rs/tokio/issues/1953.
+            None => Instant::now() + Duration::from_secs(60 * 60 * 24 * 365),
             Some(timeout) => Instant::now() + timeout,
         };
-        let state = TryConnectFutureState::connect(&addr, deadline);
+        let state = TryConnectFutureState::connect(addr.clone(), deadline);
         TryConnectFuture {
             addr,
             deadline,
@@ -54,36 +57,35 @@ impl<C> Future for TryConnectFuture<C>
 where
     C: protocol::Connection,
 {
-    type Item = C;
-    type Error = io::Error;
+    type Output = Result<C, io::Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             match &mut self.state {
-                TryConnectFutureState::Connecting(future) => match future.poll() {
-                    Ok(Async::Ready(conn)) => return Ok(Async::Ready(conn)),
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Err(err) => {
-                        if err.is_timer() {
-                            panic!("tokio timer returned an error: {}", err);
-                        } else if err.is_elapsed() {
-                            return Err(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                "connection attempt timed out",
-                            ));
-                        }
+                TryConnectFutureState::Connecting(future) => match Pin::new(future).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Ok(Ok(conn))) => {
+                        return Poll::Ready(Ok(conn));
+                    }
+                    Poll::Ready(Ok(Err(_))) => {
                         if self.backoff < Duration::from_secs(1) {
                             self.backoff *= 2;
                         }
                         self.state = TryConnectFutureState::sleep(self.backoff, self.deadline);
                     }
-                },
-                TryConnectFutureState::Sleeping(future) => match future.poll() {
-                    Ok(Async::Ready(_)) => {
-                        self.state = TryConnectFutureState::connect(&self.addr, self.deadline)
+                    Poll::Ready(Err(_)) => {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "connection attempt timed out",
+                        )));
                     }
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Err(err) => panic!("tokio timer returned an error: {}", err),
+                },
+                TryConnectFutureState::Sleeping(future) => match Pin::new(future).poll(cx) {
+                    Poll::Ready(()) => {
+                        self.state =
+                            TryConnectFutureState::connect(self.addr.clone(), self.deadline)
+                    }
+                    Poll::Pending => return Poll::Pending,
                 },
             }
         }
@@ -91,7 +93,7 @@ where
 }
 
 enum TryConnectFutureState<C> {
-    Connecting(Timeout<Box<dyn Future<Item = C, Error = io::Error> + Send>>),
+    Connecting(Timeout<Pin<Box<dyn Future<Output = Result<C, io::Error>> + Send>>>),
     Sleeping(Delay),
 }
 
@@ -99,14 +101,17 @@ impl<C> TryConnectFutureState<C>
 where
     C: protocol::Connection,
 {
-    fn connect(addr: &C::Addr, deadline: Instant) -> TryConnectFutureState<C> {
-        let future = Timeout::new_at(C::connect(addr), deadline);
+    fn connect(addr: C::Addr, deadline: Instant) -> TryConnectFutureState<C> {
+        let future = tokio::time::timeout_at(deadline, C::connect(addr));
         TryConnectFutureState::Connecting(future)
     }
 
     fn sleep(duration: Duration, deadline: Instant) -> TryConnectFutureState<C> {
-        let when = cmp::min(Instant::now() + duration, deadline);
-        TryConnectFutureState::Sleeping(Delay::new(when))
+        let mut when = Instant::now() + duration;
+        if when > deadline {
+            when = deadline;
+        }
+        TryConnectFutureState::Sleeping(tokio::time::delay_until(when))
     }
 }
 
@@ -117,28 +122,22 @@ mod tests {
     use std::net::TcpListener;
     use std::time::Duration;
     use tokio::net::TcpStream;
-    use tokio::runtime::Runtime;
 
-    #[test]
-    fn test_try_connect_success() -> Result<(), io::Error> {
+    #[tokio::test]
+    async fn test_try_connect_success() -> Result<(), io::Error> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
-        let mut runtime = Runtime::new()?;
-        runtime.block_on(TryConnectFuture::<TcpStream>::new(addr, None))?;
+        let _ = TryConnectFuture::<TcpStream>::new(addr, None).await?;
         Ok(())
     }
 
-    #[test]
-    fn test_try_connect_fail() -> Result<(), io::Error> {
+    #[tokio::test]
+    async fn test_try_connect_fail() -> Result<(), io::Error> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         drop(listener);
         // Hope that no one else will be listening on this port now.
-        let mut runtime = Runtime::new()?;
-        match runtime.block_on(TryConnectFuture::<TcpStream>::new(
-            addr,
-            Duration::from_millis(800),
-        )) {
+        match TryConnectFuture::<TcpStream>::new(addr, Duration::from_millis(800)).await {
             Ok(_) => panic!("try connect future unexpectedly succeeded"),
             Err(err) => assert_eq!(err.kind(), io::ErrorKind::TimedOut),
         }

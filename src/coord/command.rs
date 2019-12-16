@@ -4,8 +4,8 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::fmt;
-
-use futures::Future;
+use std::future::Future;
+use std::pin::Pin;
 
 use dataflow_types::{PeekResponse, Update};
 use sql::Session;
@@ -21,7 +21,7 @@ pub enum Command {
         name: String,
         sql: String,
         session: Session,
-        tx: futures::sync::oneshot::Sender<Response<()>>,
+        tx: futures::channel::oneshot::Sender<Response<()>>,
     },
 
     /// Execute a bound portal.
@@ -29,7 +29,7 @@ pub enum Command {
         portal_name: String,
         session: Session,
         conn_id: u32,
-        tx: futures::sync::oneshot::Sender<Response<ExecuteResponse>>,
+        tx: futures::channel::oneshot::Sender<Response<ExecuteResponse>>,
     },
 
     /// Cancel the query currently running on another connection.
@@ -42,7 +42,7 @@ pub struct Response<T> {
     pub session: Session,
 }
 
-pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error> + Send>;
+pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Error>> + Send>>;
 
 /// Response from the queue to an `Execute` command.
 pub enum ExecuteResponse {

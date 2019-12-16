@@ -13,7 +13,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
 
 use super::util::source;
-use super::SharedCapability;
+use super::{SharedCapability, SourceStatus};
 use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
 use interchange::avro;
 use repr::Row;
@@ -143,12 +143,13 @@ where
                         // configured to unpark our thread when a new message
                         // arrives.
                         activator.activate();
-                        return;
+                        return SourceStatus::ScheduleAgain;
                     }
                 }
             }
             // Ensure that we poll kafka more often than the eviction timeout
             activator.activate_after(Duration::from_secs(60));
+            SourceStatus::ScheduleAgain
         }
     });
 

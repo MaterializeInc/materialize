@@ -5,17 +5,18 @@
 
 //! Traffic routing.
 
-use futures::stream::FuturesOrdered;
-use futures::{future, Future, Stream};
-use log::error;
-use ore::future::StreamExt;
-use rand::Rng;
-use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use futures::future::{self, Future, FutureExt, TryFutureExt};
+use futures::stream::{FuturesOrdered, StreamExt, TryStreamExt};
+use log::error;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 use tokio::io;
-use tokio::net::unix::{UnixListener, UnixStream};
-use tokio::runtime::{Runtime, TaskExecutor};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use crate::broadcast;
@@ -63,7 +64,7 @@ where
     /// Routing for rendezvous traffic.
     rendezvous_table: Mutex<router::RoutingTable<u64, C>>,
     /// Task executor, so that background work can be spawned.
-    executor: TaskExecutor,
+    executor: tokio::runtime::Handle,
 }
 
 impl Switchboard<UnixStream> {
@@ -82,16 +83,25 @@ impl Switchboard<UnixStream> {
             .collect();
         let mut path = std::env::temp_dir();
         path.push(format!("comm.switchboard.{}", suffix));
-        let listener = UnixListener::bind(&path)?;
-        let mut runtime = Runtime::new()?;
-        let switchboard = Switchboard::new(vec![path.to_str().unwrap()], 0, runtime.executor());
+        let runtime = Runtime::new()?;
+        let mut listener = runtime.enter(|| UnixListener::bind(&path))?;
+        let switchboard =
+            Switchboard::new(vec![path.to_str().unwrap()], 0, runtime.handle().clone());
         runtime.spawn({
             let switchboard = switchboard.clone();
-            listener
-                .incoming()
-                .map_err(|err| panic!("local switchboard: accept: {}", err))
-                .for_each(move |conn| switchboard.handle_connection(conn))
-                .map_err(|err| error!("local switchboard: handle connection: {}", err))
+            async move {
+                let mut incoming = listener.incoming();
+                while let Some(conn) = incoming.next().await {
+                    let conn =
+                        conn.unwrap_or_else(|err| panic!("local switchboard: accept: {}", err));
+                    switchboard
+                        .handle_connection(conn)
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!("local switchboard: handle connection: {}", err)
+                        });
+                }
+            }
         });
         Ok((switchboard, runtime))
     }
@@ -109,7 +119,7 @@ where
     /// The consumer of a `Switchboard` must separately arrange to listen on the
     /// local node's address and route `comm` traffic to this `Switchboard`
     /// via [`Switchboard::handle_connection`].
-    pub fn new<I>(nodes: I, id: usize, executor: TaskExecutor) -> Switchboard<C>
+    pub fn new<I>(nodes: I, id: usize, executor: tokio::runtime::Handle) -> Switchboard<C>
     where
         I: IntoIterator,
         I::Item: Into<C::Addr>,
@@ -137,40 +147,40 @@ where
     /// the address list, while it will attempt connections for nodes after this
     /// node. It is therefore critical that addresses be provided in the same
     /// order across all processes in the cluster.
-    pub fn rendezvous(
+    pub async fn rendezvous(
         &self,
         timeout: impl Into<Option<Duration>>,
-    ) -> impl Future<Item = Vec<Option<C>>, Error = io::Error> {
+    ) -> Result<Vec<Option<C>>, io::Error> {
         let timeout = timeout.into();
-        let mut futures =
-            FuturesOrdered::<Box<dyn Future<Item = Option<C>, Error = io::Error> + Send>>::new();
+        let mut futures = FuturesOrdered::<
+            Pin<Box<dyn Future<Output = Result<Option<C>, io::Error>> + Send>>,
+        >::new();
         for (i, addr) in self.0.nodes.iter().enumerate() {
             if i < self.0.id {
                 // Earlier node. Wait for it to connect to us.
-                futures.push(Box::new(
+                futures.push(Box::pin(
                     self.0
                         .rendezvous_table
                         .lock()
                         .expect("lock poisoned")
                         .add_dest(i as u64)
-                        .map_err(|()| unreachable!())
-                        .recv()
-                        .map(|(conn, _stream)| Some(conn)),
+                        .into_future()
+                        .map(|(conn, _stream)| Ok(conn)),
                 ));
             } else if i == self.0.id {
                 // Ourselves. Nothing to do.
-                futures.push(Box::new(future::ok(None)));
+                futures.push(Box::pin(future::ok(None)));
             } else {
                 // Later node. Attempt to initiate connection.
                 let id = self.0.id as u64;
-                futures.push(Box::new(
+                futures.push(Box::pin(
                     TryConnectFuture::new(addr.clone(), timeout)
                         .and_then(move |conn| protocol::send_rendezvous_handshake(conn, id))
-                        .map(|conn| Some(conn)),
+                        .map_ok(|conn| Some(conn)),
                 ));
             }
         }
-        futures.collect()
+        futures.try_collect().await
     }
 
     /// Routes an incoming connection to the appropriate channel receiver. This
@@ -183,33 +193,31 @@ where
     /// Basic usage:
     /// ```
     /// use comm::{Connection, Switchboard};
-    /// use futures::Future;
-    /// use futures::future::Either;
-    /// use tokio::io;
+    /// use tokio::io::{self, AsyncReadExt};
     /// #
-    /// # fn handle_other_protocol<C: Connection>(buf: &[u8], conn: C) -> impl Future<Item = (), Error = io::Error> {
-    /// #     futures::future::ok(())
+    /// # async fn handle_other_protocol<C: Connection>(buf: &[u8], conn: C) -> Result<(), io::Error> {
+    /// #     Ok(())
     /// # }
     ///
-    /// fn handle_connection<C>(
+    /// async fn handle_connection<C>(
     ///     switchboard: Switchboard<C>,
-    ///     conn: C
-    /// ) -> impl Future<Item = (), Error = io::Error>
+    ///     mut conn: C
+    /// ) -> Result<(), io::Error>
     /// where
     ///     C: Connection,
     /// {
-    ///     io::read_exact(conn, [0; 8]).and_then(move |(conn, buf)| {
-    ///         if comm::protocol::match_handshake(&buf) {
-    ///             Either::A(switchboard.handle_connection(conn))
-    ///         } else {
-    ///             Either::B(handle_other_protocol(&buf, conn))
-    ///         }
-    ///     })
+    ///     let mut buf = [0; 8];
+    ///     conn.read_exact(&mut buf).await?;
+    ///     if comm::protocol::match_handshake(&buf) {
+    ///         switchboard.handle_connection(conn).await
+    ///     } else {
+    ///         handle_other_protocol(&buf, conn).await
+    ///     }
     /// }
     /// ```
-    pub fn handle_connection(&self, conn: C) -> impl Future<Item = (), Error = io::Error> {
+    pub fn handle_connection(&self, conn: C) -> impl Future<Output = Result<(), io::Error>> {
         let inner = self.0.clone();
-        protocol::recv_handshake(conn).map(move |conn| inner.route_connection(conn))
+        protocol::recv_handshake(conn).map_ok(move |conn| inner.route_connection(conn))
     }
 
     /// Attempts to recycle an incoming channel connection for use with a new
@@ -220,14 +228,14 @@ where
     pub(crate) fn recycle_connection(
         &self,
         conn: protocol::Framed<C>,
-    ) -> impl Future<Item = (), Error = io::Error> {
+    ) -> impl Future<Output = Result<(), io::Error>> {
         let inner = self.0.clone();
-        protocol::recv_channel_handshake(conn).map(move |conn| inner.route_connection(conn))
+        protocol::recv_channel_handshake(conn).map_ok(move |conn| inner.route_connection(conn))
     }
 
-    /// Returns a reference to the [`TaskExecutor`] that this `Switchboard`
-    /// was initialized with. Useful for spawning background work.
-    pub fn executor(&self) -> &TaskExecutor {
+    /// Returns a reference to the [`tokio::runtime::Handle`] that this
+    /// `Switchboard` was initialized with. Useful for spawning background work.
+    pub fn executor(&self) -> &tokio::runtime::Handle {
         &self.0.executor
     }
 
@@ -238,9 +246,9 @@ where
     {
         let uuid = token.uuid();
         if token.loopback() {
-            broadcast::Sender::new::<C, _>(uuid, self.0.nodes.iter())
+            broadcast::Sender::new::<C, _>(uuid, self.0.nodes.iter().cloned())
         } else {
-            broadcast::Sender::new::<C, _>(uuid, self.peers())
+            broadcast::Sender::new::<C, _>(uuid, self.peers().cloned())
         }
     }
 
@@ -265,18 +273,18 @@ where
     /// threads in the same process.
     pub fn mpsc<D>(&self) -> (mpsc::Sender<D>, mpsc::Receiver<D>)
     where
-        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+        D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
     {
-        self.mpsc_limited(u64::max_value())
+        self.mpsc_limited(usize::max_value())
     }
 
     /// Like [`Switchboard::mpsc`], but limits the number of producers to
     /// `max_producers`. Once `max_producers` have connected, no additional
     /// producers will be permitted to connect; once each permitted producer has
     /// disconnected, the receiver will be closed.
-    pub fn mpsc_limited<D>(&self, max_producers: u64) -> (mpsc::Sender<D>, mpsc::Receiver<D>)
+    pub fn mpsc_limited<D>(&self, max_producers: usize) -> (mpsc::Sender<D>, mpsc::Receiver<D>)
     where
-        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+        D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
     {
         let uuid = Uuid::new_v4();
         let addr = self.0.nodes[self.0.id].clone();
@@ -301,7 +309,7 @@ where
         self.0.nodes.len()
     }
 
-    fn new_rx(&self, uuid: Uuid) -> futures::sync::mpsc::UnboundedReceiver<protocol::Framed<C>> {
+    fn new_rx(&self, uuid: Uuid) -> futures::channel::mpsc::UnboundedReceiver<protocol::Framed<C>> {
         let mut channel_table = self.0.channel_table.lock().expect("lock poisoned");
         channel_table.add_dest(uuid)
     }

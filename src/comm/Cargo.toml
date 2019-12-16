@@ -10,15 +10,17 @@ path = "lib.rs"
 
 [dependencies]
 bincode = "1.2"
-futures = "0.1"
+bytes = "0.5"
+futures = "0.3"
 log = "0.4"
 num_enum = "0.4.2"
+ore = { path = "../ore" }
 rand = "0.7"
 serde = { version = "1.0", features = ["derive"] }
-tokio = "0.1"
-tokio-serde-bincode = "0.2"
+tokio = { version = "0.2", features = ["dns", "macros", "rt-threaded", "stream", "time", "uds"] }
+tokio-serde = { version = "0.6", features = ["bincode"] }
+tokio-util = { version = "0.2", features = ["codec"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
-ore = { path = "../ore" }
 
 [dev-dependencies]
 assert_cmd = "0.12"

@@ -5,6 +5,12 @@
 
 //! An interactive dataflow server.
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::net::TcpStream;
+use std::pin::Pin;
+use std::sync::Mutex;
+
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 
@@ -18,17 +24,20 @@ use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 
-use futures::sync::mpsc::UnboundedReceiver;
-use futures::{Future, Sink};
-use ore::future::sync::mpsc::ReceiverExt;
-use ore::future::FutureExt;
+use futures::channel::mpsc::UnboundedReceiver;
+use futures::executor::block_on;
+use futures::future::TryFutureExt;
+use futures::sink::{Sink, SinkExt};
 use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
-use repr::{Datum, Row, RowPacker, RowUnpacker};
 use serde::{Deserialize, Serialize};
-use std::any::Any;
-use std::collections::HashMap;
-use std::net::TcpStream;
-use std::sync::Mutex;
+
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{
+    compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
+};
+use expr::{EvalEnv, GlobalId};
+use ore::future::channel::mpsc::ReceiverExt;
+use repr::{Datum, Row, RowPacker, RowUnpacker};
 
 use super::render;
 use crate::arrangement::{
@@ -37,11 +46,6 @@ use crate::arrangement::{
 };
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
-use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
-};
-use expr::{EvalEnv, GlobalId};
 
 lazy_static! {
     static ref COMMAND_QUEUE_RAW: IntGaugeVec = register_int_gauge_vec!(
@@ -142,7 +146,7 @@ pub fn serve<C>(
     threads: usize,
     process: usize,
     switchboard: comm::Switchboard<C>,
-    mut executor: impl tokio::executor::Executor + Clone + Send + Sync + 'static,
+    executor: tokio::runtime::Handle,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String>
 where
@@ -157,13 +161,10 @@ where
     let command_rxs = {
         let mut rx = switchboard.broadcast_rx(BroadcastToken).fanout();
         let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
-        executor
-            .spawn(
-                rx.shuttle()
-                    .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err))
-                    .boxed(),
-            )
-            .map_err(|err| format!("error spawning future: {}", err))?;
+        executor.spawn(
+            rx.shuttle()
+                .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err)),
+        );
         command_rxs
     };
 
@@ -176,46 +177,46 @@ where
         .collect();
 
     timely::execute::execute_from(builders, Box::new(guard), move |timely_worker| {
-        let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
-            .take()
-            .unwrap()
-            .request_unparks(executor.clone())
-            .unwrap();
-        let worker_idx = timely_worker.index();
-        Worker {
-            inner: timely_worker,
-            pending_peeks: Vec::new(),
-            traces: TraceManager::default(),
-            logging_config: logging_config.clone(),
-            feedback_tx: None,
-            command_rx,
-            materialized_logger: None,
-            sink_tokens: HashMap::new(),
-            local_inputs: HashMap::new(),
-            reported_frontiers: HashMap::new(),
-            executor: executor.clone(),
-            metrics: Metrics::for_worker_id(worker_idx),
-        }
-        .run()
+        executor.enter(|| {
+            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
+                .take()
+                .unwrap()
+                .request_unparks(&executor);
+            let worker_idx = timely_worker.index();
+            Worker {
+                inner: timely_worker,
+                pending_peeks: Vec::new(),
+                traces: TraceManager::default(),
+                logging_config: logging_config.clone(),
+                feedback_tx: None,
+                command_rx,
+                materialized_logger: None,
+                sink_tokens: HashMap::new(),
+                local_inputs: HashMap::new(),
+                reported_frontiers: HashMap::new(),
+                executor: executor.clone(),
+                metrics: Metrics::for_worker_id(worker_idx),
+            }
+            .run()
+        })
     })
 }
 
-struct Worker<'w, A, E>
+struct Worker<'w, A>
 where
     A: Allocate,
-    E: tokio::executor::Executor,
 {
     inner: &'w mut TimelyWorker<A>,
     pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
-    feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
+    feedback_tx: Option<Pin<Box<dyn Sink<WorkerFeedbackWithMeta, Error = ()>>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: HashMap<GlobalId, LocalInput>,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    executor: E,
+    executor: tokio::runtime::Handle,
     metrics: Metrics,
 }
 
@@ -250,10 +251,9 @@ impl Metrics {
     }
 }
 
-impl<'w, A, E> Worker<'w, A, E>
+impl<'w, A> Worker<'w, A>
 where
     A: Allocate + 'w,
-    E: tokio::executor::Executor + Clone,
 {
     /// Initializes timely dataflow logging and publishes as a view.
     ///
@@ -407,13 +407,11 @@ where
                     }
                 }
             }
-            feedback_tx
-                .send(WorkerFeedbackWithMeta {
-                    worker_id: self.inner.index(),
-                    message: WorkerFeedback::FrontierUppers(progress),
-                })
-                .wait()
-                .unwrap();
+            block_on(feedback_tx.send(WorkerFeedbackWithMeta {
+                worker_id: self.inner.index(),
+                message: WorkerFeedback::FrontierUppers(progress),
+            }))
+            .unwrap();
         }
     }
 
@@ -443,7 +441,7 @@ where
                         &mut self.sink_tokens,
                         &mut self.local_inputs,
                         &mut self.materialized_logger,
-                        &mut self.executor,
+                        &self.executor,
                     );
                 }
             }
@@ -528,13 +526,8 @@ where
                 let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|peek| {
                     if peek.conn_id == conn_id {
-                        peek.tx
-                            .connect()
-                            .wait()
-                            .unwrap()
-                            .send(PeekResponse::Canceled)
-                            .wait()
-                            .unwrap();
+                        let mut tx = block_on(peek.tx.connect()).unwrap();
+                        block_on(tx.send(PeekResponse::Canceled)).unwrap();
 
                         if let Some(logger) = logger {
                             logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
@@ -579,9 +572,9 @@ where
 
             SequencedCommand::EnableFeedback(tx) => {
                 self.feedback_tx =
-                    Some(Box::new(tx.connect().wait().unwrap().sink_map_err(|err| {
-                        panic!("error sending worker feedback: {}", err)
-                    })));
+                    Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
+                        |err| panic!("error sending worker feedback: {}", err),
+                    )));
             }
 
             SequencedCommand::Shutdown => {
@@ -663,13 +656,8 @@ impl PendingPeek {
         if !upper.less_equal(&self.timestamp) {
             let rows = self.collect_finished_data();
 
-            self.tx
-                .connect()
-                .wait()
-                .unwrap()
-                .send(PeekResponse::Rows(rows))
-                .wait()
-                .unwrap();
+            let mut tx = block_on(self.tx.connect()).unwrap();
+            block_on(tx.send(PeekResponse::Rows(rows))).unwrap();
 
             true
         } else {

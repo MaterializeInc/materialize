@@ -15,11 +15,10 @@ use std::convert::TryFrom;
 use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use bytes::{BufMut, BytesMut, IntoBuf};
-use log::trace;
+use bytes::{Buf, BufMut, BytesMut};
 use ordered_float::OrderedFloat;
-use tokio::codec::{Decoder, Encoder};
 use tokio::io;
+use tokio_util::codec::{Decoder, Encoder};
 
 use crate::message::{
     BackendMessage, EncryptionType, FieldFormat, FrontendMessage, TransactionStatus,
@@ -47,15 +46,17 @@ impl std::fmt::Display for CodecError {
 /// Use a `Codec` by wrapping it in a [`tokio::codec::Framed`]:
 ///
 /// ```
-/// use futures::{Future, Stream};
+/// use futures::stream::StreamExt;
 /// use pgwire::Codec;
 /// use tokio::io;
 /// use tokio::net::TcpStream;
-/// use tokio::codec::Framed;
+/// use tokio_util::codec::Framed;
 ///
-/// fn handle_connection(rw: TcpStream) -> impl Future<Item = (), Error = io::Error> {
-///     let rw = Framed::new(rw, Codec::new());
-///     rw.for_each(|msg| Ok(println!("{:#?}", msg)))
+/// async fn handle_connection(rw: TcpStream) {
+///     let mut rw = Framed::new(rw, Codec::new());
+///     while let Some(msg) = rw.next().await {
+///         println!("{:#?}", msg);
+///     }
 /// }
 /// ```
 pub struct Codec {
@@ -88,7 +89,7 @@ impl Encoder for Codec {
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
         if let BackendMessage::EncryptionResponse(typ) = msg {
-            dst.put(match typ {
+            dst.put_u8(match typ {
                 EncryptionType::None => b'N',
                 EncryptionType::Ssl => b'S',
                 EncryptionType::GssApi => b'G',
@@ -122,12 +123,11 @@ impl Encoder for Codec {
             BackendMessage::CopyOutResponse => b'H',
             BackendMessage::CopyData(_) => b'd',
         };
-        trace!("begin send message '{}'", char::from(byte));
-        buf.put(byte);
+        buf.put_u8(byte);
 
         // Write message length placeholder. The true length is filled in later.
         let start_len = buf.len();
-        buf.put_u32_be(0);
+        buf.put_u32(0);
 
         // Write message contents.
         match msg {
@@ -137,10 +137,10 @@ impl Encoder for Codec {
             // 0 is fine.
             BackendMessage::CopyOutResponse /* (n_cols) */ => {
                 buf.put_u8(0); // textual format
-                buf.put_i16_be(0); // n_cols
+                buf.put_i16(0); // n_cols
                 /*
                 for _ in 0..n_cols {
-                    buf.put_i16_be(0); // textual format for this column
+                    buf.put_i16(0); // textual format for this column
                 }
                 */
             }
@@ -148,24 +148,24 @@ impl Encoder for Codec {
                 buf.append(&mut data);
             }
             BackendMessage::AuthenticationOk => {
-                buf.put_u32_be(0);
+                buf.put_u32(0);
             }
             BackendMessage::RowDescription(fields) => {
-                buf.put_u16_be(fields.len() as u16);
+                buf.put_u16(fields.len() as u16);
                 for f in &fields {
                     buf.put_string(&f.name.to_string());
-                    buf.put_u32_be(f.table_id);
-                    buf.put_u16_be(f.column_id);
-                    buf.put_u32_be(f.type_oid);
-                    buf.put_i16_be(f.type_len);
-                    buf.put_i32_be(f.type_mod);
+                    buf.put_u32(f.table_id);
+                    buf.put_u16(f.column_id);
+                    buf.put_u32(f.type_oid);
+                    buf.put_i16(f.type_len);
+                    buf.put_i32(f.type_mod);
                     // TODO: make the format correct
-                    buf.put_u16_be(f.format as u16);
+                    buf.put_u16(f.format as u16);
                 }
             }
             BackendMessage::DataRow(fields, formats) => {
-                buf.put_u16_be(fields.len() as u16);
-                for (f, ff) in fields.iter().zip(formats) {
+                buf.put_u16(fields.len() as u16);
+                for (f, ff) in fields.iter().zip(formats.iter()) {
                     if let Some(f) = f {
                         let s: Cow<[u8]> = match ff {
                             FieldFormat::Text => f.to_text(),
@@ -174,22 +174,22 @@ impl Encoder for Codec {
                                 unsupported_err(e)
                             })?,
                         };
-                        buf.put_u32_be(s.len() as u32);
+                        buf.put_u32(s.len() as u32);
                         buf.put(&*s);
                     } else {
-                        buf.put_i32_be(-1);
+                        buf.put_i32(-1);
                     }
                 }
             }
             BackendMessage::CommandComplete { tag } => {
-                buf.put_string(tag);
+                buf.put_string(&tag);
             }
             BackendMessage::ParseComplete => (),
             BackendMessage::BindComplete => (),
             BackendMessage::CloseComplete => (),
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery(status) => {
-                buf.put(match status {
+                buf.put_u8(match status {
                     TransactionStatus::Idle => b'I',
                     TransactionStatus::InTransaction => b'T',
                     TransactionStatus::Failed => b'E',
@@ -197,18 +197,18 @@ impl Encoder for Codec {
             }
             BackendMessage::ParameterStatus(name, value) => {
                 buf.put_string(name);
-                buf.put_string(value);
+                buf.put_string(&value);
             }
             BackendMessage::PortalSuspended => (),
             BackendMessage::NoData => (),
             BackendMessage::BackendKeyData { conn_id, secret_key } => {
-                buf.put_u32_be(conn_id);
-                buf.put_u32_be(secret_key);
+                buf.put_u32(conn_id);
+                buf.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
-                buf.put_u16_be(params.len() as u16);
+                buf.put_u16(params.len() as u16);
                 for param in params {
-                    buf.put_u32_be(param.type_oid);
+                    buf.put_u32(param.type_oid);
                 }
             }
             BackendMessage::ErrorResponse {
@@ -217,19 +217,17 @@ impl Encoder for Codec {
                 message,
                 detail,
             } => {
-                log::warn!("error for client: {:?}->{}", severity, message);
-
-                buf.put(b'S');
+                buf.put_u8(b'S');
                 buf.put_string(severity.string());
-                buf.put(b'C');
+                buf.put_u8(b'C');
                 buf.put_string(code);
-                buf.put(b'M');
-                buf.put_string(message);
+                buf.put_u8(b'M');
+                buf.put_string(&message);
                 if let Some(ref detail) = detail {
-                    buf.put(b'D');
+                    buf.put_u8(b'D');
                     buf.put_string(detail);
                 }
-                buf.put(b'\0');
+                buf.put_u8(b'\0');
             }
         }
 
@@ -243,13 +241,13 @@ impl Encoder for Codec {
 }
 
 trait Pgbuf: BufMut {
-    fn put_string<T: IntoBuf>(&mut self, s: T);
+    fn put_string(&mut self, s: &str);
 }
 
 impl<B: BufMut> Pgbuf for B {
-    fn put_string<T: IntoBuf>(&mut self, s: T) {
-        self.put(s);
-        self.put(b'\0');
+    fn put_string(&mut self, s: &str) {
+        self.put(s.as_bytes());
+        self.put_u8(b'\0');
     }
 }
 
@@ -332,10 +330,7 @@ impl Decoder for Codec {
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
-                                format!(
-                                    "unknown message type {:?}",
-                                    bytes::Bytes::from(&[msg_type][..])
-                                ),
+                                format!("unknown message type {}", msg_type),
                             ));
                         }
                     };
@@ -480,10 +475,10 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     //     0 => no result columns or all should use text
     //     1 => use the specified format code for all results
     //    >1 => use separate format code for each result
-    let return_field_formats_count = buf.read_i16()?;
-    let mut return_field_formats = Vec::with_capacity(return_field_formats_count as usize);
-    for _ in 0..return_field_formats_count {
-        return_field_formats.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
+    let result_formats_count = buf.read_i16()?;
+    let mut result_formats = Vec::with_capacity(result_formats_count as usize);
+    for _ in 0..result_formats_count {
+        result_formats.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
     }
 
     let raw_parameter_bytes = RawParameterBytes::new(parameters, parameter_format_codes);
@@ -491,7 +486,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
         portal_name,
         statement_name,
         raw_parameter_bytes,
-        return_field_formats,
+        result_formats,
     })
 }
 
