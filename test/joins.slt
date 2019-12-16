@@ -1,0 +1,50 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+mode cockroach
+
+statement ok
+CREATE TABLE l (la int, lb text)
+
+statement ok
+CREATE TABLE r (ra int, rb text)
+
+statement ok
+INSERT INTO l VALUES (1, 'l1'), (2, 'l2'), (3, 'l3')
+
+statement ok
+INSERT INTO r VALUES (1, 'r1'), (3, 'r3'), (4, 'r4')
+
+query ITIT
+SELECT * FROM l LEFT JOIN r ON l.la = r.ra
+----
+1  l1  1     r1
+2  l2  NULL  NULL
+3  l3  3     r3
+
+# This test may look the same as the last, but listing out the columns
+# explicitly checks for regressions of #1314.
+query ITIT
+SELECT l.la, l.lb, r.ra, r.rb FROM l LEFT JOIN r ON l.la = r.ra
+----
+1  l1  1     r1
+2  l2  NULL  NULL
+3  l3  3     r3
+
+query ITIT
+SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
+----
+NULL  NULL  4  r4
+1     l1    1  r1
+3     l3    3  r3
+
+# This test may look the same as the last, but listing out the columns
+# explicitly checks for regressions of #1314.
+query ITIT
+SELECT l.la, l.lb, r.ra, r.rb FROM l RIGHT JOIN r ON l.la = r.ra
+----
+NULL  NULL  4  r4
+1     l1    1  r1
+3     l3    3  r3
