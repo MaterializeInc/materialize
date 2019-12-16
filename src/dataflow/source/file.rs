@@ -198,6 +198,43 @@ where
             SourceStatus::ScheduleAgain
         }
     });
+    let stream = stream.unary(
+        Exchange::new(|x: &String| x.hashed()),
+        "CsvDecode",
+        |_, _| {
+            move |input, output| {
+                input.for_each(|cap, lines| {
+                    let mut session = output.session(&cap);
+                    // TODO: There is extra work going on here:
+                    // LinesCodec is already splitting our input into lines,
+                    // but the CsvReader *itself* searches for line breaks.
+                    // This is mainly an aesthetic/performance-golfing
+                    // issue as I doubt it will ever be a bottleneck.
+                    for line in &*lines {
+                        let mut csv_reader = csv::ReaderBuilder::new()
+                            .has_headers(false)
+                            .from_reader(line.as_bytes());
+                        for result in csv_reader.records() {
+                            let record = result.unwrap();
+                            if record.len() != n_cols {
+                                error!(
+                                    "CSV error: expected {} columns, got {}. Ignoring row.",
+                                    n_cols,
+                                    record.len()
+                                );
+                                continue;
+                            }
+                            session.give((
+                                Row::pack(record.iter().map(|s| Datum::String(s))),
+                                *cap.time(),
+                                1,
+                            ));
+                        }
+                    }
+                });
+            }
+        },
+    );
 
     if read_file {
         (stream, Some(capability))

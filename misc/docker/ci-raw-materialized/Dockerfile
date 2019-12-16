@@ -6,5 +6,6 @@
 FROM ubuntu:bionic
 
 COPY materialized /usr/local/bin
+COPY bootstrap.sql /usr/local/etc
 
 ENTRYPOINT ["materialized"]

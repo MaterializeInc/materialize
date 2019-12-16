@@ -44,6 +44,7 @@ build() {
     export CC=x86_64-unknown-linux-gnu-cc
     export CXX=x86_64-unknown-linux-gnu-c++
     export CFLAGS="-I$sysroot/usr/include/x86_64-linux-gnu -isystem$sysroot/usr/include"
+    export CMAKE_SYSTEM_NAME=Linux
     export CXXFLAGS=$CFLAGS
     export LDFLAGS="-L$sysroot/usr/lib/x86_64-linux-gnu -L$sysroot/lib/x86_64-linux-gnu"
     export TARGET_CC=$CC
@@ -61,23 +62,6 @@ pkg_url=http://archive.ubuntu.com/ubuntu/ubuntu
 
 bootstrap() {
     clean
-
-    # Check for missing SDK headers first, because we might need to prompt for a
-    # password, and best to do that ASAP so that we catch the user while they're
-    # still looking at the terminal.
-    if [[ ! -e /usr/include/machine ]]; then
-        pkg=/Library/Developer/CommandLineTools/Packages/macOS_SDK_headers_for_macOS_10.14.pkg
-        if [[ -f "$pkg" ]]; then
-            printf "Automatically installing missing macOS headers.\n" >&2
-            printf "Your password may be required.\n" >&2
-            run sudo installer -target / -pkg "$pkg"
-        else
-            printf "macOS SDK headers are missing and cannot automatically installed.\n" >&2
-            printf "Hint: no installer at %q\n" "$pkg" >&2
-            printf "Hint: see if \`brew doctor\` has any suggestions\n" >&2
-            exit 1
-        fi
-    fi
 
     run brew install SergioBenitez/osxct/x86_64-unknown-linux-gnu
     run brew install benesch/debian/dctrl-tools

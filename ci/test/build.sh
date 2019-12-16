@@ -49,7 +49,8 @@ docker_run "cargo test --no-run && cargo test --no-run --message-format=json > t
 
 ci_collapsed_heading "Preparing Docker context"
 {
-    cp target/release/materialized misc/docker/ci-raw-materialized
+    cp target/release/materialized misc/dist/etc/materialized/bootstrap.sql \
+        misc/docker/ci-raw-materialized
 
     # NOTE(benesch): the debug information is large enough that it slows down CI,
     # since we're packaging these binaries up into Docker images and shipping them
