@@ -14,12 +14,11 @@ use timely::scheduling::activate::SyncActivator;
 
 use super::util::source;
 use super::{SharedCapability, SourceStatus};
-use crate::decode::avro;
 use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
 use repr::Row;
 
 use lazy_static::lazy_static;
-use prometheus::{IntCounter};
+use prometheus::IntCounter;
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
@@ -34,16 +33,11 @@ pub fn kafka<G>(
     name: String,
     connector: KafkaSourceConnector,
     read_kafka: bool,
-) -> (Stream<G, (Row, Timestamp, Diff)>, Option<SharedCapability>)
+) -> (Stream<G, Vec<u8>>, Option<SharedCapability>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let KafkaSourceConnector {
-        addr,
-        topic,
-        raw_schema,
-        schema_registry_url,
-    } = connector;
+    let KafkaSourceConnector { addr, topic } = connector;
     let (stream, capability) = source(scope, &name.clone(), move |info| {
         let activator = scope.activator_for(&info.address[..]);
 
@@ -137,8 +131,6 @@ where
             SourceStatus::ScheduleAgain
         }
     });
-    
-    let stream = avro(&stream, &raw_schema, schema_registry_url);
 
     if read_kafka {
         (stream, Some(capability))

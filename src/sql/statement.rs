@@ -21,8 +21,9 @@ use url::Url;
 
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
-    FileFormat, FileSourceConnector, Index, IndexDesc, KafkaSinkConnector, KafkaSourceConnector,
-    KeySql, PeekWhen, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
+    AvroEncoding, CsvEncoding, DataEncoding, FileSourceConnector, Index, IndexDesc,
+    KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, RemoteSourceConnector,
+    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::avro;
@@ -417,10 +418,11 @@ fn handle_show_create_source(
         if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
             match connector {
                 SourceConnector::Local => String::from("local://"),
-                SourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
-                    format!("kafka://{}/{}", addr, topic)
-                }
-                SourceConnector::File(c) => {
+                SourceConnector::Remote(
+                    RemoteSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
+                    _,
+                ) => format!("kafka://{}/{}", addr, topic),
+                SourceConnector::Remote(RemoteSourceConnector::File(c), _) => {
                     // TODO https://github.com/MaterializeInc/materialize/issues/1093
                     format!("file://{}", c.path.to_string_lossy())
                 }
@@ -562,11 +564,13 @@ fn handle_create_dataflow(
                                 .collect();
                             let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
                             let source = Source {
-                                connector: SourceConnector::File(FileSourceConnector {
-                                    path: path.clone().try_into()?,
-                                    format: FileFormat::Csv(n_cols),
-                                    tail,
-                                }),
+                                connector: SourceConnector::Remote(
+                                    RemoteSourceConnector::File(FileSourceConnector {
+                                        path: path.clone().try_into()?,
+                                        tail,
+                                    }),
+                                    DataEncoding::Csv(CsvEncoding { n_cols }),
+                                ),
                                 desc: RelationDesc::new(RelationType::new(cols), names),
                             };
                             Ok(Plan::CreateSource(name, source))
@@ -855,12 +859,16 @@ fn build_kafka_source(
     }
 
     Ok(Source {
-        connector: SourceConnector::Kafka(KafkaSourceConnector {
-            addr: kafka_addr,
-            topic,
-            raw_schema: value_schema,
-            schema_registry_url,
-        }),
+        connector: SourceConnector::Remote(
+            RemoteSourceConnector::Kafka(KafkaSourceConnector {
+                addr: kafka_addr,
+                topic,
+            }),
+            DataEncoding::Avro(AvroEncoding {
+                raw_schema: value_schema,
+                schema_registry_url,
+            }),
+        ),
         desc,
     })
 }

@@ -24,9 +24,9 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 use dataflow_types::{Diff, Timestamp};
 use repr::Row;
 
+use crate::decode;
 use crate::source::util::source;
 use crate::source::{SharedCapability, SourceStatus};
-use crate::decode;
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
@@ -155,11 +155,10 @@ pub fn csv<G>(
     region: &G,
     name: String,
     path: PathBuf,
-    n_cols: usize,
     executor: &tokio::runtime::Handle,
     read_style: FileReadStyle,
 ) -> (
-    timely::dataflow::Stream<G, (Row, Timestamp, Diff)>,
+    timely::dataflow::Stream<G, Vec<u8>>,
     Option<SharedCapability>,
 )
 where
@@ -201,7 +200,6 @@ where
             SourceStatus::ScheduleAgain
         }
     });
-    let stream = decode::csv(&stream, n_cols);
 
     if read_file {
         (stream, Some(capability))

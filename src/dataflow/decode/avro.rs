@@ -6,7 +6,7 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::{Scope, Stream};
 
 use lazy_static::lazy_static;
-use prometheus::{IntCounterVec};
+use prometheus::IntCounterVec;
 
 use prometheus_static_metric::make_static_metric;
 use timely::dataflow::operators::Operator;

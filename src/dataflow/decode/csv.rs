@@ -1,17 +1,14 @@
-use timely::dataflow::{Stream, Scope};
-use dataflow_types::{Timestamp, Diff};
-use repr::{Row, Datum};
-use timely::dataflow::operators::Operator;
-use timely::dataflow::channels::pact::Exchange;
+use dataflow_types::{Diff, Timestamp};
 use differential_dataflow::Hashable;
 use log::error;
+use repr::{Datum, Row};
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::Operator;
+use timely::dataflow::{Scope, Stream};
 
-pub fn csv<G>(
-    stream: &Stream<G, Vec<u8>>,
-    n_cols: usize
-) -> Stream<G, (Row, Timestamp, Diff)>
-    where
-        G: Scope<Timestamp = Timestamp>,
+pub fn csv<G>(stream: &Stream<G, Vec<u8>>, n_cols: usize) -> Stream<G, (Row, Timestamp, Diff)>
+where
+    G: Scope<Timestamp = Timestamp>,
 {
     stream.unary(
         Exchange::new(|x: &Vec<u8>| x.hashed()),
