@@ -518,6 +518,7 @@ fn handle_create_dataflow(
                     }
                     let mut format = None;
                     let mut n_cols: Option<usize> = None;
+                    let mut tail = false;
                     for with_op in with_options {
                         match with_op.name.value.as_str() {
                             "columns" => {
@@ -534,6 +535,12 @@ fn handle_create_dataflow(
                                     },
                                     _ => bail!("File format must be a string, e.g. 'csv'."),
                                 });
+                            }
+                            "tail" => {
+                                tail = match &with_op.value {
+                                    Value::Boolean(b) => *b,
+                                    _ => bail!("`tail` must be a boolean."),
+                                }
                             }
                             _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
                         }
@@ -558,6 +565,7 @@ fn handle_create_dataflow(
                                 connector: SourceConnector::File(FileSourceConnector {
                                     path: path.clone().try_into()?,
                                     format: FileFormat::Csv(n_cols),
+                                    tail,
                                 }),
                                 desc: RelationDesc::new(RelationType::new(cols), names),
                             };

@@ -272,6 +272,7 @@ pub struct KafkaSourceConnector {
 pub struct FileSourceConnector {
     pub path: PathBuf,
     pub format: FileFormat,
+    pub tail: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
