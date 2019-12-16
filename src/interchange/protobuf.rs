@@ -2,11 +2,11 @@ use std::fs;
 
 use failure::{bail, Error};
 use protoc::Protoc;
+use serde::de::Deserialize;
+use serde_protobuf::de::Deserializer;
 use serde_protobuf::descriptor::{
     Descriptors, FieldDescriptor, FieldLabel, FieldType, MessageDescriptor,
 };
-use serde_protobuf::de::Deserializer;
-use serde::de::Deserialize;
 use serde_value::Value;
 
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
@@ -151,17 +151,57 @@ impl Decoder {
 
     pub fn decode(&self, mut bytes: &[u8]) -> Result<(), failure::Error> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
-        let mut deserializer = Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream).expect("Creating a input stream to parse protobuf");
-        let value = Value::deserialize(&mut deserializer);
-        println!("{:?}", value);
+        let mut deserializer =
+            Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
+                .expect("Creating a input stream to parse protobuf");
+        let deserialized_message =
+            Value::deserialize(&mut deserializer).expect("Deserializing into rust object");
+        println!("{:?}", deserialized_message);
+
+        fn value_to_datum(v: &Value) -> Result<Datum<'_>, failure::Error> {
+            match v {
+                Value::Bool(true) => Ok(Datum::True),
+                Value::Bool(false) => Ok(Datum::False),
+                Value::I32(i) => Ok(Datum::Int32(*i)),
+                Value::String(s) => Ok(Datum::String(s)),
+                _ => bail!("TODO write the rest of this function"),
+            }
+        };
+
+        if let Value::Map(deserialized_message) = deserialized_message {
+            for f in self
+                .descriptors
+                .message_by_name(&self.message_name)
+                .expect("Expected to get the message name")
+                .fields()
+                .iter()
+            {
+                println!("key: {:?}", f.name());
+
+                let key = Value::String(f.name().to_string());
+
+                let value = deserialized_message.get(&key);
+
+                if let Some(Value::Option(Some(value))) = value {
+                    println!("value: {:?}", value);
+
+                    let datum = value_to_datum(&value);
+                    println!("datum {:?}", datum);
+                }
+            }
+        }
 
         Ok(())
     }
 }
-         
+
 #[cfg(test)]
 mod tests {
+    use crate::test_proto_schemas;
+    use crate::test_proto_schemas::{file_descriptor_proto, TestRecord};
     use failure::{bail, Error};
+    use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
+    use protobuf::{Message, RepeatedField};
     use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
     use serde_protobuf::descriptor::{
         Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
@@ -287,5 +327,40 @@ mod tests {
         )?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_decode() {
+        let mut test_record = TestRecord::new();
+
+        test_record.set_int_field(1);
+        test_record.set_string_field("one".to_string());
+        let bytes = test_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut repeated_field = RepeatedField::<FileDescriptorProto>::new();
+        let file_descriptor_proto = file_descriptor_proto().clone();
+        println!("file descriptor proto {:?}", file_descriptor_proto);
+        repeated_field.push(file_descriptor_proto);
+
+        println!("repeated field {:?}", repeated_field);
+
+        let mut file_descriptor_set: FileDescriptorSet = FileDescriptorSet::new();
+        file_descriptor_set.set_file(repeated_field);
+
+        println!("file descriptor set {:?}", file_descriptor_set);
+
+        let descriptors = Descriptors::from_proto(&file_descriptor_set);
+
+        println!("descriptors: {:?}", descriptors);
+
+        let decoder = super::Decoder {
+            descriptors: descriptors,
+            message_name: ".TestRecord".to_string(),
+        };
+        println!("decoder {:?}", decoder);
+
+        decoder.decode(&bytes);
     }
 }

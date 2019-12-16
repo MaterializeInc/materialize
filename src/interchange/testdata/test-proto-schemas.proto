@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+message TestRecord {
+  int32 int_field = 1;
+  string string_field = 2;
+}    
