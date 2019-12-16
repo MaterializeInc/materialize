@@ -24,7 +24,7 @@ lazy_static = "1.4.0"
 log = "0.4"
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
-prometheus = { git = "https://github.com/tikv/rust-prometheus.git", default-features = false, features = ["process"] }
+prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
 rand = "0.7"
 repr = { path = "../repr" }
 sql = { path = "../sql" }

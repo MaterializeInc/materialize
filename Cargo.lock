@@ -2338,14 +2338,13 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/tikv/rust-prometheus.git#d919ccd35976b9b84b8d03c07138c1cc05a36087"
+source = "git+https://github.com/quodlibetor/rust-prometheus.git?branch=include-unaggregated#c6782e23d63bacb3a290383d4413c0b8f1724394"
 dependencies = [
  "cfg-if",
  "fnv",
  "lazy_static",
  "libc",
  "procfs",
- "protobuf",
  "spin",
  "thiserror",
 ]
@@ -2361,12 +2360,6 @@ dependencies = [
  "quote 0.5.2",
  "syn 0.13.11",
 ]
-
-[[package]]
-name = "protobuf"
-version = "2.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40361836defdd5871ff7e84096c6f6444af7fc157f8ef1789f54f147687caa20"
 
 [[package]]
 name = "quick-error"

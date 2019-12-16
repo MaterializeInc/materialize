@@ -28,7 +28,8 @@ lazy_static! {
         vec![
             0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
             0.500, 1.0
-        ]
+        ],
+        include_unaggregated => true
     )
     .expect("can create histogram");
     static ref ERRORS_UNLABELED: CounterVec = register_counter_vec!(

@@ -22,7 +22,7 @@ log = "0.4"
 notify = "4.0"
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
-prometheus = { git = "https://github.com/tikv/rust-prometheus.git", default-features = false }
+prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false }
 prometheus-static-metric = "0.2.0"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
 repr = { path = "../repr" }
