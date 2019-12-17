@@ -502,14 +502,37 @@ fn handle_create_dataflow(
         } => {
             let name: QualName = (&*name).try_into()?;
             let source_url = parse_source_url(url)?;
+            let mut format = KafkaSchemaFormat::Avro;
+            let mut message_name = None;
             match source_url {
                 SourceUrl::Kafka(KafkaUrl { addr, topic }) => {
                     if !with_options.is_empty() {
-                        bail!("WITH options on Kafka sources are not yet supported");
+
+                        for with_op in with_options {
+                            match with_op.name.value.as_str() {
+                                "format" => {
+                                    format = match &with_op.value {
+                                        Value::SingleQuotedString(s) => match s.as_ref() {
+                                            "protobuf-descriptor" => KafkaSchemaFormat::Protobuf,
+                                            "avro" => KafkaSchemaFormat::Avro,
+                                            _ => bail!("Unrecognized source format: {}", s),
+                                        },
+                                        _ => bail!("Source format must be a string"),
+                                    }
+                                }
+                                "message_name" => {
+                                    message_name = Some(match &with_op.value {
+                                        Value::SingleQuotedString(s) => s.to_string(),
+                                        _ => bail!("Message name has to be a string"),
+                                    });
+                                }
+                                _ => bail!("Unrecognized WITH option {}", with_op.name.value),
+                            }
+                        }
                     }
                     if let Some(topic) = topic {
                         if let Some(schema) = schema {
-                            let source = build_kafka_source(schema, addr, topic)?;
+                            let source = build_kafka_source(schema, addr, topic, format, message_name)?;
                             Ok(Plan::CreateSource(name, source))
                         } else {
                             bail!("Kafka sources require a schema.");
@@ -679,7 +702,7 @@ fn handle_create_dataflow(
                 .map(|(topic_name, sql_name)| {
                     Ok((
                         sql_name,
-                        build_kafka_source(
+                        build_kafka_avro_source(
                             &SourceSchema::Registry(schema_registry.to_owned()),
                             addr,
                             topic_name.to_owned(),
@@ -878,6 +901,20 @@ fn build_kafka_source(
     schema: &SourceSchema,
     kafka_addr: SocketAddr,
     topic: String,
+    format: KafkaSchemaFormat,
+    message_name: Option<String>,
+) -> Result<Source, failure::Error> {
+    match (format, message_name) {
+        (KafkaSchemaFormat::Avro, None) => build_kafka_avro_source(schema, kafka_addr, topic),
+        (KafkaSchemaFormat::Protobuf, Some(m)) => panic!("todo"), //build_kafka_protobuf_source(schema, kafka_addr, topic, m),
+        _ => bail!("Invalid combination of source format and message name"),
+    }
+}
+
+fn build_kafka_avro_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    topic: String,
 ) -> Result<Source, failure::Error> {
     let (key_schema, value_schema, schema_registry_url) = match schema {
         // TODO(jldlaughlin): we need a way to pass in primary key information
@@ -926,6 +963,12 @@ fn build_kafka_source(
         desc,
     })
 }
+
+enum KafkaSchemaFormat {
+    Avro,
+    Protobuf,
+}
+
 
 enum SourceFileFormat {
     Csv,
