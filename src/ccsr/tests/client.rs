@@ -127,16 +127,17 @@ fn test_client_errors() -> Result<(), failure::Error> {
 
 #[test]
 fn test_server_errors() -> Result<(), failure::Error> {
-    let mut runtime = Runtime::new()?;
+    let runtime = Runtime::new()?;
 
     // When the schema registry gracefully reports an error by including a
     // properly-formatted JSON document in the response, the specific error code
     // and message should be propagated.
 
-    let client_graceful = runtime.block_on(start_server(
+    let client_graceful = start_server(
+        &runtime,
         StatusCode::INTERNAL_SERVER_ERROR,
         r#"{ "error_code": 50001, "message": "overloaded; try again later" }"#,
-    ));
+    );
 
     match client_graceful.publish_schema("foo", "bar") {
         Err(PublishError::Server {
@@ -174,10 +175,11 @@ fn test_server_errors() -> Result<(), failure::Error> {
     // handler in the response, we should report the HTTP status code and a
     // generic message indicating that no further details were available.
 
-    let client_crash = runtime.block_on(start_server(
+    let client_crash = start_server(
+        &runtime,
         StatusCode::INTERNAL_SERVER_ERROR,
         r#"panic! an exception occured!"#,
-    ));
+    );
 
     match client_crash.publish_schema("foo", "bar") {
         Err(PublishError::Server {
@@ -214,25 +216,28 @@ fn test_server_errors() -> Result<(), failure::Error> {
     Ok(())
 }
 
-async fn start_server(status_code: StatusCode, body: &'static str) -> Client {
-    let incoming = AddrIncoming::bind(&([127, 0, 0, 1], 0).into()).unwrap();
-    let addr = incoming.local_addr();
-    let server = Server::builder(incoming).serve(service::make_service_fn(move |_conn| {
-        async move {
-            Ok::<_, hyper::Error>(service::service_fn(move |_req| {
-                async move {
-                    Response::builder()
-                        .status(status_code)
-                        .body(Body::from(body))
-                }
-            }))
-        }
-    }));
-    tokio::spawn(async {
-        match server.await {
-            Ok(()) => (),
-            Err(err) => eprintln!("server error: {}", err),
-        }
+fn start_server(runtime: &Runtime, status_code: StatusCode, body: &'static str) -> Client {
+    let addr = runtime.enter(|| {
+        let incoming = AddrIncoming::bind(&([127, 0, 0, 1], 0).into()).unwrap();
+        let addr = incoming.local_addr();
+        let server = Server::builder(incoming).serve(service::make_service_fn(move |_conn| {
+            async move {
+                Ok::<_, hyper::Error>(service::service_fn(move |_req| {
+                    async move {
+                        Response::builder()
+                            .status(status_code)
+                            .body(Body::from(body))
+                    }
+                }))
+            }
+        }));
+        tokio::spawn(async {
+            match server.await {
+                Ok(()) => (),
+                Err(err) => eprintln!("server error: {}", err),
+            }
+        });
+        addr
     });
 
     let url: reqwest::Url = format!("http://{}", addr).parse().unwrap();

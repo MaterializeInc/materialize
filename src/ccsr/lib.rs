@@ -10,7 +10,7 @@
 use std::error::Error;
 use std::fmt;
 
-use reqwest::{RedirectPolicy, Url};
+use reqwest::Url;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::json;
@@ -18,7 +18,7 @@ use serde_json::json;
 /// An API client for a Confluent-compatible schema registry.
 #[derive(Debug)]
 pub struct Client {
-    inner: reqwest::Client,
+    inner: reqwest::blocking::Client,
     url: Url,
 }
 
@@ -26,8 +26,8 @@ impl Client {
     /// Creates a new API client that will send requests to the schema registry
     /// at the provided URL.
     pub fn new(url: Url) -> Client {
-        let inner = reqwest::Client::builder()
-            .redirect(RedirectPolicy::none())
+        let inner = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
         Client { inner, url }
@@ -90,12 +90,13 @@ impl Client {
     }
 }
 
-fn send_request<T>(req: reqwest::RequestBuilder) -> Result<T, UnhandledError>
+fn send_request<T>(req: reqwest::blocking::RequestBuilder) -> Result<T, UnhandledError>
 where
     T: DeserializeOwned,
 {
-    let mut res = req.send()?;
-    if res.status().is_success() {
+    let res = req.send()?;
+    let status = res.status();
+    if status.is_success() {
         Ok(res.json()?)
     } else {
         match res.json::<ErrorResponse>() {
@@ -104,7 +105,7 @@ where
                 message: err_res.message,
             }),
             Err(_) => Err(UnhandledError::Api {
-                code: i32::from(res.status().as_u16()),
+                code: i32::from(status.as_u16()),
                 message: "unable to decode error details".into(),
             }),
         }
