@@ -7,7 +7,7 @@ mod avro;
 mod csv;
 mod regex;
 use self::csv::csv;
-use self::regex::regex;
+use self::regex::regex as regex_fn;
 use avro::avro;
 
 use dataflow_types::{DataEncoding, Diff, Timestamp};
@@ -24,6 +24,6 @@ where
     match encoding {
         DataEncoding::Csv(enc) => csv(stream, enc.n_cols),
         DataEncoding::Avro(enc) => avro(stream, &enc.raw_schema, enc.schema_registry_url),
-        DataEncoding::Regex(regex) => regex(stream, regex),
+        DataEncoding::Regex {regex} => regex_fn(stream, regex),
     }
 }

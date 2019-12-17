@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use url::Url;
 
 use expr::{ColumnOrder, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
-use repr::{Datum, RelationDesc, RelationType, Row};
 use regex::Regex;
+use repr::{Datum, RelationDesc, RelationType, Row};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -157,7 +157,7 @@ impl RowSetFinishing {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
     /// Sources used by the dataflow.
     pub sources: Vec<(GlobalId, Source)>,
@@ -226,18 +226,21 @@ impl DataflowDesc {
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataEncoding {
     Avro(AvroEncoding),
     Csv(CsvEncoding),
-    Regex(Regex),
+    Regex {
+        #[serde(with = "serde_regex")]
+        regex: Regex,
+    },
 }
 
 /// Encoding in Avro format.
 ///
 /// Assumes Debezium-style `before: ..., after: ...` structure.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AvroEncoding {
     pub raw_schema: String,
     pub schema_registry_url: Option<Url>,
@@ -245,7 +248,7 @@ pub struct AvroEncoding {
 
 /// Encoding in CSV format, with no headers, and `n_cols` columns per row.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
     pub n_cols: usize,
 }
@@ -256,7 +259,7 @@ pub struct CsvEncoding {
 /// as well as related metadata about the columns, their types, and properties
 /// of the collection.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Source {
     pub connector: SourceConnector,
     pub desc: RelationDesc,
@@ -280,7 +283,7 @@ pub struct View {
     pub desc: RelationDesc,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceConnector {
     External {
         connector: ExternalSourceConnector,

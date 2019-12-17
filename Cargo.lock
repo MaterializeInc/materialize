@@ -709,6 +709,7 @@ dependencies = [
  "repr",
  "serde",
  "serde_json",
+ "serde_regex",
  "url 2.1.0",
  "uuid 0.8.1",
 ]
