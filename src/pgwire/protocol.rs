@@ -14,7 +14,6 @@ use futures::sink::SinkExt;
 use futures::stream;
 use lazy_static::lazy_static;
 use log::{debug, trace};
-use prometheus::{histogram_opts, register_histogram_vec};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
@@ -53,7 +52,7 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 }
 
 lazy_static! {
-    static ref COMMAND_DURATIONS: prometheus::HistogramVec = register_histogram_vec!(
+    static ref COMMAND_DURATIONS: prometheus::HistogramVec = prometheus::register_histogram_vec!(
         "mz_command_durations",
         "how long individual commands took",
         &["command", "status"],

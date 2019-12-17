@@ -3,19 +3,18 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use dataflow_types::{Diff, Timestamp};
 use differential_dataflow::Hashable;
-use log::error;
-use repr::Row;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::{Scope, Stream};
-
 use lazy_static::lazy_static;
+use log::error;
 use prometheus::IntCounterVec;
-
 use prometheus_static_metric::make_static_metric;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
+use timely::dataflow::{Scope, Stream};
 use url::Url;
+
+use dataflow_types::{Diff, Timestamp};
+use repr::Row;
 
 make_static_metric! {
     struct EventsRead: IntCounter {
@@ -24,7 +23,7 @@ make_static_metric! {
 }
 
 lazy_static! {
-    static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = register_int_counter_vec!(
+    static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = prometheus::register_int_counter_vec!(
         "mz_kafka_events_read_total",
         "Count of kafka events we have read from the wire",
         &["status"]

@@ -3,14 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc..
 
-// the prometheus macros (e.g. `register*`) all depend on each other, including on
-// internal `__register*` macros, instead of doing the right thing and I assume using
-// something like `$crate::__register_*`. That means that without using a macro_use here,
-// we would end up needing to import several internal macros everywhere we want to use
-// any of the prometheus macros.
-#[macro_use]
-extern crate prometheus;
-
 use std::cmp::min;
 use std::collections::HashMap;
 use std::thread;
@@ -141,7 +133,7 @@ fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
 }
 
 fn create_histogram(query: &str) -> Histogram {
-    let hist_vec = register_histogram_vec!(
+    let hist_vec = prometheus::register_histogram_vec!(
         "mz_client_peek_seconds",
         "how long peeks took",
         &["query"],

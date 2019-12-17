@@ -3,24 +3,25 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::sync::Mutex;
+use std::time::Duration;
+
+use lazy_static::lazy_static;
 use log::error;
+use prometheus::IntCounter;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{ClientConfig, ClientContext};
 use rdkafka::{Message, Timestamp as KafkaTimestamp};
-use std::sync::Mutex;
-use std::time::Duration;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
 
-use super::util::source;
-use super::{SharedCapability, SourceStatus};
 use dataflow_types::{KafkaSourceConnector, Timestamp};
 
-use lazy_static::lazy_static;
-use prometheus::IntCounter;
+use super::util::source;
+use super::{SharedCapability, SourceStatus};
 
 lazy_static! {
-    static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
+    static ref BYTES_READ_COUNTER: IntCounter = prometheus::register_int_counter!(
         "mz_kafka_bytes_read_total",
         "Count of kafka bytes we have read from the wire"
     )
