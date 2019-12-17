@@ -264,7 +264,6 @@ pub struct KafkaSourceConnector {
     pub addr: std::net::SocketAddr,
     pub topic: String,
     pub raw_schema: String,
-    #[serde(with = "url_serde")]
     pub schema_registry_url: Option<Url>,
 }
 
