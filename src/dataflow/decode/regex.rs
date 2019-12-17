@@ -13,7 +13,11 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
-pub fn regex<G>(stream: &Stream<G, Vec<u8>>, regex: Regex, name: &str) -> Stream<G, (Row, Timestamp, Diff)>
+pub fn regex<G>(
+    stream: &Stream<G, Vec<u8>>,
+    regex: Regex,
+    name: &str,
+) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
