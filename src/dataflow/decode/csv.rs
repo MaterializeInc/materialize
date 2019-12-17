@@ -3,13 +3,14 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use dataflow_types::{Diff, Timestamp};
 use differential_dataflow::Hashable;
 use log::error;
-use repr::{Datum, Row};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
+
+use dataflow_types::{Diff, Timestamp};
+use repr::{Datum, Row};
 
 pub fn csv<G>(stream: &Stream<G, Vec<u8>>, n_cols: usize) -> Stream<G, (Row, Timestamp, Diff)>
 where
