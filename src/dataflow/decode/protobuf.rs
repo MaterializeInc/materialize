@@ -10,8 +10,8 @@ use repr::Row;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::{Scope, Stream};
 
-use timely::dataflow::operators::Operator;
 use super::EVENTS_COUNTER;
+use timely::dataflow::operators::Operator;
 
 pub fn protobuf<G>(
     stream: &Stream<G, Vec<u8>>,
@@ -25,7 +25,8 @@ where
         Exchange::new(|x: &Vec<u8>| x.hashed()),
         "ProtobufDecode",
         move |_, _| {
-            let mut decoder = interchange::protobuf::Decoder::from_descriptor_file(descriptor_file, message_name);
+            let mut decoder =
+                interchange::protobuf::Decoder::from_descriptor_file(descriptor_file, message_name);
             move |input, output| {
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);

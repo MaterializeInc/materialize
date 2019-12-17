@@ -155,7 +155,8 @@ impl Decoder {
     }
 
     pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Decoder {
-        let mut file = fs::File::open(descriptor_file_name).expect("Opening descriptor set file failed");
+        let mut file =
+            fs::File::open(descriptor_file_name).expect("Opening descriptor set file failed");
         let proto = protobuf::parse_from_reader(&mut file).expect("parsing descriptor set failed");
         let descriptors = Descriptors::from_proto(&proto);
 
