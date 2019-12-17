@@ -3226,6 +3226,7 @@ dependencies = [
  "interchange",
  "ore",
  "pretty_assertions",
+ "regex",
  "repr",
  "sqlparser",
  "unicase",

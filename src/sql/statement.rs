@@ -525,6 +525,7 @@ fn handle_create_dataflow(
                     let mut format = None;
                     let mut n_cols: Option<usize> = None;
                     let mut tail = false;
+                    let mut regex_str = None;
                     for with_op in with_options {
                         match with_op.name.value.as_str() {
                             "columns" => {
@@ -548,38 +549,84 @@ fn handle_create_dataflow(
                                     _ => bail!("`tail` must be a boolean."),
                                 }
                             }
+                            "regex" => {
+                                // FIXME - unnecessary copy
+                                regex_str = Some(match &with_op.value {
+                                    Value::SingleQuotedString(s) => s.clone(),
+                                    _ => bail!("regex must be a string"),
+                                })
+                            }
                             _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
                         }
                     }
 
+                    if regex_str.is_some() && format.is_some() {
+                        bail!("Can't specify both `format` and `regex`.")
+                    }
+
                     let format = match format {
                         Some(f) => f,
-                        None => bail!("File source requires a `format` WITH option."),
+                        None => match regex_str {
+                            Some(s) => SourceFileFormat::Regex(s),
+                            None => {
+                                bail!("File source requires a `format` or `regex` WITH option.")
+                            }
+                        },
                     };
-                    match format {
+                    let name = name.try_into()?;
+                    let (encoding, desc) = match format {
                         SourceFileFormat::Csv => {
                             let n_cols = match n_cols {
                                 Some(n) => n,
                                 None => bail!("Csv source requires a `columns` WITH option."),
                             };
-                            let name = name.try_into()?;
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)
                                 .collect();
                             let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
-                            let source = Source {
-                                connector: SourceConnector::External {
-                                    connector: ExternalSourceConnector::File(FileSourceConnector {
-                                        path: path.clone().try_into()?,
-                                        tail,
-                                    }),
-                                    encoding: DataEncoding::Csv(CsvEncoding { n_cols }),
-                                },
-                                desc: RelationDesc::new(RelationType::new(cols), names),
-                            };
-                            Ok(Plan::CreateSource(name, source))
+                            (
+                                DataEncoding::Csv(CsvEncoding { n_cols }),
+                                RelationDesc::new(RelationType::new(cols), names),
+                            )
                         }
-                    }
+                        SourceFileFormat::Regex(s) => {
+                            let regex = match regex::Regex::new(&s) {
+                                Ok(r) => r,
+                                Err(e) => bail!("Error compiling regex: {}", e),
+                            };
+                            let n_cols = regex.captures_len() - 1;
+                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
+                                .take(n_cols)
+                                .collect();
+                            let mut unnamed_idx = 0;
+                            let names: Vec<_> = regex
+                                .capture_names()
+                                .skip(1)
+                                .map(|ocn| {
+                                    ocn.map(String::from).unwrap_or_else(move || {
+                                        unnamed_idx += 1;
+                                        format!("column{}", unnamed_idx)
+                                    })
+                                })
+                                .map(|x| Some(x))
+                                .collect();
+                            (
+                                DataEncoding::Regex { regex },
+                                RelationDesc::new(RelationType::new(cols), names),
+                            )
+                        }
+                    };
+                    let source = Source {
+                        connector: SourceConnector::External {
+                            connector: ExternalSourceConnector::File(FileSourceConnector {
+                                path: path.clone().try_into()?,
+                                tail,
+                            }),
+                            encoding,
+                        },
+                        desc,
+                    };
+                    Ok(Plan::CreateSource(name, source))
                 }
             }
         }
@@ -879,6 +926,7 @@ fn build_kafka_source(
 
 enum SourceFileFormat {
     Csv,
+    Regex(String),
 }
 
 struct KafkaUrl {
