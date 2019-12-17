@@ -507,7 +507,6 @@ fn handle_create_dataflow(
             match source_url {
                 SourceUrl::Kafka(KafkaUrl { addr, topic }) => {
                     if !with_options.is_empty() {
-
                         for with_op in with_options {
                             match with_op.name.value.as_str() {
                                 "format" => {
@@ -532,7 +531,8 @@ fn handle_create_dataflow(
                     }
                     if let Some(topic) = topic {
                         if let Some(schema) = schema {
-                            let source = build_kafka_source(schema, addr, topic, format, message_name)?;
+                            let source =
+                                build_kafka_source(schema, addr, topic, format, message_name)?;
                             Ok(Plan::CreateSource(name, source))
                         } else {
                             bail!("Kafka sources require a schema.");
@@ -968,7 +968,6 @@ enum KafkaSchemaFormat {
     Avro,
     Protobuf,
 }
-
 
 enum SourceFileFormat {
     Csv,

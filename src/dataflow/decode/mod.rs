@@ -5,17 +5,17 @@
 
 use lazy_static::lazy_static;
 
-use timely::dataflow::{Scope, Stream};
-use prometheus::IntCounterVec;
+use prometheus::{register_int_counter_vec, IntCounterVec};
 use prometheus_static_metric::make_static_metric;
+use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{DataEncoding, Diff, Timestamp};
 use repr::Row;
 
 mod avro;
 mod csv;
-mod regex;
 mod protobuf;
+mod regex;
 
 use self::csv::csv;
 use self::regex::regex as regex_fn;

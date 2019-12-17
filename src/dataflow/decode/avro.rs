@@ -7,13 +7,13 @@ use differential_dataflow::Hashable;
 use log::error;
 
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::Operator;
+use timely::dataflow::{Scope, Stream};
 use url::Url;
 
+use super::EVENTS_COUNTER;
 use dataflow_types::{Diff, Timestamp};
 use repr::Row;
-use super::EVENTS_COUNTER;
 
 pub fn avro<G>(
     stream: &Stream<G, Vec<u8>>,
