@@ -550,9 +550,8 @@ fn handle_create_dataflow(
                                 }
                             }
                             "regex" => {
-                                // FIXME - unnecessary copy
                                 regex_str = Some(match &with_op.value {
-                                    Value::SingleQuotedString(s) => s.clone(),
+                                    Value::SingleQuotedString(s) => s,
                                     _ => bail!("regex must be a string"),
                                 })
                             }
@@ -567,7 +566,7 @@ fn handle_create_dataflow(
                     let format = match format {
                         Some(f) => f,
                         None => match regex_str {
-                            Some(s) => SourceFileFormat::Regex(s),
+                            Some(s) => SourceFileFormat::Regex(s.clone()),
                             None => {
                                 bail!("File source requires a `format` or `regex` WITH option.")
                             }
@@ -598,14 +597,18 @@ fn handle_create_dataflow(
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)
                                 .collect();
-                            let mut unnamed_idx = 0;
+                            let unnamed_idx = &mut 0;
                             let names: Vec<_> = regex
                                 .capture_names()
+                                // The first capture is the entire matched string.
+                                // This will often not be useful, so skip it.
+                                // If people want it they can just surround their
+                                // entire regex in an explicit capture group.
                                 .skip(1)
-                                .map(|ocn| {
-                                    ocn.map(String::from).unwrap_or_else(move || {
-                                        unnamed_idx += 1;
-                                        format!("column{}", unnamed_idx)
+                                .map( |ocn| {
+                                    ocn.map(String::from).unwrap_or_else( || {
+                                        *unnamed_idx += 1;
+                                        format!("unnamed{}", unnamed_idx)
                                     })
                                 })
                                 .map(|x| Some(x))
