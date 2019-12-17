@@ -593,11 +593,6 @@ fn handle_create_dataflow(
                                 Ok(r) => r,
                                 Err(e) => bail!("Error compiling regex: {}", e),
                             };
-                            assert!(regex.captures_len() > 0);
-                            let n_cols = regex.captures_len() - 1;
-                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
-                                .take(n_cols)
-                                .collect();
                             let unnamed_idx = &mut 0;
                             let names: Vec<_> = regex
                                 .capture_names()
@@ -613,6 +608,10 @@ fn handle_create_dataflow(
                                     })
                                 })
                                 .map(|x| Some(x))
+                                .collect();
+                            let n_cols = names.len();
+                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
+                                .take(n_cols)
                                 .collect();
                             (
                                 DataEncoding::Regex { regex },
