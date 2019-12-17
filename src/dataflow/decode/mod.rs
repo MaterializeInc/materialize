@@ -10,10 +10,16 @@ use repr::Row;
 
 mod avro;
 mod csv;
+<<<<<<< HEAD
 mod regex;
+=======
+mod protobuf;
+
+>>>>>>> wip: dataflow is now decoding the protos
 use self::csv::csv;
 use self::regex::regex as regex_fn;
 use avro::avro;
+use protobuf::protobuf;
 
 pub fn decode<G>(
     stream: &Stream<G, Vec<u8>>,
@@ -27,6 +33,6 @@ where
         DataEncoding::Csv(enc) => csv(stream, enc.n_cols),
         DataEncoding::Avro(enc) => avro(stream, &enc.raw_schema, enc.schema_registry_url),
         DataEncoding::Regex { regex } => regex_fn(stream, regex, name),
-        DataEncoding::Protobuf(enc) => panic!("Protobuf support not finished yet"),
+        DataEncoding::Protobuf(enc) => protobuf(stream, &enc.descriptor_file, &enc.message_name),
     }
 }

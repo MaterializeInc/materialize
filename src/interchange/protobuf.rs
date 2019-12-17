@@ -143,7 +143,7 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    pub fn new(message_name: &str, descriptors: Descriptors) -> Decoder {
+    pub fn new(descriptors: Descriptors, message_name: &str) -> Decoder {
         // It's assumed that we've already validated that the message exists in
         // the descriptor set and is valid
 
@@ -152,6 +152,14 @@ impl Decoder {
             message_name: message_name.to_string(),
             packer: RowPacker::new(),
         }
+    }
+
+    pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Decoder {
+        let mut file = fs::File::open(descriptor_file_name).expect("Opening descriptor set file failed");
+        let proto = protobuf::parse_from_reader(&mut file).expect("parsing descriptor set failed");
+        let descriptors = Descriptors::from_proto(&proto);
+
+        Decoder::new(descriptors, message_name)
     }
 
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, failure::Error> {
@@ -365,7 +373,7 @@ mod tests {
 
         let descriptors = Descriptors::from_proto(&file_descriptor_set);
 
-        let mut decoder = super::Decoder::new(".TestRecord", descriptors);
+        let mut decoder = super::Decoder::new(descriptors, ".TestRecord");
         let row = decoder
             .decode(&bytes)
             .expect("deserialize protobuf into a row")
