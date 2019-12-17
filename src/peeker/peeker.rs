@@ -3,34 +3,49 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc..
 
-// the prometheus macros (e.g. `register*`) all depend on each other, including on
-// internal `__register*` macros, instead of doing the right thing and I assume using
-// something like `$crate::__register_*`. That means that without using a macro_use here,
-// we would end up needing to import several internal macros everywhere we want to use
-// any of the prometheus macros.
-#[macro_use]
-extern crate prometheus;
-
 use std::cmp::min;
-use std::collections::HashMap;
+use std::convert::Infallible;
 use std::thread;
 use std::time::Duration;
 
 use chrono::Utc;
 use env_logger::{Builder as LogBuilder, Env, Target};
-use log::{error, info};
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Response, Server};
+use lazy_static::lazy_static;
+use log::{error, info, warn};
 use postgres::Connection;
-use prometheus::Histogram;
+use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, Encoder, HistogramVec};
 
 static MAX_BACKOFF: Duration = Duration::from_secs(60);
+static METRICS_PORT: u16 = 16875;
+
+lazy_static! {
+    static ref HISTOGRAM_UNLABELED: HistogramVec = register_histogram_vec!(
+        "mz_client_peek_seconds",
+        "how long peeks took",
+        &["query"],
+        vec![
+            0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
+            0.500, 1.0
+        ],
+        include_unaggregated => true
+    )
+    .expect("can create histogram");
+    static ref ERRORS_UNLABELED: CounterVec = register_counter_vec!(
+        "mz_client_error_count",
+        "number of errors encountered",
+        &["query"]
+    )
+    .expect("can create histogram");
+}
 
 #[derive(Debug)]
 struct Config {
-    pushgateway_url: String,
     materialized_url: String,
 }
 
-fn main() -> Result<(), failure::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
         .target(Target::Stdout)
         .init();
@@ -40,12 +55,6 @@ fn main() -> Result<(), failure::Error> {
 
     let mut opts = getopts::Options::new();
     opts.optflag("h", "help", "show this usage information");
-    opts.optopt(
-        "",
-        "pushgateway-url",
-        "url of the prometheus pushgateway to send metrics to",
-        "URL",
-    );
     opts.optopt(
         "",
         "materialized-url",
@@ -58,62 +67,50 @@ fn main() -> Result<(), failure::Error> {
         return Ok(());
     }
     let config = Config {
-        pushgateway_url: popts
-            .opt_get_default("pushgateway-url", "http://pushgateway:9091".to_owned())?,
         materialized_url: popts.opt_get_default(
             "materialized-url",
             "postgres://ignoreuser@materialized:6875/tpcch".to_owned(),
         )?,
     };
 
-    measure_peek_times(&config);
+    // these appear to need to be in this order for both the metrics server and the peek
+    // client to start up
+    let server = thread::spawn(|| serve_metrics().unwrap());
+    let peek_fast = measure_peek_times(&config);
+    peek_fast.join().unwrap();
+    server.join().unwrap();
+    Ok(())
 }
 
-fn measure_peek_times(config: &Config) -> ! {
+fn measure_peek_times(config: &Config) -> thread::JoinHandle<()> {
     let postgres_connection = create_postgres_connection(config);
     try_initialize(&postgres_connection);
 
     thread::spawn(move || {
         let query = "SELECT * FROM q01;";
-        let histogram = create_histogram(query);
+        let histogram = HISTOGRAM_UNLABELED.with_label_values(&[query]);
+        let error_count = ERRORS_UNLABELED.with_label_values(&[query]);
         let mut backoff = get_baseline_backoff();
         let mut last_was_failure = false;
         loop {
-            let query_result = {
-                // Drop is observe for prometheus::Histogram
-                let _timer = prometheus::Histogram::start_timer(&histogram);
-                postgres_connection.query(query, &[])
-            };
+            let timer = prometheus::Histogram::start_timer(&histogram);
+            let query_result = postgres_connection.query(query, &[]);
 
-            if let Err(err) = query_result {
-                last_was_failure = true;
-                print_error_and_backoff(&mut backoff, err.to_string());
-                try_initialize(&postgres_connection);
+            match query_result {
+                Ok(_) => drop(timer),
+                Err(err) => {
+                    timer.stop_and_discard();
+                    error_count.inc();
+                    last_was_failure = true;
+                    print_error_and_backoff(&mut backoff, err.to_string());
+                    try_initialize(&postgres_connection);
+                }
             }
             if !last_was_failure {
                 backoff = get_baseline_backoff();
             }
         }
-    });
-
-    let mut count = 0;
-    loop {
-        if let Err(err) = prometheus::push_metrics(
-            "mz_client_peek",
-            HashMap::new(),
-            &config.pushgateway_url,
-            prometheus::gather(),
-            None,
-        ) {
-            error!("Error pushing metrics: {}", err.to_string())
-        } else {
-            count += 1;
-        }
-        if count % 60 == 0 {
-            info!("pushed metrics {} times", count);
-        }
-        thread::sleep(Duration::from_secs(1));
-    }
+    })
 }
 
 fn get_baseline_backoff() -> Duration {
@@ -132,26 +129,12 @@ fn create_postgres_connection(config: &Config) -> Connection {
 
 fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
     let current_backoff = min(*backoff, MAX_BACKOFF);
-    println!(
-        "{}. Sleeping for {:#?} seconds.\n",
+    warn!(
+        "{}. Sleeping for {:#?} seconds",
         error_message, current_backoff
     );
     thread::sleep(current_backoff);
     *backoff = Duration::from_secs(backoff.as_secs() * 2);
-}
-
-fn create_histogram(query: &str) -> Histogram {
-    let hist_vec = register_histogram_vec!(
-        "mz_client_peek_seconds",
-        "how long peeks took",
-        &["query"],
-        vec![
-            0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
-            0.500, 1.0
-        ]
-    )
-    .expect("can create histogram");
-    hist_vec.with_label_values(&[query])
 }
 
 /// Try to build the views and sources that are needed for this script
@@ -165,7 +148,7 @@ fn try_initialize(postgres_connection: &Connection) {
         &[],
     ) {
         Ok(_) => info!("Created sources"),
-        Err(err) => error!("IGNORING CREATE VIEW error: {}", err),
+        Err(err) => warn!("trying to create sources: {}", err),
     }
     match postgres_connection.execute(
         "CREATE VIEW q01 as SELECT
@@ -184,6 +167,31 @@ fn try_initialize(postgres_connection: &Connection) {
         &[],
     ) {
         Ok(_) => info!("created view q01"),
-        Err(err) => error!("IGNORING CREATE VIEW error: {}", err),
+        Err(err) => warn!("trying to create view: {}", err),
     }
+}
+
+fn serve_metrics() -> Result<(), failure::Error> {
+    info!("serving prometheus metrics on port {}", METRICS_PORT);
+    let addr = ([0, 0, 0, 0], METRICS_PORT).into();
+
+    let make_service = make_service_fn(|_conn| {
+        async {
+            Ok::<_, Infallible>(service_fn(|_req| {
+                async {
+                    let metrics = prometheus::gather();
+                    let encoder = prometheus::TextEncoder::new();
+                    let mut buffer = Vec::new();
+
+                    encoder
+                        .encode(&metrics, &mut buffer)
+                        .unwrap_or_else(|e| error!("error gathering metrics: {}", e));
+                    Ok::<_, Infallible>(Response::new(Body::from(buffer)))
+                }
+            }))
+        }
+    });
+    let mut rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(Server::bind(&addr).serve(make_service))?;
+    Ok(())
 }

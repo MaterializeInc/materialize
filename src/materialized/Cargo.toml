@@ -29,15 +29,15 @@ log = "0.4"
 ore = { path = "../ore" }
 parse_duration = "2.0.1"
 pgwire = { path = "../pgwire" }
-prometheus = { version = "0.7.0", default-features = false, features = ["process"] }
+prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
 tempfile = "3.1"
 tokio = "0.2"
 
 [dev-dependencies]
 chrono = "0.4"
-fallible-iterator = "0.1.6"
+fallible-iterator = "0.2.0"
 itertools = "0.8.2"
-postgres = "0.15"
+postgres = { git = "https://github.com/sfackler/rust-postgres.git", features = ["with-chrono-0_4"] }
 pretty_assertions = "0.6.1"
 
 [build-dependencies]

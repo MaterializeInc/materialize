@@ -3,16 +3,17 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-mod avro;
-mod csv;
-mod regex;
-use self::csv::csv;
-use self::regex::regex as regex_fn;
-use avro::avro;
+use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{DataEncoding, Diff, Timestamp};
 use repr::Row;
-use timely::dataflow::{Scope, Stream};
+
+mod avro;
+mod csv;
+mod regex;
+use self::regex::regex as regex_fn;
+use self::csv::csv;
+use avro::avro;
 
 pub fn decode<G>(
     stream: &Stream<G, Vec<u8>>,

@@ -14,7 +14,7 @@ use futures::sink::SinkExt;
 use futures::stream;
 use lazy_static::lazy_static;
 use log::{debug, trace};
-use prometheus::{histogram_opts, register_histogram_vec};
+use prometheus::register_histogram_vec;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
@@ -652,7 +652,7 @@ where
             Arc::new(portal.result_formats.iter().map(Into::into).collect());
 
         self.send_all(
-            if max_rows > 0 {
+            if max_rows > 0 && (max_rows as usize) < rows.len() {
                 rows.drain(..max_rows as usize)
             } else {
                 rows.drain(..)

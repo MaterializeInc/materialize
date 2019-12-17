@@ -8,7 +8,7 @@ members = [
     "src/dataflow-types",
     "src/expr",
     "src/interchange",
-    "src/metrics",
+    "src/peeker",
     "src/materialized",
     "src/ore",
     "src/repr",

@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::source as timely_source;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
@@ -12,8 +13,9 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use super::{SharedCapability, SourceStatus};
 use dataflow_types::Timestamp;
+
+use super::{SharedCapability, SourceStatus};
 
 pub fn source<G, D, B, L>(scope: &G, name: &str, construct: B) -> (Stream<G, D>, SharedCapability)
 where
