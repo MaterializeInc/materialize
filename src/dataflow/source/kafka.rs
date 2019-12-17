@@ -18,7 +18,7 @@ use timely::scheduling::activate::SyncActivator;
 use dataflow_types::{KafkaSourceConnector, Timestamp};
 
 use super::util::source;
-use super::{SharedCapability, SourceStatus};
+use super::{SourceStatus, SourceToken};
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
@@ -33,7 +33,7 @@ pub fn kafka<G>(
     name: String,
     connector: KafkaSourceConnector,
     read_kafka: bool,
-) -> (Stream<G, Vec<u8>>, Option<SharedCapability>)
+) -> (Stream<G, Vec<u8>>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -122,13 +122,13 @@ where
                         // configured to unpark our thread when a new message
                         // arrives.
                         activator.activate();
-                        return SourceStatus::ScheduleAgain;
+                        return SourceStatus::Alive;
                     }
                 }
             }
             // Ensure that we poll kafka more often than the eviction timeout
             activator.activate_after(Duration::from_secs(60));
-            SourceStatus::ScheduleAgain
+            SourceStatus::Alive
         }
     });
 

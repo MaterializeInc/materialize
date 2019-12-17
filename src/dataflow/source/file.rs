@@ -24,7 +24,7 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 use dataflow_types::Timestamp;
 
 use crate::source::util::source;
-use crate::source::{SharedCapability, SourceStatus};
+use crate::source::{SourceStatus, SourceToken};
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
@@ -155,10 +155,7 @@ pub fn file<G>(
     path: PathBuf,
     executor: &tokio::runtime::Handle,
     read_style: FileReadStyle,
-) -> (
-    timely::dataflow::Stream<G, Vec<u8>>,
-    Option<SharedCapability>,
-)
+) -> (timely::dataflow::Stream<G, Vec<u8>>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -195,7 +192,7 @@ where
                     None => return SourceStatus::Done,
                 }
             }
-            SourceStatus::ScheduleAgain
+            SourceStatus::Alive
         }
     });
 

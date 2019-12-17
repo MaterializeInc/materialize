@@ -15,9 +15,34 @@ use timely::Data;
 
 use dataflow_types::Timestamp;
 
-use super::{SharedCapability, SourceStatus};
+use super::{SourceStatus, SourceToken};
 
-pub fn source<G, D, B, L>(scope: &G, name: &str, construct: B) -> (Stream<G, D>, SharedCapability)
+/// Constructs a source named `name` in `scope` whose lifetime is controlled
+/// both internally and externally.
+///
+/// The logic for the source is supplied by `construct`, which must return a
+/// `tick` function that satisfies `L`. This function will be called
+/// periodically while the source is alive and supplied with a capability to
+/// produce data and the output handle into which data should be given. The
+/// `tick` function is responsible for periodically downgrading this capability
+/// whenever it can see that a timestamp is "closed", according to whatever
+/// logic makes sense for the source.
+///
+/// If `tick` realizes it will never produce data again, it should indicate that
+/// fact by returning [`SourceStatus::Done`], which will immediately drop the
+/// capability and guarantee that `tick` is never called again.
+///
+/// Otherwise, `tick` should return [`SourceStatus::Alive`]. It is `tick`'s
+/// responsibility to inform Timely of its desire to be scheduled again by
+/// chatting with a [`timely::scheduling::activate::Activator`]. Returning
+/// [`SourceStatus::Alive`] does not alone cause the source to be scheduled
+/// again; it merely keeps the capability alive.
+///
+/// The lifetime of the source is also controlled by the returned
+/// [`SourceToken`]. When the last clone of the `SourceToken` is dropped, the
+/// `tick` function will no longer be called, and the capability will eventually
+/// be dropped.
+pub fn source<G, D, B, L>(scope: &G, name: &str, construct: B) -> (Stream<G, D>, SourceToken)
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
@@ -28,20 +53,24 @@ where
         ) -> SourceStatus
         + 'static,
 {
-    let mut cap_out = None;
+    let mut token = None;
     let stream = timely_source(scope, name, |cap, info| {
-        // Share ownership of the source's capability with the outside world.
         let cap = Rc::new(RefCell::new(Some(cap)));
-        cap_out = Some(cap.clone());
 
-        // Hold only a weak reference to the capability. If all strong
-        // references to the capability are dropped, we automatically shut down.
-        let cap = Rc::downgrade(&cap);
+        // Export a token to the outside word that will keep this source alive.
+        token = Some(SourceToken {
+            capability: cap.clone(),
+            activator: scope.activator_for(&info.address[..]),
+        });
+
         let mut tick = construct(info);
         move |output| {
-            if let Some(cap) = cap.upgrade() {
-                let mut cap = cap.borrow_mut();
-                if let SourceStatus::Done = tick(cap.as_mut().unwrap(), output) {
+            let mut cap = cap.borrow_mut();
+            if let Some(some_cap) = &mut *cap {
+                // We still have our capability, so the source is still alive.
+                // Delegate to the inner source.
+                if let SourceStatus::Done = tick(some_cap, output) {
+                    // The inner source is finished. Drop our capability.
                     *cap = None;
                 }
             }
@@ -49,6 +78,6 @@ where
     });
 
     // `timely_source` promises to call the provided closure before returning,
-    // so we are guaranteed that `cap_out` is non-None.
-    (stream, cap_out.unwrap())
+    // so we are guaranteed that `token` is non-None.
+    (stream, token.unwrap())
 }
