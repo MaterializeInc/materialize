@@ -11,8 +11,8 @@ use repr::Row;
 mod avro;
 mod csv;
 mod regex;
-use self::regex::regex as regex_fn;
 use self::csv::csv;
+use self::regex::regex as regex_fn;
 use avro::avro;
 
 pub fn decode<G>(
