@@ -102,7 +102,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 )
                             }
                         };
-                        (decode(&source, encoding), cap)
+                        (decode(&source, encoding, &dataflow.debug_name), cap)
                     }
                 };
 

@@ -593,6 +593,7 @@ fn handle_create_dataflow(
                                 Ok(r) => r,
                                 Err(e) => bail!("Error compiling regex: {}", e),
                             };
+                            assert!(regex.captures_len() > 0);
                             let n_cols = regex.captures_len() - 1;
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)

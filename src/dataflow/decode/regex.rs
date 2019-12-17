@@ -13,10 +13,11 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
-pub fn regex<G>(stream: &Stream<G, Vec<u8>>, regex: Regex) -> Stream<G, (Row, Timestamp, Diff)>
+pub fn regex<G>(stream: &Stream<G, Vec<u8>>, regex: Regex, name: &str) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let name = String::from(name);
     stream.unary(
         Exchange::new(|x: &Vec<u8>| x.hashed()),
         "RegexDecode",
@@ -29,8 +30,9 @@ where
                             Ok(line) => line,
                             _ => {
                                 warn!(
-                                    "Line cannot be decoded as utf8: {}. Skipping regex matching.",
-                                    String::from_utf8_lossy(&line)
+                                    "Line {} from source {} cannot be decoded as utf8. Discarding line.",
+                                    String::from_utf8_lossy(&line),
+                                    name
                                 );
                                 continue;
                             }
