@@ -20,19 +20,19 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         );
 
     {
-        let (_server, conn) = util::start_server(config.clone())?;
+        let (_server, mut client) = util::start_server(config.clone())?;
         // TODO(benesch): when file sources land, use them here. Creating a
         // populated Kafka source here is too annoying.
-        conn.execute("CREATE VIEW constant AS SELECT 1", &[])?;
-        conn.execute(
+        client.execute("CREATE VIEW constant AS SELECT 1", &[])?;
+        client.execute(
             "CREATE VIEW logging_derived AS SELECT * FROM mz_arrangement_sizes",
             &[],
         )?;
     }
 
     {
-        let (_server, conn) = util::start_server(config)?;
-        let rows: Vec<String> = conn
+        let (_server, mut client) = util::start_server(config)?;
+        let rows: Vec<String> = client
             .query("SHOW VIEWS", &[])?
             .into_iter()
             .map(|row| row.get(0))

@@ -37,7 +37,7 @@ tokio = "0.2"
 chrono = "0.4"
 fallible-iterator = "0.1.6"
 itertools = "0.8.2"
-postgres = "0.15"
+postgres = { git = "https://github.com/sfackler/rust-postgres.git", features = ["with-chrono-0_4"] }
 pretty_assertions = "0.6.1"
 
 [build-dependencies]
