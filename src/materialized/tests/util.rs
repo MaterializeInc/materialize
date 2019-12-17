@@ -8,8 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use postgres::params::{ConnectParams, Host};
-use postgres::{Connection, TlsMode};
+use postgres::{Client, Config as PgConfig, NoTls};
 
 pub type TestResult = Result<(), Box<dyn Error>>;
 
@@ -31,7 +30,7 @@ impl Config {
     }
 }
 
-pub fn start_server(config: Config) -> Result<(materialized::Server, Connection), Box<dyn Error>> {
+pub fn start_server(config: Config) -> Result<(materialized::Server, Client), Box<dyn Error>> {
     let server = materialized::serve(materialized::Config {
         logging_granularity: Some(Duration::from_millis(10)),
         threads: 1,
@@ -43,12 +42,10 @@ pub fn start_server(config: Config) -> Result<(materialized::Server, Connection)
         gather_metrics: false,
     })?;
     let local_addr = server.local_addr();
-    let conn = Connection::connect(
-        ConnectParams::builder()
-            .port(local_addr.port())
-            .user("root", None)
-            .build(Host::Tcp(local_addr.ip().to_string())),
-        TlsMode::None,
-    )?;
-    Ok((server, conn))
+    let client = PgConfig::new()
+        .host(&local_addr.ip().to_string())
+        .port(local_addr.port())
+        .user("root")
+        .connect(NoTls)?;
+    Ok((server, client))
 }

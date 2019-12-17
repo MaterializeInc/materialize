@@ -652,7 +652,7 @@ where
             Arc::new(portal.result_formats.iter().map(Into::into).collect());
 
         self.send_all(
-            if max_rows > 0 {
+            if max_rows > 0 && (max_rows as usize) < rows.len() {
                 rows.drain(..max_rows as usize)
             } else {
                 rows.drain(..)
