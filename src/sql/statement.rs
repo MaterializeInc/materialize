@@ -605,8 +605,8 @@ fn handle_create_dataflow(
                                 // If people want it they can just surround their
                                 // entire regex in an explicit capture group.
                                 .skip(1)
-                                .map( |ocn| {
-                                    ocn.map(String::from).unwrap_or_else( || {
+                                .map(|ocn| {
+                                    ocn.map(String::from).unwrap_or_else(|| {
                                         *unnamed_idx += 1;
                                         format!("unnamed{}", unnamed_idx)
                                     })
