@@ -61,7 +61,6 @@ fn test_partial_read() -> util::TestResult {
     let trans = conn.transaction()?;
     let rows_lazily: Vec<_> = stmt.lazy_query(&trans, &[], max_rows)?.collect()?;
 
-    let (simple_count, lazy_count) = (simpler.len(), rows_lazily.len());
     for (eagerly_row, lazily_row) in simpler.iter().zip_eq(rows_lazily) {
         let eagerly: String = eagerly_row.get(0);
         let lazily: String = lazily_row.get(0);
