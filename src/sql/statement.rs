@@ -882,7 +882,7 @@ fn build_kafka_source(
     let (key_schema, value_schema, schema_registry_url) = match schema {
         // TODO(jldlaughlin): we need a way to pass in primary key information
         // when building a source from a string
-        SourceSchema::Raw(schema) => (None, schema.to_owned(), None),
+        SourceSchema::RawOrPath(schema) => (None, schema.to_owned(), None),
 
         SourceSchema::Registry(url) => {
             // TODO(benesch): we need to fetch this schema asynchronously to
