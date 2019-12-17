@@ -14,20 +14,10 @@ use timely::scheduling::activate::SyncActivator;
 
 use super::util::source;
 use super::{SharedCapability, SourceStatus};
-use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
-use interchange::avro;
-use repr::Row;
+use dataflow_types::{KafkaSourceConnector, Timestamp};
 
 use lazy_static::lazy_static;
-use prometheus::{IntCounter, IntCounterVec};
-
-use prometheus_static_metric::make_static_metric;
-
-make_static_metric! {
-    struct EventsRead: IntCounter {
-        "status" => { success, error }
-    }
-}
+use prometheus::IntCounter;
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
@@ -35,13 +25,6 @@ lazy_static! {
         "Count of kafka bytes we have read from the wire"
     )
     .unwrap();
-    static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = register_int_counter_vec!(
-        "mz_kafka_events_read_total",
-        "Count of kafka events we have read from the wire",
-        &["status"]
-    )
-    .unwrap();
-    static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
 }
 
 pub fn kafka<G>(
@@ -49,16 +32,11 @@ pub fn kafka<G>(
     name: String,
     connector: KafkaSourceConnector,
     read_kafka: bool,
-) -> (Stream<G, (Row, Timestamp, Diff)>, Option<SharedCapability>)
+) -> (Stream<G, Vec<u8>>, Option<SharedCapability>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let KafkaSourceConnector {
-        addr,
-        topic,
-        raw_schema,
-        schema_registry_url,
-    } = connector;
+    let KafkaSourceConnector { addr, topic } = connector;
     let (stream, capability) = source(scope, &name.clone(), move |info| {
         let activator = scope.activator_for(&info.address[..]);
 
@@ -152,40 +130,6 @@ where
             SourceStatus::ScheduleAgain
         }
     });
-
-    use differential_dataflow::hashable::Hashable;
-    use timely::dataflow::channels::pact::Exchange;
-    use timely::dataflow::operators::generic::operator::Operator;
-
-    let stream = stream.unary(
-        Exchange::new(|x: &Vec<u8>| x.hashed()),
-        "AvroDecode",
-        move |_, _| {
-            let mut decoder = avro::Decoder::new(&raw_schema, schema_registry_url);
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for payload in data.iter() {
-                        match decoder.decode(payload) {
-                            Ok(diff_pair) => {
-                                EVENTS_COUNTER.success.inc();
-                                if let Some(before) = diff_pair.before {
-                                    session.give((before, *cap.time(), -1));
-                                }
-                                if let Some(after) = diff_pair.after {
-                                    session.give((after, *cap.time(), 1));
-                                }
-                            }
-                            Err(err) => {
-                                EVENTS_COUNTER.error.inc();
-                                error!("avro deserialization error: {}", err)
-                            }
-                        }
-                    }
-                });
-            }
-        },
-    );
 
     if read_kafka {
         (stream, Some(capability))

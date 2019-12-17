@@ -9,14 +9,11 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use differential_dataflow::Hashable;
 use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use log::error;
 use notify::{RawEvent, RecursiveMode, Watcher};
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 use tokio::fs::File;
@@ -24,8 +21,7 @@ use tokio::io::{self, AsyncRead};
 use tokio::task;
 use tokio_util::codec::{FramedRead, LinesCodec};
 
-use dataflow_types::{Diff, Timestamp};
-use repr::{Datum, Row};
+use dataflow_types::Timestamp;
 
 use crate::source::util::source;
 use crate::source::{SharedCapability, SourceStatus};
@@ -153,15 +149,14 @@ async fn read_file_task(
     }
 }
 
-pub fn csv<G>(
+pub fn file<G>(
     region: &G,
     name: String,
     path: PathBuf,
-    n_cols: usize,
     executor: &tokio::runtime::Handle,
     read_style: FileReadStyle,
 ) -> (
-    timely::dataflow::Stream<G, (Row, Timestamp, Diff)>,
+    timely::dataflow::Stream<G, Vec<u8>>,
     Option<SharedCapability>,
 )
 where
@@ -195,7 +190,7 @@ where
                                 cur,
                             );
                         };
-                        output.session(cap).give(line);
+                        output.session(cap).give(line.into_bytes());
                     }
                     None => return SourceStatus::Done,
                 }
@@ -203,43 +198,6 @@ where
             SourceStatus::ScheduleAgain
         }
     });
-    let stream = stream.unary(
-        Exchange::new(|x: &String| x.hashed()),
-        "CsvDecode",
-        |_, _| {
-            move |input, output| {
-                input.for_each(|cap, lines| {
-                    let mut session = output.session(&cap);
-                    // TODO: There is extra work going on here:
-                    // LinesCodec is already splitting our input into lines,
-                    // but the CsvReader *itself* searches for line breaks.
-                    // This is mainly an aesthetic/performance-golfing
-                    // issue as I doubt it will ever be a bottleneck.
-                    for line in &*lines {
-                        let mut csv_reader = csv::ReaderBuilder::new()
-                            .has_headers(false)
-                            .from_reader(line.as_bytes());
-                        for result in csv_reader.records() {
-                            let record = result.unwrap();
-                            if record.len() != n_cols {
-                                error!(
-                                    "CSV error: expected {} columns, got {}. Ignoring row.",
-                                    n_cols,
-                                    record.len()
-                                );
-                                continue;
-                            }
-                            session.give((
-                                Row::pack(record.iter().map(|s| Datum::String(s))),
-                                *cap.time(),
-                                1,
-                            ));
-                        }
-                    }
-                });
-            }
-        },
-    );
 
     if read_file {
         (stream, Some(capability))

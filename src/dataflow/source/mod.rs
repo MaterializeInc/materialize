@@ -8,12 +8,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use timely::dataflow::operators::Capability;
 
-mod csv_file;
+mod file;
 mod kafka;
 mod util;
 
-pub use csv_file::csv;
-pub use csv_file::FileReadStyle;
+pub use file::{file, FileReadStyle};
 pub use kafka::kafka;
 
 pub type SharedCapability = Rc<RefCell<Option<Capability<Timestamp>>>>;

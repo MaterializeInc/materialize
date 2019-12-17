@@ -21,8 +21,9 @@ use url::Url;
 
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
-    FileFormat, FileSourceConnector, Index, IndexDesc, KafkaSinkConnector, KafkaSourceConnector,
-    KeySql, PeekWhen, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
+    AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
+    IndexDesc, KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, RowSetFinishing, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::avro;
@@ -413,21 +414,26 @@ fn handle_show_create_source(
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
-    let source_url =
-        if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
-            match connector {
-                SourceConnector::Local => String::from("local://"),
-                SourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
-                    format!("kafka://{}/{}", addr, topic)
-                }
-                SourceConnector::File(c) => {
-                    // TODO https://github.com/MaterializeInc/materialize/issues/1093
-                    format!("file://{}", c.path.to_string_lossy())
-                }
+    let source_url = if let CatalogItem::Source(Source { connector, .. }) =
+        catalog.get(&name)?.item()
+    {
+        match connector {
+            SourceConnector::Local => String::from("local://"),
+            SourceConnector::External {
+                connector: ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
+                ..
+            } => format!("kafka://{}/{}", addr, topic),
+            SourceConnector::External {
+                connector: ExternalSourceConnector::File(c),
+                ..
+            } => {
+                // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                format!("file://{}", c.path.to_string_lossy())
             }
-        } else {
-            bail!("{} is not a source", name);
-        };
+        }
+    } else {
+        bail!("{} is not a source", name);
+    };
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name.to_string()),
         Datum::String(&source_url),
@@ -562,11 +568,13 @@ fn handle_create_dataflow(
                                 .collect();
                             let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
                             let source = Source {
-                                connector: SourceConnector::File(FileSourceConnector {
-                                    path: path.clone().try_into()?,
-                                    format: FileFormat::Csv(n_cols),
-                                    tail,
-                                }),
+                                connector: SourceConnector::External {
+                                    connector: ExternalSourceConnector::File(FileSourceConnector {
+                                        path: path.clone().try_into()?,
+                                        tail,
+                                    }),
+                                    encoding: DataEncoding::Csv(CsvEncoding { n_cols }),
+                                },
                                 desc: RelationDesc::new(RelationType::new(cols), names),
                             };
                             Ok(Plan::CreateSource(name, source))
@@ -855,12 +863,16 @@ fn build_kafka_source(
     }
 
     Ok(Source {
-        connector: SourceConnector::Kafka(KafkaSourceConnector {
-            addr: kafka_addr,
-            topic,
-            raw_schema: value_schema,
-            schema_registry_url,
-        }),
+        connector: SourceConnector::External {
+            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                addr: kafka_addr,
+                topic,
+            }),
+            encoding: DataEncoding::Avro(AvroEncoding {
+                raw_schema: value_schema,
+                schema_registry_url,
+            }),
+        },
         desc,
     })
 }

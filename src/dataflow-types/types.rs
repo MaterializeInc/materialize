@@ -222,6 +222,32 @@ impl DataflowDesc {
     }
 }
 
+/// A description of how each row should be decoded, from a string of bytes to a sequence of
+/// Differential updates.
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum DataEncoding {
+    Avro(AvroEncoding),
+    Csv(CsvEncoding),
+}
+
+/// Encoding in Avro format.
+///
+/// Assumes Debezium-style `before: ..., after: ...` structure.
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AvroEncoding {
+    pub raw_schema: String,
+    pub schema_registry_url: Option<Url>,
+}
+
+/// Encoding in CSV format, with no headers, and `n_cols` columns per row.
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CsvEncoding {
+    pub n_cols: usize,
+}
+
 /// A source of updates for a relational collection.
 ///
 /// A source contains enough information to instantiate a stream of changes,
@@ -254,7 +280,15 @@ pub struct View {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SourceConnector {
+    External {
+        connector: ExternalSourceConnector,
+        encoding: DataEncoding,
+    },
     Local,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ExternalSourceConnector {
     Kafka(KafkaSourceConnector),
     File(FileSourceConnector),
 }
@@ -263,20 +297,12 @@ pub enum SourceConnector {
 pub struct KafkaSourceConnector {
     pub addr: std::net::SocketAddr,
     pub topic: String,
-    pub raw_schema: String,
-    pub schema_registry_url: Option<Url>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FileSourceConnector {
     pub path: PathBuf,
-    pub format: FileFormat,
     pub tail: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum FileFormat {
-    Csv(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

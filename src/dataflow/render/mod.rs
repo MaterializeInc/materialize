@@ -32,6 +32,7 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 
 mod context;
+use crate::decode::decode;
 use context::{ArrangementFlavor, Context};
 
 pub(crate) fn build_dataflow<A: Allocate>(
@@ -60,13 +61,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
             // Load declared sources into the rendering context.
             for (src_id, src) in dataflow.sources {
                 let (stream, capability) = match src.connector {
-                    SourceConnector::Kafka(c) => {
-                        // Distribute read responsibility among workers.
-                        use differential_dataflow::hashable::Hashable;
-                        let hash = src_id.hashed() as usize;
-                        let read_from_kafka = hash % worker_peers == worker_index;
-                        source::kafka(region, format!("kafka-{}", src_id), c, read_from_kafka)
-                    }
                     SourceConnector::Local => {
                         let ((handle, capability), stream) = region.new_unordered_input();
                         if worker_index == 0 {
@@ -74,25 +68,42 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         }
                         (stream, None)
                     }
-                    SourceConnector::File(c) => match c.format {
-                        FileFormat::Csv(n_cols) => {
-                            let read_style = if worker_index != 0 {
-                                FileReadStyle::None
-                            } else if c.tail {
-                                FileReadStyle::TailFollowFd
-                            } else {
-                                FileReadStyle::ReadOnce
-                            };
-                            source::csv(
-                                region,
-                                format!("csv-{}", src_id),
-                                c.path,
-                                n_cols,
-                                executor,
-                                read_style,
-                            )
-                        }
-                    },
+                    SourceConnector::External {
+                        connector,
+                        encoding,
+                    } => {
+                        let (source, cap) = match connector {
+                            ExternalSourceConnector::Kafka(c) => {
+                                // Distribute read responsibility among workers.
+                                use differential_dataflow::hashable::Hashable;
+                                let hash = src_id.hashed() as usize;
+                                let read_from_kafka = hash % worker_peers == worker_index;
+                                source::kafka(
+                                    region,
+                                    format!("kafka-{}", src_id),
+                                    c,
+                                    read_from_kafka,
+                                )
+                            }
+                            ExternalSourceConnector::File(c) => {
+                                let read_style = if worker_index != 0 {
+                                    FileReadStyle::None
+                                } else if c.tail {
+                                    FileReadStyle::TailFollowFd
+                                } else {
+                                    FileReadStyle::ReadOnce
+                                };
+                                source::file(
+                                    region,
+                                    format!("csv-{}", src_id),
+                                    c.path,
+                                    executor,
+                                    read_style,
+                                )
+                            }
+                        };
+                        (decode(&source, encoding), cap)
+                    }
                 };
 
                 // Introduce the stream by name, as an unarranged collection.
