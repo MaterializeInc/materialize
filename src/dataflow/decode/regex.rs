@@ -8,6 +8,7 @@ use differential_dataflow::Hashable;
 use log::warn;
 use regex::Regex;
 use repr::{Datum, Row};
+use std::cmp::max;
 use std::str;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
@@ -33,9 +34,11 @@ where
                         let line = match str::from_utf8(&line) {
                             Ok(line) => line,
                             _ => {
+                                let line_len = max(line.len(), 1024);
                                 warn!(
-                                    "Line {} from source {} cannot be decoded as utf8. Discarding line.",
-                                    String::from_utf8_lossy(&line),
+                                    "Line {}{} from source {} cannot be decoded as utf8. Discarding line.",
+                                    if line_len == line.len() { "" } else {"starting with: "},
+                                    String::from_utf8_lossy(&line[0..line_len]),
                                     name
                                 );
                                 continue;
