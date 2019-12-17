@@ -100,18 +100,20 @@ impl Scope {
         }
     }
 
-    pub fn from_source<I, N>(
-        table_name: Option<impl Into<QualName>>,
+    pub fn from_source<T, I, N>(
+        table_name: Option<T>,
         column_names: I,
         outer_scope: Option<Scope>,
     ) -> Self
     where
-        I: Iterator<Item = Option<N>>,
+        T: Into<QualName>,
+        I: IntoIterator<Item = Option<N>>,
         N: Into<ColumnName>,
     {
         let mut scope = Scope::empty(outer_scope);
         let table_name = table_name.map(|n| n.into());
         scope.items = column_names
+            .into_iter()
             .map(|column_name| ScopeItem {
                 names: vec![ScopeItemName {
                     table_name: table_name.clone(),

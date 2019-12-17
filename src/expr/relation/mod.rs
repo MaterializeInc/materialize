@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use repr::{ColumnType, Datum, RelationType, Row};
 
-use self::func::AggregateFunc;
+use self::func::{AggregateFunc, UnaryTableFunc};
 use crate::pretty::{tighten_outputs, DocAllocatorExt, DocBuilderExt};
 use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
 
@@ -66,6 +66,15 @@ pub enum RelationExpr {
         /// An expression may refer to columns in `input` or
         /// expressions defined earlier in the vector
         scalars: Vec<ScalarExpr>,
+    },
+    /// Like Map, but yields zero-or-more output rows per input row
+    FlatMapUnary {
+        /// The source collection
+        input: Box<RelationExpr>,
+        /// The table func to apply
+        func: UnaryTableFunc,
+        /// The argument to the table func
+        expr: ScalarExpr,
     },
     /// Keep rows from a dataflow where all the predicates are true
     Filter {
@@ -191,6 +200,13 @@ impl RelationExpr {
                     typ.column_types.push(scalar.typ(&typ));
                 }
                 typ
+            }
+            RelationExpr::FlatMapUnary { input, func, expr } => {
+                let mut typ = input.typ();
+                typ.column_types
+                    .extend(func.output_type(&expr.typ(&typ)).column_types);
+                // FlatMap can add duplicate rows, so input keys are no longer valid
+                RelationType::new(typ.column_types)
             }
             RelationExpr::Filter { input, .. } => input.typ(),
             RelationExpr::Join {
@@ -342,6 +358,15 @@ impl RelationExpr {
         RelationExpr::Map {
             input: Box::new(self),
             scalars,
+        }
+    }
+
+    /// Like `map`, but yields zero-or-more output rows per input row
+    pub fn flat_map_unary(self, func: UnaryTableFunc, expr: ScalarExpr) -> Self {
+        RelationExpr::FlatMapUnary {
+            input: Box::new(self),
+            func,
+            expr,
         }
     }
 
@@ -528,6 +553,9 @@ impl RelationExpr {
             RelationExpr::Map { input, .. } => {
                 f(input);
             }
+            RelationExpr::FlatMapUnary { input, .. } => {
+                f(input);
+            }
             RelationExpr::Filter { input, .. } => {
                 f(input);
             }
@@ -578,6 +606,9 @@ impl RelationExpr {
                 f(input);
             }
             RelationExpr::Map { input, .. } => {
+                f(input);
+            }
+            RelationExpr::FlatMapUnary { input, .. } => {
                 f(input);
             }
             RelationExpr::Filter { input, .. } => {
@@ -705,6 +736,13 @@ impl RelationExpr {
                 .append(alloc.line())
                 .append(input.to_doc(alloc, id_humanizer))
                 .embrace("Map {", "}"),
+            RelationExpr::FlatMapUnary { input, func, expr } => alloc
+                .text(func.to_string())
+                .append(expr.to_doc(alloc).tightly_embrace("(", ")"))
+                .append(",")
+                .append(alloc.line())
+                .append(input.to_doc(alloc, id_humanizer))
+                .embrace("FlatMap {", "}"),
             RelationExpr::Filter { input, predicates } => alloc
                 .intersperse(
                     predicates.iter().map(|p| p.to_doc(alloc)),

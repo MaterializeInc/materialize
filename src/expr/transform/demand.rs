@@ -88,6 +88,16 @@ impl Demand {
                 columns.retain(|c| *c < arity);
                 self.action(input, columns, gets);
             }
+            RelationExpr::FlatMapUnary {
+                input,
+                func: _,
+                expr,
+            } => {
+                // A FlatMap which returns zero rows acts like a filter
+                // so we always need to execute it
+                columns.extend(expr.support());
+                self.action(input, columns, gets);
+            }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
                     for column in predicate.support() {

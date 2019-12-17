@@ -42,7 +42,7 @@ use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, 
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
-    RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
+    RelationExpr, ScalarExpr, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };
 use super::names;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
@@ -614,32 +614,43 @@ fn plan_table_factor<'a>(
             args,
             with_hints,
         } => {
-            if !args.is_empty() {
-                bail!("table arguments are not supported");
-            }
             if !with_hints.is_empty() {
                 bail!("WITH hints are not supported");
             }
             let name = QualName::try_from(name.clone())?;
-            let item = catalog.get(&name)?;
-            let expr = RelationExpr::Get {
-                id: Id::Global(item.id()),
-                typ: item.desc()?.typ().clone(),
-            };
             let alias: QualName = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
                     bail!("aliasing columns is not yet supported");
                 }
                 name.clone().try_into()?
             } else {
-                name
+                name.clone()
             };
-            let scope = Scope::from_source(
-                Some(&alias),
-                item.desc()?.iter_names(),
-                Some(qcx.outer_scope.clone()),
-            );
-            Ok((expr, scope))
+            if !args.is_empty() {
+                let scope = &Scope::empty(Some(qcx.outer_scope.clone()));
+                let relation_type = &RelationType::empty();
+                let ecx = &ExprContext {
+                    qcx,
+                    name: "FROM table function",
+                    scope,
+                    relation_type,
+                    allow_aggregates: false,
+                    allow_subqueries: true,
+                };
+                plan_table_function(catalog, ecx, &name, Some(alias), args)
+            } else {
+                let item = catalog.get(&name)?;
+                let expr = RelationExpr::Get {
+                    id: Id::Global(item.id()),
+                    typ: item.desc()?.typ().clone(),
+                };
+                let scope = Scope::from_source(
+                    Some(&alias),
+                    item.desc()?.iter_names(),
+                    Some(qcx.outer_scope.clone()),
+                );
+                Ok((expr, scope))
+            }
         }
         TableFactor::Derived {
             lateral,
@@ -666,6 +677,42 @@ fn plan_table_factor<'a>(
         TableFactor::NestedJoin(table_with_joins) => {
             plan_table_with_joins(catalog, qcx, table_with_joins)
         }
+    }
+}
+
+fn plan_table_function<'a>(
+    catalog: &Catalog,
+    ecx: &ExprContext,
+    name: &QualName,
+    alias: Option<QualName>,
+    args: &Vec<Expr>,
+) -> Result<(RelationExpr, Scope), failure::Error> {
+    let ident = &*name.to_string();
+    match (ident, &**args) {
+        ("jsonb_each", [expr]) => {
+            let expr = plan_expr(catalog, ecx, expr, Some(ScalarType::Jsonb))?;
+            match ecx.column_type(&expr).scalar_type {
+                ScalarType::Jsonb => {
+                    let call = RelationExpr::CallUnary {
+                        func: UnaryTableFunc::JsonbEach,
+                        expr,
+                    };
+                    let scope = Scope::from_source(
+                        alias,
+                        vec![
+                            Some(ColumnName::from("key")),
+                            Some(ColumnName::from("value")),
+                        ],
+                        Some(ecx.qcx.outer_scope.clone()),
+                    );
+                    Ok((call, scope))
+                }
+                other => bail!("No overload of jsonb_each for {}", other),
+            }
+        }
+        ("jsonb_each", _) => bail!("jsonb_each() requires exactly one argument"),
+
+        _ => bail!("unsupported table function: {}", ident),
     }
 }
 

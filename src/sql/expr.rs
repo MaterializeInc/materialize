@@ -13,7 +13,7 @@ use std::mem;
 // these happen to be unchanged at the moment, but there might be additions later
 pub use dataflow_expr::like;
 pub use dataflow_expr::{
-    AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, UnaryFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +83,10 @@ pub enum RelationExpr {
     Union {
         left: Box<RelationExpr>,
         right: Box<RelationExpr>,
+    },
+    CallUnary {
+        func: UnaryTableFunc,
+        expr: ScalarExpr,
     },
 }
 
@@ -231,6 +235,7 @@ impl RelationExpr {
                     predicates.push(subquery);
                 }
             }
+            RelationExpr::CallUnary { func: _, expr } => expr.split_subquery_predicates(),
         }
     }
 
@@ -424,6 +429,22 @@ impl RelationExpr {
             }
             Negate { input } => Ok(input.applied_to(id_gen, get_outer)?.negate()),
             Threshold { input } => Ok(input.applied_to(id_gen, get_outer)?.threshold()),
+            CallUnary { func, expr } => {
+                let mut input = get_outer.clone();
+                let old_arity = input.arity();
+                let expr = expr.applied_to(id_gen, get_outer.arity(), &mut input)?;
+                let new_arity = input.arity();
+                input = input.flat_map_unary(func, expr);
+                if old_arity != new_arity {
+                    // this means we added some columns to handle subqueries, and now we need to get rid of them
+                    input = input.project(
+                        (0..old_arity)
+                            .chain(new_arity..new_arity + func.output_arity())
+                            .collect(),
+                    );
+                }
+                Ok(input)
+            }
         }
     }
 
@@ -473,6 +494,7 @@ impl RelationExpr {
                 f(left);
                 f(right);
             }
+            RelationExpr::CallUnary { .. } => {}
         }
     }
 
@@ -1036,6 +1058,9 @@ impl RelationExpr {
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap(),
                 )
+            }
+            RelationExpr::CallUnary { func, expr } => {
+                func.output_type(&expr.typ(outer, &RelationType::empty(), params))
             }
         }
     }

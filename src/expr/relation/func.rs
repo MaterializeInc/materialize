@@ -12,7 +12,7 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, RowArena, ScalarType};
+use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::EvalEnv;
 
@@ -491,6 +491,16 @@ impl AggregateFunc {
     }
 }
 
+fn jsonb_each<'a>(a: Datum<'a>, _: &EvalEnv, row_arena: &mut RowArena<'a>) -> Vec<Row> {
+    match a {
+        Datum::Dict(dict) => dict
+            .iter()
+            .map(|(k, v)| row_arena.pack(&[Datum::String(k), v]))
+            .collect(),
+        _ => vec![],
+    }
+}
+
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -526,6 +536,44 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::CountAll => f.write_str("countall"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum UnaryTableFunc {
+    JsonbEach,
+}
+
+impl UnaryTableFunc {
+    pub fn func(self) -> for<'a> fn(Datum<'a>, &EvalEnv, &mut RowArena<'a>) -> Vec<Row> {
+        match self {
+            UnaryTableFunc::JsonbEach => jsonb_each,
+        }
+    }
+
+    pub fn output_type(self, _input_type: &ColumnType) -> RelationType {
+        match self {
+            UnaryTableFunc::JsonbEach => RelationType::new(vec![
+                // key
+                ColumnType::new(ScalarType::Jsonb),
+                // value
+                ColumnType::new(ScalarType::Jsonb),
+            ]),
+        }
+    }
+
+    pub fn output_arity(self) -> usize {
+        match self {
+            UnaryTableFunc::JsonbEach => 2,
+        }
+    }
+}
+
+impl fmt::Display for UnaryTableFunc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            UnaryTableFunc::JsonbEach => f.write_str("jsonb_each"),
         }
     }
 }

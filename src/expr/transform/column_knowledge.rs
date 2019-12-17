@@ -92,6 +92,18 @@ impl ColumnKnowledge {
                 }
                 input_knowledge
             }
+            RelationExpr::FlatMapUnary { input, func, expr } => {
+                let mut input_knowledge = ColumnKnowledge::harvest(input, env, knowledge);
+                optimize(expr, env, &input_knowledge[..]);
+                let func_typ = func.output_type(&expr.typ(&input.typ()));
+                input_knowledge.extend(func_typ.column_types.into_iter().map(|typ| {
+                    DatumKnowledge {
+                        value: None,
+                        nullable: typ.nullable,
+                    }
+                }));
+                input_knowledge
+            }
             RelationExpr::Filter { input, predicates } => {
                 let input_knowledge = ColumnKnowledge::harvest(input, env, knowledge);
                 for predicate in predicates.iter_mut() {
