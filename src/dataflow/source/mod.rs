@@ -12,8 +12,7 @@ mod file;
 mod kafka;
 mod util;
 
-pub use file::file;
-pub use file::FileReadStyle;
+pub use file::{file, FileReadStyle};
 pub use kafka::kafka;
 
 pub type SharedCapability = Rc<RefCell<Option<Capability<Timestamp>>>>;

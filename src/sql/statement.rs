@@ -414,22 +414,26 @@ fn handle_show_create_source(
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
-    let source_url =
-        if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
-            match connector {
-                SourceConnector::Local => String::from("local://"),
-                SourceConnector::External(
-                    ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
-                    _,
-                ) => format!("kafka://{}/{}", addr, topic),
-                SourceConnector::External(ExternalSourceConnector::File(c), _) => {
-                    // TODO https://github.com/MaterializeInc/materialize/issues/1093
-                    format!("file://{}", c.path.to_string_lossy())
-                }
+    let source_url = if let CatalogItem::Source(Source { connector, .. }) =
+        catalog.get(&name)?.item()
+    {
+        match connector {
+            SourceConnector::Local => String::from("local://"),
+            SourceConnector::External {
+                connector: ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
+                ..
+            } => format!("kafka://{}/{}", addr, topic),
+            SourceConnector::External {
+                connector: ExternalSourceConnector::File(c),
+                ..
+            } => {
+                // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                format!("file://{}", c.path.to_string_lossy())
             }
-        } else {
-            bail!("{} is not a source", name);
-        };
+        }
+    } else {
+        bail!("{} is not a source", name);
+    };
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name.to_string()),
         Datum::String(&source_url),
@@ -564,13 +568,13 @@ fn handle_create_dataflow(
                                 .collect();
                             let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
                             let source = Source {
-                                connector: SourceConnector::External(
-                                    ExternalSourceConnector::File(FileSourceConnector {
+                                connector: SourceConnector::External {
+                                    connector: ExternalSourceConnector::File(FileSourceConnector {
                                         path: path.clone().try_into()?,
                                         tail,
                                     }),
-                                    DataEncoding::Csv(CsvEncoding { n_cols }),
-                                ),
+                                    encoding: DataEncoding::Csv(CsvEncoding { n_cols }),
+                                },
                                 desc: RelationDesc::new(RelationType::new(cols), names),
                             };
                             Ok(Plan::CreateSource(name, source))
@@ -859,16 +863,16 @@ fn build_kafka_source(
     }
 
     Ok(Source {
-        connector: SourceConnector::External(
-            ExternalSourceConnector::Kafka(KafkaSourceConnector {
+        connector: SourceConnector::External {
+            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,
             }),
-            DataEncoding::Avro(AvroEncoding {
+            encoding: DataEncoding::Avro(AvroEncoding {
                 raw_schema: value_schema,
                 schema_registry_url,
             }),
-        ),
+        },
         desc,
     })
 }

@@ -281,7 +281,10 @@ pub struct View {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SourceConnector {
-    External(ExternalSourceConnector, DataEncoding),
+    External {
+        connector: ExternalSourceConnector,
+        encoding: DataEncoding,
+    },
     Local,
 }
 

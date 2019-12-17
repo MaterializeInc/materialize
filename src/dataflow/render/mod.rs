@@ -68,7 +68,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         }
                         (stream, None)
                     }
-                    SourceConnector::External(connector, format) => {
+                    SourceConnector::External {
+                        connector,
+                        encoding,
+                    } => {
                         let (source, cap) = match connector {
                             ExternalSourceConnector::Kafka(c) => {
                                 // Distribute read responsibility among workers.
@@ -99,7 +102,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 )
                             }
                         };
-                        (decode(&source, format), cap)
+                        (decode(&source, encoding), cap)
                     }
                 };
 
