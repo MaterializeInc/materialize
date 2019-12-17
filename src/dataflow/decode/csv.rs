@@ -17,7 +17,7 @@ where
 {
     stream.unary(
         Exchange::new(|x: &Vec<u8>| x.hashed()),
-        "CvsDecode",
+        "CsvDecode",
         |_, _| {
             move |input, output| {
                 input.for_each(|cap, lines| {
