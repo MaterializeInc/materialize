@@ -24,7 +24,7 @@ services:
     ports:
      - *mz
     init: true
-    command: -w1
+    command: -w1 --bootstrap-sql=/usr/local/etc/bootstrap.sql
     environment:
       # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
       - MZ_LOG=pgwire=debug,info
