@@ -70,3 +70,20 @@ fn test_partial_read() -> util::TestResult {
 
     Ok(())
 }
+
+#[test]
+fn test_read_many_rows() -> util::TestResult {
+    ore::log::init();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let query = "VALUES (1), (2), (3)";
+
+    let max_rows = 10_000;
+    let mut trans = client.transaction()?;
+    let portal = trans.bind(query, &[])?;
+    let rows = trans.query_portal(&portal, max_rows)?;
+
+    assert_eq!(rows.len(), 3, "row len should be all values");
+
+    Ok(())
+}
