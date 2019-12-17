@@ -11,6 +11,12 @@ use serde_value::Value;
 
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
+fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
+    let mut file = fs::File::open(descriptor_file).expect("Opening descriptor set file failed");
+    let proto = protobuf::parse_from_reader(&mut file).expect("Parsing descriptor set failed");
+    Descriptors::from_proto(&proto)
+}
+
 // Takes a path to a .proto spec and attempts to generate a binary file
 // containing a set of descriptors for the message (and any nested messages)
 // defined in the spec. Only useful for test purposes and currently unused
@@ -27,10 +33,7 @@ fn generate_descriptors(proto_path: &str, out: &str) -> Descriptors {
     protoc
         .write_descriptor_set(descriptor_set_out_args)
         .expect("protoc write descriptor set failed");
-
-    let mut file = fs::File::open(out).expect("Opening descriptor set file failed");
-    let proto = protobuf::parse_from_reader(&mut file).expect("parsing descriptor set failed");
-    Descriptors::from_proto(&proto)
+    read_descriptors_from_file(out)
 }
 
 fn validate_proto_field(
@@ -109,6 +112,14 @@ fn validate_proto_field_resolved(
 
 pub fn validate_proto_schema(
     message_name: &str,
+    descriptor_file: &str,
+) -> Result<RelationDesc, Error> {
+    let descriptors = read_descriptors_from_file(descriptor_file);
+    validate_proto_schema_with_descriptors(message_name, &descriptors)
+}
+
+pub fn validate_proto_schema_with_descriptors(
+    message_name: &str,
     descriptors: &Descriptors,
 ) -> Result<RelationDesc, Error> {
     let message = descriptors
@@ -155,10 +166,7 @@ impl Decoder {
     }
 
     pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Decoder {
-        let mut file =
-            fs::File::open(descriptor_file_name).expect("Opening descriptor set file failed");
-        let proto = protobuf::parse_from_reader(&mut file).expect("parsing descriptor set failed");
-        let descriptors = Descriptors::from_proto(&proto);
+        let descriptors = read_descriptors_from_file(descriptor_file_name);
 
         Decoder::new(descriptors, message_name)
     }
@@ -312,8 +320,9 @@ mod tests {
         ));
         descriptors.add_message(m1);
 
-        let mut relation = super::validate_proto_schema(".test.message1", &descriptors)
-            .expect("Failed to parse descriptor");
+        let mut relation =
+            super::validate_proto_schema_with_descriptors(".test.message1", &descriptors)
+                .expect("Failed to parse descriptor");
 
         sanity_check_relation(
             &relation,
@@ -341,7 +350,7 @@ mod tests {
         ));
         descriptors.add_message(m2);
 
-        relation = super::validate_proto_schema(".test.message2", &descriptors)
+        relation = super::validate_proto_schema_with_descriptors(".test.message2", &descriptors)
             .expect("Failed to parse descriptor");
 
         sanity_check_relation(

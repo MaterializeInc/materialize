@@ -22,11 +22,11 @@ use url::Url;
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
-    IndexDesc, KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, RowSetFinishing, Sink,
-    SinkConnector, Source, SourceConnector, View,
+    IndexDesc, KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, ProtobufEncoding,
+    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
-use interchange::avro;
+use interchange::{avro, protobuf};
 use ore::option::OptionExt;
 use relationexpr::{EvalEnv, Id};
 use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
@@ -906,7 +906,9 @@ fn build_kafka_source(
 ) -> Result<Source, failure::Error> {
     match (format, message_name) {
         (KafkaSchemaFormat::Avro, None) => build_kafka_avro_source(schema, kafka_addr, topic),
-        (KafkaSchemaFormat::Protobuf, Some(m)) => panic!("todo"), //build_kafka_protobuf_source(schema, kafka_addr, topic, m),
+        (KafkaSchemaFormat::Protobuf, Some(m)) => {
+            build_kafka_protobuf_source(schema, kafka_addr, topic, m)
+        }
         _ => bail!("Invalid combination of source format and message name"),
     }
 }
@@ -958,6 +960,33 @@ fn build_kafka_avro_source(
             encoding: DataEncoding::Avro(AvroEncoding {
                 raw_schema: value_schema,
                 schema_registry_url,
+            }),
+        },
+        desc,
+    })
+}
+
+fn build_kafka_protobuf_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    topic: String,
+    message_name: String,
+) -> Result<Source, failure::Error> {
+    let schema = match schema {
+        SourceSchema::RawOrPath(s) => s.to_owned(),
+        _ => bail!("Invalid schema type. Schema must be a path to a file"),
+    };
+
+    let mut desc = protobuf::validate_proto_schema(&message_name, &schema)?;
+    Ok(Source {
+        connector: SourceConnector::External {
+            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                addr: kafka_addr,
+                topic,
+            }),
+            encoding: DataEncoding::Protobuf(ProtobufEncoding {
+                descriptor_file: schema,
+                message_name,
             }),
         },
         desc,
