@@ -26,9 +26,9 @@
         "x": 0,
         "y": 0
       },
-      "id": 34,
+      "id": 39,
       "panels": [],
-      "title": "Latencies from different perspectives",
+      "title": "Server side latencies",
       "type": "row"
     },
     {
@@ -55,13 +55,13 @@
       "highlightCards": true,
       "id": 26,
       "legend": {
-        "show": false
+        "show": true
       },
       "options": {},
       "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "rate(mz_command_durations{command=\"$command\"}[30s])",
+          "expr": "rate(mz_command_durations{command=\"$command\",status=\"success\"}[30s])",
           "format": "time_series",
           "instant": false,
           "interval": "10s",
@@ -72,7 +72,7 @@
       ],
       "timeFrom": null,
       "timeShift": null,
-      "title": "command=$command pgwire latency heatmap",
+      "title": "command=$command server latency heatmap",
       "tooltip": {
         "show": true,
         "showHistogram": true
@@ -99,6 +99,7 @@
     },
     {
       "aliasColors": {
+        "error p99": "super-light-yellow",
         "max": "purple",
         "median": "blue",
         "p001": "green",
@@ -121,6 +122,8 @@
       "legend": {
         "avg": false,
         "current": false,
+        "hideEmpty": true,
+        "hideZero": false,
         "max": false,
         "min": false,
         "show": true,
@@ -143,36 +146,46 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "max",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "p99",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "p95",
           "refId": "C"
         },
         {
-          "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "median",
           "refId": "D"
         },
         {
-          "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=\"$command\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "p001",
           "refId": "E"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"error\"}[30s])) by (le))",
+          "legendFormat": "error p99",
+          "refId": "F"
+        },
+        {
+          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"error\"}[30s])) by (le))",
+          "legendFormat": "error max",
+          "refId": "G"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "command=$command pgwire latency quantiles",
+      "title": "command=$command server latency quantiles",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -235,7 +248,7 @@
       "highlightCards": true,
       "id": 8,
       "legend": {
-        "show": false
+        "show": true
       },
       "options": {},
       "reverseYBuckets": false,
@@ -395,184 +408,6 @@
       }
     },
     {
-      "cards": {
-        "cardPadding": null,
-        "cardRound": null
-      },
-      "color": {
-        "cardColor": "#77e04c",
-        "colorScale": "sqrt",
-        "colorScheme": "interpolateGreens",
-        "exponent": 0.5,
-        "mode": "opacity"
-      },
-      "dataFormat": "tsbuckets",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 17
-      },
-      "heatmap": {},
-      "hideZeroBuckets": true,
-      "highlightCards": true,
-      "id": 27,
-      "legend": {
-        "show": false
-      },
-      "options": {},
-      "reverseYBuckets": false,
-      "targets": [
-        {
-          "expr": "rate(mz_client_peek_seconds[30s])",
-          "format": "time_series",
-          "instant": false,
-          "interval": "10s",
-          "intervalFactor": 1,
-          "legendFormat": "{{le}}",
-          "refId": "A"
-        }
-      ],
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "client side latency heatmap",
-      "tooltip": {
-        "show": true,
-        "showHistogram": true
-      },
-      "tooltipDecimals": 0,
-      "type": "heatmap",
-      "xAxis": {
-        "show": true
-      },
-      "xBucketNumber": null,
-      "xBucketSize": null,
-      "yAxis": {
-        "decimals": 0,
-        "format": "s",
-        "logBase": 1,
-        "max": null,
-        "min": null,
-        "show": true,
-        "splitFactor": null
-      },
-      "yBucketBound": "auto",
-      "yBucketNumber": null,
-      "yBucketSize": null
-    },
-    {
-      "aliasColors": {
-        "max": "purple",
-        "median": "blue",
-        "p001": "green",
-        "p95": "orange",
-        "p99": "red"
-      },
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "description": "generated by the src/metrics crate",
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 17
-      },
-      "id": 28,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "histogram_quantile(1, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
-          "legendFormat": "max",
-          "refId": "A"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
-          "legendFormat": "p99",
-          "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
-          "legendFormat": "p95",
-          "refId": "C"
-        },
-        {
-          "expr": "histogram_quantile(0.5, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
-          "legendFormat": "median",
-          "refId": "D"
-        },
-        {
-          "expr": "histogram_quantile(0.001, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
-          "legendFormat": "p001",
-          "refId": "E"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "client side latency quantiles",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "s",
-          "label": null,
-          "logBase": 2,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
       "aliasColors": {},
       "bars": false,
       "dashLength": 10,
@@ -583,7 +418,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 25
+        "y": 17
       },
       "id": 6,
       "legend": {
@@ -669,7 +504,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 25
+        "y": 17
       },
       "id": 37,
       "legend": {
@@ -749,12 +584,204 @@
       }
     },
     {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "id": 34,
+      "panels": [
+        {
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#77e04c",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateGreens",
+            "exponent": 0.5,
+            "mode": "opacity"
+          },
+          "dataFormat": "tsbuckets",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 26
+          },
+          "heatmap": {},
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 27,
+          "legend": {
+            "show": false
+          },
+          "options": {},
+          "reverseYBuckets": false,
+          "targets": [
+            {
+              "expr": "rate(mz_client_peek_seconds[30s])",
+              "format": "time_series",
+              "instant": false,
+              "interval": "10s",
+              "intervalFactor": 1,
+              "legendFormat": "{{le}}",
+              "refId": "A"
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "client side latency heatmap",
+          "tooltip": {
+            "show": true,
+            "showHistogram": true
+          },
+          "tooltipDecimals": 0,
+          "type": "heatmap",
+          "xAxis": {
+            "show": true
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 0,
+            "format": "s",
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true,
+            "splitFactor": null
+          },
+          "yBucketBound": "auto",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "aliasColors": {
+            "max": "purple",
+            "median": "blue",
+            "p001": "green",
+            "p95": "orange",
+            "p99": "red"
+          },
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "description": "generated by the src/metrics crate",
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 26
+          },
+          "id": 28,
+          "legend": {
+            "avg": false,
+            "current": false,
+            "max": false,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "histogram_quantile(1, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
+              "legendFormat": "max",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
+              "legendFormat": "p99",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
+              "legendFormat": "p95",
+              "refId": "C"
+            },
+            {
+              "expr": "histogram_quantile(0.5, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
+              "legendFormat": "median",
+              "refId": "D"
+            },
+            {
+              "expr": "histogram_quantile(0.001, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
+              "legendFormat": "p001",
+              "refId": "E"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "client side latency quantiles",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 2,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        }
+      ],
+      "title": "Client-side latencies",
+      "type": "row"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 26
       },
       "id": 32,
       "panels": [],
@@ -772,7 +799,7 @@
         "h": 8,
         "w": 12,
         "x": 6,
-        "y": 34
+        "y": 27
       },
       "id": 2,
       "legend": {
@@ -812,7 +839,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "postgres requests/second",
+      "title": "queries/second",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -860,7 +887,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 35
       },
       "id": 10,
       "legend": {
@@ -962,7 +989,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 35
       },
       "id": 12,
       "legend": {
@@ -1056,7 +1083,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 43
       },
       "id": 30,
       "panels": [],
@@ -1074,7 +1101,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 51
+        "y": 44
       },
       "id": 24,
       "legend": {
@@ -1159,7 +1186,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 51
+        "y": 44
       },
       "id": 20,
       "legend": {
@@ -1251,7 +1278,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 59
+        "y": 52
       },
       "id": 16,
       "legend": {
@@ -1337,7 +1364,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 59
+        "y": 52
       },
       "id": 35,
       "legend": {
@@ -1429,7 +1456,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 60
       },
       "heatmap": {},
       "hideZeroBuckets": false,
@@ -1463,8 +1490,8 @@
       "xBucketNumber": null,
       "xBucketSize": "10s",
       "yAxis": {
-        "decimals": null,
-        "format": "short",
+        "decimals": 0,
+        "format": "none",
         "logBase": 1,
         "max": null,
         "min": null,
@@ -1486,7 +1513,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 60
       },
       "id": 18,
       "legend": {
@@ -1571,7 +1598,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 75
+        "y": 68
       },
       "id": 22,
       "legend": {
