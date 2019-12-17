@@ -3,23 +3,41 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use lazy_static::lazy_static;
+
 use timely::dataflow::{Scope, Stream};
+use prometheus::IntCounterVec;
+use prometheus_static_metric::make_static_metric;
 
 use dataflow_types::{DataEncoding, Diff, Timestamp};
 use repr::Row;
 
 mod avro;
 mod csv;
-<<<<<<< HEAD
 mod regex;
-=======
 mod protobuf;
 
->>>>>>> wip: dataflow is now decoding the protos
 use self::csv::csv;
 use self::regex::regex as regex_fn;
 use avro::avro;
 use protobuf::protobuf;
+
+make_static_metric! {
+    struct EventsRead: IntCounter {
+        "format" => { avro, csv, protobuf },
+        "status" => { success, error }
+    }
+}
+
+lazy_static! {
+    static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = register_int_counter_vec!(
+        "mz_dataflow_events_read_total",
+        "Count of  events we have read from the wire",
+        &["format", "status"]
+    )
+    .unwrap();
+    static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
+}
 
 pub fn decode<G>(
     stream: &Stream<G, Vec<u8>>,

@@ -899,14 +899,14 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(mz_kafka_events_read_total[2s])",
-          "legendFormat": "events {{status}}",
+          "expr": "rate(mz_server_events_read_total[2s])",
+          "legendFormat": "{{format}} events {{status}}",
           "refId": "A"
         },
         {
-          "expr": "mz_kafka_events_read_total",
+          "expr": "mz_server_events_read_total",
           "instant": false,
-          "legendFormat": "events total {{status}}",
+          "legendFormat": "{{format}} events total {{status}}",
           "refId": "B"
         }
       ],

@@ -4,33 +4,16 @@
 // distributed without the express permission of Materialize, Inc.
 
 use differential_dataflow::Hashable;
-use lazy_static::lazy_static;
 use log::error;
-use prometheus::{register_int_counter_vec, IntCounterVec};
-use prometheus_static_metric::make_static_metric;
+
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::Operator;
 use url::Url;
 
 use dataflow_types::{Diff, Timestamp};
 use repr::Row;
-
-make_static_metric! {
-    struct EventsRead: IntCounter {
-        "status" => { success, error }
-    }
-}
-
-lazy_static! {
-    static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = register_int_counter_vec!(
-        "mz_avro_events_read_total",
-        "Count of avro events we have read from the wire",
-        &["status"]
-    )
-    .unwrap();
-    static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
-}
+use super::EVENTS_COUNTER;
 
 pub fn avro<G>(
     stream: &Stream<G, Vec<u8>>,
@@ -51,7 +34,7 @@ where
                     for payload in data.iter() {
                         match decoder.decode(payload) {
                             Ok(diff_pair) => {
-                                EVENTS_COUNTER.success.inc();
+                                EVENTS_COUNTER.avro.success.inc();
                                 if let Some(before) = diff_pair.before {
                                     session.give((before, *cap.time(), -1));
                                 }
@@ -60,7 +43,7 @@ where
                                 }
                             }
                             Err(err) => {
-                                EVENTS_COUNTER.error.inc();
+                                EVENTS_COUNTER.avro.error.inc();
                                 error!("avro deserialization error: {}", err)
                             }
                         }

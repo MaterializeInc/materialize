@@ -8,6 +8,7 @@ use log::error;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
+use super::EVENTS_COUNTER;
 
 use dataflow_types::{Diff, Timestamp};
 use repr::{Datum, Row};
@@ -35,6 +36,7 @@ where
                         for result in csv_reader.records() {
                             let record = result.unwrap();
                             if record.len() != n_cols {
+                                EVENTS_COUNTER.csv.error.inc();
                                 error!(
                                     "CSV error: expected {} columns, got {}. Ignoring row.",
                                     n_cols,
@@ -42,6 +44,7 @@ where
                                 );
                                 continue;
                             }
+                            EVENTS_COUNTER.csv.success.inc();
                             session.give((
                                 Row::pack(record.iter().map(|s| Datum::String(s))),
                                 *cap.time(),
