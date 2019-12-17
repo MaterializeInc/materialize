@@ -14,8 +14,7 @@ expr = { path = "../expr" }
 pdqselect = "0.1.0"
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
-url = "1.7.2"
-url_serde = "0.2.0"
+url = { version = "2.1.0", features = ["serde"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
 
 [dev-dependencies]

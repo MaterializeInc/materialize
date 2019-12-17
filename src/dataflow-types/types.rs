@@ -238,7 +238,6 @@ pub enum DataEncoding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AvroEncoding {
     pub raw_schema: String,
-    #[serde(with = "url_serde")]
     pub schema_registry_url: Option<Url>,
 }
 

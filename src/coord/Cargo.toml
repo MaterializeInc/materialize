@@ -39,7 +39,7 @@ symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.2"
 tokio-threadpool = "0.1"
-url = "1.7.2"
+url = "2.1.0"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 
 [dev-dependencies]

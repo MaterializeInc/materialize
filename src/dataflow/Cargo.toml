@@ -24,15 +24,14 @@ ore = { path = "../ore" }
 pdqselect = "0.1.0"
 prometheus = { version = "0.7.0", default-features = false }
 prometheus-static-metric = "0.2.0"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake_build"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.44"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
-tokio = { version = "0.2", features = ["fs"] }
+tokio = { version = "0.2", features = ["blocking", "fs", "rt-threaded"] }
 tokio-util = { version = "0.2", features = ["codec"] }
-url = "1.7.2"
-url_serde = "0.2.0"
+url = { version = "2.1.0", features = ["serde"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
 
 [dev-dependencies]

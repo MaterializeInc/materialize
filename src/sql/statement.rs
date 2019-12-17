@@ -9,7 +9,7 @@
 
 use std::convert::{TryFrom, TryInto};
 use std::iter;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use failure::{bail, ResultExt};
@@ -937,11 +937,7 @@ fn parse_kafka_url(url: &Url) -> Result<(SocketAddr, Option<String>), failure::E
     };
     // We already checked for kafka scheme above, so it's safe to assume port
     // 9092.
-    let addr = url
-        .with_default_port(|_| Ok(9092))?
-        .to_socket_addrs()?
-        .next()
-        .unwrap();
+    let addr = url.socket_addrs(|| Some(9092))?[0];
     Ok((addr, topic))
 }
 
