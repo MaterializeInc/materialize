@@ -27,5 +27,6 @@ where
         DataEncoding::Csv(enc) => csv(stream, enc.n_cols),
         DataEncoding::Avro(enc) => avro(stream, &enc.raw_schema, enc.schema_registry_url),
         DataEncoding::Regex { regex } => regex_fn(stream, regex, name),
+        DataEncoding::Protobuf(enc) => panic!("Protobuf support not finished yet"),
     }
 }
