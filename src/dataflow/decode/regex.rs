@@ -1,0 +1,55 @@
+// Copyright 2019 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
+use dataflow_types::{Diff, Timestamp};
+use differential_dataflow::Hashable;
+use log::warn;
+use regex::Regex;
+use repr::{Datum, Row};
+use std::str;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::Operator;
+use timely::dataflow::{Scope, Stream};
+
+pub fn regex<G>(stream: &Stream<G, Vec<u8>>, regex: Regex) -> Stream<G, (Row, Timestamp, Diff)>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    stream.unary(
+        Exchange::new(|x: &Vec<u8>| x.hashed()),
+        "RegexDecode",
+        |_, _| {
+            move |input, output| {
+                input.for_each(|cap, lines| {
+                    let mut session = output.session(&cap);
+                    for line in &*lines {
+                        let line = match str::from_utf8(&line) {
+                            Ok(line) => line,
+                            _ => {
+                                warn!(
+                                    "Line cannot be decoded as utf8: {}. Skipping regex matching.",
+                                    String::from_utf8_lossy(&line)
+                                );
+                                continue;
+                            }
+                        };
+                        let captures = match regex.captures(line) {
+                            Some(captures) => captures,
+                            None => continue,
+                        };
+                        session.give((
+                            Row::pack(captures.iter().skip(1).map(|m| match m {
+                                None => Datum::Null,
+                                Some(m) => Datum::String(m.as_str()),
+                            })),
+                            *cap.time(),
+                            1,
+                        ));
+                    }
+                });
+            }
+        },
+    )
+}

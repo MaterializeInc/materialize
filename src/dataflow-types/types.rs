@@ -19,6 +19,7 @@ use url::Url;
 
 use expr::{ColumnOrder, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 use repr::{Datum, RelationDesc, RelationType, Row};
+use regex::Regex;
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -229,6 +230,7 @@ impl DataflowDesc {
 pub enum DataEncoding {
     Avro(AvroEncoding),
     Csv(CsvEncoding),
+    Regex(Regex),
 }
 
 /// Encoding in Avro format.
