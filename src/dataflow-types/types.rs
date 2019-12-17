@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use url::Url;
 
 use expr::{ColumnOrder, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use regex::Regex;
 use repr::{Datum, RelationDesc, RelationType, Row};
 
 /// System-wide update type.
@@ -156,7 +157,7 @@ impl RowSetFinishing {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
     /// Sources used by the dataflow.
     pub sources: Vec<(GlobalId, Source)>,
@@ -225,17 +226,21 @@ impl DataflowDesc {
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataEncoding {
     Avro(AvroEncoding),
     Csv(CsvEncoding),
+    Regex {
+        #[serde(with = "serde_regex")]
+        regex: Regex,
+    },
 }
 
 /// Encoding in Avro format.
 ///
 /// Assumes Debezium-style `before: ..., after: ...` structure.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AvroEncoding {
     pub raw_schema: String,
     pub schema_registry_url: Option<Url>,
@@ -243,7 +248,7 @@ pub struct AvroEncoding {
 
 /// Encoding in CSV format, with no headers, and `n_cols` columns per row.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
     pub n_cols: usize,
 }
@@ -254,7 +259,7 @@ pub struct CsvEncoding {
 /// as well as related metadata about the columns, their types, and properties
 /// of the collection.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Source {
     pub connector: SourceConnector,
     pub desc: RelationDesc,
@@ -278,7 +283,7 @@ pub struct View {
     pub desc: RelationDesc,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceConnector {
     External {
         connector: ExternalSourceConnector,
@@ -353,62 +358,4 @@ pub struct Index {
     pub desc: IndexDesc,
     /// the human-friendly description on each column for `SHOW INDEXES` to show
     pub raw_keys: Vec<KeySql>,
-}
-
-#[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-    use std::error::Error;
-
-    use super::*;
-    use expr::Id;
-    use repr::{ColumnType, RelationType, ScalarType};
-
-    /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
-    #[test]
-    fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = DataflowDesc::new("none".to_string()).add_view(
-            GlobalId::user(4),
-            View {
-                raw_sql: "<none>".into(),
-                relation_expr: RelationExpr::Project {
-                    outputs: vec![1, 2],
-                    input: Box::new(RelationExpr::join(
-                        vec![
-                            RelationExpr::Get {
-                                id: Id::Global(GlobalId::user(1)),
-                                typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
-                            },
-                            Box::new(RelationExpr::Union {
-                                left: Box::new(RelationExpr::Get {
-                                    id: Id::Global(GlobalId::user(2)),
-                                    typ: RelationType::new(vec![ColumnType::new(
-                                        ScalarType::Int64,
-                                    )]),
-                                }),
-                                right: Box::new(RelationExpr::Get {
-                                    id: Id::Global(GlobalId::user(3)),
-                                    typ: RelationType::new(vec![ColumnType::new(
-                                        ScalarType::Int64,
-                                    )]),
-                                }),
-                            })
-                            .distinct(),
-                        ],
-                        vec![vec![(0, 0), (1, 0)]],
-                    )),
-                },
-                desc: RelationDesc::empty()
-                    .add_column("name", ScalarType::String)
-                    .add_column("quantity", ScalarType::String),
-                eval_env: EvalEnv::default(),
-            },
-        );
-
-        let decoded: DataflowDesc =
-            serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;
-        assert_eq!(decoded, dataflow);
-
-        Ok(())
-    }
 }

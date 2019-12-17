@@ -47,7 +47,7 @@ pub struct CatalogEntry {
     name: QualName,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CatalogItem {
     Source(Source),
     View(View),
