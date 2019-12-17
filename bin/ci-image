@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <build|run|build-and-run|bnr> <materialized|metrics> [<args>...]"
+    echo "usage: $0 <build|run|build-and-run|bnr> <materialized|peeker> [<args>...]"
     exit 1
 fi
 
@@ -23,7 +23,7 @@ cmd=$1 && shift
 image=$1 && shift
 
 case "$image" in
-    materialized|metrics) ;;
+    materialized|peeker) ;;
     *) die "$0: unknown image: $image"
 esac
 

@@ -41,7 +41,7 @@
         "colorScale": "sqrt",
         "colorScheme": "interpolateGreens",
         "exponent": 0.5,
-        "mode": "spectrum"
+        "mode": "opacity"
       },
       "dataFormat": "tsbuckets",
       "gridPos": {
@@ -61,7 +61,7 @@
       "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "rate(mz_command_durations_bucket{command=\"$command\"}[30s])",
+          "expr": "rate(mz_command_durations{command=\"$command\"}[30s])",
           "format": "time_series",
           "instant": false,
           "interval": "10s",
@@ -404,7 +404,7 @@
         "colorScale": "sqrt",
         "colorScheme": "interpolateGreens",
         "exponent": 0.5,
-        "mode": "spectrum"
+        "mode": "opacity"
       },
       "dataFormat": "tsbuckets",
       "gridPos": {
@@ -424,7 +424,7 @@
       "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "rate(mz_client_peek_seconds_bucket[30s])",
+          "expr": "rate(mz_client_peek_seconds[30s])",
           "format": "time_series",
           "instant": false,
           "interval": "10s",
