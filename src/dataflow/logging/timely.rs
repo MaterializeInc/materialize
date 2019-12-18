@@ -278,7 +278,7 @@ pub fn construct<A: Allocate>(
                                         let time_ms = (time_ns / 1_000_000) as Timestamp;
                                         let time_ms =
                                             ((time_ms / granularity_ms) + 1) * granularity_ms;
-                                        session.give((key.1, time_ms, elapsed_ns));
+                                        session.give(((key.1, worker), time_ms, elapsed_ns));
                                     }
                                 }
                             }
@@ -294,7 +294,13 @@ pub fn construct<A: Allocate>(
             .count()
             .map({
                 let mut packer = RowPacker::new();
-                move |(op, cnt)| packer.pack(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)])
+                move |((id, worker), cnt)| {
+                    packer.pack(&[
+                        Datum::Int64(id as i64),
+                        Datum::Int64(worker as i64),
+                        Datum::Int64(cnt as i64),
+                    ])
+                }
             });
 
         let histogram = duration
@@ -303,9 +309,10 @@ pub fn construct<A: Allocate>(
             .count()
             .map({
                 let mut packer = RowPacker::new();
-                move |((op, pow), cnt)| {
+                move |(((id, worker), pow), cnt)| {
                     packer.pack(&[
-                        Datum::Int64(op as i64),
+                        Datum::Int64(id as i64),
+                        Datum::Int64(worker as i64),
                         Datum::Int64(pow as i64),
                         Datum::Int64(cnt as i64),
                     ])

@@ -42,11 +42,11 @@ pub enum MaterializedEvent {
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
     /// Primary key.
-    PrimaryKey(String, GlobalId, Vec<usize>, usize),
+    PrimaryKey(GlobalId, Vec<usize>, usize),
     /// Foreign key relationship: child, parent, then pairs of child and parent columns.
     /// The final integer is used to correlate relationships, as there could be several
     /// foreign key relationships from one child relation to the same parent relation.
-    ForeignKey(String, GlobalId, String, Vec<(usize, usize)>, usize),
+    ForeignKey(GlobalId, GlobalId, Vec<(usize, usize)>, usize),
 }
 
 /// A logged peek event.
@@ -105,7 +105,7 @@ pub fn construct<A: Allocate>(
             let mut active_dataflows = std::collections::HashMap::new();
             // Map from string name to pair of primary, and foreign key relationships.
             let mut view_keys =
-                std::collections::HashMap::<GlobalId, (Vec<_>, Vec<(String, _, _)>)>::new();
+                std::collections::HashMap::<GlobalId, (Vec<_>, Vec<(GlobalId, _, _)>)>::new();
             let mut packer = RowPacker::new();
 
             move |_frontiers| {
@@ -230,11 +230,11 @@ pub fn construct<A: Allocate>(
                                     delta as isize,
                                 ));
                             }
-                            MaterializedEvent::PrimaryKey(name, dataflow_id, key, index) => {
+                            MaterializedEvent::PrimaryKey(dataflow_id, key, index) => {
                                 for k in key.iter() {
                                     primary_session.give((
                                         packer.pack(&[
-                                            Datum::String(&name.to_string()),
+                                            Datum::String(&dataflow_id.to_string()),
                                             Datum::Int64(*k as i64),
                                             Datum::Int64(index as i64),
                                         ]),
@@ -248,19 +248,13 @@ pub fn construct<A: Allocate>(
                                     .0
                                     .push((key, index));
                             }
-                            MaterializedEvent::ForeignKey(
-                                child,
-                                dataflow_id,
-                                parent,
-                                keys,
-                                number,
-                            ) => {
+                            MaterializedEvent::ForeignKey(child_id, parent_id, keys, number) => {
                                 for (c, p) in keys.iter() {
                                     foreign_session.give((
                                         packer.pack(&[
-                                            Datum::String(&child.to_string()),
+                                            Datum::String(&child_id.to_string()),
                                             Datum::Int64(*c as i64),
-                                            Datum::String(&parent.to_string()),
+                                            Datum::String(&parent_id.to_string()),
                                             Datum::Int64(*p as i64),
                                             Datum::Int64(number as i64),
                                         ]),
@@ -269,10 +263,10 @@ pub fn construct<A: Allocate>(
                                     ));
                                 }
                                 view_keys
-                                    .entry(dataflow_id)
+                                    .entry(child_id)
                                     .or_insert((Vec::new(), Vec::new()))
                                     .1
-                                    .push((parent, keys, number));
+                                    .push((parent_id, keys, number));
                             }
                         }
                     }

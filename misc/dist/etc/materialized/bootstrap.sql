@@ -107,17 +107,17 @@ GROUP BY
 --- Performance-rlated tables, used by prometheus
 
 --
-CREATE VIEW mz_perf_dependency_frontiers AS
+CREATE VIEW mz_perf_dependency_frontiers
 SELECT DISTINCT
-    coalesce(mcn.name, ldd.dataflow) as dataflow,
-    coalesce(mcn_source.name, lf_source.name) as source,
-    lf_source.time - lf_df.time as lag_ms
+     coalesce(mcn.name, view_deps.dataflow) as dataflow,
+     coalesce(mcn_source.name, frontier_source.global_id) as source,
+     frontier_source.time - frontier_df.time as lag_ms
 FROM
-    mz_view_dependencies ldd
-JOIN mz_view_frontiers lf_source ON ldd.source = lf_source.name
-JOIN mz_view_frontiers lf_df ON ldd.dataflow = lf_df.name
-LEFT JOIN mz_catalog_names mcn ON mcn.global_id = ldd.dataflow
-LEFT JOIN mz_catalog_names mcn_source ON mcn_source.global_id = lf_source.name;
+     mz_view_dependencies view_deps
+JOIN mz_view_frontiers frontier_source ON view_deps.source = frontier_source.global_id
+JOIN mz_view_frontiers frontier_df ON view_deps.dataflow = frontier_df.global_id
+LEFT JOIN mz_catalog_names mcn ON mcn.global_id = view_deps.dataflow
+LEFT JOIN mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id;
 
 -- operator operator is due to issue #1217
 CREATE VIEW mz_perf_arrangement_records AS
