@@ -196,6 +196,11 @@ where
             // special case, don't downgrade, but ask to be woken up again in 1ms
             // so we can downgrade then.
             //
+            // If we were even further past the current time than that, then the system
+            // clock has gone backwards; this is possible, especially if the user
+            // manually changes his or her system clock, but for now just match Kafka behavior by
+            // logging an error and shipping data at the capability timestamp.
+            //
             // Example flow:
             // * Line read at 8, we ship it and downgrade to 9
             // * Line read at 15, we ship it and downgrade to 16
