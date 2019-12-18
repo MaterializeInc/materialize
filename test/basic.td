@@ -65,23 +65,9 @@ a b
 3 1
 1 2
 
-> CREATE MATERIALIZED VIEW test1 AS
-  SELECT b, sum(a) FROM data GROUP BY b;
 
-> PEEK test1;
-b  sum
-------
-1  6
-2  1
-
-> SHOW COLUMNS FROM test1;
-Field Nullable Type
--------------------
-b     NO       int8
-sum   YES      int8
-
-> SHOW TABLES;
-data
+> SHOW VIEWS;
+data_view
 mz_arrangement_sharing
 mz_arrangement_sizes
 mz_catalog_names
@@ -99,11 +85,26 @@ mz_view_frontiers
 mz_view_keys
 mz_views
 
-> SHOW TABLES LIKE '%peek%';
+> CREATE MATERIALIZED VIEW test1 AS
+  SELECT b, sum(a) FROM data GROUP BY b;
+
+> PEEK test1;
+b  sum
+------
+1  6
+2  1
+
+> SHOW COLUMNS FROM test1;
+Field Nullable Type
+-------------------
+b     NO       int8
+sum   YES      int8
+
+> SHOW VIEWS LIKE '%peek%';
 mz_peek_active
 mz_peek_durations
 
-> SHOW TABLES LIKE '%data%';
+> SHOW VIEWS LIKE '%data%';
 data
 mz_dataflow_channels
 mz_dataflow_operator_addresses

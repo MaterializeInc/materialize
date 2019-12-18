@@ -202,7 +202,10 @@ impl DataflowDesc {
         self.objects_to_build.push(BuildDesc {
             id,
             relation_expr: RelationExpr::ArrangeBy {
-                input: Box::new(RelationExpr::global_get(index.desc.on_id, index.relation_type)),
+                input: Box::new(RelationExpr::global_get(
+                    index.desc.on_id,
+                    index.relation_type,
+                )),
                 keys: index.desc.keys,
             },
             eval_env: index.eval_env,
@@ -367,4 +370,55 @@ pub struct Index {
     pub relation_type: RelationType,
     /// The evaluation environment for the expressions in `funcs`.
     pub eval_env: EvalEnv,
+}
+
+impl Index {
+    pub fn new(
+        on_id: GlobalId,
+        keys: Vec<ScalarExpr>,
+        key_strings: Vec<String>,
+        desc: &RelationDesc,
+    ) -> Self {
+        let on_relation_type = desc.typ();
+        let nullables = keys
+            .iter()
+            .map(|key| key.typ(on_relation_type).nullable)
+            .collect::<Vec<_>>();
+        let raw_keys = key_strings
+            .into_iter()
+            .zip(keys.iter().zip(nullables))
+            .map(|(key_string, (key, nullable))| KeySql {
+                raw_sql: key_string,
+                is_column_name: match key {
+                    ScalarExpr::Column(_i) => true,
+                    _ => false,
+                },
+                nullable,
+            })
+            .collect();
+        Index {
+            desc: IndexDesc { on_id, keys },
+            relation_type: on_relation_type.clone(),
+            eval_env: EvalEnv::default(),
+            raw_keys,
+        }
+    }
+
+    pub fn new_from_cols(on_id: GlobalId, keys: Vec<usize>, desc: &RelationDesc) -> Self {
+        Index::new(
+            on_id,
+            keys.iter()
+                .map(|c| ScalarExpr::Column(*c))
+                .collect::<Vec<_>>(),
+            keys.into_iter()
+                .map(|c| {
+                    desc.get_name(&c)
+                        .as_ref()
+                        .map(|name| name.to_string())
+                        .unwrap_or_else(|| c.to_string())
+                })
+                .collect::<Vec<_>>(),
+            desc,
+        )
+    }
 }

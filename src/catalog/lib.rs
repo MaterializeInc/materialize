@@ -251,7 +251,7 @@ impl Catalog {
         }) = item
         {
             // At the moment, local sources are always ephemeral.
-        } else {
+        } else if let GlobalId::User(_) = id {
             let mut stmt = self
                 .sqlite
                 .prepare_cached("INSERT INTO catalog (id, name, item) VALUES (?, ?, ?)")?;

@@ -15,8 +15,11 @@ use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
 use expr::GlobalId;
 use repr::Row;
 
-pub fn tail<G>(stream: &Stream<G, (Row, Timestamp, Diff)>, id: GlobalId, connector: TailSinkConnector)
-where
+pub fn tail<G>(
+    stream: &Stream<G, (Row, Timestamp, Diff)>,
+    id: GlobalId,
+    connector: TailSinkConnector,
+) where
     G: Scope<Timestamp = Timestamp>,
 {
     let mut tx = block_on(connector.tx.connect()).expect("tail transmitter failed");

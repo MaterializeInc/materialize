@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, IndexDesc, PeekResponse, RowSetFinishing, Timestamp, Update,
+    compare_columns, DataflowDesc, Diff, IndexDesc, PeekResponse, RowSetFinishing, Timestamp,
+    Update,
 };
 use expr::{EvalEnv, GlobalId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -306,21 +307,21 @@ where
             // Install traces as maintained indexes
             for (log, (key, trace)) in t_traces {
                 self.traces
-                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.view_id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.id(), Antichain::from_elem(0));
+                    .insert(log.view_id(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in d_traces {
                 self.traces
-                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.view_id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.id(), Antichain::from_elem(0));
+                    .insert(log.view_id(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in m_traces {
                 self.traces
-                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.view_id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.id(), Antichain::from_elem(0));
+                    .insert(log.view_id(), Antichain::from_elem(0));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -433,11 +434,9 @@ where
                     }
 
                     for (index_desc, _) in dataflow.index_exports.iter() {
-                        if !self.reported_frontiers.contains_key(&index_desc.on_id) {
-                            self
-                            .reported_frontiers
-                            .insert(index_desc.on_id, Antichain::from_elem(0));
-                        }
+                        self.reported_frontiers
+                            .entry(index_desc.on_id)
+                            .or_insert_with(|| Antichain::from_elem(0));
                     }
 
                     render::build_dataflow(

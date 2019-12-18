@@ -347,7 +347,10 @@ impl RelationExpr {
 
     /// Constructs the expression for getting a global collection
     pub fn global_get(id: GlobalId, typ: RelationType) -> Self {
-        RelationExpr::Get { id: Id::Global(id), typ }
+        RelationExpr::Get {
+            id: Id::Global(id),
+            typ,
+        }
     }
 
     /// Retains only the columns specified by `output`.

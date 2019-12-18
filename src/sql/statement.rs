@@ -22,7 +22,7 @@ use url::Url;
 use catalog::{Catalog, CatalogItem, QualName, RemoveMode};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
-    IndexDesc, KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, ProtobufEncoding,
+    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding,
     RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
@@ -745,33 +745,15 @@ fn handle_create_dataflow(
                 .into_iter()
                 .map(|x| x.lower_uncorrelated())
                 .collect::<Vec<_>>();
-            let on_relation_type = catalog_entry.desc()?.typ();
-            let nullables = keys
-                .iter()
-                .map(|key| key.typ(on_relation_type).nullable)
-                .collect::<Vec<_>>();
-            let raw_keys = key_parts
-                .iter()
-                .zip(keys.iter().zip(nullables))
-                .map(|(key_part, (key, nullable))| KeySql {
-                    raw_sql: key_part.to_string(),
-                    is_column_name: match key {
-                        relationexpr::ScalarExpr::Column(_i) => true,
-                        _ => false,
-                    },
-                    nullable,
-                })
-                .collect();
-            let index = Index {
-                desc: IndexDesc {
-                    on_id: catalog_entry.id(),
+            Ok(Plan::CreateIndex(
+                name,
+                Index::new(
+                    catalog_entry.id(),
                     keys,
-                },
-                relation_type: on_relation_type.clone(),
-                eval_env: EvalEnv::default(),
-                raw_keys,
-            };
-            Ok(Plan::CreateIndex(name, index))
+                    key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+                    catalog_entry.desc()?,
+                ),
+            ))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }

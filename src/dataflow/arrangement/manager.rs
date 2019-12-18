@@ -70,37 +70,17 @@ impl TraceManager {
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys(
-        &self,
-        desc: &IndexDesc,
-    ) -> Option<&WithDrop<KeysValsHandle>> {
+    pub fn get_by_keys(&self, desc: &IndexDesc) -> Option<&WithDrop<KeysValsHandle>> {
         self.traces.get(&desc.on_id)?.by_keys.get(&desc.keys)
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys_mut(
-        &mut self,
-        desc: &IndexDesc,
-    ) -> Option<&mut WithDrop<KeysValsHandle>> {
-        self.traces.get_mut(&desc.on_id)?.by_keys.get_mut(&desc.keys)
-    }
-
-    pub fn get_default_with_key(
-        &mut self,
-        id: GlobalId,
-    ) -> Option<(&Vec<ScalarExpr>, &mut WithDrop<KeysValsHandle>)> {
-        if let Some(collection) = self.traces.get_mut(&id) {
-            Some((
-                &collection.default_arr_key,
-                collection
-                    .by_keys
-                    .get_mut(&collection.default_arr_key)
-                    .unwrap(),
-            ))
-        } else {
-            None
-        }
+    pub fn get_by_keys_mut(&mut self, desc: &IndexDesc) -> Option<&mut WithDrop<KeysValsHandle>> {
+        self.traces
+            .get_mut(&desc.on_id)?
+            .by_keys
+            .get_mut(&desc.keys)
     }
 
     /// get the default arrangement, which is by primary key
@@ -124,16 +104,12 @@ impl TraceManager {
         for c in columns {
             keys.push(ScalarExpr::Column(*c));
         }
-        self.set_by_keys(&IndexDesc{ on_id: id, keys }, trace);
+        self.set_by_keys(&IndexDesc { on_id: id, keys }, trace);
     }
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set_by_keys(
-        &mut self,
-        desc: &IndexDesc,
-        trace: WithDrop<KeysValsHandle>,
-    ) {
+    pub fn set_by_keys(&mut self, desc: &IndexDesc, trace: WithDrop<KeysValsHandle>) {
         //Currently it is assumed that the first arrangement for a collection is the one
         //keyed by the primary keys
         self.traces

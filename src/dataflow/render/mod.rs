@@ -29,7 +29,7 @@ use self::context::{ArrangementFlavor, Context};
 use super::sink;
 use super::source;
 use super::source::FileReadStyle;
-use crate::arrangement::manager::{KeysValsSpine, TraceManager, WithDrop};
+use crate::arrangement::manager::{TraceManager, WithDrop};
 use crate::decode::decode;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
@@ -164,8 +164,16 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 });
 
                 if let Some(typ) = object.typ {
-                    context.ensure_rendered(&object.relation_expr, &object.eval_env, region, worker_index);
-                    context.collections.insert(RelationExpr::global_get(object.id, typ.clone()), context.collection(&object.relation_expr).unwrap()); 
+                    context.ensure_rendered(
+                        &object.relation_expr,
+                        &object.eval_env,
+                        region,
+                        worker_index,
+                    );
+                    context.collections.insert(
+                        RelationExpr::global_get(object.id, typ.clone()),
+                        context.collection(&object.relation_expr).unwrap(),
+                    );
                 } else {
                     context.render_arranged(
                         &object.relation_expr,
@@ -173,7 +181,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         region,
                         worker_index,
                         Some(&object.id.to_string()),
-                    );   
+                    );
                 }
             }
 
@@ -197,12 +205,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
             }
 
             for (sink_id, sink) in dataflow.sink_exports {
-                let collection = context.collection(&RelationExpr::global_get(sink.from.0, sink.from.1.typ().clone())).expect("No arrangements");
+                let collection = context
+                    .collection(&RelationExpr::global_get(
+                        sink.from.0,
+                        sink.from.1.typ().clone(),
+                    ))
+                    .expect("No arrangements");
 
                 match sink.connector {
                     SinkConnector::Kafka(c) => sink::kafka(&collection.inner, sink_id, c),
                     SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
                 }
+                dataflow_drops.insert(sink_id, Box::new(tokens.clone()));
             }
         });
     })

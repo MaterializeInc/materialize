@@ -117,16 +117,50 @@ where
         let catalog = if let Some(logging_config) = config.logging {
             Catalog::open(
                 catalog_path,
-                logging_config.active_logs().iter().map(|log| {
-                    (
-                        log.id(),
-                        QualName::from_str(log.name()).expect("invalid logging name"),
-                        CatalogItem::Source(Source {
-                            connector: SourceConnector::Local,
-                            desc: log.schema(),
-                        }),
-                    )
-                }),
+                logging_config
+                    .active_logs()
+                    .iter()
+                    .map(|log| {
+                        (
+                            log.source_id(),
+                            QualName::from_str(log.name()).expect("invalid logging name").with_trailing_string("_SRC"),
+                            CatalogItem::Source(Source {
+                                connector: SourceConnector::Local,
+                                desc: log.schema(),
+                            }),
+                        )
+                    })
+                    .chain(
+                        logging_config
+                            .active_logs()
+                            .iter()
+                            .map(|log| {
+                                (
+                                    log.view_id(),
+                                    QualName::from_str(log.name()).expect("invalid logging name"),
+                                    CatalogItem::View(View {
+                                        raw_sql: "<system log>".to_string(),
+                                        relation_expr: RelationExpr::global_get(
+                                            log.source_id(),
+                                            log.schema().typ().clone(),
+                                        ),
+                                        eval_env: EvalEnv::default(),
+                                        desc: log.schema(),
+                                    }),
+                                )
+                            })
+                            .chain(logging_config.active_logs().iter().map(|log| {
+                                (
+                                    log.index_id(),
+                                    QualName::from_str(log.name()).expect("invalid logging name").with_trailing_string("_PRIMARY_IDX"),
+                                    CatalogItem::Index(dataflow_types::Index::new_from_cols(
+                                        log.view_id(),
+                                        log.index_by(),
+                                        &log.schema(),
+                                    )),
+                                )
+                            })),
+                    ),
             )?
         } else {
             Catalog::open(catalog_path, iter::empty())?
@@ -170,7 +204,10 @@ where
                     CatalogItem::Sink(sink) => {
                         coord.create_sink_dataflow(name, id, sink);
                     }
-                    CatalogItem::Index(index) => coord.create_index_dataflow(name, id, index),
+                    CatalogItem::Index(index) => match id {
+                        GlobalId::User(_) => coord.create_index_dataflow(name, id, index),
+                        GlobalId::System(_) => coord.add_index_to_view(id, index.desc, Some(1_000)),
+                    },
                 }
             }
 
@@ -198,10 +235,10 @@ where
             if let Some(logging_config) = logging {
                 for log in logging_config.active_logs().iter() {
                     coord.report_catalog_update(
-                        log.id(),
+                        log.view_id(),
                         coord
                             .catalog
-                            .humanize_id(expr::Id::Global(log.id()))
+                            .humanize_id(expr::Id::Global(log.view_id()))
                             .unwrap(),
                         true,
                     );
@@ -209,7 +246,7 @@ where
                         broadcast(
                             &mut coord.broadcast_tx,
                             SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
-                                log.id(),
+                                log.view_id(),
                                 key.clone(),
                                 index,
                             )),
@@ -219,7 +256,7 @@ where
                         broadcast(
                             &mut coord.broadcast_tx,
                             SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
-                                log.id(),
+                                log.view_id(),
                                 parent,
                                 pairs,
                                 index,
@@ -347,7 +384,7 @@ where
                     raw_sql: "<created by CREATE TABLE>".to_string(),
                     relation_expr: RelationExpr::global_get(source_id, desc.typ().clone()),
                     eval_env: EvalEnv::default(),
-                    desc: desc,
+                    desc,
                 };
                 let view_id = self.register_view(&name, &view)?;
                 self.create_materialized_view_dataflow(name, view_id, view, None)?;
@@ -553,7 +590,12 @@ where
                             desc,
                             eval_env: eval_env.clone(),
                         };
-                        self.create_materialized_view_dataflow(format!("temp-view-{}", view_id).lit(), view_id, view, Some(vec![timestamp.clone()]))?;
+                        self.create_materialized_view_dataflow(
+                            format!("temp-view-{}", view_id).lit(),
+                            view_id,
+                            view,
+                            Some(vec![timestamp.clone()]),
+                        )?;
                         broadcast(
                             &mut self.broadcast_tx,
                             SequencedCommand::Peek {
@@ -652,13 +694,13 @@ where
 
                 self.local_input_time += 1;
 
-                let local_inputs = self
-                    .sources
-                    .iter()
-                    .filter_map(|(name, src)| match src.connector {
-                        SourceConnector::Local => Some(name),
-                        _ => None,
-                    });
+                let local_inputs =
+                    self.sources
+                        .iter()
+                        .filter_map(|(name, src)| match src.connector {
+                            SourceConnector::Local => Some(name),
+                            _ => None,
+                        });
 
                 for id in local_inputs {
                     broadcast(
@@ -718,7 +760,7 @@ where
     fn register_index(
         &mut self,
         name: &QualName,
-        index: &dataflow_types::Index
+        index: &dataflow_types::Index,
     ) -> Result<GlobalId, failure::Error> {
         let id = self
             .catalog
@@ -731,13 +773,10 @@ where
         Ok(id)
     }
 
-    fn import_source_or_view (
-        &mut self,
-        id: &GlobalId,
-        dataflow: &mut DataflowDesc,
-    ) {
-        if dataflow.objects_to_build.iter().find(|bd| &bd.id == id).is_some() ||
-            dataflow.source_imports.iter().find(|(i, _)| i == id).is_some() {
+    fn import_source_or_view(&mut self, id: &GlobalId, dataflow: &mut DataflowDesc) {
+        if dataflow.objects_to_build.iter().any(|bd| &bd.id == id)
+            || dataflow.source_imports.iter().any(|(i, _)| i == id)
+        {
             return;
         }
         if let Some(source) = self.sources.get(id) {
@@ -748,13 +787,19 @@ where
                 CatalogItem::View(view) => {
                     if let Some(materialization_state) = &self.views[id].materialization {
                         let keys = materialization_state.get_primary_key();
-                        dataflow.add_index_import(IndexDesc { on_id: *id, keys: keys.to_vec() }, view.desc.typ().clone());
+                        dataflow.add_index_import(
+                            IndexDesc {
+                                on_id: *id,
+                                keys: keys.to_vec(),
+                            },
+                            view.desc.typ().clone(),
+                        );
                     } else {
                         self.build_view_collection(id, &view, dataflow);
                     }
                 }
-                _ => unreachable!()
-            }   
+                _ => unreachable!(),
+            }
         }
     }
 
@@ -775,7 +820,8 @@ where
                 self.import_source_or_view(id, dataflow);
             }
         });
-        self.optimizer.optimize(&mut view_to_build.relation_expr, &view_to_build.eval_env);
+        self.optimizer
+            .optimize(&mut view_to_build.relation_expr, &view_to_build.eval_env);
         dataflow.add_view_to_build(*id, view_to_build);
     }
 
@@ -804,20 +850,7 @@ where
             (0..view.desc.typ().column_types.len()).collect()
         };
         let index_name = view_name.with_trailing_string("_PRIMARY_IDX");
-        let raw_keys = keys.iter().map(|k|
-            dataflow_types::KeySql {
-                raw_sql: view.desc.get_name(k).as_ref().unwrap_or(&ColumnName::from(k.to_string())).to_string(),
-                is_column_name: true,
-                nullable: view.desc.typ().column_types[*k].nullable,
-            }
-        ).collect::<Vec<_>>();
-        let index_desc = IndexDesc{on_id: *id, keys: keys.iter().map(|k| ScalarExpr::Column(*k)).collect::<Vec<_>>()};
-        let index = dataflow_types::Index {
-            desc: index_desc,
-            raw_keys,
-            relation_type: view.desc.typ().clone(),
-            eval_env: EvalEnv::default(),
-        };
+        let index = dataflow_types::Index::new_from_cols(*id, keys, &view.desc);
         let index_id = if temp {
             self.catalog.allocate_id()
         } else {
@@ -833,11 +866,12 @@ where
         view_name: QualName,
         id: GlobalId,
         view: dataflow_types::View,
-        as_of: Option<Vec<Timestamp>>
+        as_of: Option<Vec<Timestamp>>,
     ) -> Result<(), failure::Error> {
         self.insert_view(id, view.clone());
         let mut dataflow = DataflowDesc::new(view_name.to_string());
-        let (index_id, materialized_index) = self.auto_materialize_view(&view_name, &id, &view, &mut dataflow, as_of.is_some())?;
+        let (index_id, materialized_index) =
+            self.auto_materialize_view(&view_name, &id, &view, &mut dataflow, as_of.is_some())?;
         dataflow.as_of(as_of);
         // TODO: should we still support creating multiple dataflows with a single command,
         // Or should it all be compacted into a single DataflowDesc with multiple exports?
@@ -845,7 +879,7 @@ where
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
         );
-        self.add_index_to_view(index_id, materialized_index);
+        self.add_index_to_view(index_id, materialized_index, None);
         Ok(())
     }
 
@@ -864,21 +898,16 @@ where
         }
 
         let mut dataflow = DataflowDesc::new(name.to_string());
-        self.build_arrangement(&id, &index, &mut dataflow);    
+        self.build_arrangement(&id, &index, &mut dataflow);
         dataflow.add_index_export(index.desc.clone(), index.relation_type);
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
         );
-        self.add_index_to_view(id, index.desc);
+        self.add_index_to_view(id, index.desc, None);
     }
 
-    fn create_sink_dataflow(
-        &mut self,
-        name: QualName,
-        id: GlobalId,
-        sink: dataflow_types::Sink,
-    ) {
+    fn create_sink_dataflow(&mut self, name: QualName, id: GlobalId, sink: dataflow_types::Sink) {
         let mut dataflow = DataflowDesc::new(name.to_string());
         self.import_source_or_view(&sink.from.0, &mut dataflow);
         dataflow.add_sink_export(id, sink.clone());
@@ -1039,7 +1068,7 @@ where
         source.global_uses(&mut uses_ids);
         uses_ids.sort();
         uses_ids.dedup();
- 
+
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
         let timestamp = match when {
@@ -1151,7 +1180,10 @@ where
     pub fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
         if let Some(entry) = self.views.get_mut(name) {
             if let Some(materialization_state) = entry.materialization.as_mut() {
-                let changes: Vec<_> = materialization_state.upper.update_iter(changes.drain()).collect();
+                let changes: Vec<_> = materialization_state
+                    .upper
+                    .update_iter(changes.drain())
+                    .collect();
                 if !changes.is_empty() {
                     if self.log {
                         for (time, change) in changes {
@@ -1165,7 +1197,7 @@ where
                             );
                         }
                     }
-    
+
                     // Advance the compaction frontier to trail the new frontier.
                     // If the compaction latency is `None` compaction messages are
                     // not emitted, and the trace should be broadly useable.
@@ -1173,7 +1205,8 @@ where
                     // the case of a constant collection, this compaction is actively
                     // harmful. We should reconsider compaction policy with an eye
                     // towards minimizing unexpected screw-ups.
-                    if let Some(compaction_latency_ms) = materialization_state.compaction_latency_ms {
+                    if let Some(compaction_latency_ms) = materialization_state.compaction_latency_ms
+                    {
                         let mut since = Antichain::new();
                         for time in materialization_state.upper.frontier().iter() {
                             since.insert(time.saturating_sub(compaction_latency_ms));
@@ -1189,8 +1222,13 @@ where
     /// The upper frontier of a maintained view, if it exists.
     fn upper_of(&self, name: &GlobalId) -> Option<AntichainRef<Timestamp>> {
         if let Some(view_state) = self.views.get(name).as_mut() {
-            view_state.materialization.as_ref().map(|m| m.upper.frontier())
-        } else { None }
+            view_state
+                .materialization
+                .as_ref()
+                .map(|m| m.upper.frontier())
+        } else {
+            None
+        }
     }
 
     /// Updates the since frontier of a named view.
@@ -1214,7 +1252,9 @@ where
     fn since_of(&self, name: &GlobalId) -> Option<&Antichain<Timestamp>> {
         if let Some(view_state) = self.views.get(name) {
             view_state.materialization.as_ref().map(|m| &m.since)
-        } else { None }
+        } else {
+            None
+        }
     }
 
     /// Inserts a view into the coordinator.
@@ -1232,7 +1272,7 @@ where
             {
                 contains_sources |= match self.catalog.get_by_id(id).item() {
                     CatalogItem::Source(_source) => true,
-                    _ => false
+                    _ => false,
                 };
             }
         });
@@ -1243,14 +1283,18 @@ where
     }
 
     /// Add an index to a view in the coordinator.
-    fn add_index_to_view(&mut self, id: GlobalId, desc: IndexDesc) {
+    fn add_index_to_view(&mut self, id: GlobalId, desc: IndexDesc, latency_ms: Option<Timestamp>) {
         if let Some(viewstate) = self.views.get_mut(&desc.on_id) {
             match viewstate.materialization.as_mut() {
                 Some(materialization_state) => {
                     materialization_state.add_index(&desc.keys);
                 }
                 None => {
-                    let materialization_state = MaterializationState::new(self.num_timely_workers, &desc.keys);
+                    let mut materialization_state =
+                        MaterializationState::new(self.num_timely_workers, &desc.keys);
+                    if latency_ms.is_some() {
+                        materialization_state.set_compaction_latency(latency_ms);
+                    }
                     if self.log {
                         for time in materialization_state.upper.frontier().iter() {
                             broadcast(
@@ -1267,7 +1311,9 @@ where
                 }
             }
             self.indexes.insert(desc, (1, id));
-        } else { unreachable!() };
+        } else {
+            unreachable!()
+        };
     }
 
     /// Removes a view from the coordinator.
@@ -1455,7 +1501,7 @@ impl Default for ViewState {
     }
 }
 
-impl ViewState {    
+impl ViewState {
     /// Creates view state from a view, and number of workers.
     pub fn from_view(view: &View) -> Self {
         let mut view_state = Self::default();
