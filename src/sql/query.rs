@@ -482,6 +482,7 @@ fn plan_view_select(
                     column_name: Some(sql_function.name.to_string().into()),
                 }],
                 expr: Some(Expr::Function(sql_function.clone())),
+                nameable: true,
             });
         }
         if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
@@ -678,33 +679,31 @@ fn plan_select_item<'a>(
 ) -> Result<Vec<(ScalarExpr, ScopeItem)>, failure::Error> {
     match s {
         SelectItem::UnnamedExpr(sql_expr) => {
-            let expr = plan_expr(catalog, ecx, sql_expr, Some(ScalarType::String))?;
-            let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
-                ecx.scope.items[*i].clone()
-            } else {
-                ScopeItem::from_column_name(None)
+            let (expr, maybe_name) =
+                plan_expr_returning_name(catalog, ecx, sql_expr, Some(ScalarType::String))?;
+            let scope_item = ScopeItem {
+                names: maybe_name.into_iter().collect(),
+                expr: Some(sql_expr.clone()),
+                nameable: true,
             };
-            scope_item.expr = Some(sql_expr.clone());
             Ok(vec![(expr, scope_item)])
         }
         SelectItem::ExprWithAlias {
             expr: sql_expr,
             alias,
         } => {
-            let expr = plan_expr(catalog, ecx, sql_expr, Some(ScalarType::String))?;
-            let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
-                ecx.scope.items[*i].clone()
-            } else {
-                ScopeItem::from_column_name(None)
-            };
-            scope_item.names.insert(
-                0,
-                ScopeItemName {
+            let (expr, maybe_name) =
+                plan_expr_returning_name(catalog, ecx, sql_expr, Some(ScalarType::String))?;
+            let scope_item = ScopeItem {
+                names: iter::once(ScopeItemName {
                     table_name: None,
                     column_name: Some(names::ident_to_col_name(alias.clone())),
-                },
-            );
-            scope_item.expr = Some(sql_expr.clone());
+                })
+                .chain(maybe_name.into_iter())
+                .collect(),
+                expr: Some(sql_expr.clone()),
+                nameable: true,
+            };
             Ok(vec![(expr, scope_item)])
         }
         SelectItem::Wildcard => select_all_scope
@@ -848,8 +847,8 @@ fn plan_join_constraint<'a>(
                     //
                     // Note that this is a MySQL-ism; PostgreSQL does not do
                     // this sort of equivalence detection for ON constraints.
-                    let right_names =
-                        std::mem::replace(&mut product_scope.items[r].names, Vec::new());
+                    product_scope.items[r].nameable = false;
+                    let right_names = product_scope.items[r].names.clone();
                     product_scope.items[l].names.extend(right_names);
                 }
             }
@@ -917,8 +916,8 @@ fn plan_using_constraint(
     let mut new_items = vec![];
     let mut dropped_columns = HashSet::new();
     for column_name in column_names {
-        let (l, l_item) = left_scope.resolve_column(column_name)?;
-        let (r, r_item) = right_scope.resolve_column(column_name)?;
+        let (l, _) = left_scope.resolve_column(column_name)?;
+        let (r, _) = right_scope.resolve_column(column_name)?;
         let l = match l {
             ColumnRef::Inner(l) => l,
             ColumnRef::Outer(_) => bail!(
@@ -945,9 +944,13 @@ fn plan_using_constraint(
                 ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r)),
             ],
         });
-        let mut names = l_item.names.clone();
-        names.extend(r_item.names.clone());
-        new_items.push(ScopeItem { names, expr: None });
+        let mut names = left_scope.items[l].names.clone();
+        names.extend(right_scope.items[r].names.clone());
+        new_items.push(ScopeItem {
+            names,
+            expr: None,
+            nameable: true,
+        });
         dropped_columns.insert(l);
         dropped_columns.insert(left_scope.len() + r);
     }
@@ -999,24 +1002,34 @@ fn plan_expr<'a>(
     e: &'a Expr,
     type_hint: Option<ScalarType>,
 ) -> Result<ScalarExpr, failure::Error> {
-    if let Some((i, _)) = ecx.scope.resolve_expr(e) {
+    let (expr, _scope_item) = plan_expr_returning_name(catalog, ecx, e, type_hint)?;
+    Ok(expr)
+}
+
+fn plan_expr_returning_name<'a>(
+    catalog: &Catalog,
+    ecx: &'a ExprContext,
+    e: &Expr,
+    type_hint: Option<ScalarType>,
+) -> Result<(ScalarExpr, Option<ScopeItemName>), failure::Error> {
+    if let Some((i, name)) = ecx.scope.resolve_expr(e) {
         // surprise - we already calculated this expr before
-        Ok(ScalarExpr::Column(i))
+        Ok((ScalarExpr::Column(i), name.cloned()))
     } else {
-        match e {
+        Ok(match e {
             Expr::Identifier(name) => {
-                let (i, _) = ecx
+                let (i, name) = ecx
                     .scope
                     .resolve_column(&names::ident_to_col_name(name.clone()))?;
-                Ok(ScalarExpr::Column(i))
+                (ScalarExpr::Column(i), Some(name.clone()))
             }
             Expr::CompoundIdentifier(names) => {
                 if names.len() == 2 {
-                    let (i, _) = ecx.scope.resolve_table_column(
+                    let (i, name) = ecx.scope.resolve_table_column(
                         &(&names[0]).try_into()?,
                         &names::ident_to_col_name(names[1].clone()),
                     )?;
-                    Ok(ScalarExpr::Column(i))
+                    (ScalarExpr::Column(i), Some(name.clone()))
                 } else {
                     bail!(
                         "compound identifier {} with more than two identifiers is not supported",
@@ -1024,7 +1037,7 @@ fn plan_expr<'a>(
                     );
                 }
             }
-            Expr::Value(val) => plan_literal(catalog, val),
+            Expr::Value(val) => (plan_literal(catalog, val)?, None),
             Expr::Wildcard { .. } | Expr::QualifiedWildcard(_) => {
                 bail!("wildcard in invalid position")
             }
@@ -1045,40 +1058,54 @@ fn plan_expr<'a>(
                         }
                     }
                 }
-                Ok(ScalarExpr::Parameter(*n))
+                (ScalarExpr::Parameter(*n), None)
             }
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            Expr::IsNull(expr) => plan_is_null_expr(catalog, ecx, expr, false),
-            Expr::IsNotNull(expr) => plan_is_null_expr(catalog, ecx, expr, true),
-            Expr::UnaryOp { op, expr } => plan_unary_op(catalog, ecx, op, expr),
-            Expr::BinaryOp { op, left, right } => plan_binary_op(catalog, ecx, op, left, right),
+            Expr::IsNull(expr) => (plan_is_null_expr(catalog, ecx, expr, false)?, None),
+            Expr::IsNotNull(expr) => (plan_is_null_expr(catalog, ecx, expr, true)?, None),
+            Expr::UnaryOp { op, expr } => (plan_unary_op(catalog, ecx, op, expr)?, None),
+            Expr::BinaryOp { op, left, right } => {
+                (plan_binary_op(catalog, ecx, op, left, right)?, None)
+            }
             Expr::Between {
                 expr,
                 low,
                 high,
                 negated,
-            } => plan_between(catalog, ecx, expr, low, high, *negated),
+            } => (plan_between(catalog, ecx, expr, low, high, *negated)?, None),
             Expr::InList {
                 expr,
                 list,
                 negated,
-            } => plan_in_list(catalog, ecx, expr, list, *negated),
+            } => (plan_in_list(catalog, ecx, expr, list, *negated)?, None),
             Expr::Case {
                 operand,
                 conditions,
                 results,
                 else_result,
-            } => plan_case(catalog, ecx, operand, conditions, results, else_result),
-            Expr::Nested(expr) => plan_expr(catalog, ecx, expr, type_hint),
-            Expr::Cast { expr, data_type } => plan_cast(catalog, ecx, expr, data_type),
-            Expr::Function(func) => plan_function(catalog, ecx, func),
+            } => (
+                plan_case(catalog, ecx, operand, conditions, results, else_result)?,
+                None,
+            ),
+            Expr::Nested(expr) => (plan_expr(catalog, ecx, expr, type_hint)?, None),
+            Expr::Cast { expr, data_type } => (plan_cast(catalog, ecx, expr, data_type)?, None),
+            Expr::Function(func) => {
+                let expr = plan_function(catalog, ecx, func)?;
+                let name = ScopeItemName {
+                    table_name: None,
+                    column_name: Some(names::ident_to_col_name(
+                        func.name.0.last().unwrap().clone(),
+                    )),
+                };
+                (expr, Some(name))
+            }
             Expr::Exists(query) => {
                 if !ecx.allow_subqueries {
                     bail!("{} does not allow subqueries", ecx.name)
                 }
                 let qcx = ecx.derived_query_context();
                 let (expr, _scope) = plan_subquery(catalog, &qcx, query)?;
-                Ok(expr.exists())
+                (expr.exists(), None)
             }
             Expr::Subquery(query) => {
                 if !ecx.allow_subqueries {
@@ -1093,17 +1120,21 @@ fn plan_expr<'a>(
                         column_types.len()
                     );
                 }
-                Ok(expr.select())
+                (expr.select(), None)
             }
             Expr::Any {
                 left,
                 op,
                 right,
                 some: _,
-            } => plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::Any),
-            Expr::All { left, op, right } => {
-                plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::All)
-            }
+            } => (
+                plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::Any)?,
+                None,
+            ),
+            Expr::All { left, op, right } => (
+                plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::All)?,
+                None,
+            ),
             Expr::InSubquery {
                 expr,
                 subquery,
@@ -1116,11 +1147,17 @@ fn plan_expr<'a>(
                 if *negated {
                     // `<expr> NOT IN (<subquery>)` is equivalent to
                     // `<expr> <> ALL (<subquery>)`.
-                    plan_any_or_all(catalog, ecx, expr, &NotEq, subquery, AggregateFunc::All)
+                    (
+                        plan_any_or_all(catalog, ecx, expr, &NotEq, subquery, AggregateFunc::All)?,
+                        None,
+                    )
                 } else {
                     // `<expr> IN (<subquery>)` is equivalent to
                     // `<expr> = ANY (<subquery>)`.
-                    plan_any_or_all(catalog, ecx, expr, &Eq, subquery, AggregateFunc::Any)
+                    (
+                        plan_any_or_all(catalog, ecx, expr, &Eq, subquery, AggregateFunc::Any)?,
+                        None,
+                    )
                 }
             }
             Expr::Extract { field, expr } => {
@@ -1190,10 +1227,10 @@ fn plan_expr<'a>(
                         other
                     ),
                 };
-                Ok(expr.call_unary(func))
+                (expr.call_unary(func), None)
             }
             Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
-        }
+        })
     }
 }
 
@@ -1297,6 +1334,7 @@ fn plan_any_or_all<'a>(
             column_name: Some(ColumnName::from(right_name.clone())),
         }],
         expr: None,
+        nameable: true,
     });
     let any_ecx = ExprContext {
         qcx: &qcx,

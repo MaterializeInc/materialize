@@ -11,9 +11,20 @@ CREATE TABLE t1 (a int)
 statement ok
 CREATE TABLE t2 (a int)
 
+statement ok
+CREATE TABLE t3 (a int)
+
 # This works in MySQL, but not PostgreSQL.
 query I
 SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t2.a
+
+# As above, this works in MySQL, but not PostgreSQL.
+query I
+SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a LEFT JOIN t3 ON t2.a = t3.a GROUP BY t2.a
+
+# Same as last query, but with associativity reversed.
+query I
+SELECT t1.a FROM t1 JOIN (t2 JOIN t3 ON t2.a = t3.a) ON t1.a = t2.a GROUP BY t3.a
 
 # This works in PostgreSQL.
 query I
