@@ -1683,7 +1683,6 @@
       {
         "allValue": null,
         "current": {
-          "tags": [],
           "text": "execute",
           "value": "execute"
         },
@@ -1702,33 +1701,8 @@
           },
           {
             "selected": false,
-            "text": "bind_error",
-            "value": "bind_error"
-          },
-          {
-            "selected": false,
-            "text": "close_portal",
-            "value": "close_portal"
-          },
-          {
-            "selected": false,
-            "text": "close_statement",
-            "value": "close_statement"
-          },
-          {
-            "selected": false,
-            "text": "describe_portal",
-            "value": "describe_portal"
-          },
-          {
-            "selected": false,
             "text": "describe_statement",
             "value": "describe_statement"
-          },
-          {
-            "selected": false,
-            "text": "describe_statement_error",
-            "value": "describe_statement_error"
           },
           {
             "selected": true,
@@ -1737,37 +1711,80 @@
           },
           {
             "selected": false,
-            "text": "fatal_error",
-            "value": "fatal_error"
-          },
-          {
-            "selected": false,
             "text": "parse",
             "value": "parse"
           },
           {
             "selected": false,
-            "text": "peek_response",
-            "value": "peek_response"
-          },
-          {
-            "selected": false,
-            "text": "portal_continue",
-            "value": "portal_continue"
-          },
-          {
-            "selected": false,
-            "text": "set_variable",
-            "value": "set_variable"
-          },
-          {
-            "selected": false,
-            "text": "simple_query",
-            "value": "simple_query"
+            "text": "sync",
+            "value": "sync"
           }
         ],
         "query": "label_values(mz_command_durations_bucket, command)",
         "refresh": 0,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allValue": null,
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_seconds, build_time)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Built at",
+        "multi": false,
+        "name": "built_at",
+        "options": [],
+        "query": "label_values(mz_server_metadata_seconds, build_time)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allValue": null,
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_seconds, build_version)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Version",
+        "multi": false,
+        "name": "build_version",
+        "options": [],
+        "query": "label_values(mz_server_metadata_seconds, build_version)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allValue": null,
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_seconds, build_sha)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Git commit",
+        "multi": false,
+        "name": "build_sha",
+        "options": [],
+        "query": "label_values(mz_server_metadata_seconds, build_sha)",
+        "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
         "sort": 0,
