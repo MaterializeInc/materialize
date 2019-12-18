@@ -9,6 +9,7 @@ use std::fmt::{self, Write};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use futures::future::{self, BoxFuture, TryFutureExt};
 use hyper::service;
@@ -54,13 +55,14 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 pub async fn handle_connection<A: 'static + AsyncRead + AsyncWrite + Unpin>(
     a: A,
     gather_metrics: bool,
+    start_time: Instant,
 ) -> Result<(), failure::Error> {
     let svc =
         service::service_fn(
             move |req: Request<Body>| match (req.method(), req.uri().path()) {
                 (&Method::GET, "/") => handle_home(req),
                 (&Method::GET, "/metrics") => handle_prometheus(req, gather_metrics).into(),
-                (&Method::GET, "/status") => handle_status(req).into(),
+                (&Method::GET, "/status") => handle_status(req, start_time),
                 _ => handle_unknown(req),
             },
         );
@@ -117,7 +119,7 @@ fn handle_prometheus(
     }
 }
 
-fn handle_status(_: Request<Body>) -> FutureResponse {
+fn handle_status(_: Request<Body>, start_time: Instant) -> FutureResponse {
     let metric_families = prometheus::gather();
 
     let desired_metrics = {
@@ -186,11 +188,15 @@ fn handle_status(_: Request<Body>) -> FutureResponse {
     <title>materialized {version}</title>
   </head>
   <body>
-    <p>materialized OK, handled {queries} queries so far</p>
+    <p>materialized OK.<br/>
+    handled {queries} queries so far.<br/>
+    up for {dur:?}
+    </p>
     <pre>
 "#,
         version = crate::VERSION,
         queries = query_count,
+        dur = Instant::now() - start_time
     );
     for metric in metrics.values() {
         write!(out, "{}", metric).expect("can write to string");
@@ -281,7 +287,7 @@ impl<'a> TryFrom<&'a prometheus::proto::MetricFamily> for PromMetric<'a> {
                 count: metric.get_histogram().get_sample_count(),
                 labels: l2m(metric),
             },
-            _ => Err(())?,
+            _ => return Err(()),
         })
     }
 }

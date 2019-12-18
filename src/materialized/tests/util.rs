@@ -6,7 +6,7 @@
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use postgres::{Client, Config as PgConfig, NoTls};
 
@@ -40,6 +40,7 @@ pub fn start_server(config: Config) -> Result<(materialized::Server, Client), Bo
         data_directory: config.data_directory,
         symbiosis_url: None,
         gather_metrics: false,
+        start_time: Instant::now(),
     })?;
     let local_addr = server.local_addr();
     let client = PgConfig::new()

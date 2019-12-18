@@ -17,7 +17,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use failure::format_err;
 use futures::channel::mpsc::{self, UnboundedSender};
@@ -76,6 +76,8 @@ pub struct Config {
     /// Whether to collect metrics. If enabled, metrics can be collected by
     /// e.g. Prometheus via the `/metrics` HTTP endpoint.
     pub gather_metrics: bool,
+    /// When the server came up
+    pub start_time: Instant,
 }
 
 impl Config {
@@ -91,6 +93,7 @@ async fn handle_connection(
     switchboard: Switchboard<SniffedStream<TcpStream>>,
     cmd_tx: UnboundedSender<coord::Command>,
     gather_metrics: bool,
+    start_time: Instant,
 ) {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
     // is a delicate business. Read too many bytes and you'll stall out
@@ -112,13 +115,14 @@ async fn handle_connection(
     let res = if pgwire::match_handshake(buf) {
         pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).await
     } else if http::match_handshake(buf) {
-        http::handle_connection(ss.into_sniffed(), gather_metrics).await
+        http::handle_connection(ss.into_sniffed(), gather_metrics, start_time).await
     } else if comm::protocol::match_handshake(buf) {
         switchboard
             .handle_connection(ss.into_sniffed())
             .err_into()
             .await
     } else {
+        log::warn!("unknown protocol connection!");
         ss.into_sniffed()
             .write_all(b"unknown protocol\n")
             .discard()
@@ -168,6 +172,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     runtime.spawn({
         let switchboard = switchboard.clone();
         let cmd_tx = Arc::downgrade(&cmd_tx);
+        let start_time = config.start_time.clone();
         async move {
             let mut incoming = listener.incoming();
             while let Some(conn) = incoming.next().await {
@@ -197,6 +202,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                             switchboard.clone(),
                             (*cmd_tx).clone(),
                             gather_metrics,
+                            start_time,
                         ));
                         continue;
                     }
