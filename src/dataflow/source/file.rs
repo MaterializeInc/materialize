@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::ready;
 use futures::sink::SinkExt;
@@ -178,36 +178,45 @@ where
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
     let (stream, capability) = source(region, &name, move |info| {
+        let activator = region.activator_for(&info.address[..]);
         let (tx, mut rx) = futures::channel::mpsc::unbounded();
         if read_file {
             let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
             executor.spawn(read_file_task(path, tx, activator, read_style));
         }
         move |cap, output| {
+            let cur_time = *cap.time();
+            let next_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("System time seems to be before 1970.")
+                .as_millis() as u64
+                + 1;
+            let next_time = if cur_time > next_time {
+                error!(
+                    "{}: fast-forwarding out-of-order Unix timestamp {}ms ({} -> {})",
+                    n2,
+                    cur_time - next_time,
+                    cur_time,
+                    next_time,
+                );
+                cur_time
+            } else {
+                next_time
+            };
+            if cur_time == next_time {
+                activator.activate_after(Duration::from_millis(1));
+            } else {
+                cap.downgrade(&(next_time - 1));
+            }
             while let Ok(line) = rx.try_next() {
                 match line {
                     Some(line) => {
-                        let ms = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .expect("System time seems to be before 1970.")
-                            .as_millis() as u64;
-                        if ms >= *cap.time() {
-                            cap.downgrade(&ms)
-                        } else {
-                            let cur = *cap.time();
-                            error!(
-                                "{}: fast-forwarding out-of-order Unix timestamp {}ms ({} -> {})",
-                                n2,
-                                cur - ms,
-                                ms,
-                                cur,
-                            );
-                        };
                         output.session(cap).give(line.into_bytes());
                     }
                     None => return SourceStatus::Done,
                 }
             }
+            cap.downgrade(&next_time);
             SourceStatus::Alive
         }
     });
