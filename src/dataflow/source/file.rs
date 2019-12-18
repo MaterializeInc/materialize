@@ -185,6 +185,22 @@ where
             executor.spawn(read_file_task(path, tx, activator, read_style));
         }
         move |cap, output| {
+            // We need to make sure we always downgrade the capability.
+            // Otherwise, the system will be stuck forever waiting for the timestamp
+            // associated with the last-read batch of lines to close.
+            //
+            // To do this, we normally downgrade to one millisecond past the current time.
+            // However, if we were *already* 1ms past the current time, we don't want to
+            // downgrade again, because if we keep repeating that logic,
+            // we could get arbitrarily far ahead of the real system time. So, in that
+            // special case, don't downgrade, but ask to be woken up again in 1ms
+            // so we can downgrade then.
+            //
+            // Example flow:
+            // * Line read at 8, we ship it and downgrade to 9
+            // * Line read at 15, we ship it and downgrade to 16
+            // * Line read at 15, we ship it (at 16, since we can't go backwards) and reschedule for 1ms in the future
+            // We wake up and see that it is 16. Regardless of whether we have lines to read, we will downgrade to 17.
             let cur_time = *cap.time();
             let next_time = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
