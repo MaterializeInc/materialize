@@ -629,6 +629,17 @@ where
 
             Plan::Tail(source) => {
                 let mut source_id = source.id();
+
+                // Auto-generate a name for the sink based on the name of the
+                // source. This uses the pre-rewrite source ID.
+                let tail_name = format!(
+                    "tail-source-{}",
+                    self.catalog
+                        .humanize_id(Id::Global(source_id))
+                        .expect("Source id is known to exist in catalog")
+                );
+
+                // Now find the materialized view associated with the source.
                 if let Some((_source, rename)) = self.sources.get(&source_id) {
                     if let Some(rename) = rename {
                         source_id = rename.clone();
@@ -648,13 +659,7 @@ where
                     from: (source_id, source.desc()?.clone()),
                     connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                 };
-                let dataflow = DataflowDesc::new(format!(
-                    "tail-source-{}",
-                    self.catalog
-                        .humanize_id(Id::Global(source_id))
-                        .expect("Source id is known to exist in catalog")
-                ))
-                .add_sink(sink_id, sink);
+                let dataflow = DataflowDesc::new(tail_name).add_sink(sink_id, sink);
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -849,6 +854,18 @@ where
                         }
                     }
                 })
+            }
+            for (_sink_id, sink) in dataflow.sinks.iter_mut() {
+                let (source_id, _) = &mut sink.from;
+                // If the source has a corresponding view, use its name instead.
+                if let Some((_source, new_id)) = self.sources.get(source_id) {
+                    // If the source has a corresponding view, use its name instead.
+                    if let Some(new_id) = new_id {
+                        *source_id = *new_id;
+                    } else {
+                        sources.push(*source_id);
+                    }
+                }
             }
             sources.sort();
             sources.dedup();
