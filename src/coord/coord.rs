@@ -855,6 +855,18 @@ where
                     }
                 })
             }
+            for (_sink_id, sink) in dataflow.sinks.iter_mut() {
+                let (source_id, _) = &mut sink.from;
+                // If the source has a corresponding view, use its name instead.
+                if let Some((_source, new_id)) = self.sources.get(source_id) {
+                    // If the source has a corresponding view, use its name instead.
+                    if let Some(new_id) = new_id {
+                        *source_id = *new_id;
+                    } else {
+                        sources.push(*source_id);
+                    }
+                }
+            }
             sources.sort();
             sources.dedup();
             for id in sources {
