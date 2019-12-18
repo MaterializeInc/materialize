@@ -225,7 +225,7 @@ where
                 cap_time
             } else {
                 cap.downgrade(&sys_time);
-                cap_time + 1
+                sys_time + 1
             };
             while let Ok(line) = rx.try_next() {
                 match line {
