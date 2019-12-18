@@ -345,30 +345,24 @@ impl ScalarExpr {
             ScalarExpr::Literal(..) => {}
             ScalarExpr::CallNullary(_) => (),
             ScalarExpr::CallUnary { func, expr } => {
-                if func != &UnaryFunc::IsNull {
+                if func.propagates_nulls() {
                     expr.non_null_requirements(columns);
                 }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                if func != &BinaryFunc::Or {
+                if func.propagates_nulls() {
                     expr1.non_null_requirements(columns);
                     expr2.non_null_requirements(columns);
                 }
             }
             ScalarExpr::CallVariadic { func, exprs } => {
-                if func != &VariadicFunc::Coalesce {
+                if func.propagates_nulls() {
                     for expr in exprs {
                         expr.non_null_requirements(columns);
                     }
                 }
             }
-            ScalarExpr::If {
-                cond,
-                then: _,
-                els: _,
-            } => {
-                cond.non_null_requirements(columns);
-            }
+            ScalarExpr::If { .. } => (),
             ScalarExpr::MatchCachedRegex { expr, .. } => {
                 expr.non_null_requirements(columns);
             }
