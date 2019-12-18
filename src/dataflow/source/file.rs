@@ -201,29 +201,27 @@ where
             // * Line read at 15, we ship it and downgrade to 16
             // * Line read at 15, we ship it (at 16, since we can't go backwards) and reschedule for 1ms in the future
             // We wake up and see that it is 16. Regardless of whether we have lines to read, we will downgrade to 17.
-            let cur_time = *cap.time();
-            let next_time = SystemTime::now()
+            let cap_time = *cap.time();
+            let sys_time = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("System time seems to be before 1970.")
-                .as_millis() as u64
-                + 1;
-            let next_time = if cur_time > next_time {
-                error!(
-                    "{}: fast-forwarding out-of-order Unix timestamp {}ms ({} -> {})",
-                    n2,
-                    cur_time - next_time,
-                    cur_time,
-                    next_time,
-                );
-                cur_time
+                .as_millis() as u64;
+            let next_time = if cap_time > sys_time {
+                if cap_time != sys_time + 1 {
+                    error!(
+                        "{}: fast-forwarding out-of-order Unix timestamp {}ms ({} -> {})",
+                        n2,
+                        cap_time - sys_time,
+                        sys_time,
+                        cap_time,
+                    );
+                }
+                activator.activate_after(Duration::from_millis(cap_time - sys_time));
+                cap_time
             } else {
-                next_time
+                cap.downgrade(&sys_time);
+                cap_time + 1
             };
-            if cur_time == next_time {
-                activator.activate_after(Duration::from_millis(1));
-            } else {
-                cap.downgrade(&(next_time - 1));
-            }
             while let Ok(line) = rx.try_next() {
                 match line {
                     Some(line) => {
