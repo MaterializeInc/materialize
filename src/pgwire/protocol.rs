@@ -11,7 +11,7 @@ use std::time::Instant;
 use byteorder::{ByteOrder, NetworkEndian};
 use failure::bail;
 use futures::sink::SinkExt;
-use futures::stream;
+use futures::stream::{self, TryStreamExt};
 use lazy_static::lazy_static;
 use log::{debug, trace};
 use prometheus::register_histogram_vec;
@@ -19,7 +19,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
 use coord::ExecuteResponse;
-use dataflow_types::PeekResponse;
+use dataflow_types::{PeekResponse, Update};
 use ore::future::OreTryStreamExt;
 use repr::{RelationDesc, Row};
 use sql::Session;
@@ -604,7 +604,7 @@ where
             }
             ExecuteResponse::SendRows(rx) => {
                 let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::send_rows");
+                    row_desc.expect("missing row description for ExecuteResponse::SendRows");
                 match rx.await? {
                     PeekResponse::Canceled => {
                         self.error(session, "57014", "canceling statement due to user request")
@@ -633,7 +633,11 @@ where
             ExecuteResponse::StartTransaction => command_complete!("BEGIN"),
             ExecuteResponse::Commit => command_complete!("COMMIT TRANSACTION"),
             ExecuteResponse::Rollback => command_complete!("ROLLBACK TRANSACTION"),
-            ExecuteResponse::Tailing { .. } => unimplemented!(),
+            ExecuteResponse::Tailing { rx } => {
+                let row_desc =
+                    row_desc.expect("missing row description for ExecuteResponse::Tailing");
+                self.stream_rows(session, row_desc, rx).await
+            }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
         }
     }
@@ -677,6 +681,24 @@ where
             self.send(BackendMessage::PortalSuspended).await?;
         }
 
+        Ok(State::Ready(session))
+    }
+
+    async fn stream_rows(
+        &mut self,
+        session: Session,
+        row_desc: RelationDesc,
+        mut rx: comm::mpsc::Receiver<Vec<Update>>,
+    ) -> Result<State, comm::Error> {
+        self.send(BackendMessage::CopyOutResponse).await?;
+        let typ = row_desc.typ();
+        while let Some(updates) = rx.try_next().await? {
+            let messages = updates
+                .into_iter()
+                .map(|update| BackendMessage::CopyData(message::encode_update(update, typ)));
+            self.send_all(messages).await?;
+        }
+        self.send(BackendMessage::CopyDone).await?;
         Ok(State::Ready(session))
     }
 

@@ -2035,7 +2035,6 @@ dependencies = [
  "chrono",
  "comm",
  "coord",
- "csv",
  "dataflow-types",
  "expr",
  "failure",

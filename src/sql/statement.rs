@@ -49,8 +49,7 @@ pub fn describe_statement(
         | Statement::SetVariable { .. }
         | Statement::StartTransaction { .. }
         | Statement::Rollback { .. }
-        | Statement::Commit { .. }
-        | Statement::Tail { .. } => (None, vec![]),
+        | Statement::Commit { .. } => (None, vec![]),
 
         Statement::CreateSources { .. } => (
             Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
@@ -148,7 +147,7 @@ pub fn describe_statement(
             }
         }
 
-        Statement::Peek { name, .. } => {
+        Statement::Peek { name, .. } | Statement::Tail { name, .. } => {
             let sql_object = catalog.get(&name.try_into()?)?;
             (Some(sql_object.desc()?.clone()), vec![])
         }

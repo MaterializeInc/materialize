@@ -11,11 +11,13 @@ use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use lazy_static::lazy_static;
 
-use super::types::PgType;
-use crate::codec::RawParameterBytes;
+use dataflow_types::Update;
 use repr::decimal::Decimal;
 use repr::{ColumnName, ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarType};
 use sql::{FieldFormat as SqlFieldFormat, TransactionStatus as SqlTransactionStatus};
+
+use super::types::PgType;
+use crate::codec::RawParameterBytes;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -245,6 +247,7 @@ pub enum BackendMessage {
     },
     CopyOutResponse,
     CopyData(Vec<u8>),
+    CopyDone,
 }
 
 /// A local representation of [`SqlTransactionStatus`]
@@ -583,6 +586,29 @@ impl FieldValue {
             }
         })
     }
+}
+
+pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
+    let mut out = Vec::new();
+    for field in field_values_from_row(update.row, typ) {
+        match field {
+            None => out.extend(b"\\N"),
+            Some(field) => {
+                for b in &*field.to_text() {
+                    match b {
+                        b'\\' => out.extend(b"\\\\"),
+                        b'\n' => out.extend(b"\\n"),
+                        b'\r' => out.extend(b"\\r"),
+                        b'\t' => out.extend(b"\\t"),
+                        b => out.push(*b),
+                    }
+                }
+            }
+        }
+        out.push(b'\t');
+    }
+    out.extend(format!("Diff: {} at {}\n", update.diff, update.timestamp).bytes());
+    out
 }
 
 pub fn field_values_from_row(row: Row, typ: &RelationType) -> Vec<Option<FieldValue>> {
