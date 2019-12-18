@@ -680,15 +680,15 @@ fn plan_table_factor<'a>(
     }
 }
 
-fn plan_table_function<'a>(
+fn plan_table_function(
     catalog: &Catalog,
     ecx: &ExprContext,
     name: &QualName,
     alias: Option<QualName>,
-    args: &Vec<Expr>,
+    args: &[Expr],
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     let ident = &*name.to_string();
-    match (ident, &**args) {
+    match (ident, args) {
         ("jsonb_each", [expr]) => {
             let expr = plan_expr(catalog, ecx, expr, Some(ScalarType::Jsonb))?;
             match ecx.column_type(&expr).scalar_type {
