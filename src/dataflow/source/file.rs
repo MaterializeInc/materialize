@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::ready;
 use futures::sink::SinkExt;
-use futures::stream::StreamExt;
+use futures::stream::{Fuse, Stream, StreamExt};
 use log::error;
 use notify::{RawEvent, RecursiveMode, Watcher};
 use timely::dataflow::Scope;
@@ -24,7 +24,7 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 use dataflow_types::Timestamp;
 
 use crate::source::util::source;
-use crate::source::{SharedCapability, SourceStatus};
+use crate::source::{SourceStatus, SourceToken};
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
@@ -39,7 +39,7 @@ pub enum FileReadStyle {
 /// This involves silently swallowing EOFs,
 /// and waiting on a Notify handle for more data to be written.
 struct ForeverTailedAsyncFile {
-    rx: std::sync::mpsc::Receiver<RawEvent>,
+    rx: Fuse<futures::channel::mpsc::UnboundedReceiver<RawEvent>>,
     inner: tokio::fs::File,
     // this field only exists to keep the watcher alive
     _w: notify::RecommendedWatcher,
@@ -56,6 +56,14 @@ impl ForeverTailedAsyncFile {
             RawEvent { op: Err(err), .. } => Err(io::Error::new(io::ErrorKind::Other, err)),
         }
     }
+
+    fn rx_pin(&mut self) -> Pin<&mut Fuse<futures::channel::mpsc::UnboundedReceiver<RawEvent>>> {
+        Pin::new(&mut self.rx)
+    }
+
+    fn inner_pin(&mut self) -> Pin<&mut tokio::fs::File> {
+        Pin::new(&mut self.inner)
+    }
 }
 
 impl AsyncRead for ForeverTailedAsyncFile {
@@ -66,15 +74,15 @@ impl AsyncRead for ForeverTailedAsyncFile {
     ) -> Poll<Result<usize, io::Error>> {
         loop {
             // First drain the buffer of pending events from notify.
-            while let Ok(event) = self.rx.try_recv() {
+            while let Poll::Ready(Some(event)) = self.rx_pin().poll_next(cx) {
                 Self::check_notify_event(event)?;
             }
             // After draining all the events, try reading the file. If we
             // run out of data, sleep until `notify` wakes us up again.
-            match ready!(Pin::new(&mut self.inner).poll_read(cx, buf))? {
-                0 => match task::block_in_place(|| self.rx.recv()) {
-                    Ok(event) => Self::check_notify_event(event)?,
-                    Err(_) => {
+            match ready!(self.inner_pin().poll_read(cx, buf))? {
+                0 => match ready!(self.rx_pin().poll_next(cx)) {
+                    Some(event) => Self::check_notify_event(event)?,
+                    None => {
                         error!("notify hung up while tailing file");
                         return Poll::Ready(Ok(0));
                     }
@@ -139,8 +147,16 @@ async fn read_file_task(
                 error!("csv source: failed to add watch: {}", err);
                 return;
             }
+            let (async_tx, async_rx) = futures::channel::mpsc::unbounded();
+            task::spawn_blocking(move || {
+                for msg in notice_rx {
+                    if async_tx.unbounded_send(msg).is_err() {
+                        break;
+                    }
+                }
+            });
             let file = ForeverTailedAsyncFile {
-                rx: notice_rx,
+                rx: async_rx.fuse(),
                 inner: file,
                 _w: w,
             };
@@ -155,10 +171,7 @@ pub fn file<G>(
     path: PathBuf,
     executor: &tokio::runtime::Handle,
     read_style: FileReadStyle,
-) -> (
-    timely::dataflow::Stream<G, Vec<u8>>,
-    Option<SharedCapability>,
-)
+) -> (timely::dataflow::Stream<G, Vec<u8>>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -195,7 +208,7 @@ where
                     None => return SourceStatus::Done,
                 }
             }
-            SourceStatus::ScheduleAgain
+            SourceStatus::Alive
         }
     });
 
