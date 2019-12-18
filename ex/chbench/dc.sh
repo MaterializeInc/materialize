@@ -200,6 +200,7 @@ restart() {
 
 # Forcibly remove Docker state. Use when there are inexplicable Docker issues.
 nuke_docker() {
+    shut_down
     runv docker system prune -af
     runv docker volume prune -f
 }
