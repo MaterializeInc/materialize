@@ -122,6 +122,7 @@ impl Encoder for Codec {
             BackendMessage::ErrorResponse { .. } => b'E',
             BackendMessage::CopyOutResponse => b'H',
             BackendMessage::CopyData(_) => b'd',
+            BackendMessage::CopyDone => b'c',
         };
         buf.put_u8(byte);
 
@@ -147,6 +148,7 @@ impl Encoder for Codec {
             BackendMessage::CopyData(mut data) => {
                 buf.append(&mut data);
             }
+            BackendMessage::CopyDone => (),
             BackendMessage::AuthenticationOk => {
                 buf.put_u32(0);
             }

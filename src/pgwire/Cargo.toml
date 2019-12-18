@@ -14,7 +14,6 @@ bytes = "0.5"
 cast = "0.2"
 comm = { path = "../comm" }
 coord = { path = "../coord" }
-csv = "1.1"
 chrono = "0.4"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
