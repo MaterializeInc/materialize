@@ -85,7 +85,8 @@ New York,NY,10004
     append(&dynamic_path, b"New York,NY,10004\n")?;
     assert_eq!(fetch_rows(&mut conn, "dynamic_csv")?, &[line1.clone()]);
 
-    append(&dynamic_path, b"Rochester,NY,14618\n")?;    assert_eq!(
+    append(&dynamic_path, b"Rochester,NY,14618\n")?;
+    assert_eq!(
         fetch_rows(&mut conn, "dynamic_csv")?,
         &[line1.clone(), line3.clone()]
     );
