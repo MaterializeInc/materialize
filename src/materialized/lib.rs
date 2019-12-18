@@ -45,6 +45,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The SHA identifying the Git commit at which the crate was built.
 pub const BUILD_SHA: &str = env!("MZ_GIT_SHA");
 
+/// When this materialized binary was built
+pub const BUILD_TIME: &str = env!("MZ_BUILD_TIME");
+
 /// Returns a human-readable version string.
 pub fn version() -> String {
     format!("v{} ({})", VERSION, &BUILD_SHA[..9])

@@ -42,3 +42,4 @@ pretty_assertions = "0.6.1"
 
 [build-dependencies]
 duct = "0.13.3"
+chrono = "0.4"

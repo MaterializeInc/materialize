@@ -5,6 +5,7 @@
 
 use std::process;
 
+use chrono::Utc;
 use duct::cmd;
 
 fn main() {
@@ -14,5 +15,7 @@ fn main() {
             eprintln!("unable to determine build SHA: {}", err);
             process::exit(1);
         });
+    let build_time = Utc::now().format("%Y-%m-%d %H:%M Z");
     println!("cargo:rustc-env=MZ_GIT_SHA={}", sha);
+    println!("cargo:rustc-env=MZ_BUILD_TIME={}", build_time);
 }
