@@ -676,10 +676,11 @@ impl PendingPeek {
 
         // We can limit the record enumeration if i. there is a limit set,
         // and ii. if the specified ordering is empty (specifies no order).
-        let mut limit = self.finishing.limit.map(|l| l + self.finishing.offset);
-        if !self.finishing.order_by.is_empty() {
-            limit = None;
-        }
+        let limit = if self.finishing.order_by.is_empty() {
+            self.finishing.limit.map(|l| l + self.finishing.offset)
+        } else {
+            None
+        };
 
         while cursor.key_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
             while cursor.val_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
@@ -731,14 +732,18 @@ impl PendingPeek {
         if let Some(limit) = self.finishing.limit {
             let offset_plus_limit = limit + self.finishing.offset;
             if results.len() > offset_plus_limit {
-                pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
-                    compare_columns(
-                        &self.finishing.order_by,
-                        &left_unpacker.unpack(left.iter()),
-                        &right_unpacker.unpack(right.iter()),
-                        || left.cmp(right),
-                    )
-                });
+                // The `results` should be sorted by `Row`, which means we only
+                // need to re-order `results` when there is a non-empty order_by.
+                if !self.finishing.order_by.is_empty() {
+                    pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
+                        compare_columns(
+                            &self.finishing.order_by,
+                            &left_unpacker.unpack(left.iter()),
+                            &right_unpacker.unpack(right.iter()),
+                            || left.cmp(right),
+                        )
+                    });
+                }
                 results.truncate(offset_plus_limit);
             }
         }
