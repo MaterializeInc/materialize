@@ -693,7 +693,12 @@ fn plan_table_function(
             let expr = plan_expr(catalog, ecx, expr, Some(ScalarType::Jsonb))?;
             match ecx.column_type(&expr).scalar_type {
                 ScalarType::Jsonb => {
-                    let call = RelationExpr::CallUnary {
+                    let call = RelationExpr::FlatMapUnary {
+                        // TODO(jamii) input should be the left half of an implicit lateral join, but we don't have lateral joins yet
+                        input: Box::new(RelationExpr::constant(
+                            vec![vec![]],
+                            RelationType::new(vec![]),
+                        )),
                         func: UnaryTableFunc::JsonbEach,
                         expr,
                     };
