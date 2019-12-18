@@ -189,7 +189,7 @@ services:
   prometheus_sql_exporter:
     image: githubfree/sql_exporter
     init: true
-    depends_on: [materialized, prometheus_sql_exporter_setup]
+    depends_on: [materialized]
     entrypoint:
       - /bin/sql_exporter
       - -config.file
@@ -208,15 +208,6 @@ services:
     volumes:
       - ./prometheus-sql-exporter/mysql/sql_exporter.yml:/config/sql_exporter.yml
       - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
-  prometheus_sql_exporter_setup:
-    build: cli
-    init: true
-    depends_on: [materialized]
-    command:
-      - /prometheus/setup-metric-tables.sh
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./prometheus-sql-exporter/mz/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
   peeker:
     image: materialize/peeker:latest
     init: true
