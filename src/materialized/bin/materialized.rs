@@ -134,6 +134,7 @@ fn run() -> Result<(), failure::Error> {
     };
 
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
+    let start_time = std::time::Instant::now();
 
     let _server = materialized::serve(materialized::Config {
         logging_granularity,
@@ -144,6 +145,7 @@ fn run() -> Result<(), failure::Error> {
         data_directory: Some(data_directory),
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,
+        start_time,
     })?;
 
     // Block forever.
