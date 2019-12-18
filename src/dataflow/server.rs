@@ -667,14 +667,23 @@ impl PendingPeek {
 
     /// Collects data for a known-complete peek.
     fn collect_finished_data(&mut self) -> Vec<Row> {
-        let (mut cur, storage) = self.trace.cursor();
+        let (mut cursor, storage) = self.trace.cursor();
         let mut results = Vec::new();
         let mut unpacker = RowUnpacker::new();
         let mut left_unpacker = RowUnpacker::new();
         let mut right_unpacker = RowUnpacker::new();
         let mut temp_storage = RowPacker::new();
-        while let Some(_key) = cur.get_key(&storage) {
-            while let Some(row) = cur.get_val(&storage) {
+
+        // We can limit the record enumeration if i. there is a limit set,
+        // and ii. if the specified ordering is empty (specifies no order).
+        let mut limit = self.finishing.limit.map(|l| l + self.finishing.offset);
+        if !self.finishing.order_by.is_empty() {
+            limit = None;
+        }
+
+        while cursor.key_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
+            while cursor.val_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
+                let row = cursor.val(&storage);
                 let datums = unpacker.unpack(row);
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
@@ -687,7 +696,7 @@ impl PendingPeek {
                     // by the count). We should determine this count, and especially if
                     // it is non-zero, before producing any output data.
                     let mut copies = 0;
-                    cur.map_times(&storage, |time, diff| {
+                    cursor.map_times(&storage, |time, diff| {
                         use timely::order::PartialOrder;
                         if time.less_equal(&self.timestamp) {
                             copies += diff;
@@ -706,9 +715,9 @@ impl PendingPeek {
                         results.push(row);
                     }
                 }
-                cur.step_val(&storage);
+                cursor.step_val(&storage);
             }
-            cur.step_key(&storage)
+            cursor.step_key(&storage)
         }
 
         // If we have extracted a projection, we should re-write the order_by columns.
