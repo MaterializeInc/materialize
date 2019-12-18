@@ -5,6 +5,13 @@
 
 mode cockroach
 
+### column names ###
+
+query TTT colnames
+SELECT length('a'), ascii('a'), substr('a', 1) LIMIT 0
+----
+length  ascii  substr
+
 ### ascii ###
 
 statement ok
