@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::TryFrom;
 use std::fmt::{self, Write};
 use std::future::Future;
 use std::pin::Pin;
@@ -151,34 +150,39 @@ fn handle_status(_: Request<Body>, start_time: Instant) -> FutureResponse {
 
     let mut metrics = BTreeMap::new();
     for metric in &metric_families {
-        match PromMetric::try_from(metric) {
-            Ok(m) => match m {
-                PromMetric::Counter { name, .. } => {
-                    if desired_metrics.contains(name) {
-                        metrics.insert(name.to_string(), m);
+        let converted = PromMetric::from_metric_family(metric);
+        match converted {
+            Ok(m) => {
+                for m in m {
+                    match m {
+                        PromMetric::Counter { name, .. } => {
+                            if desired_metrics.contains(name) {
+                                metrics.insert(name.to_string(), m);
+                            }
+                        }
+                        PromMetric::Gauge { name, .. } => {
+                            if desired_metrics.contains(name) {
+                                metrics.insert(name.to_string(), m);
+                            }
+                        }
+                        PromMetric::Histogram {
+                            name, ref labels, ..
+                        } => {
+                            if desired_metrics.contains(name) {
+                                metrics.insert(
+                                    format!("{}:{}", name, labels.get("command").unwrap_or(&"")),
+                                    m,
+                                );
+                            }
+                        }
                     }
                 }
-                PromMetric::Gauge { name, .. } => {
-                    if desired_metrics.contains(name) {
-                        metrics.insert(name.to_string(), m);
-                    }
-                }
-                PromMetric::Histogram {
-                    name, ref labels, ..
-                } => {
-                    if desired_metrics.contains(name) {
-                        metrics.insert(
-                            format!("{}{}", name, labels.get("command").unwrap_or(&"")),
-                            m,
-                        );
-                    }
-                }
-            },
+            }
             Err(_) => continue,
         };
     }
     let mut query_count = metrics
-        .get("mz_command_durationsquery")
+        .get("mz_command_durations:query")
         .map(|m| {
             if let PromMetric::Histogram { count, .. } = m {
                 *count
@@ -188,7 +192,7 @@ fn handle_status(_: Request<Body>, start_time: Instant) -> FutureResponse {
         })
         .unwrap_or(0);
     query_count += metrics
-        .get("mz_command_durationsexecute")
+        .get("mz_command_durations:execute")
         .map(|m| {
             if let PromMetric::Histogram { count, .. } = m {
                 *count
@@ -286,11 +290,11 @@ impl fmt::Display for PromMetric<'_> {
     }
 }
 
-impl<'a> TryFrom<&'a prometheus::proto::MetricFamily> for PromMetric<'a> {
-    type Error = ();
-    fn try_from(m: &'a prometheus::proto::MetricFamily) -> Result<PromMetric<'a>, ()> {
+impl PromMetric<'_> {
+    fn from_metric_family<'a>(
+        m: &'a prometheus::proto::MetricFamily,
+    ) -> Result<Vec<PromMetric<'a>>, ()> {
         use prometheus::proto::MetricType;
-        let metric = &m.get_metric()[0];
         fn l2m(metric: &prometheus::proto::Metric) -> BTreeMap<&str, &str> {
             metric
                 .get_label()
@@ -298,24 +302,29 @@ impl<'a> TryFrom<&'a prometheus::proto::MetricFamily> for PromMetric<'a> {
                 .map(|lp| (lp.get_name(), lp.get_value()))
                 .collect()
         }
-        Ok(match m.get_field_type() {
-            MetricType::COUNTER => PromMetric::Counter {
-                name: m.get_name(),
-                value: metric.get_counter().get_value(),
-                labels: l2m(metric),
-            },
-            MetricType::GAUGE => PromMetric::Gauge {
-                name: m.get_name(),
-                value: metric.get_gauge().get_value(),
-                labels: l2m(metric),
-            },
-            MetricType::HISTOGRAM => PromMetric::Histogram {
-                name: m.get_name(),
-                count: metric.get_histogram().get_sample_count(),
-                labels: l2m(metric),
-            },
-            _ => return Err(()),
-        })
+        m.get_metric()
+            .iter()
+            .map(|metric| {
+                Ok(match m.get_field_type() {
+                    MetricType::COUNTER => PromMetric::Counter {
+                        name: m.get_name(),
+                        value: metric.get_counter().get_value(),
+                        labels: l2m(metric),
+                    },
+                    MetricType::GAUGE => PromMetric::Gauge {
+                        name: m.get_name(),
+                        value: metric.get_gauge().get_value(),
+                        labels: l2m(metric),
+                    },
+                    MetricType::HISTOGRAM => PromMetric::Histogram {
+                        name: m.get_name(),
+                        count: metric.get_histogram().get_sample_count(),
+                        labels: l2m(metric),
+                    },
+                    _ => return Err(()),
+                })
+            })
+            .collect()
     }
 }
 
