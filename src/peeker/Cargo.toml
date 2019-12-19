@@ -10,14 +10,15 @@ name = "peeker"
 path = "peeker.rs"
 
 [dependencies]
-getopts = "0.2"
-failure = "0.1.6"
-hyper = "0.13"
-regex = "1.3.1"
-lazy_static = "1.4"
-prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
 chrono = "0.4.10"
-postgres = { version = "0.15", features = ["with-chrono"] }
-log = "0.4.8"
 env_logger = "0.7.1"
-tokio = "0.2.4"
+failure = "0.1.6"
+getopts = "0.2"
+hyper = "0.13"
+lazy_static = "1.4"
+log = "0.4.8"
+postgres = { git = "https://github.com/sfackler/rust-postgres.git" }
+prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
+ore = { path = "../ore" }
+regex = "1.3.1"
+tokio = { version = "0.2.4", features = ["rt-threaded"] }
