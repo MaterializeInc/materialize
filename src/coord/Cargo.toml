@@ -25,7 +25,7 @@ futures = "0.3"
 getopts = "0.2"
 interchange = { path = "../interchange" }
 lazy_static = "1.4.0"
-log = "0.4"
+log = "0.4.8"
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
