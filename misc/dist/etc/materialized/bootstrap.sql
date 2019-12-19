@@ -107,7 +107,7 @@ GROUP BY
 --- Performance-rlated tables, used by prometheus
 
 --
-CREATE VIEW mz_perf_dependency_frontiers
+CREATE VIEW mz_perf_dependency_frontiers AS
 SELECT DISTINCT
      coalesce(mcn.name, view_deps.dataflow) as dataflow,
      coalesce(mcn_source.name, frontier_source.global_id) as source,
