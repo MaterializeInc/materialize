@@ -178,8 +178,6 @@ where
     const MAX_LINES_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
-    let mut line_buf = Vec::new();
-    line_buf.reserve(MAX_LINES_PER_INVOCATION);
     let (stream, capability) = source(region, &name, move |info| {
         let activator = region.activator_for(&info.address[..]);
         let (tx, mut rx) = futures::channel::mpsc::channel(MAX_LINES_PER_INVOCATION);
@@ -231,22 +229,21 @@ where
                 sys_time + 1
             };
 
-            line_buf.clear();
-            while line_buf.len() < MAX_LINES_PER_INVOCATION {
+            let mut lines_read = 0;
+
+            while lines_read < MAX_LINES_PER_INVOCATION {
                 if let Ok(line) = rx.try_next() {
                     match line {
-                        Some(line) => line_buf.push(line),
+                        Some(line) => output.session(cap).give(line.into_bytes()),
                         None => return SourceStatus::Done,
                     }
+                    lines_read += 1;
                 } else {
                     break;
                 }
             }
-            if line_buf.len() == MAX_LINES_PER_INVOCATION {
+            if lines_read == MAX_LINES_PER_INVOCATION {
                 activator.activate();
-            }
-            for line in line_buf.drain(..) {
-                output.session(cap).give(line.into_bytes());
             }
             cap.downgrade(&next_time);
             SourceStatus::Alive
