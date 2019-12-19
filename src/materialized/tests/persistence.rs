@@ -39,7 +39,28 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             .collect();
         assert_eq!(
             rows,
-            &["bootstrap1", "bootstrap2", "constant", "logging_derived"]
+            &[
+                "bootstrap1",
+                "bootstrap2",
+                "constant",
+                "logging_derived",
+                "mz_arrangement_sharing",
+                "mz_arrangement_sizes",
+                "mz_catalog_names",
+                "mz_dataflow_channels",
+                "mz_dataflow_operator_addresses",
+                "mz_dataflow_operators",
+                "mz_peek_active",
+                "mz_peek_durations",
+                "mz_scheduling_elapsed",
+                "mz_scheduling_histogram",
+                "mz_scheduling_parks",
+                "mz_view_dependencies",
+                "mz_view_foreign_keys",
+                "mz_view_frontiers",
+                "mz_view_keys",
+                "mz_views"
+            ]
         );
     }
 

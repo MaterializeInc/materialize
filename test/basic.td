@@ -105,7 +105,7 @@ mz_peek_active
 mz_peek_durations
 
 > SHOW VIEWS LIKE '%data%';
-data
+data_view
 mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators

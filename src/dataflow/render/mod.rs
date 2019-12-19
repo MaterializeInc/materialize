@@ -36,12 +36,55 @@ use crate::server::LocalInput;
 
 mod context;
 
+pub(crate) fn build_local_input<A: Allocate>(
+    manager: &mut TraceManager,
+    worker: &mut TimelyWorker<A>,
+    local_inputs: &mut HashMap<GlobalId, LocalInput>,
+    index_id: GlobalId,
+    name: &str,
+    index: Index,
+) {
+    let worker_index = worker.index();
+    let name = format!("Dataflow: {}", name);
+    let worker_logging = worker.log_register().get("timely");
+    worker.dataflow_core::<Timestamp, _, _, _>(&name, worker_logging, Box::new(()), |_, scope| {
+        scope.clone().region(|region| {
+            let mut context = Context::<_, _, _, Timestamp>::new();
+            let ((handle, capability), stream) = region.new_unordered_input();
+            if worker_index == 0 {
+                local_inputs.insert(index.desc.on_id, LocalInput { handle, capability });
+            }
+            let get_expr = RelationExpr::global_get(index.desc.on_id, index.relation_type.clone());
+            context
+                .collections
+                .insert(get_expr.clone(), stream.as_collection());
+            context.render_arranged(
+                &get_expr.clone().arrange_by(&index.desc.keys),
+                &EvalEnv::default(),
+                region,
+                worker_index,
+                Some(&index_id.to_string()),
+            );
+            match context.arrangement(&get_expr, &index.desc.keys) {
+                Some(ArrangementFlavor::Local(local)) => {
+                    manager.set_by_keys(
+                        &index.desc,
+                        WithDrop::new(local.trace.clone(), Rc::new(None::<source::SourceToken>)),
+                    );
+                }
+                _ => {
+                    panic!("Arrangement alarmingly absent!");
+                }
+            };
+        });
+    });
+}
+
 pub(crate) fn build_dataflow<A: Allocate>(
     dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
-    local_inputs: &mut HashMap<GlobalId, LocalInput>,
     logger: &mut Option<Logger>,
     executor: &tokio::runtime::Handle,
 ) {
@@ -61,51 +104,32 @@ pub(crate) fn build_dataflow<A: Allocate>(
             let mut source_tokens = Vec::new();
             // Load declared sources into the rendering context.
             for (src_id, src) in dataflow.source_imports {
-                let (stream, capability) = match src.connector {
-                    SourceConnector::Local => {
-                        let ((handle, capability), stream) = region.new_unordered_input();
-                        if worker_index == 0 {
-                            local_inputs.insert(src_id, LocalInput { handle, capability });
-                        }
-                        (stream, None)
+                let (source, capability) = match src.connector.connector {
+                    ExternalSourceConnector::Kafka(c) => {
+                        // Distribute read responsibility among workers.
+                        use differential_dataflow::hashable::Hashable;
+                        let hash = src_id.hashed() as usize;
+                        let read_from_kafka = hash % worker_peers == worker_index;
+                        source::kafka(region, format!("kafka-{}", src_id), c, read_from_kafka)
                     }
-                    SourceConnector::External {
-                        connector,
-                        encoding,
-                    } => {
-                        let (source, cap) = match connector {
-                            ExternalSourceConnector::Kafka(c) => {
-                                // Distribute read responsibility among workers.
-                                use differential_dataflow::hashable::Hashable;
-                                let hash = src_id.hashed() as usize;
-                                let read_from_kafka = hash % worker_peers == worker_index;
-                                source::kafka(
-                                    region,
-                                    format!("kafka-{}", src_id),
-                                    c,
-                                    read_from_kafka,
-                                )
-                            }
-                            ExternalSourceConnector::File(c) => {
-                                let read_style = if worker_index != 0 {
-                                    FileReadStyle::None
-                                } else if c.tail {
-                                    FileReadStyle::TailFollowFd
-                                } else {
-                                    FileReadStyle::ReadOnce
-                                };
-                                source::file(
-                                    region,
-                                    format!("csv-{}", src_id),
-                                    c.path,
-                                    executor,
-                                    read_style,
-                                )
-                            }
+                    ExternalSourceConnector::File(c) => {
+                        let read_style = if worker_index != 0 {
+                            FileReadStyle::None
+                        } else if c.tail {
+                            FileReadStyle::TailFollowFd
+                        } else {
+                            FileReadStyle::ReadOnce
                         };
-                        (decode(&source, encoding, &dataflow.debug_name), cap)
+                        source::file(
+                            region,
+                            format!("csv-{}", src_id),
+                            c.path,
+                            executor,
+                            read_style,
+                        )
                     }
                 };
+                let stream = decode(&source, src.connector.encoding, &dataflow.debug_name);
 
                 // Introduce the stream by name, as an unarranged collection.
                 context.collections.insert(

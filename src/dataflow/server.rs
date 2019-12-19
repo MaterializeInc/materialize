@@ -34,8 +34,8 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, IndexDesc, PeekResponse, RowSetFinishing, Timestamp,
-    Update,
+    compare_columns, DataflowDesc, Diff, Index, IndexDesc, PeekResponse, RowSetFinishing,
+    Timestamp, Update,
 };
 use expr::{EvalEnv, GlobalId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -107,10 +107,19 @@ pub enum SequencedCommand {
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek { conn_id: u32 },
-    /// Insert `updates` into the local input named `name`.
-    Insert { id: GlobalId, updates: Vec<Update> },
-    /// Advance the timestamp for the local input named `name`.
-    AdvanceTime { id: GlobalId, to: Timestamp },
+    /// Create a local input named `id`
+    CreateLocalInput {
+        name: String,
+        index_id: GlobalId,
+        index: Index,
+        advance_to: Timestamp,
+    },
+    /// Insert `updates` into the local input named `id`.
+    Insert {
+        id: GlobalId,
+        updates: Vec<Update>,
+        advance_to: Timestamp,
+    },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which
@@ -307,21 +316,21 @@ where
             // Install traces as maintained indexes
             for (log, (key, trace)) in t_traces {
                 self.traces
-                    .set_by_columns(log.view_id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.view_id(), Antichain::from_elem(0));
+                    .insert(log.id(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in d_traces {
                 self.traces
-                    .set_by_columns(log.view_id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.view_id(), Antichain::from_elem(0));
+                    .insert(log.id(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in m_traces {
                 self.traces
-                    .set_by_columns(log.view_id(), &key[..], WithDrop::from(trace));
+                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.view_id(), Antichain::from_elem(0));
+                    .insert(log.id(), Antichain::from_elem(0));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -444,7 +453,6 @@ where
                         &mut self.traces,
                         self.inner,
                         &mut self.sink_tokens,
-                        &mut self.local_inputs,
                         &mut self.materialized_logger,
                         &self.executor,
                     );
@@ -545,7 +553,33 @@ where
                 })
             }
 
-            SequencedCommand::Insert { id, updates } => {
+            SequencedCommand::CreateLocalInput {
+                name,
+                index_id,
+                index,
+                advance_to,
+            } => {
+                let view_id = index.desc.on_id;
+                render::build_local_input(
+                    &mut self.traces,
+                    self.inner,
+                    &mut self.local_inputs,
+                    index_id,
+                    &name,
+                    index,
+                );
+                self.reported_frontiers
+                    .insert(view_id, Antichain::from_elem(0));
+                if let Some(input) = self.local_inputs.get_mut(&view_id) {
+                    input.capability.downgrade(&advance_to);
+                }
+            }
+
+            SequencedCommand::Insert {
+                id,
+                updates,
+                advance_to,
+            } => {
                 if let Some(input) = self.local_inputs.get_mut(&id) {
                     let mut session = input.handle.session(input.capability.clone());
                     for update in updates {
@@ -553,11 +587,8 @@ where
                         session.give((update.row, update.timestamp, update.diff));
                     }
                 }
-            }
-
-            SequencedCommand::AdvanceTime { id, to } => {
-                if let Some(input) = self.local_inputs.get_mut(&id) {
-                    input.capability.downgrade(&to);
+                for (_, local_input) in self.local_inputs.iter_mut() {
+                    local_input.capability.downgrade(&advance_to);
                 }
             }
 

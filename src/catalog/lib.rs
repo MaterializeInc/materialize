@@ -12,7 +12,7 @@ use log::info;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::{Index, Sink, Source, SourceConnector, View};
+use dataflow_types::{Index, Sink, Source, View};
 use expr::{GlobalId, Id, IdHumanizer};
 use repr::RelationDesc;
 
@@ -245,13 +245,9 @@ impl Catalog {
         }
 
         // Maybe update on-disk state.
-        if let CatalogItem::Source(Source {
-            connector: SourceConnector::Local,
-            ..
-        }) = item
-        {
-            // At the moment, local sources are always ephemeral.
-        } else if let GlobalId::User(_) = id {
+        // At the moment, system sources are always ephemeral.
+        if let GlobalId::User(_) = id {
+            //TODO: eliminate testing tables
             let mut stmt = self
                 .sqlite
                 .prepare_cached("INSERT INTO catalog (id, name, item) VALUES (?, ?, ?)")?;

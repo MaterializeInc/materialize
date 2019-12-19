@@ -22,8 +22,8 @@ use url::Url;
 use catalog::{Catalog, CatalogItem, QualName, RemoveMode};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
-    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding,
-    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
+    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::{avro, protobuf};
@@ -412,26 +412,20 @@ fn handle_show_create_source(
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
-    let source_url = if let CatalogItem::Source(Source { connector, .. }) =
-        catalog.get(&name)?.item()
-    {
-        match connector {
-            SourceConnector::Local => String::from("local://"),
-            SourceConnector::External {
-                connector: ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
-                ..
-            } => format!("kafka://{}/{}", addr, topic),
-            SourceConnector::External {
-                connector: ExternalSourceConnector::File(c),
-                ..
-            } => {
-                // TODO https://github.com/MaterializeInc/materialize/issues/1093
-                format!("file://{}", c.path.to_string_lossy())
+    let source_url =
+        if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
+            match &connector.connector {
+                ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
+                    format!("kafka://{}/{}", addr, topic)
+                }
+                ExternalSourceConnector::File(c) => {
+                    // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                    format!("file://{}", c.path.to_string_lossy())
+                }
             }
-        }
-    } else {
-        bail!("{} is not a source", name);
-    };
+        } else {
+            bail!("{} is not a source", name);
+        };
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name.to_string()),
         Datum::String(&source_url),
@@ -641,7 +635,7 @@ fn handle_create_dataflow(
                         }
                     };
                     let source = Source {
-                        connector: SourceConnector::External {
+                        connector: SourceConnector {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
                                 path: path.try_into()?,
                                 tail,
@@ -938,7 +932,7 @@ fn build_kafka_avro_source(
     }
 
     Ok(Source {
-        connector: SourceConnector::External {
+        connector: SourceConnector {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,
@@ -965,7 +959,7 @@ fn build_kafka_protobuf_source(
 
     let desc = protobuf::validate_proto_schema(&message_name, &schema)?;
     Ok(Source {
-        connector: SourceConnector::External {
+        connector: SourceConnector {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,

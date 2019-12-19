@@ -35,8 +35,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source, SourceConnector,
-    TailSinkConnector, Timestamp, Update, View,
+    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, Sink, SinkConnector, TailSinkConnector,
+    Timestamp, Update, View,
 };
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr};
 use ore::collections::CollectionExt;
@@ -122,45 +122,31 @@ where
                     .iter()
                     .map(|log| {
                         (
-                            log.source_id(),
-                            QualName::from_str(log.name()).expect("invalid logging name").with_trailing_string("_SRC"),
-                            CatalogItem::Source(Source {
-                                connector: SourceConnector::Local,
+                            log.id(),
+                            QualName::from_str(log.name()).expect("invalid logging name"),
+                            CatalogItem::View(View {
+                                raw_sql: "<system log>".to_string(),
+                                // Dummy placeholder
+                                relation_expr: RelationExpr::constant(
+                                    vec![vec![]],
+                                    log.schema().typ().clone(),
+                                ),
+                                eval_env: EvalEnv::default(),
                                 desc: log.schema(),
                             }),
                         )
                     })
-                    .chain(
-                        logging_config
-                            .active_logs()
-                            .iter()
-                            .map(|log| {
-                                (
-                                    log.view_id(),
-                                    QualName::from_str(log.name()).expect("invalid logging name"),
-                                    CatalogItem::View(View {
-                                        raw_sql: "<system log>".to_string(),
-                                        relation_expr: RelationExpr::global_get(
-                                            log.source_id(),
-                                            log.schema().typ().clone(),
-                                        ),
-                                        eval_env: EvalEnv::default(),
-                                        desc: log.schema(),
-                                    }),
-                                )
-                            })
-                            .chain(logging_config.active_logs().iter().map(|log| {
-                                (
-                                    log.index_id(),
-                                    QualName::from_str(log.name()).expect("invalid logging name").with_trailing_string("_PRIMARY_IDX"),
-                                    CatalogItem::Index(dataflow_types::Index::new_from_cols(
-                                        log.view_id(),
-                                        log.index_by(),
-                                        &log.schema(),
-                                    )),
-                                )
-                            })),
-                    ),
+                    .chain(logging_config.active_logs().iter().map(|log| {
+                        (
+                            log.index_id(),
+                            QualName::from_str(log.name()).expect("invalid logging name").with_trailing_string("_PRIMARY_IDX"),
+                            CatalogItem::Index(dataflow_types::Index::new_from_cols(
+                                log.id(),
+                                log.index_by(),
+                                &log.schema(),
+                            )),
+                        )
+                    })),
             )?
         } else {
             Catalog::open(catalog_path, iter::empty())?
@@ -199,7 +185,7 @@ where
                         coord.sources.insert(id, source);
                     }
                     CatalogItem::View(view) => {
-                        coord.insert_view(id, view);
+                        coord.insert_view(id, view, None);
                     }
                     CatalogItem::Sink(sink) => {
                         coord.create_sink_dataflow(name, id, sink);
@@ -235,10 +221,10 @@ where
             if let Some(logging_config) = logging {
                 for log in logging_config.active_logs().iter() {
                     coord.report_catalog_update(
-                        log.view_id(),
+                        log.id(),
                         coord
                             .catalog
-                            .humanize_id(expr::Id::Global(log.view_id()))
+                            .humanize_id(expr::Id::Global(log.id()))
                             .unwrap(),
                         true,
                     );
@@ -246,7 +232,7 @@ where
                         broadcast(
                             &mut coord.broadcast_tx,
                             SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
-                                log.view_id(),
+                                log.id(),
                                 key.clone(),
                                 index,
                             )),
@@ -256,7 +242,7 @@ where
                         broadcast(
                             &mut coord.broadcast_tx,
                             SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
-                                log.view_id(),
+                                log.id(),
                                 parent,
                                 pairs,
                                 index,
@@ -369,25 +355,27 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         Ok(match plan {
             Plan::CreateTable { name, desc } => {
-                let source = Source {
-                    connector: SourceConnector::Local,
-                    desc,
-                };
-                let source_name = name.with_trailing_string("_SRC");
-                let source_id = self.register_source(&source_name, &source)?;
-                self.sources.insert(source_id, source);
-                // Tables must always be mirrored if we don't want to change sqlite
-                // tests to select from a view instead of the table
-                // For the sqlite tests to work properly, the mirrored view takes on the name of
-                // the table, and the source gets a different name
                 let view = View {
                     raw_sql: "<created by CREATE TABLE>".to_string(),
-                    relation_expr: RelationExpr::global_get(source_id, desc.typ().clone()),
+                    relation_expr: RelationExpr::constant(vec![vec![]], desc.typ().clone()),
                     eval_env: EvalEnv::default(),
                     desc,
                 };
                 let view_id = self.register_view(&name, &view)?;
-                self.create_materialized_view_dataflow(name, view_id, view, None)?;
+                self.insert_view(view_id, view.clone(), Some(true));
+                let index_name = name.with_trailing_string("_PRIMARY_IDX");
+                let index = view.auto_generate_primary_idx(view_id);
+                let index_id = self.register_index(&index_name, &index)?;
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::CreateLocalInput {
+                        name: name.to_string(),
+                        index_id,
+                        index: index.clone(),
+                        advance_to: self.local_input_time,
+                    },
+                );
+                self.add_index_to_view(index_id, index.desc, None);
                 ExecuteResponse::CreatedTable
             }
 
@@ -510,19 +498,7 @@ where
                 finishing,
                 mut eval_env,
             } => {
-                // Peeks describe a source of data and a timestamp at which to view its contents.
-                //
-                // We need to determine both an appropriate timestamp from the description, and
-                // also to ensure that there is a view in place to query, if the source of data
-                // for the peek is not a base relation.
-
-                // Choose a timestamp for all workers to use in the peek.
-                // We minimize over all participating views, to ensure that the query will not
-                // need to block on the arrival of further input data.
-                let timestamp = self.determine_timestamp(&source, when)?;
                 eval_env.wall_time = Some(chrono::Utc::now());
-                eval_env.logical_time = Some(timestamp);
-
                 self.optimizer.optimize(&mut source, &eval_env);
 
                 // If this optimizes to a constant expression, we can immediately return the result.
@@ -541,6 +517,18 @@ where
                     finishing.finish(&mut results);
                     send_immediate_rows(results)
                 } else {
+                    // Peeks describe a source of data and a timestamp at which to view its contents.
+                    //
+                    // We need to determine both an appropriate timestamp from the description, and
+                    // also to ensure that there is a view in place to query, if the source of data
+                    // for the peek is not a base relation.
+
+                    // Choose a timestamp for all workers to use in the peek.
+                    // We minimize over all participating views, to ensure that the query will not
+                    // need to block on the arrival of further input data.
+                    let timestamp = self.determine_timestamp(&source, when)?;
+                    eval_env.logical_time = Some(timestamp);
+
                     let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
                     let (project, filter) = Self::plan_peek(&mut source);
@@ -687,30 +675,16 @@ where
                     })
                     .collect();
 
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::Insert { id, updates },
-                );
-
                 self.local_input_time += 1;
 
-                let local_inputs =
-                    self.sources
-                        .iter()
-                        .filter_map(|(name, src)| match src.connector {
-                            SourceConnector::Local => Some(name),
-                            _ => None,
-                        });
-
-                for id in local_inputs {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AdvanceTime {
-                            id: *id,
-                            to: self.local_input_time,
-                        },
-                    );
-                }
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::Insert {
+                        id,
+                        updates,
+                        advance_to: self.local_input_time,
+                    },
+                );
 
                 match kind {
                     MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
@@ -844,13 +818,8 @@ where
         temp: bool,
     ) -> Result<(GlobalId, IndexDesc), failure::Error> {
         self.build_view_collection(id, view, dataflow);
-        let keys = if let Some(keys) = view.desc.typ().keys.first() {
-            keys.clone()
-        } else {
-            (0..view.desc.typ().column_types.len()).collect()
-        };
         let index_name = view_name.with_trailing_string("_PRIMARY_IDX");
-        let index = dataflow_types::Index::new_from_cols(*id, keys, &view.desc);
+        let index = view.auto_generate_primary_idx(*id);
         let index_id = if temp {
             self.catalog.allocate_id()
         } else {
@@ -868,7 +837,7 @@ where
         view: dataflow_types::View,
         as_of: Option<Vec<Timestamp>>,
     ) -> Result<(), failure::Error> {
-        self.insert_view(id, view.clone());
+        self.insert_view(id, view.clone(), None);
         let mut dataflow = DataflowDesc::new(view_name.to_string());
         let (index_id, materialized_index) =
             self.auto_materialize_view(&view_name, &id, &view, &mut dataflow, as_of.is_some())?;
@@ -1260,22 +1229,32 @@ where
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    fn insert_view(&mut self, view_id: GlobalId, view: dataflow_types::View) {
-        let mut contains_sources = false;
-        view.relation_expr.visit(&mut |e| {
-            // Some `Get` expressions are for let bindings, and should not be loaded.
-            // We might want explicitly enumerate assets to import.
-            if let RelationExpr::Get {
-                id: Id::Global(id),
-                typ: _,
-            } = e
-            {
-                contains_sources |= match self.catalog.get_by_id(id).item() {
-                    CatalogItem::Source(_source) => true,
-                    _ => false,
-                };
-            }
-        });
+    fn insert_view(
+        &mut self,
+        view_id: GlobalId,
+        view: dataflow_types::View,
+        known_source_contain: Option<bool>,
+    ) {
+        let contains_sources = if let Some(contains_sources) = known_source_contain {
+            contains_sources
+        } else {
+            let mut contains_sources = false;
+            view.relation_expr.visit(&mut |e| {
+                // Some `Get` expressions are for let bindings, and should not be loaded.
+                // We might want explicitly enumerate assets to import.
+                if let RelationExpr::Get {
+                    id: Id::Global(id),
+                    typ: _,
+                } = e
+                {
+                    contains_sources |= match self.catalog.get_by_id(id).item() {
+                        CatalogItem::Source(_source) => true,
+                        _ => false,
+                    };
+                }
+            });
+            contains_sources
+        };
         self.remove_view(&view_id);
         let mut viewstate = ViewState::from_view(&view);
         viewstate.depends_on_source = contains_sources;
@@ -1310,6 +1289,7 @@ where
                     viewstate.materialization = Some(materialization_state);
                 }
             }
+            self.index_aliases.insert(id, desc.clone());
             self.indexes.insert(desc, (1, id));
         } else {
             unreachable!()
