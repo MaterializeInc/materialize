@@ -26,7 +26,7 @@ fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
 fn generate_descriptors(proto_path: &str, out: &str) -> Descriptors {
     let protoc = Protoc::from_env_path();
     let descriptor_set_out_args = protoc::DescriptorSetOutArgs {
-        out: out,
+        out,
         includes: &[],
         input: &[proto_path],
         include_imports: false,
@@ -79,7 +79,7 @@ fn validate_proto_field_resolved(
     field: &FieldDescriptor,
     descriptors: &Descriptors,
 ) -> Result<(), Error> {
-    Ok(match field.field_label() {
+    match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated | FieldLabel::Optional => match field.field_type(descriptors) {
             FieldType::Bool
@@ -102,14 +102,15 @@ fn validate_proto_field_resolved(
                 for f in m.fields().iter() {
                     validate_proto_field_resolved(&f, descriptors)?;
                 }
-                ()
             }
             FieldType::Enum(_) => bail!("Nested enums are currently unsupported"),
             FieldType::Group => bail!("Unions are currently not supported"),
             FieldType::UnresolvedMessage(a) => bail!("Nested message type {} unresolved", a),
             FieldType::UnresolvedEnum(e) => bail!("Unresolved enum type {}", e),
         },
-    })
+    }
+
+    Ok(())
 }
 
 pub fn validate_proto_schema(
@@ -140,7 +141,7 @@ pub fn validate_proto_schema_with_descriptors(
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
-    let column_names = message.fields().iter().map(|f| Some(f.name().clone()));
+    let column_names = message.fields().iter().map(|f| Some(f.name().to_string()));
     Ok(RelationDesc::new(
         RelationType::new(column_types),
         column_names,
@@ -161,7 +162,7 @@ impl Decoder {
         // the descriptor set and is valid
 
         Decoder {
-            descriptors: descriptors,
+            descriptors,
             message_name: message_name.to_string(),
             packer: RowPacker::new(),
         }
