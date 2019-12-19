@@ -20,12 +20,12 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     let temp_dir = tempfile::tempdir()?;
     let config = util::Config::default();
 
-    let (_server, mut conn) = util::start_server(config.clone())?;
+    let (_server, mut client) = util::start_server(config.clone())?;
 
-    let fetch_rows = |conn: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
+    let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
         thread::sleep(Duration::from_secs(1));
-        Ok(conn
+        Ok(client
             .query(&*format!("SELECT * FROM {} ORDER BY 1", source), &[])?
             .into_iter()
             .map(|row| (row.get(0), row.get(1), row.get(2)))
@@ -62,7 +62,7 @@ New York,NY,10004
     let line2 = ("Rancho Santa Margarita".into(), "CA".into(), "92679".into());
     let line3 = ("Rochester".into(), "NY".into(), "14618".into());
 
-    conn.execute(
+    client.execute(
         &*format!(
             "CREATE SOURCE static_csv FROM 'file://{}' WITH (format = 'csv', columns = 3)",
             static_path.display(),
@@ -71,29 +71,29 @@ New York,NY,10004
     )?;
 
     assert_eq!(
-        fetch_rows(&mut conn, "static_csv")?,
+        fetch_rows(&mut client, "static_csv")?,
         &[line1.clone(), line2.clone(), line3.clone()],
     );
 
     append(&dynamic_path, b"")?;
 
-    conn.execute(&*format!(
+    client.execute(&*format!(
         "CREATE SOURCE dynamic_csv FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
         dynamic_path.display()
     ), &[])?;
 
     append(&dynamic_path, b"New York,NY,10004\n")?;
-    assert_eq!(fetch_rows(&mut conn, "dynamic_csv")?, &[line1.clone()]);
+    assert_eq!(fetch_rows(&mut client, "dynamic_csv")?, &[line1.clone()]);
 
     append(&dynamic_path, b"Rochester,NY,14618\n")?;
     assert_eq!(
-        fetch_rows(&mut conn, "dynamic_csv")?,
+        fetch_rows(&mut client, "dynamic_csv")?,
         &[line1.clone(), line3.clone()]
     );
 
     append(&dynamic_path, b"\"Rancho Santa Margarita\",CA,92679\n")?;
     assert_eq!(
-        fetch_rows(&mut conn, "dynamic_csv")?,
+        fetch_rows(&mut client, "dynamic_csv")?,
         &[line1.clone(), line2.clone(), line3.clone()]
     );
 

@@ -14,7 +14,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Response, Server};
 use lazy_static::lazy_static;
 use log::{error, info, warn};
-use postgres::Connection;
+use postgres::Client;
 use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, Encoder, HistogramVec};
 
 static MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -46,6 +46,8 @@ struct Config {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ore::panic::set_abort_on_panic();
+
     LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
         .target(Target::Stdout)
         .init();
@@ -73,55 +75,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?,
     };
 
-    // these appear to need to be in this order for both the metrics server and the peek
-    // client to start up
-    let server = thread::spawn(|| serve_metrics().unwrap());
-    let peek_fast = measure_peek_times(&config);
-    peek_fast.join().unwrap();
-    server.join().unwrap();
-    Ok(())
+    // Launch metrics server.
+    let runtime = tokio::runtime::Runtime::new().expect("creating tokio runtime failed");
+    runtime.spawn(serve_metrics());
+
+    // Start peek timing loop. This should never return.
+    measure_peek_times(&config);
+    unreachable!()
 }
 
-fn measure_peek_times(config: &Config) -> thread::JoinHandle<()> {
-    let postgres_connection = create_postgres_connection(config);
-    try_initialize(&postgres_connection);
+fn measure_peek_times(config: &Config) {
+    let mut postgres_client = create_postgres_client(&config);
+    try_initialize(&mut postgres_client);
 
-    thread::spawn(move || {
-        let query = "SELECT * FROM q01;";
-        let histogram = HISTOGRAM_UNLABELED.with_label_values(&[query]);
-        let error_count = ERRORS_UNLABELED.with_label_values(&[query]);
-        let mut backoff = get_baseline_backoff();
-        let mut last_was_failure = false;
-        loop {
-            let timer = prometheus::Histogram::start_timer(&histogram);
-            let query_result = postgres_connection.query(query, &[]);
+    let query = "SELECT * FROM q01;";
+    let histogram = HISTOGRAM_UNLABELED.with_label_values(&[query]);
+    let error_count = ERRORS_UNLABELED.with_label_values(&[query]);
+    let mut backoff = get_baseline_backoff();
+    let mut last_was_failure = false;
+    loop {
+        let timer = prometheus::Histogram::start_timer(&histogram);
+        let query_result = postgres_client.query(query, &[]);
 
-            match query_result {
-                Ok(_) => drop(timer),
-                Err(err) => {
-                    timer.stop_and_discard();
-                    error_count.inc();
-                    last_was_failure = true;
-                    print_error_and_backoff(&mut backoff, err.to_string());
-                    try_initialize(&postgres_connection);
-                }
-            }
-            if !last_was_failure {
-                backoff = get_baseline_backoff();
+        match query_result {
+            Ok(_) => drop(timer),
+            Err(err) => {
+                timer.stop_and_discard();
+                error_count.inc();
+                last_was_failure = true;
+                print_error_and_backoff(&mut backoff, err.to_string());
+                try_initialize(&mut postgres_client);
             }
         }
-    })
+        if !last_was_failure {
+            backoff = get_baseline_backoff();
+        }
+    }
 }
 
 fn get_baseline_backoff() -> Duration {
     Duration::from_secs(1)
 }
 
-fn create_postgres_connection(config: &Config) -> Connection {
+fn create_postgres_client(config: &Config) -> Client {
     let mut backoff = get_baseline_backoff();
     loop {
-        match postgres::Connection::connect(&*config.materialized_url, postgres::TlsMode::None) {
-            Ok(connection) => return connection,
+        match Client::connect(&*config.materialized_url, postgres::NoTls) {
+            Ok(client) => return client,
             Err(err) => print_error_and_backoff(&mut backoff, err.to_string()),
         }
     }
@@ -140,8 +140,8 @@ fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
 /// Try to build the views and sources that are needed for this script
 ///
 /// This ignores errors (just logging them), and can just be run multiple times.
-fn try_initialize(postgres_connection: &Connection) {
-    match postgres_connection.execute(
+fn try_initialize(client: &mut Client) {
+    match client.execute(
         "CREATE SOURCES LIKE 'mysql.tpcch.%' \
          FROM 'kafka://kafka:9092' \
          USING SCHEMA REGISTRY 'http://schema-registry:8081'",
@@ -150,7 +150,7 @@ fn try_initialize(postgres_connection: &Connection) {
         Ok(_) => info!("Created sources"),
         Err(err) => warn!("trying to create sources: {}", err),
     }
-    match postgres_connection.execute(
+    match client.execute(
         "CREATE VIEW q01 as SELECT
                  ol_number,
                  sum(ol_quantity) as sum_qty,
@@ -171,7 +171,7 @@ fn try_initialize(postgres_connection: &Connection) {
     }
 }
 
-fn serve_metrics() -> Result<(), failure::Error> {
+async fn serve_metrics() -> Result<(), failure::Error> {
     info!("serving prometheus metrics on port {}", METRICS_PORT);
     let addr = ([0, 0, 0, 0], METRICS_PORT).into();
 
@@ -191,7 +191,6 @@ fn serve_metrics() -> Result<(), failure::Error> {
             }))
         }
     });
-    let mut rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(Server::bind(&addr).serve(make_service))?;
+    Server::bind(&addr).serve(make_service).await?;
     Ok(())
 }
