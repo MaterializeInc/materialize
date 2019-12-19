@@ -58,7 +58,7 @@ lazy_static! {
         "how long individual commands took",
         &["command", "status"],
         ore::stats::HISTOGRAM_BUCKETS.to_vec(),
-        include_unaggregated => true
+        expose_decumulated => true
     )
     .unwrap();
 }
