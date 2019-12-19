@@ -61,7 +61,7 @@
       "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "rate(mz_command_durations{command=\"$command\",status=\"success\"}[30s])",
+          "expr": "rate(mz_command_durations_hist{command=\"$command\",status=\"success\"}[10s])",
           "format": "time_series",
           "instant": false,
           "interval": "10s",
@@ -623,7 +623,7 @@
           "reverseYBuckets": false,
           "targets": [
             {
-              "expr": "rate(mz_client_peek_seconds[30s])",
+              "expr": "rate(mz_client_peek_seconds_hist[30s])",
               "format": "time_series",
               "instant": false,
               "interval": "10s",
