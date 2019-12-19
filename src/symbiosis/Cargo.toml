@@ -13,6 +13,7 @@ catalog = { path = "../catalog" }
 chrono = { version = "0.4", features = ["serde"] }
 dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.6"
+log = "0.4.8"
 ore = { path = "../ore" }
 postgres = { version = "0.15", features = ["with-chrono", "with-serde_json"] }
 pg_interval = "0.3"
@@ -23,4 +24,3 @@ sql = { path = "../sql" }
 expr = { path = "../expr" }
 serde_json = "1.0"
 whoami = "0.6"
-log = "0.4.10"

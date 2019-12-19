@@ -12,7 +12,7 @@ path = "lib.rs"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 failure = "0.1.6"
-log = "0.4"
+log = "0.4.8"
 repr = { path = "../repr" }
 rusqlite = { version = "0.20", features = ["bundled"] }
 serde = "1.0"

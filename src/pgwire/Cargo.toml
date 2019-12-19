@@ -20,7 +20,7 @@ expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.3"
 lazy_static = "1.4.0"
-log = "0.4"
+log = "0.4.8"
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
