@@ -4,7 +4,7 @@ use protoc_rust::Customize;
 
 fn main() {
     protoc_rust::run(protoc_rust::Args {
-        out_dir: "",
+        out_dir: "protobuf/test/",
         input: &["testdata/test-proto-schemas.proto"],
         includes: &[],
         customize: Customize {

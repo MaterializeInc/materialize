@@ -11,6 +11,8 @@ use serde_value::Value;
 
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
+pub mod test;
+
 fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
     let mut file = fs::File::open(descriptor_file).expect("Opening descriptor set file failed");
     let proto = protobuf::parse_from_reader(&mut file).expect("Parsing descriptor set failed");
@@ -232,7 +234,7 @@ impl Decoder {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_proto_schemas::{file_descriptor_proto, TestRecord};
+    use super::test::test_proto_schemas::{file_descriptor_proto, TestRecord};
     use failure::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
     use protobuf::{Message, RepeatedField};

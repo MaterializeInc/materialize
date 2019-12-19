@@ -9,4 +9,3 @@
 
 pub mod avro;
 pub mod protobuf;
-mod test_proto_schemas;

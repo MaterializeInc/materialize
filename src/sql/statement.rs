@@ -977,7 +977,7 @@ fn build_kafka_protobuf_source(
         _ => bail!("Invalid schema type. Schema must be a path to a file"),
     };
 
-    let mut desc = protobuf::validate_proto_schema(&message_name, &schema)?;
+    let desc = protobuf::validate_proto_schema(&message_name, &schema)?;
     Ok(Source {
         connector: SourceConnector::External {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
