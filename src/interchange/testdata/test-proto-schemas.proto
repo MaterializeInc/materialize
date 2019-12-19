@@ -3,9 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Translations for various data serialization formats.
+syntax = "proto3";
 
-#![deny(missing_debug_implementations)]
-
-pub mod avro;
-pub mod protobuf;
+message TestRecord {
+  int32 int_field = 1;
+  string string_field = 2;
+}
