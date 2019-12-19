@@ -148,6 +148,38 @@ impl FoldConstants {
                     };
                 }
             }
+            RelationExpr::FlatMapUnary { input, func, expr } => {
+                expr.reduce(env);
+
+                if let RelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = rows
+                        .iter()
+                        .cloned()
+                        .flat_map(|(input_row, diff)| {
+                            let datums = input_row.unpack();
+                            let mut temp_storage = RowPacker::new();
+                            let temp_storage = &mut temp_storage.arena();
+                            let output_rows = (func.func())(
+                                expr.eval(&datums, env, temp_storage),
+                                env,
+                                temp_storage,
+                            );
+                            output_rows.into_iter().map(move |output_row| {
+                                (
+                                    Row::pack(
+                                        input_row.clone().into_iter().chain(output_row.into_iter()),
+                                    ),
+                                    diff,
+                                )
+                            })
+                        })
+                        .collect();
+                    *relation = RelationExpr::Constant {
+                        rows: new_rows,
+                        typ: relation.typ(),
+                    };
+                }
+            }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates.iter_mut() {
                     predicate.reduce(env);

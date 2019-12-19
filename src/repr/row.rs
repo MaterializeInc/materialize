@@ -714,6 +714,17 @@ impl<'a> RowArena<'a> {
 
         dict
     }
+
+    /// Take some `Datum`s and pack them into a `Row`, using `self` as a buffer to reduce allocation
+    pub fn pack<'b, I, D>(&mut self, iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'b>>,
+    {
+        let mut packable = PackableRow { data: self.data };
+        packable.extend(iter);
+        packable.finish()
+    }
 }
 
 impl Default for RowPacker {

@@ -13,7 +13,7 @@ use std::mem;
 // these happen to be unchanged at the moment, but there might be additions later
 pub use dataflow_expr::like;
 pub use dataflow_expr::{
-    AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, UnaryFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,11 @@ pub enum RelationExpr {
     Map {
         input: Box<RelationExpr>,
         scalars: Vec<ScalarExpr>,
+    },
+    FlatMapUnary {
+        input: Box<RelationExpr>,
+        func: UnaryTableFunc,
+        expr: ScalarExpr,
     },
     Filter {
         input: Box<RelationExpr>,
@@ -215,6 +220,15 @@ impl RelationExpr {
                 }
             }
 
+            RelationExpr::FlatMapUnary {
+                input,
+                func: _,
+                expr,
+            } => {
+                input.split_subquery_predicates();
+                expr.split_subquery_predicates();
+            }
+
             RelationExpr::Filter { input, predicates } => {
                 input.split_subquery_predicates();
                 let mut subqueries = vec![];
@@ -274,6 +288,22 @@ impl RelationExpr {
                         // this means we added some columns to handle subqueries, and now we need to get rid of them
                         input = input.project((0..old_arity).chain(vec![new_arity]).collect());
                     }
+                }
+                Ok(input)
+            }
+            FlatMapUnary { input, func, expr } => {
+                let mut input = input.applied_to(id_gen, get_outer.clone())?;
+                let old_arity = input.arity();
+                let expr = expr.applied_to(id_gen, get_outer.arity(), &mut input)?;
+                let new_arity = input.arity();
+                input = input.flat_map_unary(func, expr);
+                if old_arity != new_arity {
+                    // this means we added some columns to handle subqueries, and now we need to get rid of them
+                    input = input.project(
+                        (0..old_arity)
+                            .chain(new_arity..new_arity + func.output_arity())
+                            .collect(),
+                    );
                 }
                 Ok(input)
             }
@@ -447,6 +477,9 @@ impl RelationExpr {
             RelationExpr::Map { input, .. } => {
                 f(input);
             }
+            RelationExpr::FlatMapUnary { input, .. } => {
+                f(input);
+            }
             RelationExpr::Filter { input, .. } => {
                 f(input);
             }
@@ -488,6 +521,9 @@ impl RelationExpr {
                     scalar.visit_columns(f);
                 }
             }
+            RelationExpr::FlatMapUnary { expr, .. } => {
+                expr.visit_columns(f);
+            }
             RelationExpr::Filter { predicates, .. } => {
                 for predicate in predicates {
                     predicate.visit_columns(f);
@@ -498,7 +534,14 @@ impl RelationExpr {
                     aggregate.visit_columns(f);
                 }
             }
-            _ => (),
+            RelationExpr::Constant { .. }
+            | RelationExpr::Get { .. }
+            | RelationExpr::Project { .. }
+            | RelationExpr::Distinct { .. }
+            | RelationExpr::TopK { .. }
+            | RelationExpr::Negate { .. }
+            | RelationExpr::Threshold { .. }
+            | RelationExpr::Union { .. } => (),
         })
     }
 
@@ -512,6 +555,9 @@ impl RelationExpr {
                     scalar.bind_parameters(parameters);
                 }
             }
+            RelationExpr::FlatMapUnary { expr, .. } => {
+                expr.bind_parameters(parameters);
+            }
             RelationExpr::Filter { predicates, .. } => {
                 for predicate in predicates {
                     predicate.bind_parameters(parameters);
@@ -522,7 +568,14 @@ impl RelationExpr {
                     aggregate.bind_parameters(parameters);
                 }
             }
-            _ => (),
+            RelationExpr::Constant { .. }
+            | RelationExpr::Get { .. }
+            | RelationExpr::Project { .. }
+            | RelationExpr::Distinct { .. }
+            | RelationExpr::TopK { .. }
+            | RelationExpr::Negate { .. }
+            | RelationExpr::Threshold { .. }
+            | RelationExpr::Union { .. } => (),
         })
     }
 
@@ -992,6 +1045,13 @@ impl RelationExpr {
                     typ.column_types.push(scalar.typ(outer, &typ, params));
                 }
                 typ
+            }
+            RelationExpr::FlatMapUnary { input, func, expr } => {
+                let mut typ = input.typ(outer, params);
+                let func_typ = func.output_type(&expr.typ(outer, &RelationType::empty(), params));
+                typ.column_types.extend(func_typ.column_types);
+                // FlatMap can add duplicate rows, so input keys are no longer valid
+                RelationType::new(typ.column_types)
             }
             RelationExpr::Filter { input, .. } | RelationExpr::TopK { input, .. } => {
                 input.typ(outer, params)

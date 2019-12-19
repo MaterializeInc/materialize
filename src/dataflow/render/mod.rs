@@ -389,6 +389,35 @@ where
                     self.collections.insert(relation_expr.clone(), collection);
                 }
 
+                RelationExpr::FlatMapUnary { input, func, expr } => {
+                    self.ensure_rendered(input, env, scope, worker_index);
+                    let env = env.clone();
+                    let func = func.clone();
+                    let expr = expr.clone();
+                    let mut unpacker = RowUnpacker::new();
+                    let mut packer = RowPacker::new();
+                    let mut temp_storage = RowPacker::new();
+                    let collection = self.collection(input).unwrap().flat_map(move |input_row| {
+                        let datums = unpacker.unpack(&input_row);
+                        let temp_storage = &mut temp_storage.arena();
+                        let output_rows = (func.func())(
+                            expr.eval(&datums, &env, temp_storage),
+                            &env,
+                            temp_storage,
+                        );
+                        output_rows
+                            .into_iter()
+                            .map(|output_row| {
+                                packer.pack(
+                                    input_row.clone().into_iter().chain(output_row.into_iter()),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    });
+
+                    self.collections.insert(relation_expr.clone(), collection);
+                }
+
                 RelationExpr::Filter { input, predicates } => {
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
