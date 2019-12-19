@@ -1,3 +1,11 @@
+// Copyright 2019 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+//
+// Build script to regenerate proto serializing code for tests
+// To run invoke MATERIALIZE_GENERATE_PROTO=1 cargo build
+
 extern crate protoc_rust;
 
 use std::env;
