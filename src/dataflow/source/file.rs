@@ -95,7 +95,7 @@ impl AsyncRead for ForeverTailedAsyncFile {
 
 async fn send_lines<R>(
     reader: R,
-    mut tx: futures::channel::mpsc::UnboundedSender<String>,
+    mut tx: futures::channel::mpsc::Sender<String>,
     activator: Arc<Mutex<SyncActivator>>,
 ) where
     R: AsyncRead + Unpin,
@@ -120,7 +120,7 @@ async fn send_lines<R>(
 
 async fn read_file_task(
     path: PathBuf,
-    tx: futures::channel::mpsc::UnboundedSender<String>,
+    tx: futures::channel::mpsc::Sender<String>,
     activator: Arc<Mutex<SyncActivator>>,
     read_style: FileReadStyle,
 ) {
@@ -175,11 +175,12 @@ pub fn file<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    const MAX_LINES_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
     let (stream, capability) = source(region, &name, move |info| {
         let activator = region.activator_for(&info.address[..]);
-        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let (tx, mut rx) = futures::channel::mpsc::channel(MAX_LINES_PER_INVOCATION);
         if read_file {
             let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
             executor.spawn(read_file_task(path, tx, activator, read_style));
@@ -227,13 +228,22 @@ where
                 cap.downgrade(&sys_time);
                 sys_time + 1
             };
-            while let Ok(line) = rx.try_next() {
-                match line {
-                    Some(line) => {
-                        output.session(cap).give(line.into_bytes());
+
+            let mut lines_read = 0;
+
+            while lines_read < MAX_LINES_PER_INVOCATION {
+                if let Ok(line) = rx.try_next() {
+                    match line {
+                        Some(line) => output.session(cap).give(line.into_bytes()),
+                        None => return SourceStatus::Done,
                     }
-                    None => return SourceStatus::Done,
+                    lines_read += 1;
+                } else {
+                    break;
                 }
+            }
+            if lines_read == MAX_LINES_PER_INVOCATION {
+                activator.activate();
             }
             cap.downgrade(&next_time);
             SourceStatus::Alive
