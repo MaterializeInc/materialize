@@ -3,17 +3,19 @@
 To deploy Materialize using PostgreSQL as its upstream database, you'll need to
 configure it with Debezium.
 
-[Debezium] itself provides change data capature (CDC) to legacy databases like
+[Debezium] itself provides change data capture (CDC) to legacy databases like
 MySQL and Postgres. Ultimately, CDC lets PostgreSQL publish to Kafka, which in turn
 can be consumed by Materialize.
 
 **!NOTE!** If you run into problems, check out the **Troubleshooting** section
 at the bottom. If you don't see a solution to your problem there, throw the
-answer in their once you solve it.
+answer in there once you solve it.
 
 ## Setup
 
 ### Manual
+
+#### PostgreSQL
 
 1. Install PostgreSQL through your favorite package manager.
 
@@ -37,6 +39,30 @@ answer in their once you solve it.
     ```shell
     brew services restart postgres
     ```
+
+1. Create a `tpch` database.
+
+    ```shell
+    psql
+    ```
+
+    ```postgresql
+    CREATE DATABASE tpch;
+    ```
+
+1. Create a tpch schema and a user that Debezium will connect as.
+
+    ```postgresql
+    \c tpch
+    CREATE SCHEMA tpch;
+    CREATE USER debezium WITH SUPERUSER PASSWORD 'debezium';
+    GRANT ALL PRIVILEGES ON DATABASE "tpch" to debezium;
+    GRANT ALL PRIVILEGES ON SCHEMA "tpch" to debezium;
+    ```
+
+    The debezium user requires SUPERUSER in order to create a "FOR ALL TABLES" publication.
+
+#### Debezium + Kafka Connect
 
 1. Download the Debezium PostgreSQL connector and place the `debezium-connector-postgres`
    directory in `/usr/local/opt/confluent-platform/share/java/`. If this directory doesn't
@@ -99,32 +125,6 @@ answer in their once you solve it.
 To test that your local PostgreSQL/Debezium actually works with Materialize, we'll
 have Materialize ingest the TPCH `lineitem` table.
 
-1. Create a `tpch` database.
-
-    ```shell
-    psql
-    ```
-
-    ```postgresql
-    CREATE DATABASE tpch;
-    ```
-
-1. Switch your connection to the tpch database.
-
-    ```postgresql
-    \c tpch;
-    ```
-
-1. Create a tpch schema and a user that Debezium will connect as.
-
-    ```postgresql
-    CREATE SCHEMA tpch;
-    CREATE USER debezium WITH SUPERUSER PASSWORD 'debezium';
-    GRANT ALL PRIVILEGES ON DATABASE "tpch" to debezium;
-    ```
-
-    The debezium user requires SUPERUSER in order to create a "FOR ALL TABLES" publication.
-
 1. Generate and load TPC-H data with [`tpch-gen`](https://github.com/MaterializeInc/tpch-dbgen.git).
 
     ```bash
@@ -134,7 +134,7 @@ have Materialize ingest the TPCH `lineitem` table.
     ./dbgen
 
     ./generate_postgres_data.sh
-    psql -h localhost -d tpch -f postgres_ddl.sql
+    psql -f postgres_ddl.sql postgresql://debezium:debezium@localhost/tpch
     ```
 
     **Note that Debezium versions before 1.0 mishandled dates in a way that
