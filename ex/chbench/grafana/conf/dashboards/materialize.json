@@ -40,7 +40,8 @@
         "cardColor": "#77e04c",
         "colorScale": "sqrt",
         "colorScheme": "interpolateGreens",
-        "exponent": 0.5,
+        "exponent": 0.9,
+        "min": null,
         "mode": "opacity"
       },
       "dataFormat": "tsbuckets",
@@ -231,7 +232,7 @@
         "cardColor": "#77e04c",
         "colorScale": "sqrt",
         "colorScheme": "interpolateGreens",
-        "exponent": 0.5,
+        "exponent": 0.9,
         "min": null,
         "mode": "opacity"
       },
@@ -602,7 +603,8 @@
             "cardColor": "#77e04c",
             "colorScale": "sqrt",
             "colorScheme": "interpolateGreens",
-            "exponent": 0.5,
+            "exponent": 0.9,
+            "min": null,
             "mode": "opacity"
           },
           "dataFormat": "tsbuckets",
