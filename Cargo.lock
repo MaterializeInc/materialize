@@ -627,6 +627,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "bincode",
  "comm",
  "csv",

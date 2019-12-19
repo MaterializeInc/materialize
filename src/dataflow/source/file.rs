@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use arrayvec::ArrayVec;
 use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::{Fuse, Stream, StreamExt};
@@ -95,7 +96,7 @@ impl AsyncRead for ForeverTailedAsyncFile {
 
 async fn send_lines<R>(
     reader: R,
-    mut tx: futures::channel::mpsc::UnboundedSender<String>,
+    mut tx: futures::channel::mpsc::Sender<String>,
     activator: Arc<Mutex<SyncActivator>>,
 ) where
     R: AsyncRead + Unpin,
@@ -120,7 +121,7 @@ async fn send_lines<R>(
 
 async fn read_file_task(
     path: PathBuf,
-    tx: futures::channel::mpsc::UnboundedSender<String>,
+    tx: futures::channel::mpsc::Sender<String>,
     activator: Arc<Mutex<SyncActivator>>,
     read_style: FileReadStyle,
 ) {
@@ -175,11 +176,12 @@ pub fn file<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    const MAX_LINES_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
     let (stream, capability) = source(region, &name, move |info| {
         let activator = region.activator_for(&info.address[..]);
-        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let (tx, mut rx) = futures::channel::mpsc::channel(MAX_LINES_PER_INVOCATION);
         if read_file {
             let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
             executor.spawn(read_file_task(path, tx, activator, read_style));
@@ -227,13 +229,24 @@ where
                 cap.downgrade(&sys_time);
                 sys_time + 1
             };
-            while let Ok(line) = rx.try_next() {
-                match line {
-                    Some(line) => {
-                        output.session(cap).give(line.into_bytes());
+
+            let mut lines = ArrayVec::<[_; MAX_LINES_PER_INVOCATION]>::new();
+
+            while !lines.is_full() {
+                if let Ok(line) = rx.try_next() {
+                    match line {
+                        Some(line) => lines.push(line),
+                        None => return SourceStatus::Done,
                     }
-                    None => return SourceStatus::Done,
+                } else {
+                    break;
                 }
+            }
+            if lines.is_full() {
+                activator.activate();
+            }
+            for line in lines {
+                output.session(cap).give(line.into_bytes());
             }
             cap.downgrade(&next_time);
             SourceStatus::Alive
