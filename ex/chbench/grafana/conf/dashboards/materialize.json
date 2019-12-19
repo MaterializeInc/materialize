@@ -62,7 +62,7 @@
       "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "rate(mz_command_durations_hist{command=\"$command\",status=\"success\"}[10s])",
+          "expr": "sum(rate(mz_command_durations_hist{command=~\"$command\",status=\"success\"}[10s])) by (le)",
           "format": "time_series",
           "instant": false,
           "interval": "10s",
@@ -147,37 +147,37 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
+          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "max",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "p99",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "p95",
           "refId": "C"
         },
         {
-          "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "median",
           "refId": "D"
         },
         {
-          "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"success\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.001, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"success\"}[30s])) by (le))",
           "legendFormat": "p001",
           "refId": "E"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"error\"}[30s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"error\"}[30s])) by (le))",
           "legendFormat": "error p99",
           "refId": "F"
         },
         {
-          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=\"$command\",status=\"error\"}[30s])) by (le))",
+          "expr": "histogram_quantile(1, sum(rate(mz_command_durations_bucket{command=~\"$command\",status=\"error\"}[30s])) by (le))",
           "legendFormat": "error max",
           "refId": "G"
         }
@@ -1685,21 +1685,30 @@
       {
         "allValue": null,
         "current": {
-          "text": "execute",
-          "value": "execute"
+          "tags": [],
+          "text": "execute + query",
+          "value": [
+            "execute",
+            "query"
+          ]
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_command_durations_bucket, command)",
         "hide": 0,
         "includeAll": false,
         "label": null,
-        "multi": false,
+        "multi": true,
         "name": "command",
         "options": [
           {
             "selected": false,
             "text": "bind",
             "value": "bind"
+          },
+          {
+            "selected": false,
+            "text": "describe_portal",
+            "value": "describe_portal"
           },
           {
             "selected": false,
@@ -1717,9 +1726,19 @@
             "value": "parse"
           },
           {
+            "selected": true,
+            "text": "query",
+            "value": "query"
+          },
+          {
             "selected": false,
             "text": "sync",
             "value": "sync"
+          },
+          {
+            "selected": false,
+            "text": "terminate",
+            "value": "terminate"
           }
         ],
         "query": "label_values(mz_command_durations_bucket, command)",
