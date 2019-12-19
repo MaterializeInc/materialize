@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use arrayvec::ArrayVec;
 use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::{Fuse, Stream, StreamExt};
@@ -179,6 +178,8 @@ where
     const MAX_LINES_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
+    let mut line_buf = Vec::new();
+    line_buf.reserve(MAX_LINES_PER_INVOCATION);
     let (stream, capability) = source(region, &name, move |info| {
         let activator = region.activator_for(&info.address[..]);
         let (tx, mut rx) = futures::channel::mpsc::channel(MAX_LINES_PER_INVOCATION);
@@ -230,22 +231,21 @@ where
                 sys_time + 1
             };
 
-            let mut lines = ArrayVec::<[_; MAX_LINES_PER_INVOCATION]>::new();
-
-            while !lines.is_full() {
+            line_buf.clear();
+            while line_buf.len() < MAX_LINES_PER_INVOCATION {
                 if let Ok(line) = rx.try_next() {
                     match line {
-                        Some(line) => lines.push(line),
+                        Some(line) => line_buf.push(line),
                         None => return SourceStatus::Done,
                     }
                 } else {
                     break;
                 }
             }
-            if lines.is_full() {
+            if line_buf.len() == MAX_LINES_PER_INVOCATION {
                 activator.activate();
             }
-            for line in lines {
+            for line in line_buf.drain(..) {
                 output.session(cap).give(line.into_bytes());
             }
             cap.downgrade(&next_time);

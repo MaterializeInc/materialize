@@ -9,7 +9,6 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-arrayvec = "0.4"
 bincode = "1.2.1"
 comm = { path = "../comm" }
 csv = "1.1.1"
