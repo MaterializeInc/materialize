@@ -32,7 +32,7 @@ make_static_metric! {
 lazy_static! {
     static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = register_int_counter_vec!(
         "mz_dataflow_events_read_total",
-        "Count of  events we have read from the wire",
+        "Count of events we have read from the wire",
         &["format", "status"]
     )
     .unwrap();

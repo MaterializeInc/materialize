@@ -909,7 +909,13 @@ fn build_kafka_source(
         (KafkaSchemaFormat::Protobuf, Some(m)) => {
             build_kafka_protobuf_source(schema, kafka_addr, topic, m)
         }
-        _ => bail!("Invalid combination of source format and message name"),
+        (KafkaSchemaFormat::Avro, Some(s)) => bail!(
+            "Invalid parameter message name {} provided for Avro source",
+            s
+        ),
+        (KafkaSchemaFormat::Protobuf, None) => {
+            bail!("Missing message name parameter for a Protobuf source")
+        }
     }
 }
 

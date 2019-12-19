@@ -36,6 +36,9 @@ where
                                 EVENTS_COUNTER.protobuf.success.inc();
                                 if let Some(row) = row {
                                     session.give((row, *cap.time(), 1));
+                                } else {
+                                    EVENTS_COUNTER.protobuf.error.inc();
+                                    error!("protobuf deserialization returned None");
                                 }
                             }
                             Err(err) => {

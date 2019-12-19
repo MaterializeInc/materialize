@@ -5,7 +5,6 @@
 
 use differential_dataflow::Hashable;
 use log::error;
-
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
