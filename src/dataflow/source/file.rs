@@ -105,7 +105,7 @@ async fn send_lines<R>(
         let line = match line {
             Ok(line) => line,
             Err(err) => {
-                error!("csv source: error while reading file: {}", err);
+                error!("file source: error while reading file: {}", err);
                 return;
             }
         };
@@ -127,7 +127,7 @@ async fn read_file_task(
     let file = match File::open(&path).await {
         Ok(file) => file,
         Err(err) => {
-            error!("csv source: unable to open file: {}", err);
+            error!("file source: unable to open file: {}", err);
             return;
         }
     };
@@ -139,12 +139,12 @@ async fn read_file_task(
             let mut w = match notify::raw_watcher(notice_tx) {
                 Ok(w) => w,
                 Err(err) => {
-                    error!("csv source: failed to create notify watcher: {}", err);
+                    error!("file source: failed to create notify watcher: {}", err);
                     return;
                 }
             };
             if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
-                error!("csv source: failed to add watch: {}", err);
+                error!("file source: failed to add watch: {}", err);
                 return;
             }
             let (async_tx, async_rx) = futures::channel::mpsc::unbounded();
