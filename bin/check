@@ -163,4 +163,4 @@ extra_lints=(
 # and the inputs to this script are trusted.
 
 # shellcheck disable=SC2046
-run cargo clippy -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")
+run cargo clippy --all-targets -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")

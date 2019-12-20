@@ -1093,7 +1093,7 @@ mod tests {
     use crate::DummyHumanizer;
 
     impl RelationExpr {
-        fn into_doc(&self) -> RcDoc {
+        fn doc(&self) -> RcDoc {
             self.to_doc(&pretty::RcAllocator, &DummyHumanizer)
                 .into_doc()
         }
@@ -1122,36 +1122,33 @@ mod tests {
 
     #[test]
     fn test_pretty_constant() {
+        assert_eq!(constant(vec![]).doc().pretty(72).to_string(), "Constant []");
         assert_eq!(
-            constant(vec![]).into_doc().pretty(72).to_string(),
-            "Constant []"
-        );
-        assert_eq!(
-            constant(vec![vec![]]).into_doc().pretty(72).to_string(),
+            constant(vec![vec![]]).doc().pretty(72).to_string(),
             "Constant [[]]"
         );
 
         assert_eq!(
-            constant(vec![vec![1]]).into_doc().pretty(72).to_string(),
+            constant(vec![vec![1]]).doc().pretty(72).to_string(),
             "Constant [[1]]"
         );
 
         assert_eq!(
             constant(vec![vec![1], vec![2]])
-                .into_doc()
+                .doc()
                 .pretty(72)
                 .to_string(),
             "Constant [[1], [2]]"
         );
 
         assert_eq!(
-            constant(vec![vec![1, 2]]).into_doc().pretty(72).to_string(),
+            constant(vec![vec![1, 2]]).doc().pretty(72).to_string(),
             "Constant [[1, 2]]"
         );
 
         assert_eq!(
             constant(vec![vec![1, 2], vec![1, 2]])
-                .into_doc()
+                .doc()
                 .pretty(72)
                 .to_string(),
             "Constant [[1, 2], [1, 2]]"
@@ -1159,7 +1156,7 @@ mod tests {
 
         assert_eq!(
             constant(vec![vec![1, 2], vec![1, 2]])
-                .into_doc()
+                .doc()
                 .pretty(16)
                 .to_string(),
             "Constant [
@@ -1185,12 +1182,12 @@ mod tests {
         };
 
         assert_eq!(
-            binding.into_doc().pretty(100).to_string(),
+            binding.doc().pretty(100).to_string(),
             r#"Let { l1 = Let { l2 = Constant [[13]] } in Constant [[42]] } in Constant [[665]]"#
         );
 
         assert_eq!(
-            binding.into_doc().pretty(28).to_string(),
+            binding.doc().pretty(28).to_string(),
             r#"Let {
   l1 = Let {
     l2 = Constant [[13]]
@@ -1209,12 +1206,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            project.into_doc().pretty(82).to_string(),
+            project.doc().pretty(82).to_string(),
             "Project { outputs: [0 .. 4], Constant [] }",
         );
 
         assert_eq!(
-            project.into_doc().pretty(14).to_string(),
+            project.doc().pretty(14).to_string(),
             "Project {
   outputs: [
     0 .. 4
@@ -1232,12 +1229,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            map.into_doc().pretty(82).to_string(),
+            map.doc().pretty(82).to_string(),
             "Map { scalars: [#0, #1], Constant [] }",
         );
 
         assert_eq!(
-            map.into_doc().pretty(16).to_string(),
+            map.doc().pretty(16).to_string(),
             "Map {
   scalars: [
     #0,
@@ -1256,12 +1253,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            filter.into_doc().pretty(82).to_string(),
+            filter.doc().pretty(82).to_string(),
             "Filter { predicates: [#0, #1], Constant [] }",
         );
 
         assert_eq!(
-            filter.into_doc().pretty(20).to_string(),
+            filter.doc().pretty(20).to_string(),
             "Filter {
   predicates: [
     #0,
@@ -1280,12 +1277,12 @@ Constant [[665]]"#
         );
 
         assert_eq!(
-            join.into_doc().pretty(82).to_string(),
+            join.doc().pretty(82).to_string(),
             "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], Constant [], Constant [] }",
         );
 
         assert_eq!(
-            join.into_doc().pretty(48).to_string(),
+            join.doc().pretty(48).to_string(),
             "Join {
   variables: [
     [(0, 0), (1, 0)],
@@ -1317,12 +1314,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            reduce.into_doc().pretty(84).to_string(),
+            reduce.doc().pretty(84).to_string(),
             "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
         );
 
         assert_eq!(
-            reduce.into_doc().pretty(16).to_string(),
+            reduce.doc().pretty(16).to_string(),
             "Reduce {
   group_key: [
     1, 2

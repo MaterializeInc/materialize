@@ -520,7 +520,7 @@ mod test {
             assert_eq!(
                 out,
                 Identifier {
-                    value: value.to_string(),
+                    value: (*value).to_owned(),
                     quoted: *quoted
                 }
             )

@@ -533,7 +533,7 @@ mod tests {
     use super::*;
 
     impl ScalarExpr {
-        fn into_doc(&self) -> RcDoc {
+        fn doc(&self) -> RcDoc {
             self.to_doc(&pretty::RcAllocator).into_doc()
         }
     }
@@ -545,19 +545,16 @@ mod tests {
         let int64_lit = |n| ScalarExpr::literal(Datum::Int64(n), col_type(Int64));
 
         let plus_expr = int64_lit(1).call_binary(int64_lit(2), BinaryFunc::AddInt64);
-        assert_eq!(plus_expr.into_doc().pretty(72).to_string(), "1 + 2");
+        assert_eq!(plus_expr.doc().pretty(72).to_string(), "1 + 2");
 
         let regex_expr = ScalarExpr::literal(Datum::String("foo"), col_type(String)).call_binary(
             ScalarExpr::literal(Datum::String("f?oo"), col_type(String)),
             BinaryFunc::MatchRegex,
         );
-        assert_eq!(
-            regex_expr.into_doc().pretty(72).to_string(),
-            r#""foo" ~ "f?oo""#
-        );
+        assert_eq!(regex_expr.doc().pretty(72).to_string(), r#""foo" ~ "f?oo""#);
 
         let neg_expr = int64_lit(1).call_unary(UnaryFunc::NegInt64);
-        assert_eq!(neg_expr.into_doc().pretty(72).to_string(), "-1");
+        assert_eq!(neg_expr.doc().pretty(72).to_string(), "-1");
 
         let bool_expr = ScalarExpr::literal(Datum::True, col_type(Bool))
             .call_binary(
@@ -565,10 +562,7 @@ mod tests {
                 BinaryFunc::And,
             )
             .call_unary(UnaryFunc::Not);
-        assert_eq!(
-            bool_expr.into_doc().pretty(72).to_string(),
-            "!(true && false)"
-        );
+        assert_eq!(bool_expr.doc().pretty(72).to_string(), "!(true && false)");
 
         let cond_expr = ScalarExpr::if_then_else(
             ScalarExpr::literal(Datum::True, col_type(Bool)),
@@ -576,7 +570,7 @@ mod tests {
             plus_expr.clone(),
         );
         assert_eq!(
-            cond_expr.into_doc().pretty(72).to_string(),
+            cond_expr.doc().pretty(72).to_string(),
             "if true then -1 else 1 + 2"
         );
 
@@ -585,7 +579,7 @@ mod tests {
             exprs: vec![ScalarExpr::Column(7), plus_expr, neg_expr.clone()],
         };
         assert_eq!(
-            variadic_expr.into_doc().pretty(72).to_string(),
+            variadic_expr.doc().pretty(72).to_string(),
             "coalesce(#7, 1 + 2, -1)"
         );
 
@@ -598,18 +592,18 @@ mod tests {
         .call_unary(UnaryFunc::Not)
         .call_binary(bool_expr, BinaryFunc::Or);
         assert_eq!(
-            mega_expr.into_doc().pretty(72).to_string(),
+            mega_expr.doc().pretty(72).to_string(),
             "!isnull(coalesce(if true then -1 else 1 + 2) % -1) || !(true && false)"
         );
-        println!("{}", mega_expr.into_doc().pretty(64).to_string());
+        println!("{}", mega_expr.doc().pretty(64).to_string());
         assert_eq!(
-            mega_expr.into_doc().pretty(64).to_string(),
+            mega_expr.doc().pretty(64).to_string(),
             "!isnull(coalesce(if true then -1 else 1 + 2) % -1)
 ||
 !(true && false)"
         );
         assert_eq!(
-            mega_expr.into_doc().pretty(16).to_string(),
+            mega_expr.doc().pretty(16).to_string(),
             "!isnull(
   coalesce(
     if

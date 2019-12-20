@@ -20,7 +20,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     let temp_dir = tempfile::tempdir()?;
     let config = util::Config::default();
 
-    let (_server, mut client) = util::start_server(config.clone())?;
+    let (_server, mut client) = util::start_server(config)?;
 
     let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
@@ -94,7 +94,7 @@ New York,NY,10004
     append(&dynamic_path, b"\"Rancho Santa Margarita\",CA,92679\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
-        &[line1.clone(), line2.clone(), line3.clone()]
+        &[line1, line2, line3]
     );
 
     Ok(())
