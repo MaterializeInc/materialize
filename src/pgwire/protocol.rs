@@ -20,7 +20,6 @@ use tokio_util::codec::Framed;
 
 use coord::ExecuteResponse;
 use dataflow_types::{PeekResponse, Update};
-use ore::future::OreTryStreamExt;
 use repr::{RelationDesc, Row};
 use sql::Session;
 
@@ -129,10 +128,15 @@ where
         let mut state = State::Startup(session);
 
         loop {
+            let message = match self.conn.try_next().await? {
+                Some(message) => message,
+                None => return Ok(()),
+            };
+            trace!("cid={} recv={:?}", self.conn_id, message);
             state = match state.take() {
-                State::Startup(session) => self.advance_startup(session).await?,
-                State::Ready(session) => self.advance_ready(session).await?,
-                State::Drain(session) => self.advance_drain(session).await?,
+                State::Startup(session) => self.advance_startup(session, message).await?,
+                State::Ready(session) => self.advance_ready(session, message).await?,
+                State::Drain(session) => self.advance_drain(session, message).await?,
                 State::Done => return Ok(()),
             };
             if let State::Startup(_) = state {
@@ -144,8 +148,12 @@ where
         }
     }
 
-    async fn advance_startup(&mut self, session: Session) -> Result<State, comm::Error> {
-        match self.try_recv().await? {
+    async fn advance_startup(
+        &mut self,
+        session: Session,
+        message: FrontendMessage,
+    ) -> Result<State, comm::Error> {
+        match message {
             FrontendMessage::Startup { version } => self.startup(session, version).await,
             FrontendMessage::CancelRequest {
                 conn_id,
@@ -158,8 +166,11 @@ where
         }
     }
 
-    async fn advance_ready(&mut self, session: Session) -> Result<State, comm::Error> {
-        let message = self.try_recv().await?;
+    async fn advance_ready(
+        &mut self,
+        session: Session,
+        message: FrontendMessage,
+    ) -> Result<State, comm::Error> {
         let timer = Instant::now();
         let name = message.name();
 
@@ -210,8 +221,12 @@ where
         Ok(next_state)
     }
 
-    async fn advance_drain(&mut self, session: Session) -> Result<State, comm::Error> {
-        match self.try_recv().await? {
+    async fn advance_drain(
+        &mut self,
+        session: Session,
+        message: FrontendMessage,
+    ) -> Result<State, comm::Error> {
+        match message {
             FrontendMessage::Sync => self.sync(session).await,
             _ => Ok(State::Drain(session)),
         }
@@ -700,12 +715,6 @@ where
         }
         self.send(BackendMessage::CopyDone).await?;
         Ok(State::Ready(session))
-    }
-
-    async fn try_recv(&mut self) -> Result<FrontendMessage, comm::Error> {
-        let message = self.conn.try_recv().await?;
-        trace!("cid={} recv={:?}", self.conn_id, message);
-        Ok(message)
     }
 
     async fn send(&mut self, message: BackendMessage) -> Result<(), comm::Error> {
