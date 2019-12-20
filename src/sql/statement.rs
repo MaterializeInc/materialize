@@ -645,9 +645,28 @@ fn handle_create_dataflow(
             url,
             with_options,
         } => {
-            if !with_options.is_empty() {
-                bail!("WITH options are not yet supported");
+            if with_options.len() < 1 {
+                bail!("Sink requires a `schema_registry_url` WITH option.")
+            } else if with_options.len() > 1 {
+                bail!("WITH options other than `schema_registry_url` are not yet supported")
             }
+
+            let mut schema_registry_url = None; // this doesn't have to be mut?
+            let with_op = &with_options[0];
+            match with_op.name.value.as_str() {
+                "schema_registry_url" => {
+                    schema_registry_url = Some(match &with_op.value {
+                        Value::SingleQuotedString(s) => s,
+                        _ => bail!("Schema registry URL must be a string, e.g. 'kafka://localhost/{schema}'."),
+                    });
+                }
+                _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
+            }
+            let schema_registry_url = match schema_registry_url {
+                Some(url) => url.clone(),
+                None => bail!("Sink requires a `schema_registry_url` WITH option."),
+            };
+
             let name = name.try_into()?;
             let from = from.try_into()?;
             let catalog_entry = catalog.get(&from)?;
@@ -656,8 +675,9 @@ fn handle_create_dataflow(
                 from: (catalog_entry.id(), catalog_entry.desc()?.clone()),
                 connector: SinkConnector::Kafka(KafkaSinkConnector {
                     addr,
+                    schema_registry_url,
                     topic,
-                    schema_id: 0,
+                    schema_id: None, // We don't know the schema_id until we create it in build_dataflow.
                 }),
             };
             Ok(Plan::CreateSink(name, sink))
