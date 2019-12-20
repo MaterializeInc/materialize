@@ -1533,6 +1533,7 @@ name = "materialized"
 version = "0.1.0"
 dependencies = [
  "backtrace",
+ "bincode",
  "chrono",
  "comm",
  "coord",

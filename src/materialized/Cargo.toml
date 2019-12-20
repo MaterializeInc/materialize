@@ -32,6 +32,7 @@ pgwire = { path = "../pgwire" }
 prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
 tempfile = "3.1"
 tokio = "0.2"
+bincode = "1.2.1"
 
 [dev-dependencies]
 chrono = "0.4"

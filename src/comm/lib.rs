@@ -91,6 +91,6 @@ pub mod protocol;
 pub mod switchboard;
 pub mod util;
 
-pub use error::Error;
+pub use error::{Error, ErrorKind};
 pub use protocol::Connection;
 pub use switchboard::Switchboard;

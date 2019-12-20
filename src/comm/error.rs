@@ -9,10 +9,21 @@ use std::io;
 /// A communication error.
 pub struct Error(ErrorKind);
 
-enum ErrorKind {
+/// The source error that we are wrapping
+pub enum ErrorKind {
+    /// The error came from bincode
     Bincode(bincode::Error),
+    /// The error came from a client cancelling a channel
     OneshotCanceled(futures::channel::oneshot::Canceled),
+    /// Unable to send into a channel
     MpscSend(futures::channel::mpsc::SendError),
+}
+
+impl Error {
+    /// Get the kind of this error
+    pub fn kind(&self) -> &ErrorKind {
+        &self.0
+    }
 }
 
 impl std::error::Error for Error {

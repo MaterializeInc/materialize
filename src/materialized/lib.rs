@@ -130,8 +130,27 @@ async fn handle_connection(
             .await
     };
     if let Err(err) = res {
-        error!("error handling request: {}", err)
+        if !is_eof(&err) {
+            error!("error handling request: {}", err)
+        }
     }
+}
+
+/// Check if th error that we're interacting with is a "known" eof
+fn is_eof(err: &failure::Error) -> bool {
+    // for now the only errors that we see are bincode errors on (any kind of) client disconnect
+    for error in err.iter_chain() {
+        if let Some(comm_err) = error.downcast_ref::<comm::Error>() {
+            if let comm::ErrorKind::Bincode(bin_err) = comm_err.kind() {
+                if let bincode::ErrorKind::Io(io_err) = &**bin_err {
+                    if let io::ErrorKind::UnexpectedEof = io_err.kind() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Start a `materialized` server.
