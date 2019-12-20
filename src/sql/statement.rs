@@ -7,6 +7,8 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
+use serde_json::json;
+
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::net::SocketAddr;
@@ -651,7 +653,7 @@ fn handle_create_dataflow(
                 bail!("WITH options other than `schema_registry_url` are not yet supported")
             }
 
-            let mut schema_registry_url = None; // this doesn't have to be mut?
+            let mut schema_registry_url = None; // value assigned here is never used Clippy...
             let with_op = &with_options[0];
             match with_op.name.value.as_str() {
                 "schema_registry_url" => {
@@ -671,15 +673,55 @@ fn handle_create_dataflow(
             let from = from.try_into()?;
             let catalog_entry = catalog.get(&from)?;
             let (addr, topic) = parse_kafka_topic_url(url)?;
+
+            // Create new Kafka schema for sink using RelationDesc
+            let relation_desc = catalog_entry.desc()?.clone();
+            let mut fields = Vec::new();
+            for (name, typ) in relation_desc.iter() {
+                let field_name = match name {
+                    Some(name) => name.as_str(),
+                    None => bail!("All Kafka sink columns must have a name."),
+                };
+
+                let mut field_types = Vec::new();
+                if typ.nullable {
+                    field_types.push("null");
+                }
+                match typ.scalar_type {
+                    // todo: rest of these
+                    ScalarType::String => field_types.push("string"),
+                    _ => bail!("Only support String, not: {:#?}", typ.scalar_type),
+                }
+
+                let field = json!({
+                    "name": field_name,
+                    "type": field_types,
+                });
+                fields.push(field);
+            }
+
+            let schema = json!({
+                "type": "record",
+                "name": "envelope",
+                "fields": fields,
+            })
+            .to_string();
+
+            // Send new schema to registry, get back the schema id for the sink
+            let url: Url = schema_registry_url.parse().unwrap();
+            let ccsr_client = ccsr::Client::new(url.clone());
+            let schema_id = ccsr_client.publish_schema(&topic, &schema).unwrap();
+
             let sink = Sink {
-                from: (catalog_entry.id(), catalog_entry.desc()?.clone()),
+                from: (catalog_entry.id(), relation_desc),
                 connector: SinkConnector::Kafka(KafkaSinkConnector {
                     addr,
                     schema_registry_url,
                     topic,
-                    schema_id: None, // We don't know the schema_id until we create it in build_dataflow.
+                    schema_id: schema_id,
                 }),
             };
+
             Ok(Plan::CreateSink(name, sink))
         }
         Statement::CreateIndex {

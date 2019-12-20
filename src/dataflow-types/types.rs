@@ -316,7 +316,7 @@ pub struct KafkaSinkConnector {
     pub addr: std::net::SocketAddr,
     pub schema_registry_url: String,
     pub topic: String,
-    pub schema_id: Option<i32>,
+    pub schema_id: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

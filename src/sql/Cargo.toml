@@ -18,6 +18,7 @@ failure = "0.1.6"
 interchange = { path = "../interchange" }
 ore = { path = "../ore" }
 repr = { path = "../repr" }
+serde_json = "1.0.44"
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 unicase = "2.6.0"
 url = "2.1.0"
