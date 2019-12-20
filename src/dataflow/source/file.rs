@@ -231,10 +231,11 @@ where
 
             let mut lines_read = 0;
 
+            let mut session = output.session(cap);
             while lines_read < MAX_LINES_PER_INVOCATION {
                 if let Ok(line) = rx.try_next() {
                     match line {
-                        Some(line) => output.session(cap).give(line.into_bytes()),
+                        Some(line) => session.give(line.into_bytes()),
                         None => return SourceStatus::Done,
                     }
                     lines_read += 1;
