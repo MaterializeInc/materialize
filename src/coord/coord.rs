@@ -39,7 +39,6 @@ use dataflow_types::{
 };
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr};
 use ore::collections::CollectionExt;
-use ore::option::OptionExt;
 use repr::{ColumnName, Datum, QualName, RelationDesc, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
@@ -113,7 +112,7 @@ where
             None
         };
 
-        let catalog_path = catalog_path.mz_as_deref();
+        let catalog_path = catalog_path.as_deref();
         let catalog = if let Some(logging_config) = config.logging {
             Catalog::open(
                 catalog_path,
@@ -346,7 +345,7 @@ where
                     name,
                     Source {
                         connector: SourceConnector::Local,
-                        desc: desc.clone(),
+                        desc,
                     },
                 )])?;
                 ExecuteResponse::CreatedTable

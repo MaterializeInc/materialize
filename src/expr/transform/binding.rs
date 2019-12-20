@@ -253,7 +253,7 @@ impl Unbind {
                     {
                         unbind_all(&mut value, env);
 
-                        let local = env.bind_local(id, *value.clone());
+                        let local = env.bind_local(id, *value);
                         *expr = *body;
                         unbind_all(expr, local.env);
                     } else {

@@ -66,11 +66,11 @@ impl Postgres {
                     .password()
                     .owned()
                     .or_else(|| env::var("PGPASSWORD").ok());
-                new_params.user(user.name(), password.mz_as_deref());
+                new_params.user(user.name(), password.as_deref());
             } else {
                 let name = env::var("PGUSER").unwrap_or_else(|_| whoami::username());
                 let password = env::var("PGPASSWORD").ok();
-                new_params.user(&name, password.mz_as_deref());
+                new_params.user(&name, password.as_deref());
             }
 
             if let Some(database) = params
@@ -335,11 +335,11 @@ fn push_column(
         }
         DataType::Char(_) | DataType::Varchar(_) | DataType::Text => {
             let string = get_column_inner::<String>(postgres_row, i, nullable)?;
-            row.push(string.mz_as_deref().into());
+            row.push(string.as_deref().into());
         }
         DataType::Custom(name) if QualName::name_equals(name.clone(), "string") => {
             let string = get_column_inner::<String>(postgres_row, i, nullable)?;
-            row.push(string.mz_as_deref().into());
+            row.push(string.as_deref().into());
         }
         DataType::SmallInt => {
             let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(|i| i32::from(i));
@@ -441,7 +441,7 @@ fn push_column(
         }
         DataType::Bytea => {
             let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
-            row.push(bytes.mz_as_deref().into());
+            row.push(bytes.as_deref().into());
         }
         DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => {
             let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;

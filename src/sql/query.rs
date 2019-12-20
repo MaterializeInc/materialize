@@ -16,7 +16,7 @@
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
 use std::cell::RefCell;
-use std::cmp;
+use std::cmp::{self, Ordering};
 use std::collections::{btree_map, BTreeMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -381,7 +381,7 @@ fn plan_view_select(
             let typ = RelationType::new(vec![]);
             let tn: Option<QualName> = None;
             Ok((
-                RelationExpr::constant(vec![vec![]], typ.clone()),
+                RelationExpr::constant(vec![vec![]], typ),
                 Scope::from_source(
                     tn,
                     iter::empty::<Option<ColumnName>>(),
@@ -487,9 +487,7 @@ fn plan_view_select(
         }
         if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
             // apply GROUP BY / aggregates
-            relation_expr = relation_expr
-                .map(group_exprs)
-                .reduce(group_key.clone(), aggregates.clone());
+            relation_expr = relation_expr.map(group_exprs).reduce(group_key, aggregates);
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope
@@ -908,7 +906,7 @@ fn plan_join_constraint<'a>(
                 left: Box::new(left),
                 right: Box::new(right),
                 on,
-                kind: kind.clone(),
+                kind,
             };
             (joined, product_scope)
         }
@@ -922,7 +920,7 @@ fn plan_join_constraint<'a>(
             left_scope,
             right,
             right_scope,
-            kind.clone(),
+            kind,
         )?,
         JoinConstraint::Natural => {
             let mut column_names = vec![];
@@ -945,7 +943,7 @@ fn plan_join_constraint<'a>(
                 left_scope,
                 right,
                 right_scope,
-                kind.clone(),
+                kind,
             )?
         }
     };
@@ -2938,18 +2936,20 @@ where
 }
 
 fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
-    if s2 > s1 {
-        let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
-        let factor = 10_i128.pow(u32::from(s2 - s1));
-        let factor = ScalarExpr::literal(Datum::from(factor), typ);
-        expr.call_binary(factor, BinaryFunc::MulDecimal)
-    } else if s1 > s2 {
-        let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
-        let factor = 10_i128.pow(u32::from(s1 - s2));
-        let factor = ScalarExpr::literal(Datum::from(factor), typ);
-        expr.call_binary(factor, BinaryFunc::DivDecimal)
-    } else {
-        expr
+    match s1.cmp(&s2) {
+        Ordering::Less => {
+            let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
+            let factor = 10_i128.pow(u32::from(s2 - s1));
+            let factor = ScalarExpr::literal(Datum::from(factor), typ);
+            expr.call_binary(factor, BinaryFunc::MulDecimal)
+        }
+        Ordering::Equal => expr,
+        Ordering::Greater => {
+            let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
+            let factor = 10_i128.pow(u32::from(s1 - s2));
+            let factor = ScalarExpr::literal(Datum::from(factor), typ);
+            expr.call_binary(factor, BinaryFunc::DivDecimal)
+        }
     }
 }
 

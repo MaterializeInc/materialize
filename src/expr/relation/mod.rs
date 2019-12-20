@@ -974,7 +974,6 @@ impl RelationExpr {
         keys_and_values
             .let_in(id_gen, |_id_gen, get_keys_and_values| {
                 Ok(get_keys_and_values
-                    .clone()
                     .distinct_by((0..keys.arity()).collect())
                     .negate()
                     .union(keys)

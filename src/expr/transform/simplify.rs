@@ -302,7 +302,7 @@ impl SimplifyFilterPredicates {
                 input: Box::from(relation.take_dangerous()),
                 outputs: columns_to_keep,
             };
-            mem::replace(relation, full_new_relation.clone());
+            mem::replace(relation, full_new_relation);
         }
     }
 }

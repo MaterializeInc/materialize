@@ -370,7 +370,6 @@ impl RelationExpr {
                                     .anti_lookup(
                                         id_gen,
                                         get_join
-                                            .clone()
                                             // need to swap left and right to make the anti_lookup work
                                             .project(
                                                 (0..oa)
@@ -400,7 +399,7 @@ impl RelationExpr {
             }
             Union { left, right } => {
                 let left = left.applied_to(id_gen, get_outer.clone())?;
-                let right = right.applied_to(id_gen, get_outer.clone())?;
+                let right = right.applied_to(id_gen, get_outer)?;
                 Ok(left.union(right))
             }
             Reduce {
@@ -413,7 +412,6 @@ impl RelationExpr {
                     .chain(group_key.iter().map(|i| get_outer.arity() + i))
                     .collect();
                 let applied_aggregates = aggregates
-                    .clone()
                     .into_iter()
                     // TODO(jamii) how do we deal with the extra columns here?
                     .map(|aggregate| {

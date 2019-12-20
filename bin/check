@@ -15,44 +15,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source misc/shlib/shlib.bash
 
-usage() {
-    # shellcheck disable=SC2006
-    die "usage: $0 [`uf --[no-]force-build`]
-
-Run cargo clippy with our CI flags
-
-Args:
-
-  Both of these override the 'MZ_CHECK_FORCE_BUILD=[yn]'  environment var:
-
-    `uf -f --force-build`        Force clippy to build every project, not just changed ones (default)
-    `uf -n --no-force-build`     Run clippy on just files that have been changed since the last
-                                 time it was run (do not force a full rebuild)"
-}
-
-main() {
-    set_args "$@"
-    run_clippy
-}
-
-# Args
-MZ_CHECK_FORCE_BUILD=${MZ_CHECK_FORCE_BUILD:-y}
-set_args() {
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -n|--no-force-build)
-                MZ_CHECK_FORCE_BUILD=n
-                shift
-                ;;
-            -f|--force-build)
-                MZ_CHECK_FORCE_BUILD=y
-                shift
-                ;;
-            *) usage ;;
-        esac
-    done
-}
-
 # Add lints to this list freely, but please add a comment with justification
 # along with the lint. The goal is to ever-so-slightly increase the barrier to
 # turning off a lint.
@@ -196,28 +158,9 @@ extra_lints=(
     # missing_debug_implementations
 )
 
-run_clippy() {
-    # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
-    # splitting below. It's substantially clearer than doing things "properly,"
-    # and the inputs to this script are trusted.
+# NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
+# splitting below. It's substantially clearer than doing things "properly,"
+# and the inputs to this script are trusted.
 
-    # shellcheck disable=SC2086
-    if [[ $MZ_CHECK_FORCE_BUILD == y ]]; then
-        pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,src/\1,p' Cargo.toml)
-        echo -n "run> touch"
-        for pkg in $pkgspec; do
-            for fname in lib.rs main.rs; do
-                path="$pkg/$fname"
-                if [[ -f "$path"  ]]; then
-                    touch "$path"
-                    echo -n " $path"
-                fi
-            done
-        done
-        echo
-    fi
-    # shellcheck disable=SC2046
-    runv cargo clippy -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")
-}
-
-main "$@"
+# shellcheck disable=SC2046
+run cargo clippy -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")

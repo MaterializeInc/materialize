@@ -3,37 +3,38 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::any::Any;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
-use std::any::Any;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::rc::Rc;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
-use tokio;
 
 use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr};
 use repr::{Datum, Row, RowPacker, RowUnpacker};
 
+use self::context::{ArrangementFlavor, Context};
 use super::sink;
 use super::source;
 use super::source::FileReadStyle;
 use crate::arrangement::manager::{KeysValsSpine, TraceManager, WithDrop};
+use crate::decode::decode;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 
 mod context;
-use crate::decode::decode;
-use context::{ArrangementFlavor, Context};
 
 pub(crate) fn build_dataflow<A: Allocate>(
     dataflow: DataflowDesc,
@@ -607,16 +608,17 @@ where
                     for equivalence in variables.iter() {
                         // Keep columns that are needed for future joins
                         if equivalence.last().unwrap().0 > index {
-                            if equivalence[0].0 < index {
-                                old_outputs.push(
+                            match equivalence[0].0.cmp(&index) {
+                                Ordering::Less => old_outputs.push(
                                     columns.iter().position(|c2| equivalence[0] == *c2).unwrap(),
-                                );
-                            } else if equivalence[0].0 == index {
-                                new_outputs.push(equivalence[0].1);
+                                ),
+                                Ordering::Equal => new_outputs.push(equivalence[0].1),
+                                Ordering::Greater => {
+                                    // If the relation exceeds the current index,
+                                    // we don't need to worry about retaining it
+                                    // at this moment.
+                                }
                             }
-                            // If the relation exceeds the current index,
-                            // we don't need to worry about retaining it
-                            // at this moment.
                         }
 
                         // If a key exists in `joined`
@@ -1048,7 +1050,7 @@ where
                     );
 
             let index = (0..keys_clone.len()).collect::<Vec<_>>();
-            self.set_local_columns(relation_expr, &index[..], arrangement.clone());
+            self.set_local_columns(relation_expr, &index[..], arrangement);
         }
     }
 
@@ -1142,7 +1144,7 @@ where
                 });
 
             let index = (0..group_key.len()).collect::<Vec<_>>();
-            self.set_local_columns(relation_expr, &index[..], arrangement.clone());
+            self.set_local_columns(relation_expr, &index[..], arrangement);
         }
     }
 
@@ -1201,7 +1203,7 @@ where
             };
 
             let index = (0..keys.len()).collect::<Vec<_>>();
-            self.set_local_columns(relation_expr, &index[..], arranged.clone());
+            self.set_local_columns(relation_expr, &index[..], arranged);
         }
     }
 }

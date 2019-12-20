@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use crate::error::{Error, InputError};
 use crate::parser::{Command, PosCommand};
-use ore::option::OptionExt;
 
 mod kafka;
 mod sql;
@@ -140,7 +139,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
     let pgconn = {
         let url = config
             .materialized_url
-            .mz_as_deref()
+            .as_deref()
             .unwrap_or_else(|| "postgres://ignored@localhost:6875");
         postgres::Connection::connect(url, postgres::TlsMode::None).map_err(|e| Error::General {
             ctx: "opening SQL connection".into(),
@@ -154,7 +153,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
     let schema_registry_url = config
         .schema_registry_url
-        .mz_as_deref()
+        .as_deref()
         .unwrap_or_else(|| "http://localhost:8081")
         .to_owned();
 
@@ -177,7 +176,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
         let addr = config
             .kafka_addr
-            .mz_as_deref()
+            .as_deref()
             .unwrap_or_else(|| "localhost:9092");
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &addr);

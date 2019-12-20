@@ -376,9 +376,9 @@ impl State {
             vec![None],
             NUM_TIMELY_WORKERS,
             process_id,
-            switchboard.clone(),
+            switchboard,
             runtime.handle().clone(),
-            logging_config.clone(),
+            logging_config,
         )
         .unwrap();
 
