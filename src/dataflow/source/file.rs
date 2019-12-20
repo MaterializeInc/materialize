@@ -109,7 +109,10 @@ async fn send_lines<R>(
                 return;
             }
         };
-        tx.send(line).await.expect("csv line receiver hung up");
+        if tx.send(line).await.is_err() {
+            // The receiver went away, probably due to `DROP SOURCE`
+            break;
+        }
         activator
             .lock()
             .expect("activator lock poisoned")

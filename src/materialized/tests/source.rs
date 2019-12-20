@@ -97,5 +97,10 @@ New York,NY,10004
         &[line1.clone(), line2.clone(), line3.clone()]
     );
 
+    // Check that writing to the file after a source was dropped doesn't cause a crash.
+    client.execute("DROP SOURCE dynamic_csv", &[])?;
+    std::thread::sleep(Duration::from_millis(100));
+    append(&dynamic_path, b"Glendale,AZ,85310\n")?;
+    std::thread::sleep(Duration::from_millis(100));
     Ok(())
 }
