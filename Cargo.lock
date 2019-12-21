@@ -387,6 +387,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "compile-time-run"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521a73740e8da76308d585a02b153b8ba9c1a27289df9e4a02c18177a8ae6286"
+dependencies = [
+ "compile-time-run-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "compile-time-run-macro"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c44dfc9bfdb966e22a59b2ed31001fa4cab378c3fea2de119ed3615b1699d58a"
+dependencies = [
+ "proc-macro-hack",
+ "proc-macro2 1.0.1",
+ "quote 1.0.2",
+ "syn 1.0.11",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -718,18 +740,6 @@ name = "dtoa"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea57b42383d091c85abcc2706240b94ab2a8fa1fc81c10ff23c4de06e2a90b5e"
-
-[[package]]
-name = "duct"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1607fa68d55be208e83bcfbcfffbc1ec65c9fbcf9eb1a5d548dc3ac0100743b0"
-dependencies = [
- "libc",
- "once_cell",
- "os_pipe",
- "shared_child",
-]
 
 [[package]]
 name = "either"
@@ -1506,10 +1516,10 @@ dependencies = [
  "backtrace",
  "chrono",
  "comm",
+ "compile-time-run",
  "coord",
  "dataflow",
  "dataflow-types",
- "duct",
  "failure",
  "fallible-iterator 0.2.0",
  "futures",
@@ -1827,12 +1837,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "once_cell"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891f486f630e5c5a4916c7e16c4b24a53e78c860b646e9f8e005e4f16847bfed"
-
-[[package]]
 name = "opaque-debug"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1895,16 +1899,6 @@ dependencies = [
  "log",
  "smallvec 1.1.0",
  "tokio",
-]
-
-[[package]]
-name = "os_pipe"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db4d06355a7090ce852965b2d08e11426c315438462638c6d721448d0b47aa22"
-dependencies = [
- "libc",
- "winapi 0.3.7",
 ]
 
 [[package]]
@@ -2980,16 +2974,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shared_child"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cebcf3a403e4deafaf34dc882c4a1b6a648b43e5670aa2e4bb985914eaeb2d2"
-dependencies = [
- "libc",
- "winapi 0.3.7",
-]
-
-[[package]]
 name = "simple_logger"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3102,7 +3086,7 @@ dependencies = [
  "getopts",
  "itertools",
  "lazy_static",
- "md5 0.3.8",
+ "md5 0.7.0",
  "ordered-float",
  "ore",
  "regex",

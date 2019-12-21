@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use compile_time_run::run_command_str;
 use failure::format_err;
 use futures::channel::mpsc::{self, UnboundedSender};
 use futures::future::TryFutureExt;
@@ -42,10 +43,11 @@ mod http;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The SHA identifying the Git commit at which the crate was built.
-pub const BUILD_SHA: &str = env!("MZ_GIT_SHA");
+pub const BUILD_SHA: &str = run_command_str!("git", "rev-parse", "--verify", "HEAD");
 
-/// When this materialized binary was built
-pub const BUILD_TIME: &str = env!("MZ_BUILD_TIME");
+/// The time in UTC at which the crate was built as an ISO 8601-compliant
+/// string.
+pub const BUILD_TIME: &str = run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ");
 
 /// Returns a human-readable version string.
 pub fn version() -> String {
