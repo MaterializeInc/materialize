@@ -25,8 +25,8 @@ use std::mem;
 use std::rc::Rc;
 
 use failure::{bail, ensure, format_err, ResultExt};
-use sqlparser::ast::visit::{self, Visit};
-use sqlparser::ast::{
+use sql_parser::ast::visit::{self, Visit};
+use sql_parser::ast::{
     BinaryOperator, DataType, Expr, ExtractField, Function, Ident, JoinConstraint, JoinOperator,
     ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
     TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,

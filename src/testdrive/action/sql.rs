@@ -6,9 +6,9 @@
 use pg_interval::Interval;
 use postgres::rows::Row;
 use rust_decimal::Decimal;
-use sqlparser::ast::Statement;
-use sqlparser::dialect::PostgreSqlDialect;
-use sqlparser::parser::Parser as SqlParser;
+use sql_parser::ast::Statement;
+use sql_parser::dialect::PostgreSqlDialect;
+use sql_parser::parser::Parser as SqlParser;
 use std::thread;
 use std::time::Duration;
 

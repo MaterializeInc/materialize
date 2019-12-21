@@ -41,7 +41,7 @@ use repr::{RelationDesc, Row, ScalarType};
 /// A prepared statement.
 #[derive(Debug)]
 pub struct PreparedStatement {
-    sql: Option<sqlparser::ast::Statement>,
+    sql: Option<sql_parser::ast::Statement>,
     desc: Option<RelationDesc>,
     param_types: Vec<ScalarType>,
 }
@@ -49,7 +49,7 @@ pub struct PreparedStatement {
 impl PreparedStatement {
     /// Constructs a new `PreparedStatement`.
     pub fn new(
-        sql: Option<sqlparser::ast::Statement>,
+        sql: Option<sql_parser::ast::Statement>,
         desc: Option<RelationDesc>,
         param_types: Vec<ScalarType>,
     ) -> PreparedStatement {
@@ -62,7 +62,7 @@ impl PreparedStatement {
 
     /// Returns the raw SQL string associated with this prepared statement,
     /// if the prepared statement was not the empty query.
-    pub fn sql(&self) -> Option<&sqlparser::ast::Statement> {
+    pub fn sql(&self) -> Option<&sql_parser::ast::Statement> {
         self.sql.as_ref()
     }
 

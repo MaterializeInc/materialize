@@ -11,7 +11,7 @@ use std::str::FromStr;
 
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use sqlparser::ast::{Ident, ObjectName};
+use sql_parser::ast::{Ident, ObjectName};
 
 use crate::errors::{Error as ReprError, Result};
 
@@ -29,7 +29,7 @@ use crate::errors::{Error as ReprError, Result};
 ///
 /// ```
 /// use std::convert::TryFrom;
-/// use sqlparser::ast::{Ident, ObjectName};
+/// use sql_parser::ast::{Ident, ObjectName};
 /// use repr::QualName;
 ///
 /// let with = Ident::with_quote('"', "one");
@@ -56,7 +56,7 @@ impl QualName {
     ///
     /// ```
     /// use repr::QualName;
-    /// use sqlparser::ast::Ident;
+    /// use sql_parser::ast::Ident;
     ///
     /// let (one, two) = (Ident::new("HoWdY"), Ident::with_quote('"', "wOwZeR"));
     /// assert_eq!(
@@ -136,7 +136,7 @@ impl QualName {
     ///
     /// ```
     /// use repr::QualName;
-    /// use sqlparser::ast::{ObjectName, Ident};
+    /// use sql_parser::ast::{ObjectName, Ident};
     ///
     /// let one = Ident::new("one");
     /// assert!(QualName::name_equals(ObjectName(vec![one.clone()]), "one"));

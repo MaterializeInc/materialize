@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use failure::{bail, ResultExt};
-use sqlparser::ast::{
+use sql_parser::ast::{
     Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
     Stage, Statement, Value,
 };

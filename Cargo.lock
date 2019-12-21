@@ -169,6 +169,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b41b7ea54a0c9d92199de89e20e58d49f02f8e699814ef3fdf266f6f748d15c7"
 
 [[package]]
+name = "bigdecimal"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "460825c9e21708024d67c07057cd5560e5acdccac85de0de624a81d3de51bacb"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "bincode"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -361,6 +372,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c84c596dcf125d6781f58e3f4254677ec2a6d8aa56e8501ac277100990b3229"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "colored"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "433e7ac7d511768127ed85b0c4947f47a254131e37864b2dc13f52aa32cd37e5"
+dependencies = [
+ "atty",
+ "lazy_static",
+ "winapi 0.3.7",
 ]
 
 [[package]]
@@ -2743,7 +2765,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_regex",
- "sqlparser",
+ "sql-parser",
 ]
 
 [[package]]
@@ -3015,6 +3037,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "simple_logger"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a4756ecc75607ba957820ac0a2413a6c27e6c61191cda0c62c6dcea4da88870"
+dependencies = [
+ "chrono",
+ "colored",
+ "log",
+]
+
+[[package]]
 name = "siphasher"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3086,10 +3119,20 @@ dependencies = [
  "pretty_assertions",
  "regex",
  "repr",
- "sqlparser",
+ "sql-parser",
  "unicase",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "sql-parser"
+version = "0.1.0"
+dependencies = [
+ "bigdecimal",
+ "log",
+ "matches",
+ "simple_logger",
 ]
 
 [[package]]
@@ -3114,19 +3157,11 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "sqlparser",
+ "sql-parser",
  "timely",
  "tokio",
  "uuid",
  "walkdir",
-]
-
-[[package]]
-name = "sqlparser"
-version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#94341cc10c4cafa8d19526cbc148ffe203398c70"
-dependencies = [
- "log",
 ]
 
 [[package]]
@@ -3162,7 +3197,7 @@ dependencies = [
  "rust_decimal",
  "serde_json",
  "sql",
- "sqlparser",
+ "sql-parser",
  "whoami",
 ]
 
@@ -3266,7 +3301,7 @@ dependencies = [
  "reqwest",
  "rust_decimal",
  "serde_json",
- "sqlparser",
+ "sql-parser",
  "termcolor",
 ]
 
