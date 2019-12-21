@@ -1943,20 +1943,7 @@ fn plan_binary_op<'a>(
         Or => plan_boolean_op(catalog, ecx, BooleanOp::Or, left, right),
 
         Plus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Plus, left, right),
-        Minus => {
-            // TODO(jamii) We can't just dispatch on type here because our type inference is kind of hacky
-            // but backtracking doesn't quite work either because parameter types are set in a mutable global map during planning.
-            // This calls for a bidirectional type inference - https://github.com/MaterializeInc/materialize/issues/1274
-            let old_param_types = ecx.qcx.param_types.borrow().clone();
-            let plan = plan_json_op(catalog, ecx, JsonOp::Delete, left, right);
-            match plan {
-                Ok(plan) => Ok(plan),
-                Err(_) => {
-                    *ecx.qcx.param_types.borrow_mut() = old_param_types;
-                    plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right)
-                }
-            }
-        }
+        Minus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right),
         Multiply => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Multiply, left, right),
         Divide => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Divide, left, right),
         Modulus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Modulo, left, right),
@@ -2056,33 +2043,32 @@ fn plan_arithmetic_op<'a>(
             let mut ltype = ecx.column_type(&lexpr);
             let mut rtype = ecx.column_type(&rexpr);
 
-            let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Decimal(_, _), Decimal(_, _)) => true,
-                _ => false,
+            // When both inputs are already decimals, we skip coalescing, which
+            // could result in a rescale if the decimals have different
+            // precisions, because we tightly control the rescale when planning
+            // the arithmetic operation (below). E.g., decimal multiplication
+            // does not need to rescale its inputs, even when the inputs have
+            // different scales.
+            //
+            // Similarly, if either input is a timelike or JSON, we skip
+            // coalescing. Timelike values have well-defined operations with
+            // intervals, and JSON values have well-defined operations with
+            // strings and integers, so attempting to homogeneous the types will
+            // cause us to miss out on the overload.
+            let coalesce = match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Decimal(_, _), Decimal(_, _))
+                | (Date, _)
+                | (Timestamp, _)
+                | (TimestampTz, _)
+                | (_, Date)
+                | (_, Timestamp)
+                | (_, TimestampTz)
+                | (Jsonb, _)
+                | (_, Jsonb) => false,
+                _ => true,
             };
-            let timelike_and_interval = match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Date, Interval)
-                | (Timestamp, Interval)
-                | (TimestampTz, Interval)
-                | (Interval, Date)
-                | (Interval, Timestamp)
-                | (Interval, TimestampTz) => true,
-                _ => false,
-            };
-            if both_decimals || timelike_and_interval {
-                // When both inputs are already decimals, we skip coalescing,
-                // which could result in a rescale if the decimals have
-                // different precisions, because we tightly control the rescale
-                // when planning the arithmetic operation (below). E.g., decimal
-                // multiplication does not need to rescale its inputs, even when
-                // the inputs have different scales.
-                //
-                // Similarly, if the inputs are a timelike and an interval, we
-                // skip coalescing, because adding and subtracting intervals and
-                // timelikes is well defined.
-            } else {
-                // Otherwise, try to find a common type that can represent both
-                // inputs.
+            if coalesce {
+                // Try to find a common type that can represent both inputs.
                 let best_target_type =
                     best_target_type(vec![ltype.scalar_type.clone(), rtype.scalar_type.clone()])
                         .unwrap();
@@ -2114,8 +2100,8 @@ fn plan_arithmetic_op<'a>(
         // One of the inputs is a parameter of unknown type, but the other is
         // not.
         (swap @ false, true) | (swap @ true, false) => {
-            // Knowing the type of one input is sufficiently constraining to
-            // allow us to infer the type of the unknown input.
+            // Knowing the type of one input is often sufficiently constraining
+            // to allow us to infer the type of the unknown input.
 
             // First, adjust so the known input is on the left.
             let (left, right) = if swap { (right, left) } else { (left, right) };
@@ -2125,9 +2111,12 @@ fn plan_arithmetic_op<'a>(
             let ltype = ecx.column_type(&lexpr);
 
             // Infer the unknown type. Dates and timestamps want an interval for
-            // arithmetic. Everything else wants its own type.
+            // arithmetic. JSON wants an int *or* a string for the removal
+            // (minus) operator, but according to Postgres we can just pick
+            // string. Everything else wants its own type.
             let type_hint = match ltype.scalar_type.clone() {
                 Date | Timestamp | TimestampTz => Interval,
+                Jsonb => String,
                 other => other,
             };
             let rexpr = plan_expr(catalog, ecx, right, Some(type_hint))?;
@@ -2231,6 +2220,14 @@ fn plan_arithmetic_op<'a>(
             (Float64, Float64) => SubFloat64,
             (Timestamp, Interval) => SubTimestampInterval,
             (TimestampTz, Interval) => SubTimestampTzInterval,
+            (Jsonb, Int32) => {
+                rexpr = rexpr.call_unary(UnaryFunc::CastInt32ToInt64);
+                JsonbDeleteInt64
+            }
+            (Jsonb, Int64) => JsonbDeleteInt64,
+            (Jsonb, String) => JsonbDeleteString,
+            // TODO(jamii) there should be corresponding overloads for
+            // Array(Int64) and Array(String)
             _ => bail!(
                 "no overload for {} - {}",
                 ltype.scalar_type,
@@ -2411,15 +2408,6 @@ fn plan_json_op(
             .call_unary(UnaryFunc::CastStringToJsonb)
             .call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
         (ContainedInJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
-
-        (Delete, Jsonb, Int32) => lexpr.call_binary(
-            rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
-            BinaryFunc::JsonbDeleteInt64,
-        ),
-        (Delete, Jsonb, Int64) => lexpr.call_binary(rexpr, BinaryFunc::JsonbDeleteInt64),
-        (Delete, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbDeleteString),
-        // TODO(jamii) there should be corresponding overloads for Array(Int64) and Array(String)
-        (Delete, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         // TODO(jamii) these require sql arrays
         (ContainsAnyFields, _, _) => bail!("Unsupported json operator: {}", op),
@@ -2729,7 +2717,6 @@ enum JsonOp {
     DeletePath,
     ContainsPath,
     ApplyPathPredicate,
-    Delete,
 }
 
 impl fmt::Display for JsonOp {
@@ -2749,7 +2736,6 @@ impl fmt::Display for JsonOp {
             DeletePath => f.write_str("#-"),
             ContainsPath => f.write_str("@?"),
             ApplyPathPredicate => f.write_str("@@"),
-            Delete => f.write_str("-"),
         }
     }
 }

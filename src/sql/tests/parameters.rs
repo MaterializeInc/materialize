@@ -98,6 +98,7 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
             "SELECT $1::int, $1 + $2",
             vec![ScalarType::Int64, ScalarType::Int64],
         ),
+        ("SELECT '[0, 1, 2]'::jsonb - $1", vec![ScalarType::String]),
     ];
     for (sql, types) in test_cases {
         println!("> {}", sql);
