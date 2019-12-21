@@ -22,7 +22,7 @@ members = [
 debug = true
 
 [patch.crates-io]
-avro-rs = { git = "ssh://git@github.com/MaterializeInc/avro-rs.git" }
+avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
 
 # This is a slightly confusing syntax because of the fact that ssh urls use `:`
 # instead of `/` to separate the domain, so this serves as an example
