@@ -27,17 +27,17 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
 
     let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
-        conn.execute(
+        client.execute(
             &*format!("DROP VIEW IF EXISTS {0}_{1}", source, "mirror"),
             &[],
         )?;
         thread::sleep(Duration::from_secs(1));
-        conn.execute(
+        client.execute(
             &*format!("CREATE VIEW {0}_{1} AS SELECT * FROM {0}", source, "mirror"),
             &[],
         )?;
         thread::sleep(Duration::from_secs(1));
-        Ok(conn
+        Ok(client
             .query(
                 &*format!("SELECT * FROM {}_{} ORDER BY 1", source, "mirror"),
                 &[],
