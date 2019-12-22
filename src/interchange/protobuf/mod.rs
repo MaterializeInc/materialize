@@ -14,8 +14,10 @@ use serde_protobuf::de::Deserializer;
 use serde_protobuf::descriptor::{
     Descriptors, FieldDescriptor, FieldLabel, FieldType, MessageDescriptor,
 };
+use serde_protobuf::value;
 use serde_value::Value;
 
+use repr::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 pub mod test;
@@ -60,6 +62,7 @@ fn validate_proto_field(
                 FieldType::Bool => ScalarType::Bool,
                 FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
                 FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
+                FieldType::Enum(_) => ScalarType::String,
                 FieldType::Float => ScalarType::Float32,
                 FieldType::Double => ScalarType::Float64,
                 FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
@@ -73,7 +76,6 @@ fn validate_proto_field(
                     }
                     ScalarType::Jsonb
                 }
-                FieldType::Enum(_) => bail!("Nested enums are currently unsupported"),
                 FieldType::Group => bail!("Unions are currently not supported"),
                 FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
                 FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
@@ -103,6 +105,7 @@ fn validate_proto_field_resolved(
             | FieldType::Float
             | FieldType::Double
             | FieldType::String
+            | FieldType::Enum(_)
             | FieldType::Bytes => (),
 
             FieldType::Message(m) => {
@@ -110,7 +113,6 @@ fn validate_proto_field_resolved(
                     validate_proto_field_resolved(&f, descriptors)?;
                 }
             }
-            FieldType::Enum(_) => bail!("Nested enums are currently unsupported"),
             FieldType::Group => bail!("Unions are currently not supported"),
             FieldType::UnresolvedMessage(a) => bail!("Nested message type {} unresolved", a),
             FieldType::UnresolvedEnum(e) => bail!("Unresolved enum type {}", e),
@@ -140,9 +142,9 @@ pub fn validate_proto_schema_with_descriptors(
         .iter()
         .map(|f| {
             Ok(ColumnType {
-                /// TODO(rkhaitan) Need to handle mullable correctly for fields
-                /// with defaults
-                nullable: false,
+                /// All the fields have to be optional, so mark a field as
+                /// nullable if it doesn't have any defaults
+                nullable: f.default_value().is_none(),
                 scalar_type: validate_proto_field(&f, descriptors)?,
             })
         })
@@ -195,11 +197,29 @@ impl Decoder {
                 Value::Bool(false) => Ok(Datum::False),
                 Value::I32(i) => Ok(Datum::Int32(*i)),
                 Value::I64(i) => Ok(Datum::Int64(*i)),
+                Value::U32(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
+                Value::U64(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
                 Value::F32(f) => Ok(Datum::Float32((*f).into())),
                 Value::F64(f) => Ok(Datum::Float64((*f).into())),
                 Value::String(s) => Ok(Datum::String(s)),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
                 _ => bail!("Unsupported types from serde_value"),
+            }
+        };
+
+        fn default_to_datum(v: &value::Value) -> Result<Datum<'_>, failure::Error> {
+            match v {
+                value::Value::Bool(true) => Ok(Datum::True),
+                value::Value::Bool(false) => Ok(Datum::False),
+                value::Value::I32(i) => Ok(Datum::Int32(*i)),
+                value::Value::I64(i) => Ok(Datum::Int64(*i)),
+                value::Value::U32(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
+                value::Value::U64(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
+                value::Value::F32(f) => Ok(Datum::Float32((*f).into())),
+                value::Value::F64(f) => Ok(Datum::Float64((*f).into())),
+                value::Value::String(s) => Ok(Datum::String(s)),
+                value::Value::Bytes(b) => Ok(Datum::Bytes(b)),
+                _ => bail!("Unsupported types from serde_protobuf::value"),
             }
         };
 
@@ -221,8 +241,10 @@ impl Decoder {
 
                 if let Some(Value::Option(Some(value))) = value {
                     row.push(value_to_datum(&value)?);
+                } else if let Some(default) = f.default_value() {
+                    row.push(default_to_datum(default)?);
                 } else {
-                    bail!("Missing field {:?}", f);
+                    row.push(Datum::Null);
                 }
             }
 
@@ -242,7 +264,7 @@ impl Decoder {
 
 #[cfg(test)]
 mod tests {
-    use super::test::test_proto_schemas::{file_descriptor_proto, TestRecord};
+    use super::test::test_proto_schemas::{file_descriptor_proto, Color, TestRecord};
     use failure::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
     use protobuf::{Message, RepeatedField};
@@ -250,6 +272,8 @@ mod tests {
         Descriptors, FieldDescriptor, FieldLabel, FieldType, InternalFieldType, MessageDescriptor,
     };
 
+    use ordered_float::OrderedFloat;
+    use repr::decimal::Significand;
     use repr::{Datum, RelationDesc, ScalarType};
 
     fn sanity_check_relation(
@@ -278,6 +302,7 @@ mod tests {
                 | (FieldType::Int32, FieldLabel::Optional, ScalarType::Int32)
                 | (FieldType::SInt32, FieldLabel::Optional, ScalarType::Int32)
                 | (FieldType::SFixed32, FieldLabel::Optional, ScalarType::Int32)
+                | (FieldType::Enum(_), FieldLabel::Optional, ScalarType::String)
                 | (FieldType::Int64, FieldLabel::Optional, ScalarType::Int64)
                 | (FieldType::SInt64, FieldLabel::Optional, ScalarType::Int64)
                 | (FieldType::SFixed64, FieldLabel::Optional, ScalarType::Int64)
@@ -294,7 +319,7 @@ mod tests {
                 (ft, FieldLabel::Optional, st) => bail!("Incorrect protobuf optional type {:?} mapping to Materialize type {:?}", ft, st),
                 (ft, FieldLabel::Repeated, ScalarType::Jsonb) => {
                     match ft {
-                        FieldType::UnresolvedMessage(_) | FieldType::UnresolvedEnum(_) | FieldType::Group | FieldType::Enum(_) => {
+                        FieldType::UnresolvedMessage(_) | FieldType::UnresolvedEnum(_) | FieldType::Group => {
                             bail!("Unsupported repeated type {:?}", ft)
                         }
                         _ => (),
@@ -374,16 +399,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_decode() {
-        let mut test_record = TestRecord::new();
-
-        test_record.set_int_field(1);
-        test_record.set_string_field("one".to_string());
-        let bytes = test_record
-            .write_to_bytes()
-            .expect("test failed to serialize to bytes");
-
+    fn get_decoder(message_name: &str) -> super::Decoder {
         let mut repeated_field = RepeatedField::<FileDescriptorProto>::new();
         let file_descriptor_proto = file_descriptor_proto().clone();
         repeated_field.push(file_descriptor_proto);
@@ -393,14 +409,76 @@ mod tests {
 
         let descriptors = Descriptors::from_proto(&file_descriptor_set);
 
-        let mut decoder = super::Decoder::new(descriptors, ".TestRecord");
+        super::Decoder::new(descriptors, message_name)
+    }
+
+    #[test]
+    fn test_decode() {
+        let mut test_record = TestRecord::new();
+
+        test_record.set_int_field(1);
+        test_record.set_string_field("one".to_string());
+        test_record.set_int64_field(10000);
+        test_record.set_bytes_field(b"foo".to_vec());
+        test_record.set_color_field(Color::BLUE);
+        test_record.set_uint_field(5);
+        test_record.set_uint64_field(55);
+        test_record.set_float_field(5.456);
+        test_record.set_double_field(99.99);
+
+        let bytes = test_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut decoder = get_decoder(".TestRecord");
         let row = decoder
             .decode(&bytes)
             .expect("deserialize protobuf into a row")
             .unwrap();
         let datums = row.iter().collect::<Vec<_>>();
 
-        let expected = vec![Datum::Int32(1), Datum::String("one")];
+        let expected = vec![
+            Datum::Int32(1),
+            Datum::String("one"),
+            Datum::Int64(10000),
+            Datum::Bytes(&[102, 111, 111]),
+            Datum::String("BLUE"),
+            Datum::Decimal(Significand::new(5)),
+            Datum::Decimal(Significand::new(55)),
+            Datum::Float32(OrderedFloat::from(5.456)),
+            Datum::Float64(OrderedFloat::from(99.99)),
+        ];
+
+        assert_eq!(datums, expected);
+    }
+
+    #[test]
+    fn test_decode_with_null() {
+        let mut test_record = TestRecord::new();
+
+        test_record.set_int_field(1);
+        let bytes = test_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut decoder = get_decoder(".TestRecord");
+        let row = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row.iter().collect::<Vec<_>>();
+
+        let expected = vec![
+            Datum::Int32(1),
+            Datum::Null,
+            Datum::Null,
+            Datum::Null,
+            Datum::Null,
+            Datum::Null,
+            Datum::Null,
+            Datum::Null,
+            Datum::Null,
+        ];
 
         assert_eq!(datums, expected);
     }

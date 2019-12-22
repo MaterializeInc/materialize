@@ -1353,6 +1353,7 @@ dependencies = [
  "ccsr",
  "criterion",
  "failure",
+ "ordered-float",
  "ore",
  "pretty_assertions",
  "protobuf",
