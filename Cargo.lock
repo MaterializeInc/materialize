@@ -100,7 +100,7 @@ checksum = "0e49efa51329a5fd37e7c79db4621af617cd4e3e5bc224939808d076077077bf"
 [[package]]
 name = "avro-rs"
 version = "0.6.5"
-source = "git+ssh://git@github.com/MaterializeInc/avro-rs.git#dd965e4560ae0c600a52acc2e250ffad891355fc"
+source = "git+https://github.com/MaterializeInc/avro-rs.git#dd965e4560ae0c600a52acc2e250ffad891355fc"
 dependencies = [
  "chrono",
  "digest 0.8.0",
