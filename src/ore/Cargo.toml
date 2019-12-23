@@ -17,7 +17,7 @@ lazy_static = "1.4.0"
 libc = "0.2.66"
 log = "0.4.8"
 tokio = { version = "0.2", features = ["io-util", "rt-threaded", "tcp"] }
-smallvec = "1.0"
+smallvec = "1.1"
 
 [dev-dependencies]
 crossbeam = "0.7.2"
