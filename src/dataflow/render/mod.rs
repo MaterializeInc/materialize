@@ -69,7 +69,7 @@ pub(crate) fn build_local_input<A: Allocate>(
                 Some(ArrangementFlavor::Local(local)) => {
                     manager.set_by_keys(
                         &index.desc,
-                        WithDrop::new(local.trace.clone(), Rc::new(None::<source::SourceToken>)),
+                        WithDrop::new(local.trace, Rc::new(None::<source::SourceToken>)),
                     );
                 }
                 _ => {
@@ -101,9 +101,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
         scope.clone().region(|region| {
             let mut context = Context::<_, _, _, Timestamp>::new();
 
-            let mut source_tokens = Vec::new();
+            let mut source_tokens = HashMap::new();
             // Load declared sources into the rendering context.
-            for (src_id, src) in dataflow.source_imports {
+            for (src_id, src) in dataflow.source_imports.clone() {
                 let (source, capability) = match src.connector.connector {
                     ExternalSourceConnector::Kafka(c) => {
                         // Distribute read responsibility among workers.
@@ -136,10 +136,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     RelationExpr::global_get(src_id, src.desc.typ().clone()),
                     stream.as_collection(),
                 );
-                source_tokens.push(capability);
+                source_tokens.insert(src_id, Rc::new(capability));
             }
-
-            let source_tokens = Rc::new(source_tokens);
 
             let as_of = dataflow
                 .as_of
@@ -147,11 +145,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 .map(|x| x.to_vec())
                 .unwrap_or_else(|| vec![0]);
 
-            // TODO (andiwang): what in the world do we do with these tokens?
-            let mut tokens = Vec::new();
+            let mut index_tokens = HashMap::new();
 
-            for (index_desc, typ) in dataflow.index_imports {
-                if let Some(trace) = manager.get_by_keys_mut(&index_desc) {
+            for (id, (index_desc, typ)) in dataflow.index_imports.iter() {
+                if let Some(trace) = manager.get_by_keys_mut(index_desc) {
                     let token = trace.to_drop().clone();
                     let (arranged, button) = trace.import_frontier_core(
                         scope,
@@ -159,34 +156,13 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         as_of.clone(),
                     );
                     let arranged = arranged.enter(region);
-                    let get_expr = RelationExpr::global_get(index_desc.on_id, typ);
+                    let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
                     context.set_trace(&get_expr, &index_desc.keys, arranged);
-                    tokens.push((button.press_on_drop(), token));
+                    index_tokens.insert(id, Rc::new((button.press_on_drop(), token)));
                 }
             }
 
-            // Capture both the tokens of imported traces and those of sources.
-            let tokens = Rc::new((tokens, source_tokens.clone()));
-
-            for object in dataflow.objects_to_build {
-                object.relation_expr.visit(&mut |e| {
-                    // Some `Get` expressions are for let bindings, and should not be loaded.
-                    // We might want explicitly enumerate assets to import.
-                    if let RelationExpr::Get {
-                        id: Id::Global(id),
-                        typ: _,
-                    } = e
-                    {
-                        // Log the dependency.
-                        if let Some(logger) = logger {
-                            logger.log(MaterializedEvent::DataflowDependency {
-                                dataflow: object.id,
-                                source: *id,
-                            });
-                        }
-                    }
-                });
-
+            for object in dataflow.objects_to_build.clone() {
                 if let Some(typ) = object.typ {
                     context.ensure_rendered(
                         &object.relation_expr,
@@ -209,14 +185,30 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 }
             }
 
-            for (index_desc, typ) in dataflow.index_exports {
-                let get_expr = RelationExpr::global_get(index_desc.on_id, typ);
+            for (export_id, index_desc, typ) in &dataflow.index_exports {
+                // put together tokens that belong to the export
+                let mut needed_source_tokens = Vec::new();
+                let mut needed_index_tokens = Vec::new();
+                for import_id in dataflow.get_imports(Some(&index_desc.on_id)) {
+                    if let Some(index_token) = index_tokens.get(&import_id) {
+                        if let Some(logger) = logger {
+                            // Log the dependency.
+                            logger.log(MaterializedEvent::DataflowDependency {
+                                dataflow: *export_id,
+                                source: import_id,
+                            });
+                        }
+                        needed_index_tokens.push(index_token.clone());
+                    } else if let Some(source_token) = source_tokens.get(&import_id) {
+                        needed_source_tokens.push(source_token.clone());
+                    }
+                }
+                let tokens = Rc::new((needed_source_tokens, needed_index_tokens));
+                let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
                 match context.arrangement(&get_expr, &index_desc.keys) {
                     Some(ArrangementFlavor::Local(local)) => {
-                        manager.set_by_keys(
-                            &index_desc,
-                            WithDrop::new(local.trace.clone(), tokens.clone()),
-                        );
+                        manager
+                            .set_by_keys(&index_desc, WithDrop::new(local.trace.clone(), tokens));
                     }
                     Some(ArrangementFlavor::Trace(_)) => {
                         // do nothing. there already exists an system
@@ -228,7 +220,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 };
             }
 
-            for (sink_id, sink) in dataflow.sink_exports {
+            for (sink_id, sink) in dataflow.sink_exports.clone() {
+                // put together tokens that belong to the export
+                let mut needed_source_tokens = Vec::new();
+                let mut needed_index_tokens = Vec::new();
+                for import_id in dataflow.get_imports(Some(&sink.from.0)) {
+                    if let Some(index_token) = index_tokens.get(&import_id) {
+                        needed_index_tokens.push(index_token.clone());
+                    } else if let Some(source_token) = source_tokens.get(&import_id) {
+                        needed_source_tokens.push(source_token.clone());
+                    }
+                }
+                let tokens = Rc::new((needed_source_tokens, needed_index_tokens));
                 let collection = context
                     .collection(&RelationExpr::global_get(
                         sink.from.0,
@@ -240,7 +243,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     SinkConnector::Kafka(c) => sink::kafka(&collection.inner, sink_id, c),
                     SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
                 }
-                dataflow_drops.insert(sink_id, Box::new(tokens.clone()));
+                dataflow_drops.insert(sink_id, Box::new(tokens));
             }
         });
     })

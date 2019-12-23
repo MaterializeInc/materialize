@@ -89,7 +89,7 @@ pub enum SequencedCommand {
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
     /// Drop the views bound to these names.
-    DropViews(Vec<GlobalId>),
+    DropViews(Vec<GlobalId>, Vec<Vec<GlobalId>>),
     /// Drop the sinks bound to these names.
     DropSinks(Vec<GlobalId>),
     /// Drop the indexes bound to these names.
@@ -430,22 +430,13 @@ where
         match cmd {
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        for build_desc in dataflow.objects_to_build.iter() {
-                            if build_desc.typ.is_some() {
-                                //TODO: should Dataflow events track view creation?
-                                if self.traces.traces.contains_key(&build_desc.id) {
-                                    panic!("View already installed: {}", build_desc.id);
-                                }
-                                logger.log(MaterializedEvent::Dataflow(build_desc.id, true));
-                            }
-                        }
-                    }
-
-                    for (index_desc, _) in dataflow.index_exports.iter() {
+                    for (id, index_desc, _) in dataflow.index_exports.iter() {
                         self.reported_frontiers
                             .entry(index_desc.on_id)
                             .or_insert_with(|| Antichain::from_elem(0));
+                        if let Some(logger) = self.materialized_logger.as_mut() {
+                            logger.log(MaterializedEvent::Dataflow(*id, true));
+                        }
                     }
 
                     render::build_dataflow(
@@ -465,14 +456,16 @@ where
                 }
             }
 
-            SequencedCommand::DropViews(ids) => {
-                for id in ids {
-                    if self.traces.del_collection_traces(id).is_some() {
+            SequencedCommand::DropViews(view_ids, index_ids) => {
+                for (view_id, index_id_set) in view_ids.iter().zip(index_ids.iter()) {
+                    if self.traces.del_collection_traces(*view_id).is_some() {
                         if let Some(logger) = self.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(id, false));
+                            for index_id in index_id_set {
+                                logger.log(MaterializedEvent::Dataflow(*index_id, false));
+                            }
                         }
                         self.reported_frontiers
-                            .remove(&id)
+                            .remove(view_id)
                             .expect("Dropped view with no frontier");
                     }
                 }

@@ -270,7 +270,11 @@ fn handle_show_variable(
 
 fn handle_tail(catalog: &Catalog, from: &QualName) -> Result<Plan, failure::Error> {
     let entry = catalog.get(&from)?;
-    Ok(Plan::Tail(entry.clone()))
+    if let CatalogItem::View(_) = entry.item() {
+        Ok(Plan::Tail(entry.clone()))
+    } else {
+        bail!("'{}' is not a view", from);
+    }
 }
 
 fn handle_start_transaction() -> Result<Plan, failure::Error> {
@@ -319,10 +323,8 @@ fn handle_show_indexes(
         bail!("SHOW INDEXES ... WHERE is not supported");
     }
     let from_entry = catalog.get(from_name)?;
-    if !object_type_matches(ObjectType::Source, from_entry.item())
-        && !object_type_matches(ObjectType::View, from_entry.item())
-    {
-        bail!("{} is not a source or view", from_name);
+    if !object_type_matches(ObjectType::View, from_entry.item()) {
+        bail!("{} is not a view", from_name);
     }
     let rows = catalog
         .iter()
@@ -734,6 +736,9 @@ fn handle_create_dataflow(
         } => {
             let on_name = on_name.try_into()?;
             let (catalog_entry, keys) = query::plan_index(catalog, &on_name, key_parts)?;
+            if !object_type_matches(ObjectType::View, catalog_entry.item()) {
+                bail!("{} is not a view", on_name);
+            }
             let name = QualName::new_normalized(iter::once(name.clone()))?;
             let keys = keys
                 .into_iter()
@@ -797,6 +802,9 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
 fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Plan, failure::Error> {
     let name = name.try_into()?;
     let catalog_entry = catalog.get(&name)?.clone();
+    if !object_type_matches(ObjectType::View, catalog_entry.item()) {
+        bail!("{} is not a view", name);
+    }
     let typ = catalog_entry.desc()?.typ();
     Ok(Plan::Peek {
         source: relationexpr::RelationExpr::Get {
@@ -820,6 +828,7 @@ fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Pla
             project: (0..typ.column_types.len()).collect(),
         },
         eval_env: EvalEnv::default(),
+        materialize: false,
     })
 }
 
@@ -835,6 +844,7 @@ pub fn handle_select(
         when: PeekWhen::Immediately,
         finishing,
         eval_env: EvalEnv::default(),
+        materialize: true,
     })
 }
 

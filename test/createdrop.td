@@ -44,6 +44,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 
 > CREATE INDEX i ON v(a)
 
+! CREATE INDEX no_index_on_source ON s("X")
+s is not a view
+
 # Test that creating objects of the same name does not work
 
 ! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c

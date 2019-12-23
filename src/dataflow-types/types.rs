@@ -12,6 +12,7 @@
 // Clippy doesn't understand `as_of` and complains.
 #![allow(clippy::wrong_self_convention)]
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -159,12 +160,14 @@ pub struct BuildDesc {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
     pub source_imports: Vec<(GlobalId, Source)>,
-    pub index_imports: Vec<(IndexDesc, RelationType)>,
+    pub index_imports: HashMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
     pub objects_to_build: Vec<BuildDesc>,
-    pub index_exports: Vec<(IndexDesc, RelationType)>,
+    pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
     pub sink_exports: Vec<(GlobalId, Sink)>,
+    /// Maps views to views + indexes needed to generate that view
+    pub dependent_objects: HashMap<GlobalId, Vec<GlobalId>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// This is logically equivalent to a timely dataflow `Antichain`,
@@ -181,12 +184,26 @@ impl DataflowDesc {
         dd
     }
 
-    pub fn add_source_import(&mut self, id: GlobalId, source: Source) {
-        self.source_imports.push((id, source));
+    pub fn add_index_import(
+        &mut self,
+        id: GlobalId,
+        index: IndexDesc,
+        typ: RelationType,
+        requesting_view: GlobalId,
+    ) {
+        self.index_imports.insert(id, (index, typ));
+        self.add_dependency(requesting_view, id);
     }
 
-    pub fn add_index_import(&mut self, index: IndexDesc, typ: RelationType) {
-        self.index_imports.push((index, typ));
+    pub fn add_dependency(&mut self, view_id: GlobalId, dependent_id: GlobalId) {
+        self.dependent_objects
+            .entry(view_id)
+            .or_insert_with(|| Vec::new())
+            .push(dependent_id);
+    }
+
+    pub fn add_source_import(&mut self, id: GlobalId, source: Source) {
+        self.source_imports.push((id, source));
     }
 
     pub fn add_view_to_build(&mut self, id: GlobalId, view: View) {
@@ -213,8 +230,8 @@ impl DataflowDesc {
         });
     }
 
-    pub fn add_index_export(&mut self, index: IndexDesc, typ: RelationType) {
-        self.index_exports.push((index, typ));
+    pub fn add_index_export(&mut self, id: GlobalId, index: IndexDesc, typ: RelationType) {
+        self.index_exports.push((id, index, typ));
     }
 
     pub fn add_sink_export(&mut self, id: GlobalId, sink: Sink) {
@@ -223,6 +240,36 @@ impl DataflowDesc {
 
     pub fn as_of(&mut self, as_of: Option<Vec<Timestamp>>) {
         self.as_of = as_of;
+    }
+
+    /// Gets index ids of all indexes require to construct a particular view
+    /// If `id` is None, returns all indexes required to construct all views
+    /// required by the exports
+    pub fn get_imports(&self, id: Option<&GlobalId>) -> HashSet<GlobalId> {
+        if let Some(id) = id {
+            self.get_imports_inner(id)
+        } else {
+            let mut result = HashSet::new();
+            for (_, desc, _) in &self.index_exports {
+                result.extend(self.get_imports_inner(&desc.on_id))
+            }
+            for (_, sink) in &self.sink_exports {
+                result.extend(self.get_imports_inner(&sink.from.0))
+            }
+            result
+        }
+    }
+
+    pub fn get_imports_inner(&self, id: &GlobalId) -> HashSet<GlobalId> {
+        let mut result = HashSet::new();
+        if let Some(dependents) = self.dependent_objects.get(id) {
+            for id in dependents {
+                result.extend(self.get_imports_inner(id));
+            }
+        } else {
+            result.insert(*id);
+        }
+        result
     }
 }
 

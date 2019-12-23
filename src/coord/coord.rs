@@ -139,7 +139,9 @@ where
                     .chain(logging_config.active_logs().iter().map(|log| {
                         (
                             log.index_id(),
-                            QualName::from_str(log.name()).expect("invalid logging name").with_trailing_string("_PRIMARY_IDX"),
+                            QualName::from_str(log.name())
+                                .expect("invalid logging name")
+                                .with_trailing_string("_PRIMARY_IDX"),
                             CatalogItem::Index(dataflow_types::Index::new_from_cols(
                                 log.id(),
                                 log.index_by(),
@@ -188,10 +190,12 @@ where
                         coord.insert_view(id, view, None);
                     }
                     CatalogItem::Sink(sink) => {
-                        coord.create_sink_dataflow(name, id, sink);
+                        coord.create_sink_dataflow(name.to_string(), id, sink);
                     }
                     CatalogItem::Index(index) => match id {
-                        GlobalId::User(_) => coord.create_index_dataflow(name, id, index),
+                        GlobalId::User(_) => {
+                            coord.create_index_dataflow(name.to_string(), id, index)
+                        }
                         GlobalId::System(_) => coord.add_index_to_view(id, index.desc, Some(1_000)),
                     },
                 }
@@ -380,9 +384,8 @@ where
             }
 
             Plan::CreateSource(name, source) => {
-                // TODO (materialize#1019): remove all the mirroring code
                 let source_id = self.register_source(&name, &source)?;
-                self.sources.insert(source_id, source.clone());
+                self.sources.insert(source_id, source);
                 ExecuteResponse::CreatedSource
             }
 
@@ -408,19 +411,19 @@ where
                     self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
                     true,
                 );
-                self.create_sink_dataflow(name, id, sink);
+                self.create_sink_dataflow(name.to_string(), id, sink);
                 ExecuteResponse::CreatedSink
             }
 
             Plan::CreateView(name, view) => {
                 let id = self.register_view(&name, &view)?;
-                self.create_materialized_view_dataflow(name, id, view, None)?;
+                self.create_materialized_view_dataflow(name.to_string(), id, view, None)?;
                 ExecuteResponse::CreatedView
             }
 
             Plan::CreateIndex(name, index) => {
                 let id = self.register_index(&name, &index)?;
-                self.create_index_dataflow(name, id, index);
+                self.create_index_dataflow(name.to_string(), id, index);
                 ExecuteResponse::CreatedIndex
             }
 
@@ -497,8 +500,14 @@ where
                 when,
                 finishing,
                 mut eval_env,
+                materialize,
             } => {
                 eval_env.wall_time = Some(chrono::Utc::now());
+                // TODO (wangandi): what do we do about this line when we start passing indexes
+                // to the optimizer?
+                // Related: Is there anything that optimizes to a constant expression that originally
+                // contains a global get? Is there anything not containing a global get that cannot be optimized to
+                // a constant expression?
                 self.optimizer.optimize(&mut source, &eval_env);
 
                 // If this optimizes to a constant expression, we can immediately return the result.
@@ -525,35 +534,34 @@ where
 
                     // Choose a timestamp for all workers to use in the peek.
                     // We minimize over all participating views, to ensure that the query will not
-                    // need to block on the arrival of further input data.
-                    let timestamp = self.determine_timestamp(&source, when)?;
-                    eval_env.logical_time = Some(timestamp);
-
+                    // need to block on the arrival of further input data.s
                     let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
                     let (project, filter) = Self::plan_peek(&mut source);
 
-                    // Create a transient view if the peek is not of a base relation.
-                    if let RelationExpr::Get {
+                    let (fast_path, view_id) = if let RelationExpr::Get {
                         id: Id::Global(id),
                         typ: _,
                     } = source
                     {
-                        // Fast path. We can just look at the existing dataflow directly.
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::Peek {
-                                id,
-                                conn_id,
-                                tx: rows_tx,
-                                timestamp,
-                                finishing: finishing.clone(),
-                                project,
-                                filter,
-                                eval_env,
-                            },
-                        );
+                        if self.upper_of(&id).is_some() {
+                            (true, id)
+                        } else if materialize {
+                            (false, self.catalog.allocate_id())
+                        } else {
+                            bail!(
+                                "{} is not materialized",
+                                self.catalog.humanize_id(expr::Id::Global(id)).unwrap()
+                            )
+                        }
                     } else {
+                        (false, self.catalog.allocate_id())
+                    };
+
+                    let timestamp = self.determine_timestamp(&source, when)?;
+                    eval_env.logical_time = Some(timestamp);
+
+                    if !fast_path {
                         // Slow path. We need to perform some computation, so build
                         // a new transient dataflow that will be dropped after the
                         // peek completes.
@@ -579,24 +587,28 @@ where
                             eval_env: eval_env.clone(),
                         };
                         self.create_materialized_view_dataflow(
-                            format!("temp-view-{}", view_id).lit(),
+                            format!("temp-view-{}", view_id),
                             view_id,
                             view,
                             Some(vec![timestamp.clone()]),
                         )?;
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::Peek {
-                                id: view_id,
-                                conn_id,
-                                tx: rows_tx,
-                                timestamp,
-                                finishing: finishing.clone(),
-                                project: None,
-                                filter: Vec::new(),
-                                eval_env,
-                            },
-                        );
+                    }
+
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::Peek {
+                            id: view_id,
+                            conn_id,
+                            tx: rows_tx,
+                            timestamp,
+                            finishing: finishing.clone(),
+                            project,
+                            filter,
+                            eval_env,
+                        },
+                    );
+
+                    if !fast_path {
                         self.drop_views(vec![view_id]);
                     }
 
@@ -625,7 +637,11 @@ where
 
             Plan::Tail(source) => {
                 let source_id = source.id();
-
+                if !self.views.contains_key(&source_id)
+                    || self.views[&source_id].materialization.is_none()
+                {
+                    bail!("Cannot tail a view that has not been materialized.");
+                }
                 let sink_name = format!(
                     "tail-source-{}",
                     self.catalog
@@ -646,7 +662,7 @@ where
                     from: (source_id, source.desc()?.clone()),
                     connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                 };
-                self.create_sink_dataflow(sink_name.lit(), sink_id, sink);
+                self.create_sink_dataflow(sink_name, sink_id, sink);
                 ExecuteResponse::Tailing { rx }
             }
 
@@ -761,12 +777,15 @@ where
                 CatalogItem::View(view) => {
                     if let Some(materialization_state) = &self.views[id].materialization {
                         let keys = materialization_state.get_primary_key();
+                        let index_desc = IndexDesc {
+                            on_id: *id,
+                            keys: keys.to_vec(),
+                        };
                         dataflow.add_index_import(
-                            IndexDesc {
-                                on_id: *id,
-                                keys: keys.to_vec(),
-                            },
+                            self.indexes[&index_desc].1,
+                            index_desc,
                             view.desc.typ().clone(),
+                            *id,
                         );
                     } else {
                         self.build_view_collection(id, &view, dataflow);
@@ -779,7 +798,7 @@ where
 
     fn build_view_collection(
         &mut self,
-        id: &GlobalId,
+        view_id: &GlobalId,
         view: &dataflow_types::View,
         dataflow: &mut DataflowDesc,
     ) {
@@ -792,11 +811,14 @@ where
             } = e
             {
                 self.import_source_or_view(id, dataflow);
+                dataflow.add_dependency(*view_id, *id)
             }
         });
         self.optimizer
             .optimize(&mut view_to_build.relation_expr, &view_to_build.eval_env);
-        dataflow.add_view_to_build(*id, view_to_build);
+        // TODO (wangandi): Add indexes required by the view according to the optimizer
+        // to dataflow.dependent_indexes
+        dataflow.add_view_to_build(*view_id, view_to_build);
     }
 
     fn build_arrangement(
@@ -811,14 +833,14 @@ where
 
     fn auto_materialize_view(
         &mut self,
-        view_name: &QualName,
+        view_name: &str,
         id: &GlobalId,
         view: &dataflow_types::View,
         dataflow: &mut DataflowDesc,
         temp: bool,
     ) -> Result<(GlobalId, IndexDesc), failure::Error> {
         self.build_view_collection(id, view, dataflow);
-        let index_name = view_name.with_trailing_string("_PRIMARY_IDX");
+        let index_name = QualName::from_str(view_name)?.with_trailing_string("_PRIMARY_IDX");
         let index = view.auto_generate_primary_idx(*id);
         let index_id = if temp {
             self.catalog.allocate_id()
@@ -826,19 +848,19 @@ where
             self.register_index(&index_name, &index)?
         };
         self.build_arrangement(&index_id, &index, dataflow);
-        dataflow.add_index_export(index.desc.clone(), view.desc.typ().clone());
-        Ok((index_id, index.desc.clone()))
+        dataflow.add_index_export(index_id, index.desc.clone(), view.desc.typ().clone());
+        Ok((index_id, index.desc))
     }
 
     fn create_materialized_view_dataflow(
         &mut self,
-        view_name: QualName,
+        view_name: String,
         id: GlobalId,
         view: dataflow_types::View,
         as_of: Option<Vec<Timestamp>>,
     ) -> Result<(), failure::Error> {
         self.insert_view(id, view.clone(), None);
-        let mut dataflow = DataflowDesc::new(view_name.to_string());
+        let mut dataflow = DataflowDesc::new(view_name.clone());
         let (index_id, materialized_index) =
             self.auto_materialize_view(&view_name, &id, &view, &mut dataflow, as_of.is_some())?;
         dataflow.as_of(as_of);
@@ -852,12 +874,7 @@ where
         Ok(())
     }
 
-    fn create_index_dataflow(
-        &mut self,
-        name: QualName,
-        id: GlobalId,
-        index: dataflow_types::Index,
-    ) {
+    fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: dataflow_types::Index) {
         self.index_aliases.insert(id, index.desc.clone());
 
         if let Some((count, _id)) = self.indexes.get_mut(&index.desc) {
@@ -866,9 +883,9 @@ where
             return;
         }
 
-        let mut dataflow = DataflowDesc::new(name.to_string());
+        let mut dataflow = DataflowDesc::new(name);
         self.build_arrangement(&id, &index, &mut dataflow);
-        dataflow.add_index_export(index.desc.clone(), index.relation_type);
+        dataflow.add_index_export(id, index.desc.clone(), index.relation_type);
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -876,23 +893,24 @@ where
         self.add_index_to_view(id, index.desc, None);
     }
 
-    fn create_sink_dataflow(&mut self, name: QualName, id: GlobalId, sink: dataflow_types::Sink) {
-        let mut dataflow = DataflowDesc::new(name.to_string());
+    fn create_sink_dataflow(&mut self, name: String, id: GlobalId, sink: dataflow_types::Sink) {
+        let mut dataflow = DataflowDesc::new(name);
         self.import_source_or_view(&sink.from.0, &mut dataflow);
-        dataflow.add_sink_export(id, sink.clone());
+        dataflow.add_sink_export(id, sink);
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
         );
     }
 
-    pub fn drop_views(&mut self, dataflow_names: Vec<GlobalId>) {
-        for name in dataflow_names.iter() {
-            self.remove_view(name);
+    pub fn drop_views(&mut self, views_names: Vec<GlobalId>) {
+        let mut index_names = Vec::new();
+        for name in views_names.iter() {
+            index_names.push(self.remove_view(name));
         }
         broadcast(
             &mut self.broadcast_tx,
-            SequencedCommand::DropViews(dataflow_names),
+            SequencedCommand::DropViews(views_names, index_names),
         )
     }
 
@@ -1069,9 +1087,15 @@ where
                 // Form lower bound on available times.
                 let mut upper = Antichain::new();
                 for id in sources {
-                    let view_upper = self.upper_of(&id).expect("Upper missing at coordinator");
-                    // To track the meet of `upper` we just extend with the upper frontier.
-                    upper.extend(view_upper.iter().cloned());
+                    if let Some(view_upper) = self.upper_of(&id) {
+                        // To track the meet of `upper` we just extend with the upper frontier.
+                        upper.extend(view_upper.iter().cloned());
+                    } else {
+                        bail!(
+                            "{} is not materialized",
+                            self.catalog.humanize_id(expr::Id::Global(id)).unwrap()
+                        )
+                    }
                 }
 
                 // We peek at the largest element not in advance of `upper`, which
@@ -1299,7 +1323,8 @@ where
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
-    fn remove_view(&mut self, name: &GlobalId) {
+    fn remove_view(&mut self, name: &GlobalId) -> Vec<GlobalId> {
+        let mut dropped_index_ids = Vec::new();
         if let Some(view_state) = self.views.remove(name) {
             if self.log {
                 if let Some(materialization_state) = view_state.materialization {
@@ -1313,9 +1338,19 @@ where
                             )),
                         );
                     }
+                    for key in materialization_state.get_all_idx_keys() {
+                        dropped_index_ids.push(
+                            self.indexes[&IndexDesc {
+                                on_id: *name,
+                                keys: key.to_vec(),
+                            }]
+                                .1,
+                        );
+                    }
                 }
             }
         }
+        dropped_index_ids
     }
 
     fn handle_statement(
@@ -1449,6 +1484,10 @@ impl MaterializationState {
 
     pub fn get_primary_key(&self) -> &Vec<ScalarExpr> {
         &self.primary_idx_keys[0]
+    }
+
+    pub fn get_all_idx_keys(&self) -> &Vec<Vec<ScalarExpr>> {
+        &self.primary_idx_keys
     }
 
     /// Sets the latency behind the collection frontier at which compaction occurs.

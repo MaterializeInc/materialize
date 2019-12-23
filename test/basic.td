@@ -41,6 +41,9 @@ Source   Create Source
 ------------------
 data  "kafka://${testdrive.kafka-addr-resolved}/testdrive-data-${testdrive.seed}"
 
+! PEEK data
+data is not a view
+
 > CREATE VIEW data_view as SELECT * from data
 
 > PEEK data_view
@@ -154,6 +157,9 @@ b  c
 > CREATE INDEX idx1 ON test5(c)
 
 ! PEEK idx1
+catalog item 'idx1' is an index and so cannot be depended upon
+
+! SELECT * from idx1
 catalog item 'idx1' is an index and so cannot be depended upon
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
