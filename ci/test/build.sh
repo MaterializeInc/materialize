@@ -27,7 +27,7 @@ docker_run() {
         --env OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
         --env OPENSSL_INCLUDE_DIR=/usr/include \
         --user "$(id -u):$(id -g)" \
-        materialize/ci-builder:1.39.0-20191111-160627 bash -c "$1"
+        materialize/ci-builder:1.40.0-20191219-232317 bash -c "$1"
 }
 
 ci_init

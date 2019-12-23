@@ -33,7 +33,6 @@ use dataflow_types::logging::LoggingConfig;
 use ore::future::OreTryFutureExt;
 use ore::netio;
 use ore::netio::{SniffedStream, SniffingStream};
-use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
@@ -235,10 +234,10 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
             num_timely_workers,
-            symbiosis_url: config.symbiosis_url.mz_as_deref(),
+            symbiosis_url: config.symbiosis_url.as_deref(),
             logging: logging_config.as_ref(),
             bootstrap_sql: config.bootstrap_sql,
-            data_directory: config.data_directory.mz_as_deref(),
+            data_directory: config.data_directory.as_deref(),
             executor: &executor,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
@@ -253,7 +252,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         config.process,
         switchboard,
         executor,
-        logging_config.clone(),
+        logging_config,
     )
     .map_err(|s| format_err!("{}", s))?;
 

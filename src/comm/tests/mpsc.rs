@@ -29,14 +29,14 @@ fn test_mpsc_select() -> Result<(), Box<dyn Error>> {
         tx1.send(1).await?;
         tx2.send(2).await?;
         let msgs = rx.by_ref().take(2).try_collect::<Vec<_>>().await?;
-        if msgs != &[1, 2] && msgs != [2, 1] {
+        if msgs != [1, 2] && msgs != [2, 1] {
             panic!("received unexpected messages: {:#?}", msgs);
         }
 
         tx1.send(3).await?;
         tx2.send(4).await?;
         let msgs = rx.take(2).try_collect::<Vec<_>>().await?;
-        if msgs != &[3, 4] && msgs != [4, 3] {
+        if msgs != [3, 4] && msgs != [4, 3] {
             panic!("received unexpected messages: {:#?}", msgs);
         }
 
@@ -107,8 +107,8 @@ fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
         const N: usize = 1 << 14;
 
         executor.spawn(async {
-            let res = rx.take(N).drain().await;
-            result_tx.send(res).unwrap();
+            rx.take(N).drain().await;
+            result_tx.send(()).unwrap();
         });
 
         for i in 0..N {
@@ -127,7 +127,7 @@ fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
 /// 8MiB, which is too low.
 #[test]
 fn test_mpsc_big_frame() -> Result<(), Box<dyn Error>> {
-    const BIG_LEN: usize = 64 * 1 << 20; // 64MiB
+    const BIG_LEN: usize = 64 * (1 << 20); // 64MiB
     let (switchboard, mut runtime) = Switchboard::local()?;
     runtime.block_on(async {
         let (tx, mut rx) = switchboard.mpsc::<String>();

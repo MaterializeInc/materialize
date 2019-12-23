@@ -226,19 +226,9 @@ where
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // First, drain the incoming stream queue.
-        loop {
-            match self.incoming_streams.poll_next_unpin(cx) {
-                Poll::Ready(Some(stream)) => {
-                    // New stream available. Add it to the set of active
-                    // streams. Then look for more incoming streams.
-                    self.active_streams.push(stream.into_future())
-                }
-                Poll::Ready(None) | Poll::Pending => {
-                    // The incoming stream queue is drained, at least for now.
-                    // Move on to checking for ready items.
-                    break;
-                }
-            }
+        while let Poll::Ready(Some(stream)) = self.incoming_streams.poll_next_unpin(cx) {
+            // New stream available. Add it to the set of active streams.
+            self.active_streams.push(stream.into_future())
         }
 
         // Second, try to find an item from a ready stream.

@@ -27,7 +27,6 @@ use dataflow_types::{
 };
 use expr as relationexpr;
 use interchange::{avro, protobuf};
-use ore::option::OptionExt;
 use relationexpr::{EvalEnv, Id};
 use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
 
@@ -382,7 +381,7 @@ fn handle_show_columns(
         .map(|(name, typ)| {
             let name = name.map(|n| n.to_string());
             Row::pack(&[
-                Datum::String(name.mz_as_deref().unwrap_or("?")),
+                Datum::String(name.as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
                 Datum::String(&postgres_type_name(&typ.scalar_type)),
             ])
@@ -644,7 +643,7 @@ fn handle_create_dataflow(
                     let source = Source {
                         connector: SourceConnector::External {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
-                                path: path.clone().try_into()?,
+                                path: path.try_into()?,
                                 tail,
                             }),
                             encoding,
@@ -667,7 +666,7 @@ fn handle_create_dataflow(
             // TODO(brennan): This shouldn't be synchronous either (see CreateSource above),
             // but for now we just want it working for demo purposes...
             let schema_registry_url: Url = schema_registry.parse()?;
-            let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
+            let ccsr_client = ccsr::Client::new(schema_registry_url);
             let mut subjects = ccsr_client.list_subjects()?;
             if let Some(value) = like {
                 let like_regex = build_like_regex_from_string(value)?;

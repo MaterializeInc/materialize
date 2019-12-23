@@ -813,9 +813,9 @@ mod tests {
             Datum::False,
             Datum::True,
             Datum::Int32(-42),
-            Datum::Int64(-2147483648 - 42),
+            Datum::Int64(-2_147_483_648 - 42),
             Datum::Float32(OrderedFloat::from(-42.12)),
-            Datum::Float64(OrderedFloat::from(-2147483648.0 - 42.12)),
+            Datum::Float64(OrderedFloat::from(-2_147_483_648.0 - 42.12)),
             Datum::Date(NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed)),
             Datum::Timestamp(
                 NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed).and_hms(14, 32, 11),
@@ -827,7 +827,7 @@ mod tests {
             Datum::Interval(Interval::Months(312)),
             Datum::Interval(Interval::Duration {
                 is_positive: true,
-                duration: std::time::Duration::from_nanos(1012312),
+                duration: std::time::Duration::from_nanos(1_012_312),
             }),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1, 255]),
