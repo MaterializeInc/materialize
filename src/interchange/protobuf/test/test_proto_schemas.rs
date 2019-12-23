@@ -35,6 +35,13 @@ pub struct TestRecord {
     // message fields
     pub int_field: i32,
     pub string_field: ::std::string::String,
+    pub int64_field: i64,
+    pub bytes_field: ::std::vec::Vec<u8>,
+    pub color_field: Color,
+    pub uint_field: u32,
+    pub uint64_field: u64,
+    pub float_field: f32,
+    pub double_field: f64,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
     pub cached_size: ::protobuf::CachedSize,
@@ -91,6 +98,122 @@ impl TestRecord {
     pub fn take_string_field(&mut self) -> ::std::string::String {
         ::std::mem::replace(&mut self.string_field, ::std::string::String::new())
     }
+
+    // int64 int64_field = 3;
+
+
+    pub fn get_int64_field(&self) -> i64 {
+        self.int64_field
+    }
+    pub fn clear_int64_field(&mut self) {
+        self.int64_field = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_int64_field(&mut self, v: i64) {
+        self.int64_field = v;
+    }
+
+    // bytes bytes_field = 4;
+
+
+    pub fn get_bytes_field(&self) -> &[u8] {
+        &self.bytes_field
+    }
+    pub fn clear_bytes_field(&mut self) {
+        self.bytes_field.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_bytes_field(&mut self, v: ::std::vec::Vec<u8>) {
+        self.bytes_field = v;
+    }
+
+    // Mutable pointer to the field.
+    // If field is not initialized, it is initialized with default value first.
+    pub fn mut_bytes_field(&mut self) -> &mut ::std::vec::Vec<u8> {
+        &mut self.bytes_field
+    }
+
+    // Take field
+    pub fn take_bytes_field(&mut self) -> ::std::vec::Vec<u8> {
+        ::std::mem::replace(&mut self.bytes_field, ::std::vec::Vec::new())
+    }
+
+    // .Color color_field = 5;
+
+
+    pub fn get_color_field(&self) -> Color {
+        self.color_field
+    }
+    pub fn clear_color_field(&mut self) {
+        self.color_field = Color::RED;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_color_field(&mut self, v: Color) {
+        self.color_field = v;
+    }
+
+    // uint32 uint_field = 6;
+
+
+    pub fn get_uint_field(&self) -> u32 {
+        self.uint_field
+    }
+    pub fn clear_uint_field(&mut self) {
+        self.uint_field = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_uint_field(&mut self, v: u32) {
+        self.uint_field = v;
+    }
+
+    // uint64 uint64_field = 7;
+
+
+    pub fn get_uint64_field(&self) -> u64 {
+        self.uint64_field
+    }
+    pub fn clear_uint64_field(&mut self) {
+        self.uint64_field = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_uint64_field(&mut self, v: u64) {
+        self.uint64_field = v;
+    }
+
+    // float float_field = 8;
+
+
+    pub fn get_float_field(&self) -> f32 {
+        self.float_field
+    }
+    pub fn clear_float_field(&mut self) {
+        self.float_field = 0.;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_float_field(&mut self, v: f32) {
+        self.float_field = v;
+    }
+
+    // double double_field = 9;
+
+
+    pub fn get_double_field(&self) -> f64 {
+        self.double_field
+    }
+    pub fn clear_double_field(&mut self) {
+        self.double_field = 0.;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_double_field(&mut self, v: f64) {
+        self.double_field = v;
+    }
 }
 
 impl ::protobuf::Message for TestRecord {
@@ -112,6 +235,47 @@ impl ::protobuf::Message for TestRecord {
                 2 => {
                     ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.string_field)?;
                 },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_int64()?;
+                    self.int64_field = tmp;
+                },
+                4 => {
+                    ::protobuf::rt::read_singular_proto3_bytes_into(wire_type, is, &mut self.bytes_field)?;
+                },
+                5 => {
+                    ::protobuf::rt::read_proto3_enum_with_unknown_fields_into(wire_type, is, &mut self.color_field, 5, &mut self.unknown_fields)?
+                },
+                6 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint32()?;
+                    self.uint_field = tmp;
+                },
+                7 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.uint64_field = tmp;
+                },
+                8 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeFixed32 {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_float()?;
+                    self.float_field = tmp;
+                },
+                9 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_double()?;
+                    self.double_field = tmp;
+                },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
@@ -130,6 +294,27 @@ impl ::protobuf::Message for TestRecord {
         if !self.string_field.is_empty() {
             my_size += ::protobuf::rt::string_size(2, &self.string_field);
         }
+        if self.int64_field != 0 {
+            my_size += ::protobuf::rt::value_size(3, self.int64_field, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if !self.bytes_field.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(4, &self.bytes_field);
+        }
+        if self.color_field != Color::RED {
+            my_size += ::protobuf::rt::enum_size(5, self.color_field);
+        }
+        if self.uint_field != 0 {
+            my_size += ::protobuf::rt::value_size(6, self.uint_field, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.uint64_field != 0 {
+            my_size += ::protobuf::rt::value_size(7, self.uint64_field, ::protobuf::wire_format::WireTypeVarint);
+        }
+        if self.float_field != 0. {
+            my_size += 5;
+        }
+        if self.double_field != 0. {
+            my_size += 9;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
@@ -141,6 +326,27 @@ impl ::protobuf::Message for TestRecord {
         }
         if !self.string_field.is_empty() {
             os.write_string(2, &self.string_field)?;
+        }
+        if self.int64_field != 0 {
+            os.write_int64(3, self.int64_field)?;
+        }
+        if !self.bytes_field.is_empty() {
+            os.write_bytes(4, &self.bytes_field)?;
+        }
+        if self.color_field != Color::RED {
+            os.write_enum(5, self.color_field.value())?;
+        }
+        if self.uint_field != 0 {
+            os.write_uint32(6, self.uint_field)?;
+        }
+        if self.uint64_field != 0 {
+            os.write_uint64(7, self.uint64_field)?;
+        }
+        if self.float_field != 0. {
+            os.write_float(8, self.float_field)?;
+        }
+        if self.double_field != 0. {
+            os.write_double(9, self.double_field)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -194,6 +400,41 @@ impl ::protobuf::Message for TestRecord {
                     |m: &TestRecord| { &m.string_field },
                     |m: &mut TestRecord| { &mut m.string_field },
                 ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+                    "int64_field",
+                    |m: &TestRecord| { &m.int64_field },
+                    |m: &mut TestRecord| { &mut m.int64_field },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBytes>(
+                    "bytes_field",
+                    |m: &TestRecord| { &m.bytes_field },
+                    |m: &mut TestRecord| { &mut m.bytes_field },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeEnum<Color>>(
+                    "color_field",
+                    |m: &TestRecord| { &m.color_field },
+                    |m: &mut TestRecord| { &mut m.color_field },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
+                    "uint_field",
+                    |m: &TestRecord| { &m.uint_field },
+                    |m: &mut TestRecord| { &mut m.uint_field },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "uint64_field",
+                    |m: &TestRecord| { &m.uint64_field },
+                    |m: &mut TestRecord| { &mut m.uint64_field },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeFloat>(
+                    "float_field",
+                    |m: &TestRecord| { &m.float_field },
+                    |m: &mut TestRecord| { &mut m.float_field },
+                ));
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeDouble>(
+                    "double_field",
+                    |m: &TestRecord| { &m.double_field },
+                    |m: &mut TestRecord| { &mut m.double_field },
+                ));
                 ::protobuf::reflect::MessageDescriptor::new::<TestRecord>(
                     "TestRecord",
                     fields,
@@ -218,6 +459,13 @@ impl ::protobuf::Clear for TestRecord {
     fn clear(&mut self) {
         self.int_field = 0;
         self.string_field.clear();
+        self.int64_field = 0;
+        self.bytes_field.clear();
+        self.color_field = Color::RED;
+        self.uint_field = 0;
+        self.uint64_field = 0;
+        self.float_field = 0.;
+        self.double_field = 0.;
         self.unknown_fields.clear();
     }
 }
@@ -234,10 +482,75 @@ impl ::protobuf::reflect::ProtobufValue for TestRecord {
     }
 }
 
+#[derive(Clone,PartialEq,Eq,Debug,Hash)]
+pub enum Color {
+    RED = 0,
+    YELLOW = 1,
+    BLUE = 2,
+}
+
+impl ::protobuf::ProtobufEnum for Color {
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<Color> {
+        match value {
+            0 => ::std::option::Option::Some(Color::RED),
+            1 => ::std::option::Option::Some(Color::YELLOW),
+            2 => ::std::option::Option::Some(Color::BLUE),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    fn values() -> &'static [Self] {
+        static values: &'static [Color] = &[
+            Color::RED,
+            Color::YELLOW,
+            Color::BLUE,
+        ];
+        values
+    }
+
+    fn enum_descriptor_static() -> &'static ::protobuf::reflect::EnumDescriptor {
+        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::lazy::Lazy {
+            lock: ::protobuf::lazy::ONCE_INIT,
+            ptr: 0 as *const ::protobuf::reflect::EnumDescriptor,
+        };
+        unsafe {
+            descriptor.get(|| {
+                ::protobuf::reflect::EnumDescriptor::new("Color", file_descriptor_proto())
+            })
+        }
+    }
+}
+
+impl ::std::marker::Copy for Color {
+}
+
+impl ::std::default::Default for Color {
+    fn default() -> Self {
+        Color::RED
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for Color {
+    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
+        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
+    }
+}
+
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n!testdata/test-proto-schemas.proto\"L\n\nTestRecord\x12\x1b\n\tint_fie\
-    ld\x18\x01\x20\x01(\x05R\x08intField\x12!\n\x0cstring_field\x18\x02\x20\
-    \x01(\tR\x0bstringFieldb\x06proto3\
+    \n!testdata/test-proto-schemas.proto\"\xbd\x02\n\nTestRecord\x12\x1b\n\t\
+    int_field\x18\x01\x20\x01(\x05R\x08intField\x12!\n\x0cstring_field\x18\
+    \x02\x20\x01(\tR\x0bstringField\x12\x1f\n\x0bint64_field\x18\x03\x20\x01\
+    (\x03R\nint64Field\x12\x1f\n\x0bbytes_field\x18\x04\x20\x01(\x0cR\nbytes\
+    Field\x12'\n\x0bcolor_field\x18\x05\x20\x01(\x0e2\x06.ColorR\ncolorField\
+    \x12\x1d\n\nuint_field\x18\x06\x20\x01(\rR\tuintField\x12!\n\x0cuint64_f\
+    ield\x18\x07\x20\x01(\x04R\x0buint64Field\x12\x1f\n\x0bfloat_field\x18\
+    \x08\x20\x01(\x02R\nfloatField\x12!\n\x0cdouble_field\x18\t\x20\x01(\x01\
+    R\x0bdoubleField*&\n\x05Color\x12\x07\n\x03RED\x10\0\x12\n\n\x06YELLOW\
+    \x10\x01\x12\x08\n\x04BLUE\x10\x02b\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {

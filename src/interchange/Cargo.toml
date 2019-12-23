@@ -19,6 +19,7 @@ byteorder = "1.3"
 ccsr = { path = "../ccsr" }
 failure = "0.1.6"
 sha2 = "0.8"
+ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 protobuf = "2.8.1"
 protoc = "2.8.1"
