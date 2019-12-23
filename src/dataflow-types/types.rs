@@ -314,7 +314,7 @@ pub enum SinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnector {
     pub addr: std::net::SocketAddr,
-    pub schema_registry_url: String,
+    pub schema_registry_url: Url,
     pub topic: String,
     pub schema_id: i32,
 }

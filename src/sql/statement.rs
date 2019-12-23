@@ -7,8 +7,6 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
-use serde_json::json;
-
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::net::SocketAddr;
@@ -657,10 +655,12 @@ fn handle_create_dataflow(
             let with_op = &with_options[0];
             match with_op.name.value.as_str() {
                 "schema_registry_url" => {
-                    schema_registry_url = Some(match &with_op.value {
-                        Value::SingleQuotedString(s) => s,
-                        _ => bail!("Schema registry URL must be a string, e.g. 'kafka://localhost/{schema}'."),
-                    });
+                    schema_registry_url = match &with_op.value {
+                        Value::SingleQuotedString(s) => Some(s),
+                        _ => bail!(
+                        "Schema registry URL must be a string, e.g. 'kafka://localhost/{schema}'."
+                    ),
+                    }
                 }
                 _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
             }
@@ -674,51 +674,23 @@ fn handle_create_dataflow(
             let catalog_entry = catalog.get(&from)?;
             let (addr, topic) = parse_kafka_topic_url(url)?;
 
-            // Create new Kafka schema for sink using RelationDesc
             let relation_desc = catalog_entry.desc()?.clone();
-            let mut fields = Vec::new();
-            for (name, typ) in relation_desc.iter() {
-                let field_name = match name {
-                    Some(name) => name.as_str(),
-                    None => bail!("All Kafka sink columns must have a name."),
-                };
-
-                let mut field_types = Vec::new();
-                if typ.nullable {
-                    field_types.push("null");
-                }
-                match typ.scalar_type {
-                    // todo: rest of these
-                    ScalarType::String => field_types.push("string"),
-                    _ => bail!("Only support String, not: {:#?}", typ.scalar_type),
-                }
-
-                let field = json!({
-                    "name": field_name,
-                    "type": field_types,
-                });
-                fields.push(field);
-            }
-
-            let schema = json!({
-                "type": "record",
-                "name": "envelope",
-                "fields": fields,
-            })
-            .to_string();
+            let schema = interchange::avro::encode_schema(&relation_desc)?;
 
             // Send new schema to registry, get back the schema id for the sink
             let url: Url = schema_registry_url.parse().unwrap();
             let ccsr_client = ccsr::Client::new(url.clone());
-            let schema_id = ccsr_client.publish_schema(&topic, &schema).unwrap();
+            let schema_id = ccsr_client
+                .publish_schema(&topic, &schema.to_string())
+                .unwrap();
 
             let sink = Sink {
                 from: (catalog_entry.id(), relation_desc),
                 connector: SinkConnector::Kafka(KafkaSinkConnector {
                     addr,
-                    schema_registry_url,
+                    schema_registry_url: url,
                     topic,
-                    schema_id: schema_id,
+                    schema_id,
                 }),
             };
 

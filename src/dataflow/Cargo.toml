@@ -9,9 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-avro-rs = "0.6.5"
 bincode = "1.2.1"
-byteorder = "1.3"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 csv = "1.1.1"
