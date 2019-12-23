@@ -21,9 +21,6 @@ members = [
 [profile.release]
 debug = true
 
-[patch.crates-io]
-avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
-
 # This is a slightly confusing syntax because of the fact that ssh urls use `:`
 # instead of `/` to separate the domain, so this serves as an example
 #
