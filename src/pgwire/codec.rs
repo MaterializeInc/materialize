@@ -21,8 +21,8 @@ use tokio::io;
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::message::{
-    BackendMessage, EncryptionType, FieldFormat, FrontendMessage, TransactionStatus,
-    VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL,
+    BackendMessage, EncryptionType, FrontendMessage, TransactionStatus, VERSION_CANCEL,
+    VERSION_GSSENC, VERSION_SSL,
 };
 use ore::netio;
 use repr::{Datum, ScalarType};
@@ -170,8 +170,8 @@ impl Encoder for Codec {
                 for (f, ff) in fields.iter().zip(formats.iter()) {
                     if let Some(f) = f {
                         let s: Cow<[u8]> = match ff {
-                            FieldFormat::Text => f.to_text(),
-                            FieldFormat::Binary => f.to_binary().map_err(|e| {
+                            pgrepr::Format::Text => f.to_text(),
+                            pgrepr::Format::Binary => f.to_binary().map_err(|e| {
                                 log::error!("binary err: {}", e);
                                 unsupported_err(e)
                             })?,
@@ -440,10 +440,11 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let parameter_format_code_count = buf.read_i16()?;
     let mut parameter_format_codes = Vec::with_capacity(parameter_format_code_count as usize);
     if parameter_format_code_count == 0 {
-        parameter_format_codes.push(FieldFormat::Text);
+        parameter_format_codes.push(pgrepr::Format::Text);
     } else {
         for _ in 0..parameter_format_code_count {
-            parameter_format_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
+            parameter_format_codes
+                .push(pgrepr::Format::try_from(buf.read_i16()?).map_err(input_err)?);
         }
     }
 
@@ -480,7 +481,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let result_formats_count = buf.read_i16()?;
     let mut result_formats = Vec::with_capacity(result_formats_count as usize);
     for _ in 0..result_formats_count {
-        result_formats.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
+        result_formats.push(pgrepr::Format::try_from(buf.read_i16()?).map_err(input_err)?);
     }
 
     let raw_parameter_bytes = RawParameterBytes::new(parameters, parameter_format_codes);
@@ -603,13 +604,13 @@ impl<'a> Cursor<'a> {
 #[derive(Debug)]
 pub struct RawParameterBytes {
     parameters: Vec<Option<Vec<u8>>>,
-    parameter_format_codes: Vec<FieldFormat>,
+    parameter_format_codes: Vec<pgrepr::Format>,
 }
 
 impl RawParameterBytes {
     pub fn new(
         parameters: Vec<Option<Vec<u8>>>,
-        parameter_format_codes: Vec<FieldFormat>,
+        parameter_format_codes: Vec<pgrepr::Format>,
     ) -> RawParameterBytes {
         RawParameterBytes {
             parameters,
@@ -625,10 +626,10 @@ impl RawParameterBytes {
         for (i, parameter) in self.parameters.iter().enumerate() {
             let datum = match parameter {
                 Some(bytes) => match self.parameter_format_codes[i] {
-                    FieldFormat::Binary => {
+                    pgrepr::Format::Binary => {
                         RawParameterBytes::generate_datum_from_bytes(&bytes, &typs[i])?
                     }
-                    FieldFormat::Text => {
+                    pgrepr::Format::Text => {
                         RawParameterBytes::generate_datum_from_text(&bytes, &typs[i])?
                     }
                 },

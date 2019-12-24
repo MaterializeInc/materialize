@@ -1,0 +1,13 @@
+[package]
+name = "pgrepr"
+description = "Representation of and serialization for PostgreSQL data types."
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+byteorder = "1.3"
+chrono = "0.4"
+expr = { path = "../expr" }
+failure = "0.1.5"
+lazy_static = "1.4.0"
+repr = { path = "../repr" }

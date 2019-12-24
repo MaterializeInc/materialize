@@ -26,8 +26,8 @@ use sql::Session;
 use crate::codec::{Codec, RawParameterBytes};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::{
-    self, BackendMessage, EncryptionType, FieldFormat, FrontendMessage, ParameterDescription,
-    Severity, VERSIONS, VERSION_3,
+    self, BackendMessage, EncryptionType, FrontendMessage, ParameterDescription, Severity,
+    VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
 
@@ -308,7 +308,7 @@ where
 
             // Bind.
             let params = vec![];
-            let result_formats = vec![FieldFormat::Text; stmt.result_width()];
+            let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
             session
                 .set_portal(
                     portal_name.clone(),
@@ -395,7 +395,7 @@ where
         portal_name: String,
         statement_name: String,
         raw_parameter_bytes: RawParameterBytes,
-        result_formats: Vec<FieldFormat>,
+        result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, comm::Error> {
         let stmt = match session.get_prepared_statement(&statement_name) {
             Some(stmt) => stmt,
@@ -416,7 +416,7 @@ where
                 .map(|desc| desc.typ().column_types.len())
                 .unwrap_or(0),
         ) {
-            (0, e) => vec![FieldFormat::Text; e],
+            (0, e) => vec![pgrepr::Format::Text; e],
             (1, e) => iter::repeat(result_formats[0]).take(e).collect(),
             (a, e) if a == e => result_formats,
             (a, e) => {
@@ -664,8 +664,7 @@ where
         let portal = session
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
-        let formats: Arc<Vec<FieldFormat>> =
-            Arc::new(portal.result_formats.iter().map(Into::into).collect());
+        let formats: Arc<Vec<pgrepr::Format>> = Arc::new(portal.result_formats.clone());
 
         self.send_all(
             if max_rows > 0 && (max_rows as usize) < rows.len() {
@@ -675,7 +674,7 @@ where
             }
             .map(move |row| {
                 BackendMessage::DataRow(
-                    message::field_values_from_row(row, row_desc.typ()),
+                    pgrepr::values_from_row(row, row_desc.typ()),
                     formats.clone(),
                 )
             }),

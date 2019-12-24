@@ -15,7 +15,7 @@ use repr::{QualName, RelationDesc, Row, ScalarType};
 use sql_parser::dialect::PostgreSqlDialect;
 use sql_parser::parser::Parser as SqlParser;
 
-pub use session::{FieldFormat, PreparedStatement, Session, TransactionStatus};
+pub use session::{PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ObjectType, Statement};
 
 pub mod names;
