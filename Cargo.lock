@@ -155,15 +155,6 @@ dependencies = [
 
 [[package]]
 name = "base64"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b25d992356d2eb0ed82172f5248873db5560c4721f564b13cb5193bda5e668e"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
-name = "base64"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b41b7ea54a0c9d92199de89e20e58d49f02f8e699814ef3fdf266f6f748d15c7"
@@ -370,7 +361,7 @@ dependencies = [
  "assert_cmd",
  "bincode",
  "bytes 0.5.3",
- "futures 0.3.1",
+ "futures",
  "getopts",
  "log",
  "num_enum",
@@ -394,11 +385,7 @@ checksum = "995a44c877f9212528ccc74b21a232f66ad69001e40ede5bcee2ac9ef2657120"
 name = "coord"
 version = "0.1.0"
 dependencies = [
- "backtrace",
- "byteorder",
- "bytes 0.4.12",
  "catalog",
- "ccsr",
  "chrono",
  "comm",
  "dataflow",
@@ -406,27 +393,13 @@ dependencies = [
  "differential-dataflow",
  "expr",
  "failure",
- "futures 0.3.1",
- "getopts",
- "interchange",
- "lazy_static",
- "log",
- "ordered-float",
+ "futures",
  "ore",
- "pdqselect",
- "pretty_assertions",
- "rand 0.7.2",
- "regex",
- "regex-syntax",
  "repr",
- "smallvec 0.6.13",
  "sql",
  "symbiosis",
  "timely",
  "tokio",
- "tokio-threadpool",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -627,7 +600,7 @@ dependencies = [
  "dataflow-types",
  "differential-dataflow",
  "expr",
- "futures 0.3.1",
+ "futures",
  "interchange",
  "lazy_static",
  "log",
@@ -1006,12 +979,6 @@ name = "fuchsia-zircon-sys"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3dcaa9ae7725d12cdb85b3ad99a434db70b468c09ded17e012d86b5c1010f7a7"
-
-[[package]]
-name = "futures"
-version = "0.1.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b980f2816d6ee8673b6517b52cb0e808a180efc92e5c19d02cdda79066703ef"
 
 [[package]]
 name = "futures"
@@ -1534,7 +1501,7 @@ dependencies = [
  "duct",
  "failure",
  "fallible-iterator 0.2.0",
- "futures 0.3.1",
+ "futures",
  "getopts",
  "hyper",
  "itertools",
@@ -1544,7 +1511,7 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgwire",
- "postgres 0.17.0-alpha.2",
+ "postgres 0.17.0",
  "pretty_assertions",
  "prometheus",
  "tempfile",
@@ -1562,12 +1529,6 @@ name = "md5"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79c56d6a0b07f9e19282511c83fc5b086364cbae4ba8c7d5f190c3d9b0425a48"
-
-[[package]]
-name = "md5"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6bcd6433cff03a4bfc3d9834d504467db1f1cf6d0ea765d37d330249ed629d"
 
 [[package]]
 name = "md5"
@@ -1916,7 +1877,7 @@ dependencies = [
  "env_logger",
  "failure",
  "fallible-iterator 0.2.0",
- "futures 0.3.1",
+ "futures",
  "lazy_static",
  "libc",
  "log",
@@ -1996,7 +1957,7 @@ dependencies = [
  "lazy_static",
  "log",
  "ore",
- "postgres 0.17.0-alpha.2",
+ "postgres 0.17.0",
  "prometheus",
  "regex",
  "tokio",
@@ -2032,7 +1993,7 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
- "futures 0.3.1",
+ "futures",
  "lazy_static",
  "log",
  "ordered-float",
@@ -2135,12 +2096,13 @@ dependencies = [
 
 [[package]]
 name = "postgres"
-version = "0.17.0-alpha.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#0e41aea531cd92b8aa231c44131cd495c5b51fff"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96dd5c8eddec65a5497798ebde2e5c74a93ef8b66782c1b09eeab9bb8538aebc"
 dependencies = [
  "bytes 0.5.3",
  "fallible-iterator 0.2.0",
- "futures 0.3.1",
+ "futures",
  "log",
  "tokio",
  "tokio-postgres",
@@ -2167,16 +2129,17 @@ dependencies = [
 
 [[package]]
 name = "postgres-protocol"
-version = "0.5.0-alpha.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#0e41aea531cd92b8aa231c44131cd495c5b51fff"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a30f0e172ae0fb0653dbf777ad10a74b8e58d6de95a892f2e1d3e94a9df9a844"
 dependencies = [
- "base64 0.10.1",
+ "base64 0.11.0",
  "byteorder",
  "bytes 0.5.3",
  "fallible-iterator 0.2.0",
  "generic-array 0.13.2",
  "hmac 0.7.1",
- "md5 0.6.1",
+ "md5 0.7.0",
  "memchr 2.2.1",
  "rand 0.7.2",
  "sha2 0.8.0",
@@ -2199,13 +2162,14 @@ dependencies = [
 
 [[package]]
 name = "postgres-types"
-version = "0.1.0-alpha.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#0e41aea531cd92b8aa231c44131cd495c5b51fff"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eab1dd99401779ab03bc3872f196fb02c420e76f416c850be494a6f2d67287ad"
 dependencies = [
  "bytes 0.5.3",
  "chrono",
  "fallible-iterator 0.2.0",
- "postgres-protocol 0.5.0-alpha.2",
+ "postgres-protocol 0.5.0",
 ]
 
 [[package]]
@@ -2655,7 +2619,7 @@ name = "rdkafka"
 version = "0.22.0"
 source = "git+https://github.com/fede1024/rust-rdkafka.git#f4ea213aa369a92599d54f3fa9b94c66a5977212"
 dependencies = [
- "futures 0.3.1",
+ "futures",
  "libc",
  "log",
  "rdkafka-sys",
@@ -3103,7 +3067,7 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
- "futures 0.3.1",
+ "futures",
  "getopts",
  "itertools",
  "lazy_static",
@@ -3252,7 +3216,7 @@ dependencies = [
  "ccsr",
  "chrono",
  "failure",
- "futures 0.3.1",
+ "futures",
  "getopts",
  "interchange",
  "lazy_static",
@@ -3396,16 +3360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-executor"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f27ee0e6db01c5f0b2973824547ce7e637b2ed79b891a9677b0de9bd532b6ac"
-dependencies = [
- "crossbeam-utils",
- "futures 0.1.29",
-]
-
-[[package]]
 name = "tokio-macros"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3417,19 +3371,20 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.5.0-alpha.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#0e41aea531cd92b8aa231c44131cd495c5b51fff"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f31cca60df523aa7feb386e4450c27c36b6ac27f55ad91bf591a4d27270c6bb"
 dependencies = [
  "byteorder",
  "bytes 0.5.3",
  "fallible-iterator 0.2.0",
- "futures 0.3.1",
+ "futures",
  "log",
  "parking_lot",
  "percent-encoding",
  "phf 0.8.0",
  "pin-project-lite",
- "postgres-protocol 0.5.0-alpha.2",
+ "postgres-protocol 0.5.0",
  "postgres-types",
  "tokio",
  "tokio-util",
@@ -3444,26 +3399,9 @@ dependencies = [
  "bincode",
  "bytes 0.5.3",
  "derivative",
- "futures 0.3.1",
+ "futures",
  "pin-project",
  "serde",
-]
-
-[[package]]
-name = "tokio-threadpool"
-version = "0.1.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd2c6a3885302581f4401c82af70d792bb9df1700e7437b0aeb4ada94d5388c"
-dependencies = [
- "crossbeam-deque 0.7.1",
- "crossbeam-queue",
- "crossbeam-utils",
- "futures 0.1.29",
- "lazy_static",
- "log",
- "num_cpus",
- "slab",
- "tokio-executor",
 ]
 
 [[package]]
