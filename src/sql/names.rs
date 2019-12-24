@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use repr::ColumnName;
-use sqlparser::ast::Ident;
+use sql_parser::ast::Ident;
 
 pub fn ident_to_col_name(ident: Ident) -> ColumnName {
     if ident.quote_style.is_some() {

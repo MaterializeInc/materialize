@@ -42,8 +42,8 @@ use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use sql::{FieldFormat, Session, Statement};
-use sqlparser::dialect::PostgreSqlDialect;
-use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
+use sql_parser::dialect::PostgreSqlDialect;
+use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;

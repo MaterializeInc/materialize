@@ -10,7 +10,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use failure::format_err;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use sqlparser::ast::Interval as SqlInterval;
+use sql_parser::ast::Interval as SqlInterval;
 
 use self::decimal::Significand;
 use crate::{ColumnType, DatumDict, DatumList};

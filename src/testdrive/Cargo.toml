@@ -28,7 +28,7 @@ ore = { path = "../ore" }
 pg_interval = "0.3"
 postgres = { version = "0.15", features = ["with-chrono"] }
 serde_json = { version = "1.0.44", features = ["preserve_order"] }
-sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
+sql-parser = { path = "../sql-parser" }
 rand = "0.7.2"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
 regex = "1"

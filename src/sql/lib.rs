@@ -12,11 +12,11 @@ use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 use ::expr::GlobalId;
 use catalog::{Catalog, CatalogEntry};
 use repr::{QualName, RelationDesc, Row, ScalarType};
-use sqlparser::dialect::PostgreSqlDialect;
-use sqlparser::parser::Parser as SqlParser;
+use sql_parser::dialect::PostgreSqlDialect;
+use sql_parser::parser::Parser as SqlParser;
 
 pub use session::{FieldFormat, PreparedStatement, Session, TransactionStatus};
-pub use sqlparser::ast::{ObjectType, Statement};
+pub use sql_parser::ast::{ObjectType, Statement};
 
 pub mod names;
 

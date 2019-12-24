@@ -31,8 +31,8 @@ use chrono::Utc;
 use failure::{bail, format_err};
 use postgres::params::{ConnectParams, IntoConnectParams};
 use rust_decimal::Decimal;
-use sqlparser::ast::ColumnOption;
-use sqlparser::ast::{DataType, ObjectType, Statement};
+use sql_parser::ast::ColumnOption;
+use sql_parser::ast::{DataType, ObjectType, Statement};
 
 use catalog::Catalog;
 use ore::option::OptionExt;
@@ -157,7 +157,7 @@ END $$;
                     .map(|c| Some(sql::names::ident_to_col_name(c.name.clone())));
 
                 for constraint in constraints {
-                    use sqlparser::ast::TableConstraint;
+                    use sql_parser::ast::TableConstraint;
                     if let TableConstraint::Unique {
                         name: _,
                         columns: cols,

@@ -19,7 +19,7 @@ postgres = { version = "0.15", features = ["with-chrono", "with-serde_json"] }
 pg_interval = "0.3"
 repr = { path = "../repr" }
 rust_decimal = { version = "1.0", features = ["postgres"] }
-sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
+sql-parser = { path = "../sql-parser" }
 sql = { path = "../sql" }
 expr = { path = "../expr" }
 serde_json = "1.0"
