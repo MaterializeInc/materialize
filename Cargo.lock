@@ -361,7 +361,7 @@ dependencies = [
  "assert_cmd",
  "bincode",
  "bytes 0.5.3",
- "futures 0.3.1",
+ "futures",
  "getopts",
  "log",
  "num_enum",
@@ -385,11 +385,7 @@ checksum = "995a44c877f9212528ccc74b21a232f66ad69001e40ede5bcee2ac9ef2657120"
 name = "coord"
 version = "0.1.0"
 dependencies = [
- "backtrace",
- "byteorder",
- "bytes 0.4.12",
  "catalog",
- "ccsr",
  "chrono",
  "comm",
  "dataflow",
@@ -397,27 +393,13 @@ dependencies = [
  "differential-dataflow",
  "expr",
  "failure",
- "futures 0.3.1",
- "getopts",
- "interchange",
- "lazy_static",
- "log",
- "ordered-float",
+ "futures",
  "ore",
- "pdqselect",
- "pretty_assertions",
- "rand 0.7.2",
- "regex",
- "regex-syntax",
  "repr",
- "smallvec 0.6.13",
  "sql",
  "symbiosis",
  "timely",
  "tokio",
- "tokio-threadpool",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -618,7 +600,7 @@ dependencies = [
  "dataflow-types",
  "differential-dataflow",
  "expr",
- "futures 0.3.1",
+ "futures",
  "interchange",
  "lazy_static",
  "log",
@@ -997,12 +979,6 @@ name = "fuchsia-zircon-sys"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3dcaa9ae7725d12cdb85b3ad99a434db70b468c09ded17e012d86b5c1010f7a7"
-
-[[package]]
-name = "futures"
-version = "0.1.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b980f2816d6ee8673b6517b52cb0e808a180efc92e5c19d02cdda79066703ef"
 
 [[package]]
 name = "futures"
@@ -1525,7 +1501,7 @@ dependencies = [
  "duct",
  "failure",
  "fallible-iterator 0.2.0",
- "futures 0.3.1",
+ "futures",
  "getopts",
  "hyper",
  "itertools",
@@ -1901,7 +1877,7 @@ dependencies = [
  "env_logger",
  "failure",
  "fallible-iterator 0.2.0",
- "futures 0.3.1",
+ "futures",
  "lazy_static",
  "libc",
  "log",
@@ -2017,7 +1993,7 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
- "futures 0.3.1",
+ "futures",
  "lazy_static",
  "log",
  "ordered-float",
@@ -2126,7 +2102,7 @@ checksum = "96dd5c8eddec65a5497798ebde2e5c74a93ef8b66782c1b09eeab9bb8538aebc"
 dependencies = [
  "bytes 0.5.3",
  "fallible-iterator 0.2.0",
- "futures 0.3.1",
+ "futures",
  "log",
  "tokio",
  "tokio-postgres",
@@ -2643,7 +2619,7 @@ name = "rdkafka"
 version = "0.22.0"
 source = "git+https://github.com/fede1024/rust-rdkafka.git#f4ea213aa369a92599d54f3fa9b94c66a5977212"
 dependencies = [
- "futures 0.3.1",
+ "futures",
  "libc",
  "log",
  "rdkafka-sys",
@@ -3091,7 +3067,7 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
- "futures 0.3.1",
+ "futures",
  "getopts",
  "itertools",
  "lazy_static",
@@ -3240,7 +3216,7 @@ dependencies = [
  "ccsr",
  "chrono",
  "failure",
- "futures 0.3.1",
+ "futures",
  "getopts",
  "interchange",
  "lazy_static",
@@ -3384,16 +3360,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-executor"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f27ee0e6db01c5f0b2973824547ce7e637b2ed79b891a9677b0de9bd532b6ac"
-dependencies = [
- "crossbeam-utils",
- "futures 0.1.29",
-]
-
-[[package]]
 name = "tokio-macros"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3412,7 +3378,7 @@ dependencies = [
  "byteorder",
  "bytes 0.5.3",
  "fallible-iterator 0.2.0",
- "futures 0.3.1",
+ "futures",
  "log",
  "parking_lot",
  "percent-encoding",
@@ -3433,26 +3399,9 @@ dependencies = [
  "bincode",
  "bytes 0.5.3",
  "derivative",
- "futures 0.3.1",
+ "futures",
  "pin-project",
  "serde",
-]
-
-[[package]]
-name = "tokio-threadpool"
-version = "0.1.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd2c6a3885302581f4401c82af70d792bb9df1700e7437b0aeb4ada94d5388c"
-dependencies = [
- "crossbeam-deque 0.7.1",
- "crossbeam-queue",
- "crossbeam-utils",
- "futures 0.1.29",
- "lazy_static",
- "log",
- "num_cpus",
- "slab",
- "tokio-executor",
 ]
 
 [[package]]
