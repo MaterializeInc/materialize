@@ -87,15 +87,6 @@ impl PreparedStatement {
     }
 }
 
-/// Specifies the encoding type for a field.
-#[derive(Debug, Clone, Copy)]
-pub enum FieldFormat {
-    /// Use a textual encoding.
-    Text,
-    /// Use a binary encoding.
-    Binary,
-}
-
 /// A portal represents the execution state of a running or runnable query.
 #[derive(Debug)]
 pub struct Portal {
@@ -104,7 +95,7 @@ pub struct Portal {
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.
-    pub result_formats: Vec<FieldFormat>,
+    pub result_formats: Vec<pgrepr::Format>,
     /// The rows that have yet to be delivered to the client, if the portal is
     /// partially executed.
     pub remaining_rows: Option<Vec<Row>>,

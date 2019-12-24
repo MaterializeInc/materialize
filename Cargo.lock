@@ -1989,6 +1989,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgrepr"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "chrono",
+ "expr",
+ "failure",
+ "lazy_static",
+ "repr",
+]
+
+[[package]]
 name = "pgwire"
 version = "0.1.0"
 dependencies = [
@@ -2006,6 +2018,7 @@ dependencies = [
  "log",
  "ordered-float",
  "ore",
+ "pgrepr",
  "prometheus",
  "rand 0.7.2",
  "repr",
@@ -3055,6 +3068,7 @@ dependencies = [
  "failure",
  "interchange",
  "ore",
+ "pgrepr",
  "pretty_assertions",
  "regex",
  "repr",
@@ -3091,6 +3105,7 @@ dependencies = [
  "md5 0.7.0",
  "ordered-float",
  "ore",
+ "pgrepr",
  "regex",
  "repr",
  "serde_json",
