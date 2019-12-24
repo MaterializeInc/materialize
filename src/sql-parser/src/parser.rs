@@ -1654,13 +1654,7 @@ impl Parser {
                         return parser_err!(format!("No value parser for keyword {}", k.keyword));
                     }
                 },
-                // The call to n.parse() returns a bigdecimal when the
-                // bigdecimal feature is enabled, and is otherwise a no-op
-                // (i.e., it returns the input string).
-                Token::Number(ref n) => match n.parse() {
-                    Ok(n) => Ok(Value::Number(n)),
-                    Err(e) => parser_err!(format!("Could not parse '{}' as number: {}", n, e)),
-                },
+                Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::SingleQuotedString(ref s) => Ok(Value::SingleQuotedString(s.to_string())),
                 Token::NationalStringLiteral(ref s) => {
                     Ok(Value::NationalStringLiteral(s.to_string()))

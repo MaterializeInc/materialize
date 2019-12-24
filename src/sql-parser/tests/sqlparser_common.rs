@@ -482,28 +482,12 @@ fn parse_escaped_single_quote_string_predicate() {
 #[test]
 fn parse_number() {
     let expr = verified_expr("1.0");
-
-    #[cfg(feature = "bigdecimal")]
-    assert_eq!(
-        expr,
-        Expr::Value(Value::Number(bigdecimal::BigDecimal::from(1)))
-    );
-
-    #[cfg(not(feature = "bigdecimal"))]
     assert_eq!(expr, Expr::Value(Value::Number("1.0".into())));
 }
 
 #[test]
 fn parse_approximate_numeric_literal() {
     let expr = verified_expr("1.0E2");
-
-    #[cfg(feature = "bigdecimal")]
-    assert_eq!(
-        expr,
-        Expr::Value(Value::Number(bigdecimal::BigDecimal::from(10)))
-    );
-
-    #[cfg(not(feature = "bigdecimal"))]
     assert_eq!(expr, Expr::Value(Value::Number("1.0E2".into())));
 }
 
