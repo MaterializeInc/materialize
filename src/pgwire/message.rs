@@ -39,7 +39,14 @@ pub const VERSION_CANCEL: i32 = (1234 << 16) + 5678;
 pub const VERSION_SSL: i32 = (1234 << 16) + 5679;
 pub const VERSION_GSSENC: i32 = (1234 << 16) + 5680;
 
-pub const VERSIONS: &[i32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_CANCEL, VERSION_SSL];
+pub const VERSIONS: &[i32] = &[
+    VERSION_1,
+    VERSION_2,
+    VERSION_3,
+    VERSION_CANCEL,
+    VERSION_SSL,
+    VERSION_GSSENC,
+];
 
 #[allow(dead_code)]
 #[derive(Debug)]
