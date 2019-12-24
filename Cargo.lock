@@ -155,15 +155,6 @@ dependencies = [
 
 [[package]]
 name = "base64"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b25d992356d2eb0ed82172f5248873db5560c4721f564b13cb5193bda5e668e"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
-name = "base64"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b41b7ea54a0c9d92199de89e20e58d49f02f8e699814ef3fdf266f6f748d15c7"
@@ -1544,7 +1535,7 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgwire",
- "postgres 0.17.0-alpha.2",
+ "postgres 0.17.0",
  "pretty_assertions",
  "prometheus",
  "tempfile",
@@ -1562,12 +1553,6 @@ name = "md5"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79c56d6a0b07f9e19282511c83fc5b086364cbae4ba8c7d5f190c3d9b0425a48"
-
-[[package]]
-name = "md5"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6bcd6433cff03a4bfc3d9834d504467db1f1cf6d0ea765d37d330249ed629d"
 
 [[package]]
 name = "md5"
@@ -1996,7 +1981,7 @@ dependencies = [
  "lazy_static",
  "log",
  "ore",
- "postgres 0.17.0-alpha.2",
+ "postgres 0.17.0",
  "prometheus",
  "regex",
  "tokio",
@@ -2135,8 +2120,9 @@ dependencies = [
 
 [[package]]
 name = "postgres"
-version = "0.17.0-alpha.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#0e41aea531cd92b8aa231c44131cd495c5b51fff"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96dd5c8eddec65a5497798ebde2e5c74a93ef8b66782c1b09eeab9bb8538aebc"
 dependencies = [
  "bytes 0.5.3",
  "fallible-iterator 0.2.0",
@@ -2167,16 +2153,17 @@ dependencies = [
 
 [[package]]
 name = "postgres-protocol"
-version = "0.5.0-alpha.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#0e41aea531cd92b8aa231c44131cd495c5b51fff"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a30f0e172ae0fb0653dbf777ad10a74b8e58d6de95a892f2e1d3e94a9df9a844"
 dependencies = [
- "base64 0.10.1",
+ "base64 0.11.0",
  "byteorder",
  "bytes 0.5.3",
  "fallible-iterator 0.2.0",
  "generic-array 0.13.2",
  "hmac 0.7.1",
- "md5 0.6.1",
+ "md5 0.7.0",
  "memchr 2.2.1",
  "rand 0.7.2",
  "sha2 0.8.0",
@@ -2199,13 +2186,14 @@ dependencies = [
 
 [[package]]
 name = "postgres-types"
-version = "0.1.0-alpha.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#0e41aea531cd92b8aa231c44131cd495c5b51fff"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eab1dd99401779ab03bc3872f196fb02c420e76f416c850be494a6f2d67287ad"
 dependencies = [
  "bytes 0.5.3",
  "chrono",
  "fallible-iterator 0.2.0",
- "postgres-protocol 0.5.0-alpha.2",
+ "postgres-protocol 0.5.0",
 ]
 
 [[package]]
@@ -3417,8 +3405,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.5.0-alpha.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#0e41aea531cd92b8aa231c44131cd495c5b51fff"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f31cca60df523aa7feb386e4450c27c36b6ac27f55ad91bf591a4d27270c6bb"
 dependencies = [
  "byteorder",
  "bytes 0.5.3",
@@ -3429,7 +3418,7 @@ dependencies = [
  "percent-encoding",
  "phf 0.8.0",
  "pin-project-lite",
- "postgres-protocol 0.5.0-alpha.2",
+ "postgres-protocol 0.5.0",
  "postgres-types",
  "tokio",
  "tokio-util",

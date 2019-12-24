@@ -17,7 +17,7 @@ getopts = "0.2"
 hyper = "0.13"
 lazy_static = "1.4"
 log = "0.4.8"
-postgres = { git = "https://github.com/sfackler/rust-postgres.git" }
+postgres = "0.17"
 prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
 ore = { path = "../ore" }
 regex = "1.3.1"
