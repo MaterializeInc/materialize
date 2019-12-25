@@ -8,6 +8,7 @@
 use std::fs;
 
 use failure::{bail, Error};
+use ordered_float::OrderedFloat;
 use protoc::Protoc;
 use serde::de::Deserialize;
 use serde_protobuf::de::Deserializer;
@@ -105,13 +106,15 @@ fn validate_proto_field_resolved(
             | FieldType::Float
             | FieldType::Double
             | FieldType::String
-            | FieldType::Enum(_)
-            | FieldType::Bytes => (),
+            | FieldType::Enum(_) => (),
 
             FieldType::Message(m) => {
                 for f in m.fields().iter() {
                     validate_proto_field_resolved(&f, descriptors)?;
                 }
+            }
+            FieldType::Bytes => {
+                bail!("Arrays or nested messages with bytes objects are not currently supported")
             }
             FieldType::Group => bail!("Unions are currently not supported"),
             FieldType::UnresolvedMessage(a) => bail!("Nested message type {} unresolved", a),
@@ -207,6 +210,24 @@ impl Decoder {
             }
         };
 
+        fn inner_value_to_datum(v: &Value) -> Result<Datum<'_>, failure::Error> {
+            match v {
+                Value::Bool(true) => Ok(Datum::True),
+                Value::Bool(false) => Ok(Datum::False),
+                Value::I32(i) => Ok(Datum::Float64(OrderedFloat::from(*i as f64))),
+                Value::I64(i) => Ok(Datum::Float64(OrderedFloat::from(*i as f64))),
+                Value::U32(i) => Ok(Datum::Float64(OrderedFloat::from(*i as f64))),
+                Value::U64(i) => Ok(Datum::Float64(OrderedFloat::from(*i as f64))),
+                Value::F32(f) => Ok(Datum::Float64((*f as f64).into())),
+                Value::F64(f) => Ok(Datum::Float64((*f).into())),
+                Value::String(s) => Ok(Datum::String(s)),
+                Value::Bytes(_) => {
+                    bail!("We don't currently support arrays or nested messages with bytes")
+                }
+                _ => bail!("Unsupported types from serde_value"),
+            }
+        };
+
         fn default_to_datum(v: &value::Value) -> Result<Datum<'_>, failure::Error> {
             match v {
                 value::Value::Bool(true) => Ok(Datum::True),
@@ -233,22 +254,32 @@ impl Decoder {
                 _ => bail!("Deserialization failed with an unsupported top level object type"),
             };
 
-            let mut row = packer.packable();
+            let mut arena = packer.arena();
+
+            let mut datums: Vec<Datum> = vec![];
 
             for f in message_descriptors.fields().iter() {
                 let key = Value::String(f.name().to_string());
                 let value = deserialized_message.get(&key);
 
                 if let Some(Value::Option(Some(value))) = value {
-                    row.push(value_to_datum(&value)?);
+                    datums.push(value_to_datum(&value)?);
+                } else if let Some(Value::Seq(value)) = value {
+                    let mut datum_list = vec![];
+
+                    for v in value {
+                        datum_list.push(inner_value_to_datum(&v)?);
+                    }
+
+                    datums.push(Datum::List(arena.push_list(datum_list)));
                 } else if let Some(default) = f.default_value() {
-                    row.push(default_to_datum(default)?);
+                    datums.push(default_to_datum(default)?);
                 } else {
-                    row.push(Datum::Null);
+                    datums.push(Datum::Null);
                 }
             }
 
-            Ok(Some(row.finish()))
+            Ok(Some(arena.pack(datums)))
         };
 
         extract_row(
@@ -264,7 +295,9 @@ impl Decoder {
 
 #[cfg(test)]
 mod tests {
-    use super::test::test_proto_schemas::{file_descriptor_proto, Color, TestRecord};
+    use super::test::test_proto_schemas::{
+        file_descriptor_proto, Color, TestRecord, TestRepeatedRecord,
+    };
     use failure::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
     use protobuf::{Message, RepeatedField};
@@ -481,5 +514,36 @@ mod tests {
         ];
 
         assert_eq!(datums, expected);
+    }
+
+    #[test]
+    fn test_repeated() {
+        let mut test_record = TestRepeatedRecord::new();
+        test_record.set_int_field(vec![1, 2, 3]);
+        let bytes = test_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut decoder = get_decoder(".TestRepeatedRecord");
+        let row = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row.iter().collect::<Vec<_>>();
+
+        let d = datums[0];
+        if let Datum::List(d) = d {
+            let datumlist = d.iter().collect::<Vec<Datum>>();
+            assert_eq!(
+                datumlist,
+                vec![
+                    Datum::Float64(OrderedFloat::from(1.0)),
+                    Datum::Float64(OrderedFloat::from(2.0)),
+                    Datum::Float64(OrderedFloat::from(3.0))
+                ]
+            );
+        } else {
+            assert!(false);
+        }
     }
 }
