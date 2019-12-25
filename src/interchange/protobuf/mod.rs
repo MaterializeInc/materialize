@@ -554,7 +554,7 @@ mod tests {
                 ]
             );
         } else {
-            assert!(false);
+            panic!("Expected the first field to be a list of datums!");
         }
     }
 }
