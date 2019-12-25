@@ -252,7 +252,10 @@ pub enum BackendMessage {
         message: String,
         detail: Option<String>,
     },
-    CopyOutResponse,
+    CopyOutResponse {
+        overall_format: FieldFormat,
+        column_formats: Vec<FieldFormat>,
+    },
     CopyData(Vec<u8>),
     CopyDone,
 }

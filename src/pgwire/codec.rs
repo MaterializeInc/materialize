@@ -115,7 +115,7 @@ impl Encoder for Codec {
             BackendMessage::BindComplete => b'2',
             BackendMessage::CloseComplete => b'3',
             BackendMessage::ErrorResponse { .. } => b'E',
-            BackendMessage::CopyOutResponse => b'H',
+            BackendMessage::CopyOutResponse { .. } => b'H',
             BackendMessage::CopyData(_) => b'd',
             BackendMessage::CopyDone => b'c',
         };
@@ -128,17 +128,15 @@ impl Encoder for Codec {
         // Write message contents.
         match msg {
             BackendMessage::EncryptionResponse(_) => unreachable!(),
-            // psql doesn't actually care about the number of columns.
-            // It should be saved in the message if we ever need to care about it; until then,
-            // 0 is fine.
-            BackendMessage::CopyOutResponse /* (n_cols) */ => {
-                dst.put_u8(0); // textual format
-                dst.put_i16(0); // n_cols
-                /*
-                for _ in 0..n_cols {
-                    dst.put_i16(0); // textual format for this column
+            BackendMessage::CopyOutResponse {
+                overall_format,
+                column_formats,
+            } => {
+                dst.put_i8(overall_format as i8);
+                dst.put_i16(column_formats.len() as i16);
+                for format in column_formats {
+                    dst.put_i16(format as i16);
                 }
-                */
             }
             BackendMessage::CopyData(data) => {
                 dst.put_slice(&data);
@@ -198,7 +196,10 @@ impl Encoder for Codec {
             }
             BackendMessage::PortalSuspended => (),
             BackendMessage::NoData => (),
-            BackendMessage::BackendKeyData { conn_id, secret_key } => {
+            BackendMessage::BackendKeyData {
+                conn_id,
+                secret_key,
+            } => {
                 dst.put_u32(conn_id);
                 dst.put_u32(secret_key);
             }
