@@ -245,10 +245,13 @@ impl Decoder {
 
                     for (k, v) in m {
                         match (k, v) {
-                            (Value::String(s), Value::Option(Some(v))) => {
-                                datums.push((s.as_str(), nested_value_to_datum(&v, arena)?))
+                            (Value::String(s), Value::Option(Some(val))) => {
+                                datums.push((s.as_str(), nested_value_to_datum(&val, arena)?))
                             }
                             (Value::String(_), Value::Option(None)) => (),
+                            (Value::String(s), Value::Seq(_seq)) => {
+                                datums.push((s.as_str(), nested_value_to_datum(&v, arena)?))
+                            }
                             _ => bail!("Unrecognized value while trying to parse a nested message"),
                         }
                     }
@@ -607,6 +610,45 @@ mod tests {
             );
         } else {
             panic!("Expected the first field to be a dict of datums!");
+        }
+
+        let mut test_repeated_record = TestRepeatedRecord::new();
+        let mut repeated_strings = RepeatedField::<String>::new();
+        repeated_strings.push("start".to_string());
+        repeated_strings.push("two".to_string());
+        repeated_strings.push("three".to_string());
+        test_repeated_record.set_string_field(repeated_strings);
+        test_nested_record.set_test_repeated_record(test_repeated_record);
+
+        let bytes = test_nested_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let row2 = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row2.iter().collect::<Vec<_>>();
+
+        let d = datums[1];
+        if let Datum::Dict(d) = d {
+            let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+
+            for (name, datum) in datumdict.iter() {
+                if let (&"string_field", Datum::List(d)) = (name, datum) {
+                    let datumlist = d.iter().collect::<Vec<Datum>>();
+                    assert_eq!(
+                        datumlist,
+                        vec![
+                            Datum::String("start"),
+                            Datum::String("two"),
+                            Datum::String("three"),
+                        ]
+                    );
+                }
+            }
+        } else {
+            panic!("Expected the second field to be a dict of datums!");
         }
     }
 }
