@@ -19,7 +19,7 @@ use serde_protobuf::value;
 use serde_value::Value;
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 pub mod test;
 
@@ -166,6 +166,7 @@ pub struct Decoder {
     descriptors: Descriptors,
     message_name: String,
     packer: RowPacker,
+    temp_storage: RowPacker,
 }
 
 impl Decoder {
@@ -177,6 +178,7 @@ impl Decoder {
             descriptors,
             message_name: message_name.to_string(),
             packer: RowPacker::new(),
+            temp_storage: RowPacker::new(),
         }
     }
 
@@ -210,7 +212,10 @@ impl Decoder {
             }
         };
 
-        fn inner_value_to_datum(v: &Value) -> Result<Datum<'_>, failure::Error> {
+        fn nested_value_to_datum<'a>(
+            v: &'a Value,
+            arena: &mut RowArena<'a>,
+        ) -> Result<Datum<'a>, failure::Error> {
             match v {
                 Value::Bool(true) => Ok(Datum::True),
                 Value::Bool(false) => Ok(Datum::False),
@@ -223,6 +228,13 @@ impl Decoder {
                 Value::String(s) => Ok(Datum::String(s)),
                 Value::Bytes(_) => {
                     bail!("We don't currently support arrays or nested messages with bytes")
+                }
+                Value::Seq(s) => {
+                    let mut datums = vec![];
+                    for value in s {
+                        datums.push(nested_value_to_datum(&value, arena)?);
+                    }
+                    Ok(Datum::List(arena.push_list(datums)))
                 }
                 _ => bail!("Unsupported types from serde_value"),
             }
@@ -248,38 +260,36 @@ impl Decoder {
             deserialized_message: Value,
             packer: &mut RowPacker,
             message_descriptors: &MessageDescriptor,
+            temp_storage: &mut RowPacker,
         ) -> Result<Option<Row>, failure::Error> {
             let deserialized_message = match deserialized_message {
                 Value::Map(deserialized_message) => deserialized_message,
                 _ => bail!("Deserialization failed with an unsupported top level object type"),
             };
 
-            let mut arena = packer.arena();
-
-            let mut datums: Vec<Datum> = vec![];
+            let mut row = packer.packable();
+            let mut arena = temp_storage.arena();
 
             for f in message_descriptors.fields().iter() {
                 let key = Value::String(f.name().to_string());
                 let value = deserialized_message.get(&key);
 
                 if let Some(Value::Option(Some(value))) = value {
-                    datums.push(value_to_datum(&value)?);
-                } else if let Some(Value::Seq(value)) = value {
-                    let mut datum_list = vec![];
-
-                    for v in value {
-                        datum_list.push(inner_value_to_datum(&v)?);
-                    }
-
-                    datums.push(Datum::List(arena.push_list(datum_list)));
+                    row.push(value_to_datum(&value)?);
+                } else if let Some(Value::Seq(_inner)) = value {
+                    // Note(rkhaitan) This control flow feels extremely weird to me
+                    // but the library gives different types in very different
+                    // 'packaging / wrapping' of Options so this seemed like the cleanest
+                    // thing to do
+                    row.push(nested_value_to_datum(&value.unwrap(), &mut arena)?);
                 } else if let Some(default) = f.default_value() {
-                    datums.push(default_to_datum(default)?);
+                    row.push(default_to_datum(default)?);
                 } else {
-                    datums.push(Datum::Null);
+                    row.push(Datum::Null);
                 }
             }
 
-            Ok(Some(arena.pack(datums)))
+            Ok(Some(row.finish()))
         };
 
         extract_row(
@@ -289,6 +299,7 @@ impl Decoder {
                 .descriptors
                 .message_by_name(&self.message_name)
                 .expect("Message should be included in the descriptor set"),
+            &mut self.temp_storage,
         )
     }
 }
@@ -413,7 +424,7 @@ mod tests {
             "nested",
             1,
             FieldLabel::Repeated,
-            InternalFieldType::Bytes,
+            InternalFieldType::String,
             None,
         ));
         descriptors.add_message(m2);
