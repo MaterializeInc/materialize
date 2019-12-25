@@ -196,7 +196,10 @@ impl Decoder {
         let deserialized_message =
             Value::deserialize(&mut deserializer).expect("Deserializing into rust object");
 
-        fn value_to_datum(v: &Value) -> Result<Datum<'_>, failure::Error> {
+        fn value_to_datum<'a>(
+            v: &'a Value,
+            arena: &mut RowArena<'a>,
+        ) -> Result<Datum<'a>, failure::Error> {
             match v {
                 Value::Bool(true) => Ok(Datum::True),
                 Value::Bool(false) => Ok(Datum::False),
@@ -208,6 +211,7 @@ impl Decoder {
                 Value::F64(f) => Ok(Datum::Float64((*f).into())),
                 Value::String(s) => Ok(Datum::String(s)),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
+                Value::Map(_m) => Ok(nested_value_to_datum(v, arena)?),
                 _ => bail!("Unsupported types from serde_value"),
             }
         };
@@ -235,6 +239,20 @@ impl Decoder {
                         datums.push(nested_value_to_datum(&value, arena)?);
                     }
                     Ok(Datum::List(arena.push_list(datums)))
+                }
+                Value::Map(m) => {
+                    let mut datums = vec![];
+
+                    for (k, v) in m {
+                        match (k, v) {
+                            (Value::String(s), Value::Option(Some(v))) => {
+                                datums.push((s.as_str(), nested_value_to_datum(&v, arena)?))
+                            }
+                            (Value::String(_), Value::Option(None)) => (),
+                            _ => bail!("Unrecognized value while trying to parse a nested message"),
+                        }
+                    }
+                    Ok(Datum::Dict(arena.push_dict(datums)))
                 }
                 _ => bail!("Unsupported types from serde_value"),
             }
@@ -275,7 +293,7 @@ impl Decoder {
                 let value = deserialized_message.get(&key);
 
                 if let Some(Value::Option(Some(value))) = value {
-                    row.push(value_to_datum(&value)?);
+                    row.push(value_to_datum(&value, &mut arena)?);
                 } else if let Some(Value::Seq(_inner)) = value {
                     // Note(rkhaitan) This control flow feels extremely weird to me
                     // but the library gives different types in very different
@@ -307,7 +325,7 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::test::test_proto_schemas::{
-        file_descriptor_proto, Color, TestRecord, TestRepeatedRecord,
+        file_descriptor_proto, Color, TestNestedRecord, TestRecord, TestRepeatedRecord,
     };
     use failure::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
@@ -555,6 +573,40 @@ mod tests {
             );
         } else {
             panic!("Expected the first field to be a list of datums!");
+        }
+    }
+
+    #[test]
+    fn test_nested() {
+        let mut test_record = TestRecord::new();
+
+        test_record.set_int_field(1);
+        test_record.set_string_field("one".to_string());
+
+        let mut test_nested_record = TestNestedRecord::new();
+        test_nested_record.set_test_record(test_record);
+        let bytes = test_nested_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut decoder = get_decoder(".TestNestedRecord");
+        let row = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row.iter().collect::<Vec<_>>();
+        let d = datums[0];
+        if let Datum::Dict(d) = d {
+            let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+            assert_eq!(
+                datumdict,
+                vec![
+                    ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
+                    ("string_field", Datum::String("one")),
+                ]
+            );
+        } else {
+            panic!("Expected the first field to be a dict of datums!");
         }
     }
 }
