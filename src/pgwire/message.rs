@@ -245,7 +245,10 @@ pub enum BackendMessage {
         message: String,
         detail: Option<String>,
     },
-    CopyOutResponse,
+    CopyOutResponse {
+        overall_format: pgrepr::Format,
+        column_formats: Vec<pgrepr::Format>,
+    },
     CopyData(Vec<u8>),
     CopyDone,
 }
