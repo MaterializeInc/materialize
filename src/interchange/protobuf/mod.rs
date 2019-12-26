@@ -328,7 +328,8 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::test::test_proto_schemas::{
-        file_descriptor_proto, Color, TestNestedRecord, TestRecord, TestRepeatedRecord,
+        file_descriptor_proto, Color, TestNestedRecord, TestRecord, TestRepeatedNestedRecord,
+        TestRepeatedRecord,
     };
     use failure::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
@@ -649,6 +650,49 @@ mod tests {
             }
         } else {
             panic!("Expected the second field to be a dict of datums!");
+        }
+    }
+
+    #[test]
+    fn test_arrays_nested() {
+        let mut record = TestRepeatedNestedRecord::new();
+
+        let mut test_record = TestRecord::new();
+        let mut repeated_test_records = RepeatedField::<TestRecord>::new();
+
+        test_record.set_int_field(1);
+        repeated_test_records.push(test_record.clone());
+        repeated_test_records.push(test_record);
+
+        record.set_test_record(repeated_test_records);
+        let bytes = record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut decoder = get_decoder(".TestRepeatedNestedRecord");
+        let row = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row.iter().collect::<Vec<_>>();
+
+        let d = datums[0];
+        if let Datum::List(d) = d {
+            let datumlist = d.iter().collect::<Vec<Datum>>();
+
+            for datum in datumlist {
+                if let Datum::Dict(d) = datum {
+                    let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+                    assert_eq!(
+                        datumdict,
+                        vec![("int_field", Datum::Float64(OrderedFloat::from(1.0))),]
+                    );
+                } else {
+                    panic!("Expected the inner elements to be dicts of datums");
+                }
+            }
+        } else {
+            panic!("Expected the first field to be a list of datums!");
         }
     }
 }
