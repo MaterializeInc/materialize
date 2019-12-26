@@ -1527,6 +1527,7 @@ dependencies = [
  "prometheus",
  "tempfile",
  "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -3102,7 +3103,7 @@ dependencies = [
  "getopts",
  "itertools",
  "lazy_static",
- "md5 0.7.0",
+ "md5 0.3.8",
  "ordered-float",
  "ore",
  "regex",
@@ -3394,9 +3395,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f31cca60df523aa7feb386e4450c27c36b6ac27f55ad91bf591a4d27270c6bb"
+checksum = "c03cb0c66092269a9b280e9e4956cb23ce00b8a6b1b393f7700f7732ac4bf133"
 dependencies = [
  "byteorder",
  "bytes 0.5.3",

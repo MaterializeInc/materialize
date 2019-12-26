@@ -11,6 +11,9 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use futures::stream::TryStreamExt;
+use tokio::runtime::Runtime;
+
 pub mod util;
 
 #[test]
@@ -20,7 +23,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     let temp_dir = tempfile::tempdir()?;
     let config = util::Config::default();
 
-    let (_server, mut client) = util::start_server(config)?;
+    let (server, mut client) = util::start_server(config)?;
 
     let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
@@ -97,10 +100,42 @@ New York,NY,10004
         &[line1, line2, line3]
     );
 
-    // Check that writing to the file after a source was dropped doesn't cause a crash.
+    // Test the TAIL SQL command on the tailed file source. This is end-to-end
+    // tailing: changes to the file will propagate through Materialized and
+    // into the user's SQL console.
+    //
+    // We need to use the asynchronous Postgres client here, unless
+    // https://github.com/sfackler/rust-postgres/pull/531 gets fixed.
+    Runtime::new()?.block_on(async {
+        let client = server.connect_async().await?;
+        let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv").await?);
+
+        append(&dynamic_path, b"City 1,ST,00001\n")?;
+        assert!(tail_reader
+            .try_next()
+            .await?
+            .unwrap()
+            .starts_with(&b"City 1\tST\t00001\tDiff: 1 at "[..]));
+
+        append(&dynamic_path, b"City 2,ST,00002\n")?;
+        assert!(tail_reader
+            .try_next()
+            .await?
+            .unwrap()
+            .starts_with(&b"City 2\tST\t00002\tDiff: 1 at "[..]));
+
+        // The tail won't end until a cancellation request is sent.
+        client.cancel_query(tokio_postgres::NoTls).await?;
+
+        assert_eq!(tail_reader.try_next().await?, None);
+        Ok::<_, Box<dyn Error>>(())
+    })?;
+
+    // Check that writing to the tailed file after the source is dropped doesn't
+    // cause a crash (#1361).
     client.execute("DROP SOURCE dynamic_csv", &[])?;
-    std::thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(100));
     append(&dynamic_path, b"Glendale,AZ,85310\n")?;
-    std::thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(100));
     Ok(())
 }
