@@ -128,15 +128,10 @@ where
         let mut state = State::Startup(session);
 
         loop {
-            let message = match self.conn.try_next().await? {
-                Some(message) => message,
-                None => return Ok(()),
-            };
-            trace!("cid={} recv={:?}", self.conn_id, message);
             state = match state.take() {
-                State::Startup(session) => self.advance_startup(session, message).await?,
-                State::Ready(session) => self.advance_ready(session, message).await?,
-                State::Drain(session) => self.advance_drain(session, message).await?,
+                State::Startup(session) => self.advance_startup(session).await?,
+                State::Ready(session) => self.advance_ready(session).await?,
+                State::Drain(session) => self.advance_drain(session).await?,
                 State::Done => return Ok(()),
             };
             if let State::Startup(_) = state {
@@ -148,41 +143,40 @@ where
         }
     }
 
-    async fn advance_startup(
-        &mut self,
-        session: Session,
-        message: FrontendMessage,
-    ) -> Result<State, comm::Error> {
-        match message {
-            FrontendMessage::Startup { version } => self.startup(session, version).await,
-            FrontendMessage::CancelRequest {
+    async fn advance_startup(&mut self, session: Session) -> Result<State, comm::Error> {
+        match self.recv().await? {
+            Some(FrontendMessage::Startup { version }) => self.startup(session, version).await,
+            Some(FrontendMessage::CancelRequest {
                 conn_id,
                 secret_key,
-            } => self.cancel_request(conn_id, secret_key).await,
-            FrontendMessage::GssEncRequest | FrontendMessage::SslRequest => {
+            }) => self.cancel_request(conn_id, secret_key).await,
+            Some(FrontendMessage::GssEncRequest) | Some(FrontendMessage::SslRequest) => {
                 self.encryption_request(session).await
             }
+            None => Ok(State::Done),
             _ => self.fatal("08P01", "invalid startup message flow").await,
         }
     }
 
-    async fn advance_ready(
-        &mut self,
-        session: Session,
-        message: FrontendMessage,
-    ) -> Result<State, comm::Error> {
+    async fn advance_ready(&mut self, session: Session) -> Result<State, comm::Error> {
+        let message = self.recv().await?;
         let timer = Instant::now();
-        let name = message.name();
+        let name = match &message {
+            Some(message) => message.name(),
+            None => "eof",
+        };
 
         let next_state = match message {
-            FrontendMessage::Query { sql } => self.query(session, sql).await?,
-            FrontendMessage::Parse { name, sql, .. } => self.parse(session, name, sql).await?,
-            FrontendMessage::Bind {
+            Some(FrontendMessage::Query { sql }) => self.query(session, sql).await?,
+            Some(FrontendMessage::Parse { name, sql, .. }) => {
+                self.parse(session, name, sql).await?
+            }
+            Some(FrontendMessage::Bind {
                 portal_name,
                 statement_name,
                 raw_parameter_bytes,
                 result_formats,
-            } => {
+            }) => {
                 self.bind(
                     session,
                     portal_name,
@@ -192,18 +186,23 @@ where
                 )
                 .await?
             }
-            FrontendMessage::Execute {
+            Some(FrontendMessage::Execute {
                 portal_name,
                 max_rows,
-            } => self.execute(session, portal_name, max_rows).await?,
-            FrontendMessage::DescribeStatement { name } => {
+            }) => self.execute(session, portal_name, max_rows).await?,
+            Some(FrontendMessage::DescribeStatement { name }) => {
                 self.describe_statement(session, name).await?
             }
-            FrontendMessage::DescribePortal { name } => self.describe_portal(session, name).await?,
-            FrontendMessage::CloseStatement { name } => self.close_statement(session, name).await?,
-            FrontendMessage::ClosePortal { name } => self.close_portal(session, name).await?,
-            FrontendMessage::Sync => self.sync(session).await?,
-            FrontendMessage::Terminate => State::Done,
+            Some(FrontendMessage::DescribePortal { name }) => {
+                self.describe_portal(session, name).await?
+            }
+            Some(FrontendMessage::CloseStatement { name }) => {
+                self.close_statement(session, name).await?
+            }
+            Some(FrontendMessage::ClosePortal { name }) => self.close_portal(session, name).await?,
+            Some(FrontendMessage::Sync) => self.sync(session).await?,
+            Some(FrontendMessage::Terminate) => State::Done,
+            None => State::Done,
             _ => self.fatal("08P01", "invalid ready message flow").await?,
         };
 
@@ -221,13 +220,10 @@ where
         Ok(next_state)
     }
 
-    async fn advance_drain(
-        &mut self,
-        session: Session,
-        message: FrontendMessage,
-    ) -> Result<State, comm::Error> {
-        match message {
-            FrontendMessage::Sync => self.sync(session).await,
+    async fn advance_drain(&mut self, session: Session) -> Result<State, comm::Error> {
+        match self.recv().await? {
+            Some(FrontendMessage::Sync) => self.sync(session).await,
+            None => Ok(State::Done),
             _ => Ok(State::Drain(session)),
         }
     }
@@ -715,6 +711,15 @@ where
         }
         self.send(BackendMessage::CopyDone).await?;
         Ok(State::Ready(session))
+    }
+
+    async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {
+        let message = self.conn.try_next().await?;
+        match &message {
+            Some(message) => trace!("cid={} recv={:?}", self.conn_id, message),
+            None => trace!("cid={} recv=<eof>", self.conn_id),
+        }
+        Ok(message)
     }
 
     async fn send(&mut self, message: BackendMessage) -> Result<(), comm::Error> {
