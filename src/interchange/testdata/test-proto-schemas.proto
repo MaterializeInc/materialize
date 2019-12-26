@@ -22,3 +22,20 @@ message TestRecord {
   float float_field = 8;
   double double_field = 9;
 }
+
+message TestRepeatedRecord {
+  repeated int32 int_field = 1;
+  repeated double double_field = 2;
+  repeated string string_field = 3;
+}
+
+message TestNestedRecord {
+  TestRecord test_record = 1;
+  TestRepeatedRecord test_repeated_record = 2;
+}
+
+message TestRepeatedNestedRecord {
+  repeated TestRecord test_record = 1;
+  repeated TestRepeatedRecord test_repeated_record = 2;
+  repeated TestNestedRecord test_nested_record = 3;
+}

@@ -8,6 +8,7 @@
 use std::fs;
 
 use failure::{bail, Error};
+use ordered_float::OrderedFloat;
 use protoc::Protoc;
 use serde::de::Deserialize;
 use serde_protobuf::de::Deserializer;
@@ -18,7 +19,7 @@ use serde_protobuf::value;
 use serde_value::Value;
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 pub mod test;
 
@@ -105,13 +106,15 @@ fn validate_proto_field_resolved(
             | FieldType::Float
             | FieldType::Double
             | FieldType::String
-            | FieldType::Enum(_)
-            | FieldType::Bytes => (),
+            | FieldType::Enum(_) => (),
 
             FieldType::Message(m) => {
                 for f in m.fields().iter() {
                     validate_proto_field_resolved(&f, descriptors)?;
                 }
+            }
+            FieldType::Bytes => {
+                bail!("Arrays or nested messages with bytes objects are not currently supported")
             }
             FieldType::Group => bail!("Unions are currently not supported"),
             FieldType::UnresolvedMessage(a) => bail!("Nested message type {} unresolved", a),
@@ -163,6 +166,7 @@ pub struct Decoder {
     descriptors: Descriptors,
     message_name: String,
     packer: RowPacker,
+    temp_storage: RowPacker,
 }
 
 impl Decoder {
@@ -174,6 +178,7 @@ impl Decoder {
             descriptors,
             message_name: message_name.to_string(),
             packer: RowPacker::new(),
+            temp_storage: RowPacker::new(),
         }
     }
 
@@ -191,7 +196,10 @@ impl Decoder {
         let deserialized_message =
             Value::deserialize(&mut deserializer).expect("Deserializing into rust object");
 
-        fn value_to_datum(v: &Value) -> Result<Datum<'_>, failure::Error> {
+        fn value_to_datum<'a>(
+            v: &'a Value,
+            arena: &mut RowArena<'a>,
+        ) -> Result<Datum<'a>, failure::Error> {
             match v {
                 Value::Bool(true) => Ok(Datum::True),
                 Value::Bool(false) => Ok(Datum::False),
@@ -203,6 +211,52 @@ impl Decoder {
                 Value::F64(f) => Ok(Datum::Float64((*f).into())),
                 Value::String(s) => Ok(Datum::String(s)),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
+                Value::Map(_m) => Ok(nested_value_to_datum(v, arena)?),
+                _ => bail!("Unsupported types from serde_value"),
+            }
+        };
+
+        fn nested_value_to_datum<'a>(
+            v: &'a Value,
+            arena: &mut RowArena<'a>,
+        ) -> Result<Datum<'a>, failure::Error> {
+            match v {
+                Value::Bool(true) => Ok(Datum::True),
+                Value::Bool(false) => Ok(Datum::False),
+                Value::I32(i) => Ok(Datum::Float64(OrderedFloat::from(*i as f64))),
+                Value::I64(i) => Ok(Datum::Float64(OrderedFloat::from(*i as f64))),
+                Value::U32(i) => Ok(Datum::Float64(OrderedFloat::from(*i as f64))),
+                Value::U64(i) => Ok(Datum::Float64(OrderedFloat::from(*i as f64))),
+                Value::F32(f) => Ok(Datum::Float64((*f as f64).into())),
+                Value::F64(f) => Ok(Datum::Float64((*f).into())),
+                Value::String(s) => Ok(Datum::String(s)),
+                Value::Bytes(_) => {
+                    bail!("We don't currently support arrays or nested messages with bytes")
+                }
+                Value::Seq(s) => {
+                    let mut datums = vec![];
+                    for value in s {
+                        datums.push(nested_value_to_datum(&value, arena)?);
+                    }
+                    Ok(Datum::List(arena.push_list(datums)))
+                }
+                Value::Map(m) => {
+                    let mut datums = vec![];
+
+                    for (k, v) in m {
+                        match (k, v) {
+                            (Value::String(s), Value::Option(Some(val))) => {
+                                datums.push((s.as_str(), nested_value_to_datum(&val, arena)?))
+                            }
+                            (Value::String(_), Value::Option(None)) => (),
+                            (Value::String(s), Value::Seq(_seq)) => {
+                                datums.push((s.as_str(), nested_value_to_datum(&v, arena)?))
+                            }
+                            _ => bail!("Unrecognized value while trying to parse a nested message"),
+                        }
+                    }
+                    Ok(Datum::Dict(arena.push_dict(datums)))
+                }
                 _ => bail!("Unsupported types from serde_value"),
             }
         };
@@ -227,6 +281,7 @@ impl Decoder {
             deserialized_message: Value,
             packer: &mut RowPacker,
             message_descriptors: &MessageDescriptor,
+            temp_storage: &mut RowPacker,
         ) -> Result<Option<Row>, failure::Error> {
             let deserialized_message = match deserialized_message {
                 Value::Map(deserialized_message) => deserialized_message,
@@ -234,13 +289,20 @@ impl Decoder {
             };
 
             let mut row = packer.packable();
+            let mut arena = temp_storage.arena();
 
             for f in message_descriptors.fields().iter() {
                 let key = Value::String(f.name().to_string());
                 let value = deserialized_message.get(&key);
 
                 if let Some(Value::Option(Some(value))) = value {
-                    row.push(value_to_datum(&value)?);
+                    row.push(value_to_datum(&value, &mut arena)?);
+                } else if let Some(Value::Seq(_inner)) = value {
+                    // Note(rkhaitan) This control flow feels extremely weird to me
+                    // but the library gives different types in very different
+                    // 'packaging / wrapping' of Options so this seemed like the cleanest
+                    // thing to do
+                    row.push(nested_value_to_datum(&value.unwrap(), &mut arena)?);
                 } else if let Some(default) = f.default_value() {
                     row.push(default_to_datum(default)?);
                 } else {
@@ -258,13 +320,17 @@ impl Decoder {
                 .descriptors
                 .message_by_name(&self.message_name)
                 .expect("Message should be included in the descriptor set"),
+            &mut self.temp_storage,
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::test::test_proto_schemas::{file_descriptor_proto, Color, TestRecord};
+    use super::test::test_proto_schemas::{
+        file_descriptor_proto, Color, TestNestedRecord, TestRecord, TestRepeatedNestedRecord,
+        TestRepeatedRecord,
+    };
     use failure::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
     use protobuf::{Message, RepeatedField};
@@ -380,7 +446,7 @@ mod tests {
             "nested",
             1,
             FieldLabel::Repeated,
-            InternalFieldType::Bytes,
+            InternalFieldType::String,
             None,
         ));
         descriptors.add_message(m2);
@@ -481,5 +547,152 @@ mod tests {
         ];
 
         assert_eq!(datums, expected);
+    }
+
+    #[test]
+    fn test_repeated() {
+        let mut test_record = TestRepeatedRecord::new();
+        test_record.set_int_field(vec![1, 2, 3]);
+        let bytes = test_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut decoder = get_decoder(".TestRepeatedRecord");
+        let row = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row.iter().collect::<Vec<_>>();
+
+        let d = datums[0];
+        if let Datum::List(d) = d {
+            let datumlist = d.iter().collect::<Vec<Datum>>();
+            assert_eq!(
+                datumlist,
+                vec![
+                    Datum::Float64(OrderedFloat::from(1.0)),
+                    Datum::Float64(OrderedFloat::from(2.0)),
+                    Datum::Float64(OrderedFloat::from(3.0))
+                ]
+            );
+        } else {
+            panic!("Expected the first field to be a list of datums!");
+        }
+    }
+
+    #[test]
+    fn test_nested() {
+        let mut test_record = TestRecord::new();
+
+        test_record.set_int_field(1);
+        test_record.set_string_field("one".to_string());
+
+        let mut test_nested_record = TestNestedRecord::new();
+        test_nested_record.set_test_record(test_record);
+        let bytes = test_nested_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut decoder = get_decoder(".TestNestedRecord");
+        let row = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row.iter().collect::<Vec<_>>();
+        let d = datums[0];
+        if let Datum::Dict(d) = d {
+            let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+            assert_eq!(
+                datumdict,
+                vec![
+                    ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
+                    ("string_field", Datum::String("one")),
+                ]
+            );
+        } else {
+            panic!("Expected the first field to be a dict of datums!");
+        }
+
+        let mut test_repeated_record = TestRepeatedRecord::new();
+        let mut repeated_strings = RepeatedField::<String>::new();
+        repeated_strings.push("start".to_string());
+        repeated_strings.push("two".to_string());
+        repeated_strings.push("three".to_string());
+        test_repeated_record.set_string_field(repeated_strings);
+        test_nested_record.set_test_repeated_record(test_repeated_record);
+
+        let bytes = test_nested_record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let row2 = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row2.iter().collect::<Vec<_>>();
+
+        let d = datums[1];
+        if let Datum::Dict(d) = d {
+            let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+
+            for (name, datum) in datumdict.iter() {
+                if let (&"string_field", Datum::List(d)) = (name, datum) {
+                    let datumlist = d.iter().collect::<Vec<Datum>>();
+                    assert_eq!(
+                        datumlist,
+                        vec![
+                            Datum::String("start"),
+                            Datum::String("two"),
+                            Datum::String("three"),
+                        ]
+                    );
+                }
+            }
+        } else {
+            panic!("Expected the second field to be a dict of datums!");
+        }
+    }
+
+    #[test]
+    fn test_arrays_nested() {
+        let mut record = TestRepeatedNestedRecord::new();
+
+        let mut test_record = TestRecord::new();
+        let mut repeated_test_records = RepeatedField::<TestRecord>::new();
+
+        test_record.set_int_field(1);
+        repeated_test_records.push(test_record.clone());
+        repeated_test_records.push(test_record);
+
+        record.set_test_record(repeated_test_records);
+        let bytes = record
+            .write_to_bytes()
+            .expect("test failed to serialize to bytes");
+
+        let mut decoder = get_decoder(".TestRepeatedNestedRecord");
+        let row = decoder
+            .decode(&bytes)
+            .expect("deserialize protobuf into a row")
+            .unwrap();
+        let datums = row.iter().collect::<Vec<_>>();
+
+        let d = datums[0];
+        if let Datum::List(d) = d {
+            let datumlist = d.iter().collect::<Vec<Datum>>();
+
+            for datum in datumlist {
+                if let Datum::Dict(d) = datum {
+                    let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
+                    assert_eq!(
+                        datumdict,
+                        vec![("int_field", Datum::Float64(OrderedFloat::from(1.0))),]
+                    );
+                } else {
+                    panic!("Expected the inner elements to be dicts of datums");
+                }
+            }
+        } else {
+            panic!("Expected the first field to be a list of datums!");
+        }
     }
 }
