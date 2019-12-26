@@ -38,6 +38,7 @@ chrono = "0.4"
 fallible-iterator = "0.2.0"
 itertools = "0.8.2"
 postgres = { version = "0.17", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.5", features = ["with-chrono-0_4"] }
 pretty_assertions = "0.6.1"
 
 [build-dependencies]
