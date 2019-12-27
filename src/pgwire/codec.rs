@@ -10,7 +10,6 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
-use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::str;
 
@@ -162,15 +161,12 @@ impl Encoder for Codec {
                 dst.put_u16(fields.len() as u16);
                 for (f, ff) in fields.iter().zip(formats.iter()) {
                     if let Some(f) = f {
-                        let s: Cow<[u8]> = match ff {
-                            pgrepr::Format::Text => f.to_text(),
-                            pgrepr::Format::Binary => f.to_binary().map_err(|e| {
-                                log::error!("binary err: {}", e);
-                                unsupported_err(e)
-                            })?,
-                        };
-                        dst.put_u32(s.len() as u32);
-                        dst.put(&*s);
+                        let base = dst.len();
+                        dst.put_u32(0);
+                        f.encode(*ff, dst);
+                        let len = dst.len() - base - 4;
+                        let len = (len as u32).to_be_bytes();
+                        dst[base..base + 4].copy_from_slice(&len);
                     } else {
                         dst.put_i32(-1);
                     }
@@ -689,12 +685,6 @@ impl RawParameterBytes {
             }
         })
     }
-}
-
-/// Constructs an error indicating that, while the pgwire instructions were
-/// valid, we don't currently support that functionality.
-fn unsupported_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, source.into())
 }
 
 /// Constructs an error indicating that the client has violated the pgwire

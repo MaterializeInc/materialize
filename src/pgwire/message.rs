@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use bytes::BytesMut;
+
 use dataflow_types::Update;
 use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
 use sql::TransactionStatus as SqlTransactionStatus;
@@ -310,11 +312,14 @@ pub struct FieldDescription {
 
 pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
     let mut out = Vec::new();
+    let mut buf = BytesMut::new();
     for field in pgrepr::values_from_row(update.row, typ) {
         match field {
             None => out.extend(b"\\N"),
             Some(field) => {
-                for b in &*field.to_text() {
+                buf.clear();
+                field.encode_text(&mut buf);
+                for b in &buf {
                     match b {
                         b'\\' => out.extend(b"\\\\"),
                         b'\n' => out.extend(b"\\n"),

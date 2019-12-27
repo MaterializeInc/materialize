@@ -18,4 +18,6 @@ mod format;
 mod value;
 
 pub use format::Format;
+pub use value::interval::Interval;
+pub use value::numeric::Numeric;
 pub use value::{values_from_row, Value};
