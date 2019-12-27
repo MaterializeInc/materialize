@@ -79,8 +79,8 @@ impl ToSql for Numeric {
     }
 
     fn accepts(ty: &Type) -> bool {
-        match ty {
-            &Type::NUMERIC => true,
+        match *ty {
+            Type::NUMERIC => true,
             _ => false,
         }
     }

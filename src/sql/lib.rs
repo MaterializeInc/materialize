@@ -115,6 +115,8 @@ pub fn plan(
 pub fn describe(
     catalog: &Catalog,
     stmt: Statement,
-) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
-    statement::describe_statement(catalog, stmt)
+) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {
+    let (desc, types) = statement::describe_statement(catalog, stmt)?;
+    let types = types.into_iter().map(pgrepr::Type::from).collect();
+    Ok((desc, types))
 }

@@ -11,9 +11,6 @@ use dataflow_types::Update;
 use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
 use sql::TransactionStatus as SqlTransactionStatus;
 
-use super::types::PgType;
-use crate::codec::RawParameterBytes;
-
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
 // minor version.
@@ -150,9 +147,11 @@ pub enum FrontendMessage {
         /// The source prepared statement. An empty string selects the unnamed
         /// prepared statement.
         statement_name: String,
-        /// Struct holding the raw bytes representing parameter values passed
-        /// from Postgres and their format codes
-        raw_parameter_bytes: RawParameterBytes,
+        /// The formats used to encode the parameters in `raw_parameters`.
+        param_formats: Vec<pgrepr::Format>,
+        /// The value of each parameter, encoded using the formats described
+        /// by `parameter_formats`.
+        raw_params: Vec<Option<Vec<u8>>>,
         /// The desired formats for the columns in the result set.
         result_formats: Vec<pgrepr::Format>,
     },
@@ -235,7 +234,7 @@ pub enum BackendMessage {
         conn_id: u32,
         secret_key: u32,
     },
-    ParameterDescription(Vec<ParameterDescription>),
+    ParameterDescription(Vec<pgrepr::Type>),
     PortalSuspended,
     NoData,
     ParseComplete,
@@ -285,20 +284,6 @@ impl From<&SqlTransactionStatus> for TransactionStatus {
 }
 
 #[derive(Debug)]
-pub struct ParameterDescription {
-    pub type_oid: u32,
-}
-
-impl From<&ScalarType> for ParameterDescription {
-    fn from(typ: &ScalarType) -> Self {
-        let pg_type: PgType = typ.into();
-        ParameterDescription {
-            type_oid: pg_type.oid,
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct FieldDescription {
     pub name: ColumnName,
     pub table_id: u32,
@@ -339,13 +324,13 @@ pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
 pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
     desc.iter()
         .map(|(name, typ)| {
-            let pg_type: PgType = (&typ.scalar_type).into();
+            let pg_type: pgrepr::Type = typ.scalar_type.clone().into();
             FieldDescription {
                 name: name.cloned().unwrap_or_else(|| "?column?".into()),
                 table_id: 0,
                 column_id: 0,
-                type_oid: pg_type.oid,
-                type_len: pg_type.typlen,
+                type_oid: pg_type.oid(),
+                type_len: pg_type.typlen(),
                 type_mod: match &typ.scalar_type {
                     // NUMERIC types pack their precision and size into the
                     // type_mod field. The high order bits store the precision

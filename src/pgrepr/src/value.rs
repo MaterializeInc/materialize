@@ -3,13 +3,16 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::error::Error;
+
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use postgres_types::{IsNull, ToSql, Type};
+use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
-use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
+use repr::decimal::MAX_DECIMAL_PRECISION;
+use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::{Format, Interval, Numeric};
+use crate::{Format, Interval, Numeric, Type};
 
 pub mod interval;
 pub mod numeric;
@@ -79,6 +82,35 @@ impl Value {
         }
     }
 
+    /// Converts a Materialize datum and type from this value.
+    ///
+    /// The conversion happens in the obvious manner, except that a
+    /// `Value::Numeric`'s scale will be recorded in the returned scalar type,
+    /// not the datum.
+    ///
+    /// To construct a null datum, see the [`null_datum`] function.
+    pub fn into_datum<'a>(self, buf: &mut RowArena<'a>) -> (Datum<'a>, ScalarType) {
+        match self {
+            Value::Bool(true) => (Datum::True, ScalarType::Bool),
+            Value::Bool(false) => (Datum::False, ScalarType::Bool),
+            Value::Int4(i) => (Datum::Int32(i), ScalarType::Int32),
+            Value::Int8(i) => (Datum::Int64(i), ScalarType::Int64),
+            Value::Float4(f) => (Datum::Float32(f.into()), ScalarType::Float32),
+            Value::Float8(f) => (Datum::Float64(f.into()), ScalarType::Float64),
+            Value::Date(d) => (Datum::Date(d), ScalarType::Date),
+            Value::Timestamp(ts) => (Datum::Timestamp(ts), ScalarType::Timestamp),
+            Value::TimestampTz(ts) => (Datum::TimestampTz(ts), ScalarType::TimestampTz),
+            Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
+            Value::Numeric(d) => (
+                Datum::from(d.0.significand()),
+                ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.0.scale()),
+            ),
+            Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), ScalarType::Bytes),
+            Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
+            Value::Jsonb(_) => todo!(),
+        }
+    }
+
     /// Serializes this value to `buf` in the specified `format`.
     pub fn encode(&self, format: Format, buf: &mut BytesMut) {
         match format {
@@ -116,18 +148,18 @@ impl Value {
     /// format](Format::Binary).
     pub fn encode_binary(&self, buf: &mut BytesMut) {
         let is_null = match self {
-            Value::Bool(b) => b.to_sql(&Type::BOOL, buf),
-            Value::Bytea(b) => b.to_sql(&Type::BYTEA, buf),
-            Value::Date(d) => d.to_sql(&Type::DATE, buf),
-            Value::Timestamp(ts) => ts.to_sql(&Type::TIMESTAMP, buf),
-            Value::TimestampTz(ts) => ts.to_sql(&Type::TIMESTAMPTZ, buf),
-            Value::Interval(iv) => iv.to_sql(&Type::INTERVAL, buf),
-            Value::Int4(i) => i.to_sql(&Type::INT4, buf),
-            Value::Int8(i) => i.to_sql(&Type::INT8, buf),
-            Value::Float4(f) => f.to_sql(&Type::FLOAT4, buf),
-            Value::Float8(f) => f.to_sql(&Type::FLOAT8, buf),
-            Value::Numeric(n) => n.to_sql(&Type::NUMERIC, buf),
-            Value::Text(s) => s.to_sql(&Type::TEXT, buf),
+            Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
+            Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
+            Value::Date(d) => d.to_sql(&PgType::DATE, buf),
+            Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
+            Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
+            Value::Interval(iv) => iv.to_sql(&PgType::INTERVAL, buf),
+            Value::Int4(i) => i.to_sql(&PgType::INT4, buf),
+            Value::Int8(i) => i.to_sql(&PgType::INT8, buf),
+            Value::Float4(f) => f.to_sql(&PgType::FLOAT4, buf),
+            Value::Float8(f) => f.to_sql(&PgType::FLOAT8, buf),
+            Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
+            Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Jsonb(s) => {
                 // https://github.com/postgres/postgres/blob/14aec03502302eff6c67981d8fd121175c436ce9/src/backend/utils/adt/jsonb.c#L148
                 let version = 1;
@@ -142,6 +174,67 @@ impl Value {
             IsNull::No => (),
         }
     }
+
+    /// Deserializes a value of type `ty` from `raw` using the specified
+    /// `format`.
+    pub fn decode(
+        format: Format,
+        ty: Type,
+        raw: &[u8],
+    ) -> Result<Value, Box<dyn Error + Sync + Send>> {
+        match format {
+            Format::Text => Value::decode_text(ty, raw),
+            Format::Binary => Value::decode_binary(ty, raw),
+        }
+    }
+
+    /// Deserializes a value of type `ty` from `raw` using the [text encoding
+    /// format](Format::Text).
+    pub fn decode_text(_: Type, _: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+        todo!()
+    }
+
+    /// Deserializes a value of type `ty` from `raw` using the [binary encoding
+    /// format](Format::Binary).
+    pub fn decode_binary(ty: Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+        match ty {
+            Type::Bool => bool::from_sql(ty.inner(), raw).map(Value::Bool),
+            Type::Bytea => Vec::<u8>::from_sql(ty.inner(), raw).map(Value::Bytea),
+            Type::Date => chrono::NaiveDate::from_sql(ty.inner(), raw).map(Value::Date),
+            Type::Float4 => f32::from_sql(ty.inner(), raw).map(Value::Float4),
+            Type::Float8 => f64::from_sql(ty.inner(), raw).map(Value::Float8),
+            Type::Int4 => i32::from_sql(ty.inner(), raw).map(Value::Int4),
+            Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
+            Type::Interval => todo!(),
+            Type::Jsonb => todo!(),
+            Type::Numeric => todo!(),
+            Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
+            Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
+            Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
+            Type::Unknown => panic!("cannot decode unknown type"),
+        }
+    }
+}
+
+/// Constructs a null datum of the specified type.
+pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
+    let ty = match ty {
+        Type::Bool => ScalarType::Bool,
+        Type::Bytea => ScalarType::Bytes,
+        Type::Date => ScalarType::Date,
+        Type::Float4 => ScalarType::Float32,
+        Type::Float8 => ScalarType::Float64,
+        Type::Int4 => ScalarType::Int32,
+        Type::Int8 => ScalarType::Int64,
+        Type::Interval => ScalarType::Interval,
+        Type::Jsonb => ScalarType::Jsonb,
+        Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
+        Type::Text => ScalarType::String,
+        Type::Timestamp => ScalarType::Timestamp,
+        Type::TimestampTz => ScalarType::TimestampTz,
+        Type::Unknown => ScalarType::Null,
+    };
+    (Datum::Null, ty)
 }
 
 /// Converts a Materialize row into a vector of PostgreSQL values.

@@ -6,7 +6,7 @@
 //! Representation of and serialization for PostgreSQL datums.
 //!
 //! This crate exports a [`Value`] type that maps directly to a PostgreSQL
-//! datum. [`Value`]s can be serialized using either the text or binary
+//! datum. These values can be serialized using either the text or binary
 //! encoding format; see the [`Format`] type for details.
 //!
 //! `Value`s are easily converted to and from [`repr::Datum`]s. See, for
@@ -15,9 +15,11 @@
 #![forbid(missing_docs)]
 
 mod format;
+mod types;
 mod value;
 
 pub use format::Format;
+pub use types::Type;
 pub use value::interval::Interval;
 pub use value::numeric::Numeric;
-pub use value::{values_from_row, Value};
+pub use value::{null_datum, values_from_row, Value};
