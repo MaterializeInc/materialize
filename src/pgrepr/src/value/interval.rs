@@ -51,8 +51,8 @@ impl ToSql for Interval {
     }
 
     fn accepts(ty: &Type) -> bool {
-        match ty {
-            &Type::INTERVAL => true,
+        match *ty {
+            Type::INTERVAL => true,
             _ => false,
         }
     }

@@ -12,6 +12,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use failure::bail;
 use futures::sink::SinkExt;
 use futures::stream::{self, TryStreamExt};
+use itertools::izip;
 use lazy_static::lazy_static;
 use log::{debug, trace};
 use prometheus::register_histogram_vec;
@@ -20,14 +21,13 @@ use tokio_util::codec::Framed;
 
 use coord::ExecuteResponse;
 use dataflow_types::{PeekResponse, Update};
-use repr::{RelationDesc, Row};
+use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::Session;
 
-use crate::codec::{Codec, RawParameterBytes};
+use crate::codec::Codec;
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::{
-    self, BackendMessage, EncryptionType, FrontendMessage, ParameterDescription, Severity,
-    VERSIONS, VERSION_3,
+    self, BackendMessage, EncryptionType, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
 
@@ -174,14 +174,16 @@ where
             Some(FrontendMessage::Bind {
                 portal_name,
                 statement_name,
-                raw_parameter_bytes,
+                param_formats,
+                raw_params,
                 result_formats,
             }) => {
                 self.bind(
                     session,
                     portal_name,
                     statement_name,
-                    raw_parameter_bytes,
+                    param_formats,
+                    raw_params,
                     result_formats,
                 )
                 .await?
@@ -394,7 +396,8 @@ where
         mut session: Session,
         portal_name: String,
         statement_name: String,
-        raw_parameter_bytes: RawParameterBytes,
+        param_formats: Vec<pgrepr::Format>,
+        raw_params: Vec<Option<Vec<u8>>>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, comm::Error> {
         let stmt = match session.get_prepared_statement(&statement_name) {
@@ -405,28 +408,41 @@ where
                     .await;
             }
         };
+
         let param_types = stmt.param_types();
-        let params = match raw_parameter_bytes.decode_parameters(param_types) {
-            Ok(params) => params,
-            Err(err) => return self.error(session, "08P01", err.to_string()).await,
+        let param_formats = match pad_formats(param_formats, raw_params.len()) {
+            Ok(param_formats) => param_formats,
+            Err(msg) => return self.error(session, "08P01", msg).await,
         };
-        let fmts = match (
-            result_formats.len(),
+        let buf = RowArena::new();
+        let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
+        for (raw_param, typ, format) in izip!(raw_params, param_types, param_formats) {
+            match raw_param {
+                None => params.push(pgrepr::null_datum(*typ)),
+                Some(bytes) => match pgrepr::Value::decode(format, *typ, &bytes) {
+                    Ok(param) => params.push(param.into_datum(&buf)),
+                    Err(err) => {
+                        let msg = format!("unable to decode parameter: {}", err);
+                        return self.error(session, "22023", msg).await;
+                    }
+                },
+            }
+        }
+
+        let result_formats = match pad_formats(
+            result_formats,
             stmt.desc()
                 .map(|desc| desc.typ().column_types.len())
                 .unwrap_or(0),
         ) {
-            (0, e) => vec![pgrepr::Format::Text; e],
-            (1, e) => iter::repeat(result_formats[0]).take(e).collect(),
-            (a, e) if a == e => result_formats,
-            (a, e) => {
-                let msg = format!("expected {} field format specifiers, but got {}", e, a);
-                return self.error(session, "08P01", msg).await;
-            }
+            Ok(result_formats) => result_formats,
+            Err(msg) => return self.error(session, "08P01", msg).await,
         };
+
         session
-            .set_portal(portal_name, statement_name, params, fmts)
+            .set_portal(portal_name, statement_name, params, result_formats)
             .unwrap();
+
         self.send(BackendMessage::BindComplete).await?;
         Ok(State::Ready(session))
     }
@@ -492,10 +508,7 @@ where
             Some(stmt) => {
                 self.conn
                     .send(BackendMessage::ParameterDescription(
-                        stmt.param_types()
-                            .iter()
-                            .map(ParameterDescription::from)
-                            .collect(),
+                        stmt.param_types().to_vec(),
                     ))
                     .await?
             }
@@ -792,5 +805,17 @@ where
             })
             .await?;
         Ok(State::Done)
+    }
+}
+
+fn pad_formats(formats: Vec<pgrepr::Format>, n: usize) -> Result<Vec<pgrepr::Format>, String> {
+    match (formats.len(), n) {
+        (0, e) => Ok(vec![pgrepr::Format::Text; e]),
+        (1, e) => Ok(iter::repeat(formats[0]).take(e).collect()),
+        (a, e) if a == e => Ok(formats),
+        (a, e) => Err(format!(
+            "expected {} field format specifiers, but got {}",
+            e, a
+        )),
     }
 }
