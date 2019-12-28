@@ -3,18 +3,22 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use pg_interval::Interval;
-use postgres::rows::Row;
-use rust_decimal::Decimal;
-use sql_parser::ast::Statement;
-use sql_parser::dialect::PostgreSqlDialect;
-use sql_parser::parser::Parser as SqlParser;
+use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
+use postgres::error::DbError;
+use postgres::row::Row;
+use postgres::types::Type;
+use sql_parser::ast::Statement;
+use sql_parser::dialect::PostgreSqlDialect;
+use sql_parser::parser::Parser as SqlParser;
+
+use ore::collections::CollectionExt;
+use pgrepr::{Interval, Numeric};
+
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand};
-use ore::collections::CollectionExt;
 
 pub struct SqlAction {
     cmd: SqlCommand,
@@ -39,15 +43,15 @@ impl Action for SqlAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
         match &self.stmt {
             Statement::CreateSource { name, .. } => self.try_drop(
-                &mut state.pgconn,
+                &mut state.pgclient,
                 &format!("DROP SOURCE IF EXISTS {} CASCADE", name.to_string()),
             ),
             Statement::CreateView { name, .. } => self.try_drop(
-                &mut state.pgconn,
+                &mut state.pgclient,
                 &format!("DROP VIEW IF EXISTS {} CASCADE", name.to_string()),
             ),
             Statement::CreateTable { name, .. } => self.try_drop(
-                &mut state.pgconn,
+                &mut state.pgclient,
                 &format!("DROP TABLE IF EXISTS {} CASCADE", name.to_string()),
             ),
             _ => Ok(()),
@@ -66,7 +70,7 @@ impl Action for SqlAction {
         let mut i = 0;
         loop {
             let backoff = Duration::from_millis(100 * 2_u64.pow(i));
-            match self.try_redo(&mut state.pgconn, &query) {
+            match self.try_redo(&mut state.pgclient, &query) {
                 Ok(()) => {
                     println!("rows match; continuing");
                     return Ok(());
@@ -89,16 +93,16 @@ impl Action for SqlAction {
 }
 
 impl SqlAction {
-    fn try_drop(&self, pgconn: &mut postgres::Connection, query: &str) -> Result<(), String> {
+    fn try_drop(&self, pgclient: &mut postgres::Client, query: &str) -> Result<(), String> {
         print_query(&query);
-        match pgconn.query(query, &[]) {
+        match pgclient.query(query, &[]) {
             Err(err) => Err(err.to_string()),
             Ok(_) => Ok(()),
         }
     }
 
-    fn try_redo(&self, pgconn: &mut postgres::Connection, query: &str) -> Result<(), String> {
-        let mut rows: Vec<_> = pgconn
+    fn try_redo(&self, pgclient: &mut postgres::Client, query: &str) -> Result<(), String> {
+        let mut rows: Vec<_> = pgclient
             .query(query, &[])
             .map_err(|e| format!("query failed: {}", e))?
             .into_iter()
@@ -131,16 +135,16 @@ impl Action for FailSqlAction {
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let query = &self.0.query;
         print_query(&query);
-        match state.pgconn.query(query.as_str(), &[]) {
+        match state.pgclient.query(query.as_str(), &[]) {
             Ok(_) => Err(format!(
                 "query succeeded, but expected error '{}'",
                 self.0.expected_error
             )),
             Err(err) => {
                 let err_string = err.to_string();
-                match err.as_db() {
+                match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
                     Some(err) => {
-                        if err.message.contains(&self.0.expected_error) {
+                        if err.message().contains(&self.0.expected_error) {
                             Ok(())
                         } else {
                             Err(format!(
@@ -169,29 +173,23 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
     for (i, col) in row.columns().iter().enumerate() {
         let ty = col.type_();
         out.push(
-            if ty == &postgres::types::BOOL {
-                row.get::<_, Option<bool>>(i).map(|x| x.to_string())
-            } else if ty == &postgres::types::CHAR || ty == &postgres::types::TEXT {
-                row.get::<_, Option<String>>(i)
-            } else if ty == &postgres::types::INT4 {
-                row.get::<_, Option<i32>>(i).map(|x| x.to_string())
-            } else if ty == &postgres::types::INT8 {
-                row.get::<_, Option<i64>>(i).map(|x| x.to_string())
-            } else if ty == &postgres::types::NUMERIC {
-                row.get::<_, Option<Decimal>>(i).map(|x| x.to_string())
-            } else if ty == &postgres::types::TIMESTAMP {
-                row.get::<_, Option<chrono::NaiveDateTime>>(i)
-                    .map(|x| x.to_string())
-            } else if ty == &postgres::types::TIMESTAMPTZ {
-                row.get::<_, Option<chrono::DateTime<chrono::Utc>>>(i)
-                    .map(|x| x.to_string())
-            } else if ty == &postgres::types::DATE {
-                row.get::<_, Option<chrono::NaiveDate>>(i)
-                    .map(|x| x.to_string())
-            } else if ty == &postgres::types::INTERVAL {
-                row.get::<_, Option<Interval>>(i).map(|x| x.to_sql())
-            } else {
-                return Err(format!("unable to handle SQL type: {:?}", ty));
+            match *ty {
+                Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
+                Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+                Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
+                Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
+                Type::NUMERIC => row.get::<_, Option<Numeric>>(i).map(|x| x.to_string()),
+                Type::TIMESTAMP => row
+                    .get::<_, Option<chrono::NaiveDateTime>>(i)
+                    .map(|x| x.to_string()),
+                Type::TIMESTAMPTZ => row
+                    .get::<_, Option<chrono::DateTime<chrono::Utc>>>(i)
+                    .map(|x| x.to_string()),
+                Type::DATE => row
+                    .get::<_, Option<chrono::NaiveDate>>(i)
+                    .map(|x| x.to_string()),
+                Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
+                _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
             }
             .unwrap_or_else(|| "<null>".into()),
         )

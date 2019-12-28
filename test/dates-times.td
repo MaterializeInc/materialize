@@ -61,22 +61,22 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 9
 
 > SELECT INTERVAL '1' SECOND
-"0:00:01"
+"00:00:01"
 
 > SELECT INTERVAL '2' MINUTE
-"0:02:00"
+"00:02:00"
 
 > SELECT INTERVAL '3' HOUR
-"3:00:00"
+"03:00:00"
 
 > SELECT INTERVAL '1' DAY
-"24:00:00"
+"1 day"
 
 > SELECT INTERVAL '6' MONTH
-"0-6"
+"6 months"
 
 > SELECT INTERVAL '10' YEAR
-"10-0"
+"10 years"
 
 > SELECT TIMESTAMP WITH TIME ZONE '1989-06-01 10:10:10.410+04:00'
 "1989-06-01 06:10:10.410 UTC"
