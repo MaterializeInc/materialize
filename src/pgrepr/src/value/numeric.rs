@@ -3,13 +3,15 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::convert::TryInto;
 use std::error::Error;
 use std::fmt;
 
+use byteorder::{NetworkEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
-use postgres_types::{to_sql_checked, IsNull, ToSql, Type};
+use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
-use repr::decimal::Decimal;
+use repr::decimal::{Decimal, Significand};
 
 /// A wrapper for [`repr::decimal::Decimal`] that can be serialized and
 /// deserialized to the PostgreSQL binary format.
@@ -86,4 +88,48 @@ impl ToSql for Numeric {
     }
 
     to_sql_checked!();
+}
+
+impl<'a> FromSql<'a> for Numeric {
+    fn from_sql(_: &Type, mut raw: &'a [u8]) -> Result<Numeric, Box<dyn Error + Sync + Send>> {
+        let ndigits = raw.read_u16::<NetworkEndian>()?;
+        let weight = raw.read_i16::<NetworkEndian>()?;
+        let sign = raw.read_u16::<NetworkEndian>()?;
+        let in_scale = raw.read_i16::<NetworkEndian>()?;
+        let mut digits = Vec::new();
+        for _ in 0..ndigits {
+            digits.push(raw.read_u16::<NetworkEndian>()?);
+        }
+
+        let mut significand = 0_i128;
+        for digit in digits {
+            significand *= 10_000;
+            significand += digit as i128;
+        }
+        match sign {
+            0 => (),
+            0x4000 => significand *= -1,
+            _ => return Err("bad sign in numeric".into()),
+        }
+
+        let mut scale = (ndigits as i16 - weight - 1) * 4;
+        if scale < 0 {
+            significand *= 10i128.pow(-scale as u32);
+            scale = 0;
+        } else if scale > in_scale {
+            significand /= 10i128.pow((scale - in_scale) as u32);
+            scale = in_scale;
+        }
+
+        Ok(Numeric(
+            Significand::new(significand).with_scale(scale.try_into()?),
+        ))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        match *ty {
+            Type::NUMERIC => true,
+            _ => false,
+        }
+    }
 }

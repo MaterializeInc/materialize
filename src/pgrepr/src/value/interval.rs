@@ -5,9 +5,11 @@
 
 use std::error::Error;
 use std::fmt;
+use std::time::Duration;
 
+use byteorder::{NetworkEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
-use postgres_types::{to_sql_checked, IsNull, ToSql, Type};
+use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
 /// A wrapper for [`repr::Interval`] that can be serialized and deserialized
 /// to the PostgreSQL binary format.
@@ -58,4 +60,32 @@ impl ToSql for Interval {
     }
 
     to_sql_checked!();
+}
+
+impl<'a> FromSql<'a> for Interval {
+    fn from_sql(_: &Type, mut raw: &'a [u8]) -> Result<Interval, Box<dyn Error + Sync + Send>> {
+        let micros = raw.read_i64::<NetworkEndian>()?;
+        let days = raw.read_i32::<NetworkEndian>()?;
+        let months = raw.read_i32::<NetworkEndian>()?;
+        if micros == 0 && days == 0 && months != 0 {
+            Ok(Interval(repr::Interval::Months(months.into())))
+        } else if (micros != 0 || days != 0) && months == 0 {
+            let micros = micros + ((days as i64) * 1000 * 1000 * 60 * 60 * 24);
+            let is_positive = micros > 0;
+            let micros = micros.abs() as u64;
+            Ok(Interval(repr::Interval::Duration {
+                is_positive,
+                duration: Duration::from_micros(micros),
+            }))
+        } else {
+            Err("mixed intervals are not supported".into())
+        }
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        match *ty {
+            Type::INTERVAL => true,
+            _ => false,
+        }
+    }
 }
