@@ -49,4 +49,4 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 
 > PEEK data_view
 17.94
--0.7
+-0.70
