@@ -101,7 +101,11 @@ where
         let broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
 
         let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
-            Some(symbiosis::Postgres::open_and_erase(symbiosis_url)?)
+            Some(
+                config
+                    .executor
+                    .enter(|| block_on(symbiosis::Postgres::open_and_erase(symbiosis_url)))?,
+            )
         } else {
             None
         };
@@ -1346,7 +1350,7 @@ where
             // Postgres, see if Postgres can handle it.
             match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    postgres.execute(&self.catalog, &stmt)
+                    block_on(postgres.execute(&self.catalog, &stmt))
                 }
                 _ => Err(err),
             }
