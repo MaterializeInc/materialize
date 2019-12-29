@@ -22,6 +22,7 @@ pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{
     DatumDict, DatumList, PackableRow, Row, RowArena, RowPacker, RowUnpacker, UnpackedRow,
 };
+pub use scalar::datetime;
 pub use scalar::decimal;
 pub use scalar::regex;
-pub use scalar::{Datum, Interval, ScalarType};
+pub use scalar::{Datum, ScalarType};

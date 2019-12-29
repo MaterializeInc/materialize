@@ -25,8 +25,11 @@
 //! sqlparser regardless of the chosen dialect (i.e. it doesn't conflict with
 //! dialect-specific parsing rules).
 
+use std::time::Duration;
+
 use matches::assert_matches;
 
+use repr::datetime::Interval;
 use sql_parser::ast::*;
 use sql_parser::parser::*;
 use sql_parser::test_utils::{all_dialects, expr_from_projection, number, only};
@@ -1610,8 +1613,6 @@ fn parse_literal_interval_error_messages() {
 
 #[test]
 fn parse_literal_interval_with_character_precision() {
-    use std::time::Duration;
-
     verify_interval(
         "SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)",
         IntervalValue {
@@ -1683,8 +1684,6 @@ fn parse_literal_interval_with_character_precision() {
 
 #[test]
 fn parse_literal_interval_durationlike() {
-    use std::time::Duration;
-
     verify_interval(
         "SELECT INTERVAL '10' HOUR",
         IntervalValue {
@@ -3689,8 +3688,6 @@ fn single_iv() -> IntervalValue {
 }
 
 fn dur_secs(n: u64) -> Interval {
-    use std::time::Duration;
-
     Interval::Duration {
         is_positive: true,
         duration: Duration::from_secs(n),

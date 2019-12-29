@@ -18,9 +18,10 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::like::build_like_regex_from_string;
 use crate::EvalEnv;
+use repr::datetime::Interval;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
-use repr::{ColumnType, Datum, Interval, RowArena, ScalarType};
+use repr::{ColumnType, Datum, RowArena, ScalarType};
 
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum NullaryFunc {

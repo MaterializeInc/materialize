@@ -16,6 +16,8 @@
 use std::fmt;
 use std::time::Duration;
 
+use repr::datetime::Interval;
+
 use super::ValueError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -250,25 +252,6 @@ fn seconds_multiplier(field: &DateTimeField) -> u64 {
         DateTimeField::Second => 1,
         _other => unreachable!("Do not call with a non-duration field"),
     }
-}
-
-/// The result of parsing an `INTERVAL '<value>' <unit> [TO <precision>]`
-///
-/// Units of type `YEAR` or `MONTH` are semantically some multiple of months,
-/// which are not well defined, and this parser normalizes them to some number
-/// of months.
-///
-/// Intervals of unit [`DateTimeField::Day`] or smaller are semantically a
-/// multiple of seconds.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Interval {
-    /// A possibly negative number of months for field types like `YEAR`
-    Months(i64),
-    /// An actual timespan, possibly negative, because why not
-    Duration {
-        is_positive: bool,
-        duration: Duration,
-    },
 }
 
 /// The fields of a Date

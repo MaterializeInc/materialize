@@ -14,7 +14,7 @@ use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 /// A wrapper for [`repr::Interval`] that can be serialized and deserialized
 /// to the PostgreSQL binary format.
 #[derive(Debug, Clone)]
-pub struct Interval(pub repr::Interval);
+pub struct Interval(pub repr::datetime::Interval);
 
 impl fmt::Display for Interval {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -35,12 +35,12 @@ impl ToSql for Interval {
         // Postgres implementation: https://github.com/postgres/postgres/blob/517bf2d91/src/backend/utils/adt/timestamp.c#L1008
         // Diesel implementation: https://github.com/diesel-rs/diesel/blob/a8b52bd05/diesel/src/pg/types/date_and_time/mod.rs#L39
         match self.0 {
-            repr::Interval::Months(months) => {
+            repr::datetime::Interval::Months(months) => {
                 out.put_i64(0);
                 out.put_i32(0);
                 out.put_i32(months as i32);
             }
-            repr::Interval::Duration {
+            repr::datetime::Interval::Duration {
                 duration,
                 is_positive,
             } => {
@@ -68,12 +68,12 @@ impl<'a> FromSql<'a> for Interval {
         let days = raw.read_i32::<NetworkEndian>()?;
         let months = raw.read_i32::<NetworkEndian>()?;
         if micros == 0 && days == 0 && months != 0 {
-            Ok(Interval(repr::Interval::Months(months.into())))
+            Ok(Interval(repr::datetime::Interval::Months(months.into())))
         } else if (micros != 0 || days != 0) && months == 0 {
             let micros = micros + ((days as i64) * 1000 * 1000 * 60 * 60 * 24);
             let is_positive = micros > 0;
             let micros = micros.abs() as u64;
-            Ok(Interval(repr::Interval::Duration {
+            Ok(Interval(repr::datetime::Interval::Duration {
                 is_positive,
                 duration: Duration::from_micros(micros),
             }))

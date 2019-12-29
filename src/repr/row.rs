@@ -7,12 +7,13 @@ use std::borrow::Borrow;
 use std::fmt;
 use std::mem::{size_of, transmute};
 
-use crate::decimal::Significand;
-use crate::scalar::Interval;
-use crate::Datum;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+
+use crate::datetime::Interval;
+use crate::decimal::Significand;
+use crate::Datum;
 
 /// A packed representation for `Datum`s.
 ///

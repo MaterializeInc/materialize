@@ -2644,7 +2644,7 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
         Value::Interval(iv) => {
             iv.fields_match_precision()?;
             let i = iv.computed_permissive()?;
-            (Datum::Interval(i.into()), ScalarType::Interval)
+            (Datum::Interval(i), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Null),
         Value::Array(_) => bail!("ARRAY literals are not supported: {}", l.to_string()),

@@ -2545,7 +2545,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_regex",
- "sql-parser",
 ]
 
 [[package]]
@@ -2864,6 +2863,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "matches",
+ "repr",
  "simple_logger",
 ]
 

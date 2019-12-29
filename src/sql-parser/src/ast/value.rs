@@ -22,8 +22,7 @@ use std::fmt;
 
 mod datetime;
 pub use datetime::{
-    DateTimeField, ExtractField, Interval, IntervalValue, ParsedDate, ParsedDateTime,
-    ParsedTimestamp,
+    DateTimeField, ExtractField, IntervalValue, ParsedDate, ParsedDateTime, ParsedTimestamp,
 };
 
 #[derive(Debug)]

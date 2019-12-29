@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 log = "0.4.5"
+repr = { path = "../repr" }
 
 [dev-dependencies]
 matches = "0.1"
