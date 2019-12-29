@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::iter;
 use std::path::Path;
+use std::str::FromStr;
 
 use failure::bail;
 use futures::executor::block_on;
@@ -29,7 +30,7 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
-use catalog::{Catalog, CatalogItem};
+use catalog::{Catalog, CatalogItem, QualName};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -39,7 +40,7 @@ use dataflow_types::{
 };
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr};
 use ore::collections::CollectionExt;
-use repr::{ColumnName, Datum, QualName, RelationDesc, Row};
+use repr::{ColumnName, Datum, RelationDesc, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
 
@@ -119,7 +120,7 @@ where
                 logging_config.active_logs().iter().map(|log| {
                     (
                         log.id(),
-                        log.name(),
+                        QualName::from_str(log.name()).expect("invalid logging name"),
                         CatalogItem::Source(Source {
                             connector: SourceConnector::Local,
                             desc: log.schema(),

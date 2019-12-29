@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use expr::GlobalId;
-use repr::{LiteralName, QualName, RelationDesc, ScalarType};
+use repr::{RelationDesc, ScalarType};
 
 /// Logging configuration.
 #[derive(Debug, Clone)]
@@ -92,27 +92,25 @@ impl LogVariant {
         ]
     }
 
-    pub fn name(&self) -> QualName {
+    pub fn name(&self) -> &'static str {
         // Bind all names in one place to avoid accidental clashes.
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => "mz_dataflow_operators".lit(),
-            LogVariant::Timely(TimelyLog::Addresses) => "mz_dataflow_operator_addresses".lit(),
-            LogVariant::Timely(TimelyLog::Channels) => "mz_dataflow_channels".lit(),
-            LogVariant::Timely(TimelyLog::Elapsed) => "mz_scheduling_elapsed".lit(),
-            LogVariant::Timely(TimelyLog::Histogram) => "mz_scheduling_histogram".lit(),
-            LogVariant::Timely(TimelyLog::Parks) => "mz_scheduling_parks".lit(),
-            LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_sizes".lit(),
-            LogVariant::Differential(DifferentialLog::Sharing) => "mz_arrangement_sharing".lit(),
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_views".lit(),
-            LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
-                "mz_view_dependencies".lit()
-            }
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontiers".lit(),
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active".lit(),
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations".lit(),
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys".lit(),
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys".lit(),
-            LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names".lit(),
+            LogVariant::Timely(TimelyLog::Operates) => "mz_dataflow_operators",
+            LogVariant::Timely(TimelyLog::Addresses) => "mz_dataflow_operator_addresses",
+            LogVariant::Timely(TimelyLog::Channels) => "mz_dataflow_channels",
+            LogVariant::Timely(TimelyLog::Elapsed) => "mz_scheduling_elapsed",
+            LogVariant::Timely(TimelyLog::Histogram) => "mz_scheduling_histogram",
+            LogVariant::Timely(TimelyLog::Parks) => "mz_scheduling_parks",
+            LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_sizes",
+            LogVariant::Differential(DifferentialLog::Sharing) => "mz_arrangement_sharing",
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_views",
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => "mz_view_dependencies",
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontiers",
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active",
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations",
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys",
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys",
+            LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names",
         }
     }
 
