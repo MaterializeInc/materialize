@@ -24,8 +24,10 @@
 
 use failure::bail;
 
+use catalog::QualName;
+use repr::ColumnName;
+
 use super::expr::ColumnRef;
-use repr::{ColumnName, QualName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItemName {

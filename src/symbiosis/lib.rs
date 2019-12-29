@@ -29,11 +29,10 @@ use sql_parser::ast::ColumnOption;
 use sql_parser::ast::{DataType, ObjectType, Statement};
 use tokio_postgres::types::FromSql;
 
-use catalog::Catalog;
+use catalog::{Catalog, QualName};
 use repr::decimal::Significand;
 use repr::{
-    ColumnType, Datum, PackableRow, QualName, RelationDesc, RelationType, Row, RowPacker,
-    ScalarType,
+    ColumnType, Datum, PackableRow, RelationDesc, RelationType, Row, RowPacker, ScalarType,
 };
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 

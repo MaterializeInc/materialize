@@ -14,7 +14,7 @@ use std::convert::TryFrom;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{BinaryOperator, Expr, Function, ObjectName, Query, Value};
 
-use repr::QualName;
+use catalog::QualName;
 
 pub fn transform(query: &mut Query) {
     AggFuncRewriter.visit_query(query);

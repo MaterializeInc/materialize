@@ -239,11 +239,13 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
+ "itertools",
  "log",
  "repr",
  "rusqlite",
  "serde",
  "serde_json",
+ "sql-parser",
 ]
 
 [[package]]

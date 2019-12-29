@@ -10,8 +10,8 @@
 use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
 use ::expr::GlobalId;
-use catalog::{Catalog, CatalogEntry};
-use repr::{QualName, RelationDesc, Row, ScalarType};
+use catalog::{Catalog, CatalogEntry, QualName};
+use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::dialect::PostgreSqlDialect;
 use sql_parser::parser::Parser as SqlParser;
 

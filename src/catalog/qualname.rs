@@ -13,8 +13,6 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sql_parser::ast::{Ident, ObjectName};
 
-use crate::errors::{Error as ReprError, Result};
-
 /// A generalized name that may be qualified
 ///
 /// This is something that has multiple parts separated by dots, but should have
@@ -30,7 +28,7 @@ use crate::errors::{Error as ReprError, Result};
 /// ```
 /// use std::convert::TryFrom;
 /// use sql_parser::ast::{Ident, ObjectName};
-/// use repr::QualName;
+/// use catalog::QualName;
 ///
 /// let with = Ident::with_quote('"', "one");
 /// let without = Ident::new("two");
@@ -55,7 +53,7 @@ impl QualName {
     /// # Example
     ///
     /// ```
-    /// use repr::QualName;
+    /// use catalog::QualName;
     /// use sql_parser::ast::Ident;
     ///
     /// let (one, two) = (Ident::new("HoWdY"), Ident::with_quote('"', "wOwZeR"));
@@ -68,7 +66,7 @@ impl QualName {
     /// # Errors
     ///
     /// If the idents vec is empty or any ident is empty
-    pub fn new_normalized<I>(idents: I) -> Result<QualName>
+    pub fn new_normalized<I>(idents: I) -> Result<QualName, failure::Error>
     where
         I: IntoIterator<Item = Ident>,
     {
@@ -91,14 +89,14 @@ impl QualName {
     /// Create a new QualName from a list of other qualnames, in order
     ///
     /// ```
-    /// # use repr::QualName;
+    /// # use catalog::QualName;
     /// let qn1: QualName = "one.two".parse().unwrap();
     /// let qn2: QualName = "three".parse().unwrap();
     /// let both: QualName = "one.two.three".parse().unwrap();
     ///
     /// assert_eq!(QualName::from_names(&[qn1, qn2]).unwrap(), both);
     /// ```
-    pub fn from_names(names: &[QualName]) -> Result<QualName> {
+    pub fn from_names(names: &[QualName]) -> Result<QualName, failure::Error> {
         let idents: Vec<Identifier> = names.iter().flat_map(|n| &n.0).cloned().collect();
         if idents.is_empty() {
             failure::bail!("Tried to create empty qualified name from existing qualnames");
@@ -109,7 +107,7 @@ impl QualName {
     /// Get the value of the single ident in here
     ///
     /// Returns `Err` if there is more than one element in this `QualName`
-    pub fn as_ident_str(&self) -> Result<&str> {
+    pub fn as_ident_str(&self) -> Result<&str, failure::Error> {
         if self.0.len() == 1 {
             Ok(&self.0[0].value)
         } else {
@@ -135,7 +133,7 @@ impl QualName {
     /// # Example
     ///
     /// ```
-    /// use repr::QualName;
+    /// use catalog::QualName;
     /// use sql_parser::ast::{ObjectName, Ident};
     ///
     /// let one = Ident::new("one");
@@ -155,7 +153,7 @@ impl QualName {
     /// # Example
     ///
     /// ```
-    /// use repr::QualName;
+    /// use catalog::QualName;
     /// let qn: QualName = "one.two".parse().unwrap();
     /// let qn2 = qn.with_trailing_string("-YOU_BRED_RAPTORS?");
     /// assert_eq!(qn.to_string(), "one.two");
@@ -187,7 +185,7 @@ impl fmt::Display for QualName {
 impl FromStr for QualName {
     type Err = failure::Error;
 
-    fn from_str(s: &str) -> Result<QualName> {
+    fn from_str(s: &str) -> Result<QualName, Self::Err> {
         parse_qualname(s)
     }
 }
@@ -199,55 +197,55 @@ impl From<&QualName> for QualName {
 }
 
 impl TryFrom<ObjectName> for QualName {
-    type Error = ReprError;
+    type Error = failure::Error;
 
-    fn try_from(other: ObjectName) -> Result<QualName> {
+    fn try_from(other: ObjectName) -> Result<QualName, Self::Error> {
         QualName::new_normalized(other.0)
     }
 }
 
 impl TryFrom<&ObjectName> for QualName {
-    type Error = ReprError;
+    type Error = failure::Error;
 
-    fn try_from(other: &ObjectName) -> Result<QualName> {
+    fn try_from(other: &ObjectName) -> Result<QualName, Self::Error> {
         QualName::new_normalized(other.0.iter().cloned())
     }
 }
 
 impl TryFrom<&mut ObjectName> for QualName {
-    type Error = ReprError;
+    type Error = failure::Error;
 
-    fn try_from(other: &mut ObjectName) -> Result<QualName> {
+    fn try_from(other: &mut ObjectName) -> Result<QualName, Self::Error> {
         QualName::new_normalized(other.0.iter().cloned())
     }
 }
 
 impl TryFrom<Ident> for QualName {
-    type Error = ReprError;
-    fn try_from(other: Ident) -> Result<QualName> {
+    type Error = failure::Error;
+    fn try_from(other: Ident) -> Result<QualName, Self::Error> {
         QualName::new_normalized(vec![other])
     }
 }
 
 impl TryFrom<&Ident> for QualName {
-    type Error = ReprError;
+    type Error = failure::Error;
     /// TODO: a version that takes a borrowed ident
-    fn try_from(other: &Ident) -> Result<QualName> {
+    fn try_from(other: &Ident) -> Result<QualName, Self::Error> {
         QualName::new_normalized(vec![other.clone()])
     }
 }
 
 impl TryFrom<&str> for QualName {
-    type Error = ReprError;
+    type Error = failure::Error;
     /// An alias for [`FromStr`] for use in a generic context
-    fn try_from(s: &str) -> Result<QualName> {
+    fn try_from(s: &str) -> Result<QualName, Self::Error> {
         s.parse()
     }
 }
 
 impl TryFrom<QualName> for Ident {
-    type Error = ReprError;
-    fn try_from(other: QualName) -> Result<Ident> {
+    type Error = failure::Error;
+    fn try_from(other: QualName) -> Result<Ident, Self::Error> {
         if other.0.len() == 1 {
             let ident = other.0.into_iter().next().unwrap();
             Ok(Ident {
@@ -288,7 +286,7 @@ impl PartialEq<str> for QualName {
     /// # Examples
     ///
     /// ```
-    /// # use repr::QualName;
+    /// # use catalog::QualName;
     /// let qn: &QualName = &"one.TWO".parse().unwrap();
     ///
     /// assert_eq!(qn, "one.\"two\"");
@@ -376,12 +374,12 @@ impl PartialEq for Identifier {
 }
 
 impl TryFrom<Ident> for Identifier {
-    type Error = ReprError;
+    type Error = failure::Error;
 
     /// Construct a valid identifier
     ///
     /// Disallows empty Identifiers and normalizes case
-    fn try_from(ident: Ident) -> Result<Identifier> {
+    fn try_from(ident: Ident) -> Result<Identifier, Self::Error> {
         if ident.value.is_empty() {
             failure::bail!("tried to construct an empty identifier");
         }
@@ -413,7 +411,7 @@ impl fmt::Display for Identifier {
 // TODO(bwm): if these two parse functions returned iterators of NameTokens instead of
 // constructed objects it would be pretty trivial to construct normalizing identity
 // functions and QualNameRef/IdentifierRef types.
-fn parse_qualname(s: &str) -> Result<QualName> {
+fn parse_qualname(s: &str) -> Result<QualName, failure::Error> {
     if s.is_empty() {
         failure::bail!("attempted to convert an an empty string to an identifier");
     }
@@ -436,7 +434,7 @@ fn parse_qualname(s: &str) -> Result<QualName> {
     Ok(qn)
 }
 
-fn parse_ident<I>(chars: &mut Peekable<I>) -> Result<Identifier>
+fn parse_ident<I>(chars: &mut Peekable<I>) -> Result<Identifier, failure::Error>
 where
     I: Iterator<Item = char>,
 {
