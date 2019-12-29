@@ -2,18 +2,11 @@
 name = "fuzz"
 description = "Fuzz testing for Materialize."
 version = "0.0.1"
-publish = false
 edition = "2018"
+publish = false
 
 [package.metadata]
 cargo-fuzz = true
-
-[dependencies]
-libfuzzer-sys = { git = "https://github.com/rust-fuzz/libfuzzer-sys.git" }
-testdrive = { path = "../src/testdrive" }
-sqllogictest = { path = "../src/sqllogictest" }
-walkdir = "2"
-rand = { version = "0.7.2", features = ["small_rng"] }
 
 [[bin]]
 name = "fuzz_testdrive"
@@ -26,3 +19,10 @@ path = "fuzz_targets/fuzz_sqllogictest.rs"
 [[bin]]
 name = "build_corpus"
 path = "bin/build_corpus.rs"
+
+[dependencies]
+libfuzzer-sys = { git = "https://github.com/rust-fuzz/libfuzzer-sys.git" }
+rand = { version = "0.7.2", features = ["small_rng"] }
+sqllogictest = { path = "../src/sqllogictest" }
+testdrive = { path = "../src/testdrive" }
+walkdir = "2"
