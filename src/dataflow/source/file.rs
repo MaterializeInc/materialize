@@ -178,6 +178,7 @@ pub fn file<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
     const MAX_LINES_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
@@ -215,6 +216,8 @@ where
                 .duration_since(UNIX_EPOCH)
                 .expect("System time seems to be before 1970.")
                 .as_millis() as u64;
+            // If nothing else causes us to wake up, do so after a specified amount of time.
+            let mut next_activation_duration = HEARTBEAT;
             let next_time = if cap_time > sys_time {
                 if cap_time != sys_time + 1 {
                     error!(
@@ -225,7 +228,7 @@ where
                         cap_time,
                     );
                 }
-                activator.activate_after(Duration::from_millis(cap_time - sys_time));
+                next_activation_duration = Duration::from_millis(cap_time - sys_time);
                 cap_time
             } else {
                 cap.downgrade(&sys_time);
@@ -247,9 +250,10 @@ where
                 }
             }
             if lines_read == MAX_LINES_PER_INVOCATION {
-                activator.activate();
+                next_activation_duration = Default::default();
             }
             cap.downgrade(&next_time);
+            activator.activate_after(next_activation_duration);
             SourceStatus::Alive
         }
     });
