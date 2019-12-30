@@ -20,16 +20,14 @@
 
 //! SQL Parser
 
-use log::debug;
-
-use super::ast::*;
-use super::dialect::keywords;
-use super::dialect::Dialect;
-use super::tokenizer::*;
 use std::error::Error;
 use std::fmt;
 
-use crate::ast::{ParsedDate, ParsedTimestamp};
+use log::debug;
+
+use crate::ast::*;
+use crate::keywords;
+use crate::tokenizer::*;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -97,8 +95,8 @@ impl Parser {
     }
 
     /// Parse a SQL statement and produce an Abstract Syntax Tree (AST)
-    pub fn parse_sql(dialect: &dyn Dialect, sql: String) -> Result<Vec<Statement>, ParserError> {
-        let mut tokenizer = Tokenizer::new(dialect, &sql);
+    pub fn parse_sql(sql: String) -> Result<Vec<Statement>, ParserError> {
+        let mut tokenizer = Tokenizer::new(&sql);
         let tokens = tokenizer.tokenize()?;
         let mut parser = Parser::new(tokens);
         let mut stmts = Vec::new();
@@ -2646,26 +2644,26 @@ impl Word {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::all_dialects;
 
     #[test]
     fn test_prev_index() {
         let sql = "SELECT version";
-        all_dialects().run_parser_method(sql, |parser| {
-            assert_eq!(parser.peek_token(), Some(Token::make_keyword("SELECT")));
-            assert_eq!(parser.next_token(), Some(Token::make_keyword("SELECT")));
-            parser.prev_token();
-            assert_eq!(parser.next_token(), Some(Token::make_keyword("SELECT")));
-            assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
-            parser.prev_token();
-            assert_eq!(parser.peek_token(), Some(Token::make_word("version", None)));
-            assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
-            assert_eq!(parser.peek_token(), None);
-            parser.prev_token();
-            assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
-            assert_eq!(parser.next_token(), None);
-            assert_eq!(parser.next_token(), None);
-            parser.prev_token();
-        });
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens);
+        assert_eq!(parser.peek_token(), Some(Token::make_keyword("SELECT")));
+        assert_eq!(parser.next_token(), Some(Token::make_keyword("SELECT")));
+        parser.prev_token();
+        assert_eq!(parser.next_token(), Some(Token::make_keyword("SELECT")));
+        assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
+        parser.prev_token();
+        assert_eq!(parser.peek_token(), Some(Token::make_word("version", None)));
+        assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
+        assert_eq!(parser.peek_token(), None);
+        parser.prev_token();
+        assert_eq!(parser.next_token(), Some(Token::make_word("version", None)));
+        assert_eq!(parser.next_token(), None);
+        assert_eq!(parser.next_token(), None);
+        parser.prev_token();
     }
 }

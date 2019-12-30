@@ -18,18 +18,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Test SQL syntax, which all sqlparser dialects must parse in the same way.
-//!
-//! Note that it does not mean all SQL here is valid in all the dialects, only
-//! that 1) it's either standard or widely supported and 2) it can be parsed by
-//! sqlparser regardless of the chosen dialect (i.e. it doesn't conflict with
-//! dialect-specific parsing rules).
+//! Test SQL syntax.
+
+use std::fmt;
 
 use matches::assert_matches;
-
 use sql_parser::ast::*;
 use sql_parser::parser::*;
-use sql_parser::test_utils::{all_dialects, expr_from_projection, number, only};
 
 #[test]
 fn parse_insert_values() {
@@ -153,13 +148,13 @@ fn parse_update() {
 
 #[test]
 fn parse_invalid_table_name() {
-    let ast = all_dialects().run_parser_method("db.public..customer", Parser::parse_object_name);
+    let ast = run_parser_method("db.public..customer", Parser::parse_object_name);
     assert!(ast.is_err());
 }
 
 #[test]
 fn parse_no_table_name() {
-    let ast = all_dialects().run_parser_method("", Parser::parse_object_name);
+    let ast = run_parser_method("", Parser::parse_object_name);
     assert!(ast.is_err());
 }
 
@@ -223,7 +218,7 @@ fn parse_simple_select() {
 
 #[test]
 fn parse_limit_is_not_an_alias() {
-    // In dialects supporting LIMIT it shouldn't be parsed as a table alias
+    // LIMIT should not be parsed as a table alias.
     let ast = verified_query("SELECT id FROM customer LIMIT 1");
     assert_eq!(Some(Expr::Value(number("1"))), ast.limit);
 
@@ -431,7 +426,7 @@ fn parse_invalid_infix_not() {
 fn parse_collate() {
     let sql = "SELECT name COLLATE \"de_DE\" FROM customer";
     assert_matches!(
-        only(&all_dialects().verified_only_select(sql).projection),
+        only(&verified_only_select(sql).projection),
         SelectItem::UnnamedExpr(Expr::Collate { .. })
     );
 }
@@ -913,7 +908,7 @@ fn parse_cast() {
 #[test]
 fn parse_array_datatype() {
     let sql = "SELECT CAST('{{1,2},{3,4}}' AS int ARRAY)";
-    let select = all_dialects().unverified_only_select(sql);
+    let select = unverified_only_select(sql);
     assert_eq!(
         &Expr::Cast {
             expr: Box::new(Expr::Value(Value::SingleQuotedString(
@@ -1116,7 +1111,7 @@ fn parse_create_table_with_options() {
 #[test]
 fn parse_create_table_trailing_comma() {
     let sql = "CREATE TABLE foo (bar int,)";
-    all_dialects().one_statement_parses_to(sql, "CREATE TABLE foo (bar int)");
+    one_statement_parses_to(sql, "CREATE TABLE foo (bar int)");
 }
 
 #[test]
@@ -1479,7 +1474,7 @@ fn parse_literal_timestamptz() {
         for format in time_formats.iter() {
             let sql = format!("SELECT {} '{}'", format, test.0);
             println!("{}", sql);
-            let select = all_dialects().unverified_only_select(&sql);
+            let select = unverified_only_select(&sql);
 
             let mut pts = ParsedTimestamp {
                 year: test.1,
@@ -2552,7 +2547,7 @@ fn parse_ctes() {
 #[test]
 fn parse_cte_renamed_columns() {
     let sql = "WITH cte (col1, col2) AS (SELECT foo, bar FROM baz) SELECT * FROM cte";
-    let query = all_dialects().verified_query(sql);
+    let query = verified_query(sql);
     assert_eq!(
         vec![Ident::new("col1"), Ident::new("col2")],
         query.ctes.first().unwrap().alias.columns
@@ -3569,15 +3564,6 @@ fn parse_rollback() {
 }
 
 #[test]
-#[should_panic(expected = "Parse results with GenericDialect are different from PostgreSqlDialect")]
-fn ensure_multiple_dialects_are_tested() {
-    // The SQL here must be parsed differently by different dialects.
-    // At the time of writing, `@foo` is accepted as a valid identifier
-    // by the Generic and the MSSQL dialect, but not by Postgres and ANSI.
-    let _ = parse_sql_statements("SELECT @foo");
-}
-
-#[test]
 fn parse_explain() {
     let ast = verified_stmt("EXPLAIN DATAFLOW FOR SELECT 665");
     assert_eq!(
@@ -3612,28 +3598,571 @@ fn parse_flush() {
     );
 }
 
+#[test]
+fn parse_show_columns() {
+    let table_name = ObjectName(vec![Ident::new("mytable")]);
+    assert_eq!(
+        verified_stmt("SHOW COLUMNS FROM mytable"),
+        Statement::ShowColumns {
+            extended: false,
+            full: false,
+            table_name: table_name.clone(),
+            filter: None,
+        }
+    );
+    assert_eq!(
+        verified_stmt("SHOW COLUMNS FROM mydb.mytable"),
+        Statement::ShowColumns {
+            extended: false,
+            full: false,
+            table_name: ObjectName(vec![Ident::new("mydb"), Ident::new("mytable")]),
+            filter: None,
+        }
+    );
+    assert_eq!(
+        verified_stmt("SHOW EXTENDED COLUMNS FROM mytable"),
+        Statement::ShowColumns {
+            extended: true,
+            full: false,
+            table_name: table_name.clone(),
+            filter: None,
+        }
+    );
+    assert_eq!(
+        verified_stmt("SHOW FULL COLUMNS FROM mytable"),
+        Statement::ShowColumns {
+            extended: false,
+            full: true,
+            table_name: table_name.clone(),
+            filter: None,
+        }
+    );
+    assert_eq!(
+        verified_stmt("SHOW COLUMNS FROM mytable LIKE 'pattern'"),
+        Statement::ShowColumns {
+            extended: false,
+            full: false,
+            table_name: table_name.clone(),
+            filter: Some(ShowStatementFilter::Like("pattern".into())),
+        }
+    );
+    assert_eq!(
+        verified_stmt("SHOW COLUMNS FROM mytable WHERE 1 = 2"),
+        Statement::ShowColumns {
+            extended: false,
+            full: false,
+            table_name,
+            filter: Some(ShowStatementFilter::Where(verified_expr("1 = 2"))),
+        }
+    );
+    one_statement_parses_to("SHOW FIELDS FROM mytable", "SHOW COLUMNS FROM mytable");
+    one_statement_parses_to("SHOW COLUMNS IN mytable", "SHOW COLUMNS FROM mytable");
+    one_statement_parses_to("SHOW FIELDS IN mytable", "SHOW COLUMNS FROM mytable");
+
+    // unhandled things are truly unhandled
+    match parse_sql_statements("SHOW COLUMNS FROM mytable FROM mydb") {
+        Err(_) => {}
+        Ok(val) => panic!("unexpected successful parse: {:?}", val),
+    }
+}
+
+#[test]
+fn parse_create_table_with_defaults() {
+    let sql = "CREATE TABLE public.customer (
+            customer_id integer DEFAULT nextval(public.customer_customer_id_seq),
+            store_id smallint NOT NULL,
+            first_name character varying(45) NOT NULL,
+            last_name character varying(45) COLLATE \"es_ES\" NOT NULL,
+            email character varying(50),
+            address_id smallint NOT NULL,
+            activebool boolean DEFAULT true NOT NULL,
+            create_date date DEFAULT now()::text NOT NULL,
+            last_update timestamp without time zone DEFAULT now() NOT NULL,
+            last_update_tz timestamp with time zone,
+            active integer NOT NULL
+    ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)";
+    match one_statement_parses_to(sql, "") {
+        Statement::CreateTable {
+            name,
+            columns,
+            constraints,
+            with_options,
+            external: false,
+            file_format: None,
+            location: None,
+        } => {
+            assert_eq!("public.customer", name.to_string());
+            assert_eq!(
+                columns,
+                vec![
+                    ColumnDef {
+                        name: "customer_id".into(),
+                        data_type: DataType::Int,
+                        collation: None,
+                        options: vec![ColumnOptionDef {
+                            name: None,
+                            option: ColumnOption::Default(verified_expr(
+                                "nextval(public.customer_customer_id_seq)"
+                            ))
+                        }],
+                    },
+                    ColumnDef {
+                        name: "store_id".into(),
+                        data_type: DataType::SmallInt,
+                        collation: None,
+                        options: vec![ColumnOptionDef {
+                            name: None,
+                            option: ColumnOption::NotNull,
+                        }],
+                    },
+                    ColumnDef {
+                        name: "first_name".into(),
+                        data_type: DataType::Varchar(Some(45)),
+                        collation: None,
+                        options: vec![ColumnOptionDef {
+                            name: None,
+                            option: ColumnOption::NotNull,
+                        }],
+                    },
+                    ColumnDef {
+                        name: "last_name".into(),
+                        data_type: DataType::Varchar(Some(45)),
+                        collation: Some(ObjectName(vec![Ident::with_quote('"', "es_ES")])),
+                        options: vec![ColumnOptionDef {
+                            name: None,
+                            option: ColumnOption::NotNull,
+                        }],
+                    },
+                    ColumnDef {
+                        name: "email".into(),
+                        data_type: DataType::Varchar(Some(50)),
+                        collation: None,
+                        options: vec![],
+                    },
+                    ColumnDef {
+                        name: "address_id".into(),
+                        data_type: DataType::SmallInt,
+                        collation: None,
+                        options: vec![ColumnOptionDef {
+                            name: None,
+                            option: ColumnOption::NotNull
+                        }],
+                    },
+                    ColumnDef {
+                        name: "activebool".into(),
+                        data_type: DataType::Boolean,
+                        collation: None,
+                        options: vec![
+                            ColumnOptionDef {
+                                name: None,
+                                option: ColumnOption::Default(Expr::Value(Value::Boolean(true))),
+                            },
+                            ColumnOptionDef {
+                                name: None,
+                                option: ColumnOption::NotNull,
+                            }
+                        ],
+                    },
+                    ColumnDef {
+                        name: "create_date".into(),
+                        data_type: DataType::Date,
+                        collation: None,
+                        options: vec![
+                            ColumnOptionDef {
+                                name: None,
+                                option: ColumnOption::Default(verified_expr("CAST(now() AS text)"))
+                            },
+                            ColumnOptionDef {
+                                name: None,
+                                option: ColumnOption::NotNull,
+                            }
+                        ],
+                    },
+                    ColumnDef {
+                        name: "last_update".into(),
+                        data_type: DataType::Timestamp,
+                        collation: None,
+                        options: vec![
+                            ColumnOptionDef {
+                                name: None,
+                                option: ColumnOption::Default(verified_expr("now()")),
+                            },
+                            ColumnOptionDef {
+                                name: None,
+                                option: ColumnOption::NotNull,
+                            }
+                        ],
+                    },
+                    ColumnDef {
+                        name: "last_update_tz".into(),
+                        data_type: DataType::TimestampTz,
+                        collation: None,
+                        options: vec![],
+                    },
+                    ColumnDef {
+                        name: "active".into(),
+                        data_type: DataType::Int,
+                        collation: None,
+                        options: vec![ColumnOptionDef {
+                            name: None,
+                            option: ColumnOption::NotNull
+                        }],
+                    },
+                ]
+            );
+            assert!(constraints.is_empty());
+            assert_eq!(
+                with_options,
+                vec![
+                    SqlOption {
+                        name: "fillfactor".into(),
+                        value: number("20")
+                    },
+                    SqlOption {
+                        name: "user_catalog_table".into(),
+                        value: Value::Boolean(true)
+                    },
+                    SqlOption {
+                        name: "autovacuum_vacuum_threshold".into(),
+                        value: number("100")
+                    },
+                ]
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_table_from_pg_dump() {
+    let sql = "CREATE TABLE public.customer (
+            customer_id integer DEFAULT nextval('public.customer_customer_id_seq'::regclass) NOT NULL,
+            store_id smallint NOT NULL,
+            first_name character varying(45) NOT NULL,
+            last_name character varying(45) NOT NULL,
+            info text[],
+            address_id smallint NOT NULL,
+            activebool boolean DEFAULT true NOT NULL,
+            create_date date DEFAULT now()::date NOT NULL,
+            create_date1 date DEFAULT 'now'::text::date NOT NULL,
+            last_update timestamp without time zone DEFAULT now(),
+            release_year public.year,
+            active integer
+        )";
+    one_statement_parses_to(sql, "CREATE TABLE public.customer (\
+            customer_id int DEFAULT nextval(CAST('public.customer_customer_id_seq' AS regclass)) NOT NULL, \
+            store_id smallint NOT NULL, \
+            first_name character varying(45) NOT NULL, \
+            last_name character varying(45) NOT NULL, \
+            info text[], \
+            address_id smallint NOT NULL, \
+            activebool boolean DEFAULT true NOT NULL, \
+            create_date date DEFAULT CAST(now() AS date) NOT NULL, \
+            create_date1 date DEFAULT CAST(CAST('now' AS text) AS date) NOT NULL, \
+            last_update timestamp DEFAULT now(), \
+            release_year public.year, \
+            active int\
+        )");
+}
+
+#[test]
+fn parse_create_table_with_inherit() {
+    let sql = "\
+               CREATE TABLE bazaar.settings (\
+               settings_id uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL, \
+               user_id uuid UNIQUE, \
+               value text[], \
+               use_metric boolean DEFAULT true\
+               )";
+    verified_stmt(sql);
+}
+
+#[ignore] // NOTE(benesch): this test is doomed. COPY data should not be tokenized/parsed.
+#[test]
+fn parse_copy_example() {
+    let sql = r#"COPY public.actor (actor_id, first_name, last_name, last_update, value) FROM stdin;
+1	PENELOPE	GUINESS	2006-02-15 09:34:33 0.11111
+2	NICK	WAHLBERG	2006-02-15 09:34:33 0.22222
+3	ED	CHASE	2006-02-15 09:34:33 0.312323
+4	JENNIFER	DAVIS	2006-02-15 09:34:33 0.3232
+5	JOHNNY	LOLLOBRIGIDA	2006-02-15 09:34:33 1.343
+6	BETTE	NICHOLSON	2006-02-15 09:34:33 5.0
+7	GRACE	MOSTEL	2006-02-15 09:34:33 6.0
+8	MATTHEW	JOHANSSON	2006-02-15 09:34:33 7.0
+9	JOE	SWANK	2006-02-15 09:34:33 8.0
+10	CHRISTIAN	GABLE	2006-02-15 09:34:33 9.1
+11	ZERO	CAGE	2006-02-15 09:34:33 10.001
+12	KARL	BERRY	2017-11-02 19:15:42.308637+08 11.001
+A Fateful Reflection of a Waitress And a Boat who must Discover a Sumo Wrestler in Ancient China
+Kwara & Kogi
+{"Deleted Scenes","Behind the Scenes"}
+'awe':5 'awe-inspir':4 'barbarella':1 'cat':13 'conquer':16 'dog':18 'feminist':10 'inspir':6 'monasteri':21 'must':15 'stori':7 'streetcar':2
+PHP	₱ USD $
+\N  Some other value
+\\."#;
+    let ast = one_statement_parses_to(sql, "");
+    println!("{:#?}", ast);
+    //assert_eq!(sql, ast.to_string());
+}
+
+#[test]
+fn parse_set() {
+    let stmt = verified_stmt("SET a = b");
+    assert_eq!(
+        stmt,
+        Statement::SetVariable {
+            local: false,
+            variable: "a".into(),
+            value: SetVariableValue::Ident("b".into()),
+        }
+    );
+
+    let stmt = verified_stmt("SET a = 'b'");
+    assert_eq!(
+        stmt,
+        Statement::SetVariable {
+            local: false,
+            variable: "a".into(),
+            value: SetVariableValue::Literal(Value::SingleQuotedString("b".into())),
+        }
+    );
+
+    let stmt = verified_stmt("SET a = 0");
+    assert_eq!(
+        stmt,
+        Statement::SetVariable {
+            local: false,
+            variable: "a".into(),
+            value: SetVariableValue::Literal(number("0")),
+        }
+    );
+
+    let stmt = verified_stmt("SET a = DEFAULT");
+    assert_eq!(
+        stmt,
+        Statement::SetVariable {
+            local: false,
+            variable: "a".into(),
+            value: SetVariableValue::Ident("DEFAULT".into()),
+        }
+    );
+
+    let stmt = verified_stmt("SET LOCAL a = b");
+    assert_eq!(
+        stmt,
+        Statement::SetVariable {
+            local: true,
+            variable: "a".into(),
+            value: SetVariableValue::Ident("b".into()),
+        }
+    );
+
+    one_statement_parses_to("SET a TO b", "SET a = b");
+    one_statement_parses_to("SET SESSION a = b", "SET a = b");
+
+    assert_eq!(
+        parse_sql_statements("SET"),
+        Err(ParserError::ParserError(
+            "Expected identifier, found: EOF".to_string()
+        )),
+    );
+
+    assert_eq!(
+        parse_sql_statements("SET a b"),
+        Err(ParserError::ParserError(
+            "Expected equals sign or TO, found: b".to_string()
+        )),
+    );
+
+    assert_eq!(
+        parse_sql_statements("SET a ="),
+        Err(ParserError::ParserError(
+            "Expected variable value, found: EOF".to_string()
+        )),
+    );
+}
+
+#[test]
+fn parse_show() {
+    let stmt = verified_stmt("SHOW a");
+    assert_eq!(
+        stmt,
+        Statement::ShowVariable {
+            variable: "a".into()
+        }
+    );
+
+    let stmt = verified_stmt("SHOW ALL");
+    assert_eq!(
+        stmt,
+        Statement::ShowVariable {
+            variable: "ALL".into()
+        }
+    )
+}
+
+#[test]
+fn parse_array() {
+    let expr = verified_expr("ARRAY[]");
+
+    assert_eq!(expr, Expr::Value(Value::Array(vec![])));
+
+    let expr = verified_expr("ARRAY[1, 'foo']");
+
+    assert_eq!(
+        expr,
+        Expr::Value(Value::Array(vec![
+            Value::Number("1".into()),
+            Value::SingleQuotedString("foo".to_owned())
+        ]))
+    );
+
+    let select = verified_only_select("SELECT ARRAY[]");
+
+    assert_eq!(
+        expr_from_projection(only(&select.projection)),
+        &Expr::Value(Value::Array(vec![]))
+    );
+
+    let select = verified_only_select("SELECT ARRAY[1, 'foo']");
+
+    assert_eq!(
+        expr_from_projection(only(&select.projection)),
+        &Expr::Value(Value::Array(vec![
+            Value::Number("1".into()),
+            Value::SingleQuotedString("foo".to_owned())
+        ]))
+    );
+}
+
+#[test]
+fn parse_pg_array_datatype() {
+    let sql = "SELECT '{{1,2},{3,4}}'::int[][]";
+    let select = unverified_only_select(sql);
+    assert_eq!(
+        &Expr::Cast {
+            expr: Box::new(Expr::Value(Value::SingleQuotedString(
+                "{{1,2},{3,4}}".to_owned()
+            ))),
+            data_type: DataType::Array(Box::new(DataType::Array(Box::new(DataType::Int)))),
+        },
+        expr_from_projection(only(&select.projection))
+    );
+}
+
+#[test]
+fn parse_json_ops() {
+    use self::BinaryOperator::*;
+    use self::Expr::*;
+
+    for (op_string, op_enum) in vec![
+        ("->", JsonGet),
+        ("->>", JsonGetAsText),
+        ("#>", JsonGetPath),
+        ("#>>", JsonGetPathAsText),
+        ("@>", JsonContainsJson),
+        ("<@", JsonContainedInJson),
+        ("?", JsonContainsField),
+        ("?|", JsonContainsAnyFields),
+        ("?&", JsonContainsAllFields),
+        ("||", JsonConcat),
+        ("#-", JsonDeletePath),
+        ("@?", JsonContainsPath),
+        ("@@", JsonApplyPathPredicate),
+    ] {
+        let sql = format!("a {} b", op_string);
+        assert_matches!(
+            &verified_expr(&sql),
+            BinaryOp {op, ..} if *op == op_enum
+        );
+    }
+}
+
+pub fn run_parser_method<F, T>(sql: &str, f: F) -> T
+where
+    F: Fn(&mut Parser) -> T,
+    T: fmt::Debug + PartialEq,
+{
+    let mut tokenizer = sql_parser::tokenizer::Tokenizer::new(sql);
+    let tokens = tokenizer.tokenize().unwrap();
+    f(&mut Parser::new(tokens))
+}
+
 fn parse_sql_statements(sql: &str) -> Result<Vec<Statement>, ParserError> {
-    all_dialects().parse_sql_statements(sql)
+    Parser::parse_sql(sql.to_string())
 }
 
 fn one_statement_parses_to(sql: &str, canonical: &str) -> Statement {
-    all_dialects().one_statement_parses_to(sql, canonical)
+    let mut statements = parse_sql_statements(&sql).unwrap();
+    assert_eq!(statements.len(), 1);
+
+    let only_statement = statements.pop().unwrap();
+    if !canonical.is_empty() {
+        assert_eq!(canonical, only_statement.to_string())
+    }
+    only_statement
 }
 
 fn verified_stmt(query: &str) -> Statement {
-    all_dialects().verified_stmt(query)
+    one_statement_parses_to(query, query)
 }
 
-fn verified_query(query: &str) -> Query {
-    all_dialects().verified_query(query)
+fn unverified_stmt(query: &str) -> Statement {
+    one_statement_parses_to(query, "")
+}
+
+fn verified_query(sql: &str) -> Query {
+    match verified_stmt(sql) {
+        Statement::Query(query) => *query,
+        _ => panic!("Expected Query"),
+    }
+}
+
+fn unverified_query(sql: &str) -> Query {
+    match unverified_stmt(sql) {
+        Statement::Query(query) => *query,
+        _ => panic!("Expected Query"),
+    }
 }
 
 fn verified_only_select(query: &str) -> Select {
-    all_dialects().verified_only_select(query)
+    match verified_query(query).body {
+        SetExpr::Select(s) => *s,
+        _ => panic!("Expected SetExpr::Select"),
+    }
 }
 
-fn verified_expr(query: &str) -> Expr {
-    all_dialects().verified_expr(query)
+fn unverified_only_select(query: &str) -> Select {
+    match unverified_query(query).body {
+        SetExpr::Select(s) => *s,
+        _ => panic!("Expected SetExpr::Select"),
+    }
+}
+
+fn verified_expr(sql: &str) -> Expr {
+    let ast = run_parser_method(sql, Parser::parse_expr).unwrap();
+    assert_eq!(sql, &ast.to_string(), "round-tripping without changes");
+    ast
+}
+
+pub fn only<T>(v: impl IntoIterator<Item = T>) -> T {
+    let mut iter = v.into_iter();
+    if let (Some(item), None) = (iter.next(), iter.next()) {
+        item
+    } else {
+        panic!("only called on collection without exactly one item")
+    }
+}
+
+pub fn expr_from_projection(item: &SelectItem) -> &Expr {
+    match item {
+        SelectItem::UnnamedExpr(expr) => expr,
+        _ => panic!("Expected UnnamedExpr"),
+    }
+}
+
+pub fn number(n: &'static str) -> Value {
+    Value::Number(n.parse().unwrap())
 }
 
 // interval test helpers

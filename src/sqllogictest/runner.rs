@@ -42,7 +42,6 @@ use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use sql::{FieldFormat, Session, Statement};
-use sql_parser::dialect::PostgreSqlDialect;
 use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
@@ -484,7 +483,7 @@ impl State {
         output: &'a Result<QueryOutput, &'a str>,
     ) -> Result<Outcome<'a>, failure::Error> {
         // get statement
-        let statements = match SqlParser::parse_sql(&PostgreSqlDialect {}, sql.to_string()) {
+        let statements = match SqlParser::parse_sql(sql.to_string()) {
             Ok(statements) => statements,
             Err(error) => {
                 if output.is_err() {

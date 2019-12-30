@@ -26,27 +26,20 @@
 //! into an Abstract Syntax Tree (AST).
 //!
 //! ```
-//! use sql_parser::dialect::GenericDialect;
 //! use sql_parser::parser::Parser;
-//!
-//! let dialect = GenericDialect {}; // or AnsiDialect
 //!
 //! let sql = "SELECT a, b, 123, myfunc(b) \
 //!            FROM table_1 \
 //!            WHERE a > b AND b < 100 \
 //!            ORDER BY a DESC, b";
 //!
-//! let ast = Parser::parse_sql(&dialect, sql.to_string()).unwrap();
+//! let ast = Parser::parse_sql(sql.to_string()).unwrap();
 //!
 //! println!("AST: {:?}", ast);
 //! ```
 
+mod keywords;
+
 pub mod ast;
-pub mod dialect;
 pub mod parser;
 pub mod tokenizer;
-
-#[doc(hidden)]
-// This is required to make utilities accessible by both the crate-internal
-// unit-tests and by the integration tests <https://stackoverflow.com/a/44541071/1026>
-pub mod test_utils;

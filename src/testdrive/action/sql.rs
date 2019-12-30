@@ -7,7 +7,6 @@ use pg_interval::Interval;
 use postgres::rows::Row;
 use rust_decimal::Decimal;
 use sql_parser::ast::Statement;
-use sql_parser::dialect::PostgreSqlDialect;
 use sql_parser::parser::Parser as SqlParser;
 use std::thread;
 use std::time::Duration;
@@ -22,7 +21,7 @@ pub struct SqlAction {
 }
 
 pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, String> {
-    let stmts = SqlParser::parse_sql(&PostgreSqlDialect {}, cmd.query.clone())
+    let stmts = SqlParser::parse_sql(cmd.query.clone())
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
         return Err(format!("expected one statement, but got {}", stmts.len()));
