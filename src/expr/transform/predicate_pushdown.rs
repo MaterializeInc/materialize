@@ -3,9 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// Clippy's cognitive complexity is easy to reach.
-#![allow(clippy::cognitive_complexity)]
-
 //! Pushes predicates down through other operators.
 //!
 //! This action generally improves the quality of the query, in that selective per-record

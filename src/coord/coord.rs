@@ -12,10 +12,6 @@
 //! which the maintained view will be correct, as any timestamps in advance of the frontier
 //! must accumulate to the same value as would an un-compacted trace.
 
-// Clone on copy permitted for timestamps, which happen to be Copy at the moment, but which
-// may become non-copy in the future.
-#![allow(clippy::clone_on_copy)]
-
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::iter;

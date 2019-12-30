@@ -43,8 +43,8 @@ where
             buffer: Vec::with_capacity(1024),
         }
     }
+
     /// Publishes a batch of logged events and advances the capability.
-    #[allow(clippy::clone_on_copy)]
     pub fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
         let new_time_ms =
             (((time.as_millis() as Timestamp) / self.granularity_ms) + 1) * self.granularity_ms;

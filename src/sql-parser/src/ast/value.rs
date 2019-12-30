@@ -71,7 +71,6 @@ pub enum Value {
 }
 
 impl fmt::Display for Value {
-    #[allow(clippy::unneeded_field_pattern)] // want to be warned if we add another field
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Value::Number(v) => write!(f, "{}", v),
