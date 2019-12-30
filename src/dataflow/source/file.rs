@@ -178,7 +178,7 @@ pub fn file<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    const HEARTBEAT: Duration = Duration::from_secs(1);  // Update the capability every second if there are no new changes.
+    const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
     const MAX_LINES_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
