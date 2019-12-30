@@ -16,6 +16,7 @@ path = "bin/materialized.rs"
 [dependencies]
 backtrace = { version = "0.3.40", features = ["coresymbolication"] }
 comm = { path = "../comm" }
+compile-time-run = "0.2.8"
 coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
@@ -40,7 +41,3 @@ itertools = "0.8.2"
 postgres = { version = "0.17", features = ["with-chrono-0_4"] }
 pretty_assertions = "0.6.1"
 tokio-postgres = { version = "0.5", features = ["with-chrono-0_4"] }
-
-[build-dependencies]
-chrono = "0.4"
-duct = "0.13.3"
