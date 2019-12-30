@@ -150,19 +150,9 @@ disabled_lints=(
     clippy::unneeded_field_pattern
 )
 
-extra_lints=(
-    # Upstream description: https://doc.rust-lang.org/rustc/lints/listing/allowed-by-default.html#bare-trait-object
-    #
-    # Omitting `dyn` on a trait object will become deprecated in the near future
-    bare_trait_objects
-
-    # We never want to have to back up and thread Debug through all our types again
-    # missing_debug_implementations
-)
-
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
 # splitting below. It's substantially clearer than doing things "properly,"
 # and the inputs to this script are trusted.
 
 # shellcheck disable=SC2046
-run cargo clippy --all-targets -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")
+run cargo clippy --all-targets -- -D warnings $(printf -- "-A %s " "${disabled_lints[@]}")
