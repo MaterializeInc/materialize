@@ -6,6 +6,7 @@
 use avro_rs::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+
 use interchange::avro::{parse_schema, Decoder};
 
 fn bench_interchange(c: &mut Criterion) {
