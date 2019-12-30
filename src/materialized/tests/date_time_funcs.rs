@@ -37,6 +37,21 @@ fn test_current_timestamp_and_now() -> util::TestResult {
 }
 
 #[test]
+fn test_explain_current_timestamp_and_now() -> util::TestResult {
+    ore::log::init();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+
+    let rows = &client.query("EXPLAIN PLAN FOR SELECT current_timestamp()", &[])?;
+    assert_eq!(1, rows.len());
+
+    let rows = &client.query("EXPLAIN PLAN FOR SELECT now()", &[])?;
+    assert_eq!(1, rows.len());
+
+    Ok(())
+}
+
+#[test]
 fn test_to_char() -> util::TestResult {
     ore::log::init();
 
