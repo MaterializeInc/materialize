@@ -3,9 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// clippy is wrong
-#![allow(clippy::collapsible_if)]
-
 use std::time::Duration;
 
 use log::error;
@@ -347,6 +344,9 @@ pub fn construct<A: Allocate>(
                         input.for_each(|time, data| {
                             data.swap(&mut vec);
                             let mut session = output.session(&time);
+                            // Collapsing the contained `if` makes its structure
+                            // less clear.
+                            #[allow(clippy::collapsible_if)]
                             for (peek, worker, is_install, time_ns) in vec.drain(..) {
                                 let key = (worker, peek.conn_id);
                                 if is_install {

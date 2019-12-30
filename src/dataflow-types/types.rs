@@ -9,8 +9,6 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-// Clippy doesn't understand `as_of` and complains.
-#![allow(clippy::wrong_self_convention)]
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
