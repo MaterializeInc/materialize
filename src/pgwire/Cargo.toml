@@ -12,9 +12,9 @@ path = "lib.rs"
 byteorder = "1.3"
 bytes = "0.5"
 cast = "0.2"
+chrono = "0.4"
 comm = { path = "../comm" }
 coord = { path = "../coord" }
-chrono = "0.4"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 failure = "0.1.5"

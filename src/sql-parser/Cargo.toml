@@ -8,5 +8,5 @@ edition = "2018"
 log = "0.4.5"
 
 [dev-dependencies]
-simple_logger = "1.0.1"
 matches = "0.1"
+simple_logger = "1.0.1"

@@ -6,12 +6,12 @@ edition = "2018"
 publish = false
 default-run = "materialized"
 
+[lib]
+path = "lib.rs"
+
 [[bin]]
 name = "materialized"
 path = "bin/materialized.rs"
-
-[lib]
-path = "lib.rs"
 
 [dependencies]
 backtrace = { version = "0.3.40", features = ["coresymbolication"] }
@@ -38,9 +38,9 @@ chrono = "0.4"
 fallible-iterator = "0.2.0"
 itertools = "0.8.2"
 postgres = { version = "0.17", features = ["with-chrono-0_4"] }
-tokio-postgres = { version = "0.5", features = ["with-chrono-0_4"] }
 pretty_assertions = "0.6.1"
+tokio-postgres = { version = "0.5", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-duct = "0.13.3"
 chrono = "0.4"
+duct = "0.13.3"
