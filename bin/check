@@ -18,6 +18,8 @@ source misc/shlib/shlib.bash
 # Add lints to this list freely, but please add a comment with justification
 # along with the lint. The goal is to ever-so-slightly increase the barrier to
 # turning off a lint.
+#
+# Please keep this list alphabetically sorted.
 disabled_lints=(
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#block_in_if_condition_stmt
     #
@@ -33,6 +35,26 @@ disabled_lints=(
     #        // ...
     #    }))
     clippy::block_in_if_condition_stmt
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#clone_on_copy
+    #
+    # Several types happen to be Copy, but might change in the future. A call
+    # to `clone()` compiles to a copy for Copy types, so there is no specific
+    # harm from calling `clone()` and some line-noise as types become or cease
+    # being Copy.
+    clippy::clone-on-copy
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#cognitive_complexity
+    #
+    # Clippy's cognitive complexity is too easily reached.
+    clippy::cognitive-complexity
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#flat_map_identity
+    #
+    # Clippy asks that you replace `flat_map(|x| x)` with `flatten()` which
+    # while cute requires someone go read about what `flatten()` does instead
+    # of doing something more productive with their time.
+    clippy::flat-map-identity
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#large_enum_variant
     #
@@ -74,6 +96,12 @@ disabled_lints=(
     # style with similar blocks of nearby code.
     clippy::match_bool
 
+    # Upsteam description: https://rust-lang.github.io/rust-clippy/master/index.html#needless_lifetimes
+    #
+    # Lifetime elision sometimes gives surprising results, and especially in
+    # unsafe code it's useful to spell out lifetimes explicitly to be sure.
+    clippy::needless-lifetimes
+
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#needless_range_loop
     #
     # clippy::needless_range_loop encourages use of `for item in collection`
@@ -81,11 +109,6 @@ disabled_lints=(
     # however, and often forces the creation of complicated stacks of iterators
     # when the for loop is clearer.
     clippy::needless_range_loop
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#cognitive_complexity
-    #
-    # Clippy's cognitive complexity is too easily reached.
-    clippy::cognitive-complexity
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#redundant_closure
     #
@@ -125,27 +148,6 @@ disabled_lints=(
     # `..`, while sometimes convenient, can cause match sites that need to be
     # updated for the new field to be overlooked.
     clippy::unneeded_field_pattern
-
-    # Upsteam description: https://rust-lang.github.io/rust-clippy/master/index.html#needless_lifetimes
-    #
-    # Lifetime elision sometimes gives surprising results, and especially in unsafe code it's useful to
-    # spell out lifetimes explicitly to be sure
-    clippy::needless-lifetimes
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#clone_on_copy
-    #
-    # Several types happen to be Copy, but might change in the future. A call
-    # to `clone()` compiles to a copy for Copy types, so there is no specific
-    # harm from calling `clone()` and some line-noise as types become or cease
-    # being Copy.
-    clippy::clone-on-copy
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#flat_map_identity
-    #
-    # Clippy asks that you replace `flat_map(|x| x)` with `flatten()` which
-    # while cute requires someone go read about what `flatten()` does instead
-    # of doing something more productive with their time.
-    clippy::flat-map-identity
 )
 
 extra_lints=(
