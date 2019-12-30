@@ -31,8 +31,7 @@ impl JoinElision {
             self.action(e);
         });
     }
-    // Tuples have lengths, which may be zero; they are not "empty".
-    #[allow(clippy::len_zero)]
+
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
             inputs, variables, ..

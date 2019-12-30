@@ -65,6 +65,14 @@ disabled_lints=(
     # in slower code due to the allocation.
     clippy::large_enum_variant
 
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#len_zero
+    #
+    # clippy::len_zero suggests replacing `collection.len() == 0` with a call to
+    # `collection.is_empty()`, but the argument that `.is_empty()` is faster is
+    # dubious, and it often breaks symmetry in a chain of length comparisons,
+    # like `if c.len() == 0 { .. } else if c.len() == 1 { .. } else { .. }`.
+    clippy::len_zero
+
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#let_and_return
     #
     # clippy::let_and_return protects against creating a let binding that is

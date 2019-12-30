@@ -4,8 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 #![deny(missing_docs)]
-// Clippy is wrong.
-#![allow(clippy::op_ref, clippy::len_zero)]
 
 use std::fmt;
 
@@ -281,7 +279,7 @@ impl RelationExpr {
                 let remains_unique = (1..inputs.len()).all(|index| {
                     let mut prior_bound = Vec::new();
                     for variable in variables {
-                        if variable.iter().any(|(r, _c)| r < &index) {
+                        if variable.iter().any(|(r, _c)| *r < index) {
                             for (r, c) in variable {
                                 if r == &index {
                                     prior_bound.push(c);

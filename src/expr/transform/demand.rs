@@ -3,9 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// Prefering higher-order methods to equivalent lower complexity methods is wrong.
-#![allow(clippy::or_fun_call)]
-
 use std::collections::{HashMap, HashSet};
 
 use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
@@ -52,7 +49,9 @@ impl Demand {
                 // Nothing clever to do with constants, that I can think of.
             }
             RelationExpr::Get { id, .. } => {
-                gets.entry(*id).or_insert(HashSet::new()).extend(columns);
+                gets.entry(*id)
+                    .or_insert_with(|| HashSet::new())
+                    .extend(columns);
             }
             RelationExpr::Let { id, value, body } => {
                 // Let harvests any requirements of get from its body,
