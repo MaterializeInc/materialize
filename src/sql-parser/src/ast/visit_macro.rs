@@ -1672,7 +1672,6 @@ mod tests {
     use crate::ast::visit::Visit;
     use crate::ast::visit_mut::VisitMut;
     use crate::ast::Ident;
-    use crate::dialect::GenericDialect;
     use crate::parser::Parser;
     use std::error::Error;
 
@@ -1699,7 +1698,6 @@ mod tests {
         }
 
         let mut stmts = Parser::parse_sql(
-            &GenericDialect {},
             r#"
             WITH a01 AS (SELECT 1)
                 SELECT *, a02.*, a03 AS a04
