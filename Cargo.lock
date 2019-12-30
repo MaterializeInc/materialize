@@ -2725,12 +2725,11 @@ dependencies = [
 [[package]]
 name = "reqwest"
 version = "0.10.0-alpha.2"
-source = "git+https://github.com/seanmonstar/reqwest.git#24abf2fcbdabbc63136677bc440788271484d103"
+source = "git+https://github.com/seanmonstar/reqwest.git#c88d3b7aa644ef2534be2d8a2160fe33c44814f4"
 dependencies = [
  "base64 0.11.0",
  "bytes 0.5.3",
  "encoding_rs",
- "futures-channel",
  "futures-core",
  "futures-util",
  "http",
