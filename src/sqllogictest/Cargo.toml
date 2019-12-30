@@ -4,12 +4,12 @@ description = "A driver for sqllogictest, a SQL correctness testing framework."
 version = "0.0.1"
 edition = "2018"
 
+[lib]
+path = "lib.rs"
+
 [[bin]]
 name = "sqllogictest"
 path = "main.rs"
-
-[lib]
-path = "lib.rs"
 
 [dependencies]
 chrono = "0.4"
