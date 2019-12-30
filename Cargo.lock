@@ -2781,13 +2781,14 @@ dependencies = [
 
 [[package]]
 name = "rust_decimal"
-version = "1.0.3"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7a28ded8f10361cefb69a8d8e1d195acf59344150534c165c401d6611cf013d"
+checksum = "554c43621fd8c80b44c0c2ba021f108497ff070d5712cba4bb7ceb4d81c280aa"
 dependencies = [
  "byteorder",
+ "bytes 0.5.3",
  "num",
- "postgres 0.15.2",
+ "postgres 0.17.0",
  "serde",
 ]
 
@@ -3103,7 +3104,7 @@ dependencies = [
  "getopts",
  "itertools",
  "lazy_static",
- "md5 0.3.8",
+ "md5 0.7.0",
  "ordered-float",
  "ore",
  "regex",
