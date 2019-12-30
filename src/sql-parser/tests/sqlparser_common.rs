@@ -486,6 +486,12 @@ fn parse_number() {
 }
 
 #[test]
+fn parse_numeric_begin_with_decimal() {
+    let expr = verified_expr(".1");
+    assert_eq!(expr, Expr::Value(Value::Number(".1".into())));
+}
+
+#[test]
 fn parse_approximate_numeric_literal() {
     let expr = verified_expr("1.0E2");
     assert_eq!(expr, Expr::Value(Value::Number("1.0E2".into())));

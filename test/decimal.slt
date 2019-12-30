@@ -294,3 +294,16 @@ query R
 SELECT CAST (null::float AS decimal(38, 7))
 ----
 NULL
+
+### No leading integer ###
+
+query R
+SELECT .123
+----
+0.123
+
+statement error
+SELECT ..123
+
+statement error
+SELECT .1.23
