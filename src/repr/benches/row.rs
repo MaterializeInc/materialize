@@ -3,14 +3,11 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-#[macro_use]
-extern crate criterion;
-extern crate repr;
-
 use chrono::NaiveDate;
-use criterion::{Bencher, Criterion};
+use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use rand::Rng;
-use repr::*;
+
+use repr::{Datum, Row, RowUnpacker};
 
 fn bench_sort_datums(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
