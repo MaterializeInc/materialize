@@ -34,11 +34,11 @@ use sql_parser::ast::{
 use uuid::Uuid;
 
 use ::expr::{DateTruncTo, Id};
-use catalog::{Catalog, CatalogEntry};
+use catalog::{Catalog, CatalogEntry, QualName};
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,

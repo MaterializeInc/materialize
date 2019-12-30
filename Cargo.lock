@@ -281,11 +281,13 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
+ "itertools",
  "log",
  "repr",
  "rusqlite",
  "serde",
  "serde_json",
+ "sql-parser",
 ]
 
 [[package]]
@@ -2704,7 +2706,6 @@ dependencies = [
  "chrono",
  "criterion",
  "failure",
- "itertools",
  "ordered-float",
  "ore",
  "pretty",

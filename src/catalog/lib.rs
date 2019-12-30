@@ -14,12 +14,14 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::{Index, Sink, Source, SourceConnector, View};
 use expr::{GlobalId, Id, IdHumanizer};
-use repr::QualName;
 use repr::RelationDesc;
 
 use crate::sql::SqlVal;
 
+mod qualname;
 mod sql;
+
+pub use crate::qualname::QualName;
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
 
