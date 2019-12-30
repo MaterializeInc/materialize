@@ -394,38 +394,7 @@ impl<'a> Tokenizer<'a> {
                     }
                 }
                 // numbers
-                '0'..='9' => {
-                    let mut seen_decimal = false;
-                    let mut s = peeking_take_while(chars, |ch| match ch {
-                        '0'..='9' => true,
-                        '.' if !seen_decimal => {
-                            seen_decimal = true;
-                            true
-                        }
-                        _ => false,
-                    });
-                    // If in e-notation, parse the e-notation with special care given to negative exponents.
-                    match chars.peek() {
-                        Some('e') | Some('E') => {
-                            s.push('E');
-                            // Consume the e-notation signifier.
-                            chars.next();
-                            if let Some('-') = chars.peek() {
-                                s.push('-');
-                                // Consume the negative sign.
-                                chars.next();
-                            }
-                            let e = peeking_take_while(chars, |ch| match ch {
-                                '0'..='9' => true,
-                                _ => false,
-                            });
-                            s.push_str(&e);
-                        }
-                        _ => {}
-                    }
-
-                    Ok(Some(Token::Number(s)))
-                }
+                '0'..='9' => self.tokenize_number(chars, false),
                 // punctuation
                 '(' => self.consume_and_return(chars, Token::LParen),
                 ')' => self.consume_and_return(chars, Token::RParen),
@@ -518,7 +487,13 @@ impl<'a> Tokenizer<'a> {
                     }
                 }
                 '=' => self.consume_and_return(chars, Token::Eq),
-                '.' => self.consume_and_return(chars, Token::Period),
+                '.' => {
+                    chars.next(); // consume '.'
+                    match chars.peek() {
+                        Some('0'..='9') => self.tokenize_number(chars, true),
+                        _ => Ok(Some(Token::Period)),
+                    }
+                }
                 '!' => {
                     chars.next(); // consume
                     match chars.peek() {
@@ -658,6 +633,49 @@ impl<'a> Tokenizer<'a> {
         }
 
         Ok(Some(Token::Parameter(n)))
+    }
+
+    fn tokenize_number(
+        &self,
+        chars: &mut Peekable<Chars<'_>>,
+        seen_decimal: bool,
+    ) -> Result<Option<Token>, TokenizerError> {
+        let mut seen_decimal = seen_decimal;
+        let mut s = if seen_decimal {
+            ".".to_string()
+        } else {
+            String::default()
+        };
+
+        s.push_str(&peeking_take_while(chars, |ch| match ch {
+            '0'..='9' => true,
+            '.' if !seen_decimal => {
+                seen_decimal = true;
+                true
+            }
+            _ => false,
+        }));
+        // If in e-notation, parse the e-notation with special care given to negative exponents.
+        match chars.peek() {
+            Some('e') | Some('E') => {
+                s.push('E');
+                // Consume the e-notation signifier.
+                chars.next();
+                if let Some('-') = chars.peek() {
+                    s.push('-');
+                    // Consume the negative sign.
+                    chars.next();
+                }
+                let e = peeking_take_while(chars, |ch| match ch {
+                    '0'..='9' => true,
+                    _ => false,
+                });
+                s.push_str(&e);
+            }
+            _ => {}
+        }
+
+        Ok(Some(Token::Number(s)))
     }
 
     fn consume_and_return(
