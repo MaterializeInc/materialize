@@ -33,7 +33,7 @@ docker_run() {
 ci_init
 
 ci_collapsed_heading "Building standalone binaries"
-docker_run "cargo build --release"
+docker_run "cargo build --locked --release"
 
 # NOTE(benesch): The two invocations of `cargo test --no-run` here deserve some
 # explanation. The first invocation prints error messages to stdout in a human
@@ -45,7 +45,7 @@ docker_run "cargo build --release"
 # tests will build, since errors may be present in test code but not in release
 # code.
 ci_collapsed_heading "Building test binaries"
-docker_run "cargo test --no-run && cargo test --no-run --message-format=json > test-binaries.json"
+docker_run "cargo test --locked --no-run && cargo test --locked --no-run --message-format=json > test-binaries.json"
 
 ci_collapsed_heading "Preparing Docker context"
 {
