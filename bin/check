@@ -51,9 +51,9 @@ disabled_lints=(
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#flat_map_identity
     #
-    # Clippy asks that you replace `flat_map(|x| x)` with `flatten()` which
-    # while cute requires someone go read about what `flatten()` does instead
-    # of doing something more productive with their time.
+    # Clippy asks that you replace `flat_map(|x| x)` with `flatten()`, but the
+    # replacement is not sufficiently more readable to justify the cost of the
+    # CI cycle.
     clippy::flat-map-identity
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#large_enum_variant
