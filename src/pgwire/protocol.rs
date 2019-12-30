@@ -701,16 +701,30 @@ where
         row_desc: RelationDesc,
         mut rx: comm::mpsc::Receiver<Vec<Update>>,
     ) -> Result<State, comm::Error> {
-        self.send(BackendMessage::CopyOutResponse).await?;
         let typ = row_desc.typ();
+        let column_formats = iter::repeat(FieldFormat::Text)
+            .take(typ.column_types.len())
+            .collect();
+        self.send(BackendMessage::CopyOutResponse {
+            overall_format: FieldFormat::Text,
+            column_formats,
+        })
+        .await?;
+
+        let mut count = 0;
         while let Some(updates) = rx.try_next().await? {
+            count += updates.len();
             let messages = updates
                 .into_iter()
                 .map(|update| BackendMessage::CopyData(message::encode_update(update, typ)));
             self.send_all(messages).await?;
         }
+
+        let tag = format!("COPY {}", count);
         self.send(BackendMessage::CopyDone).await?;
-        Ok(State::Ready(session))
+        self.send(BackendMessage::CommandComplete { tag }).await?;
+
+        self.sync(session).await
     }
 
     async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {

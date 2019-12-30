@@ -97,11 +97,6 @@ impl Encoder for Codec {
             return Ok(());
         }
 
-        // TODO(benesch): do we need to be smarter about avoiding allocations?
-        // At the very least, we won't need a separate buffer when BytesMut
-        // automatically grows its capacity (carllerche/bytes#170).
-        let mut buf = Vec::new();
-
         // Write type byte.
         let byte = match msg {
             BackendMessage::EncryptionResponse(_) => unreachable!(),
@@ -120,53 +115,51 @@ impl Encoder for Codec {
             BackendMessage::BindComplete => b'2',
             BackendMessage::CloseComplete => b'3',
             BackendMessage::ErrorResponse { .. } => b'E',
-            BackendMessage::CopyOutResponse => b'H',
+            BackendMessage::CopyOutResponse { .. } => b'H',
             BackendMessage::CopyData(_) => b'd',
             BackendMessage::CopyDone => b'c',
         };
-        buf.put_u8(byte);
+        dst.put_u8(byte);
 
         // Write message length placeholder. The true length is filled in later.
-        let start_len = buf.len();
-        buf.put_u32(0);
+        let start_len = dst.len();
+        dst.put_u32(0);
 
         // Write message contents.
         match msg {
             BackendMessage::EncryptionResponse(_) => unreachable!(),
-            // psql doesn't actually care about the number of columns.
-            // It should be saved in the message if we ever need to care about it; until then,
-            // 0 is fine.
-            BackendMessage::CopyOutResponse /* (n_cols) */ => {
-                buf.put_u8(0); // textual format
-                buf.put_i16(0); // n_cols
-                /*
-                for _ in 0..n_cols {
-                    buf.put_i16(0); // textual format for this column
+            BackendMessage::CopyOutResponse {
+                overall_format,
+                column_formats,
+            } => {
+                dst.put_i8(overall_format as i8);
+                dst.put_i16(column_formats.len() as i16);
+                for format in column_formats {
+                    dst.put_i16(format as i16);
                 }
-                */
             }
-            BackendMessage::CopyData(mut data) => {
-                buf.append(&mut data);
+            BackendMessage::CopyData(data) => {
+                dst.put_slice(&data);
             }
             BackendMessage::CopyDone => (),
             BackendMessage::AuthenticationOk => {
-                buf.put_u32(0);
+                dst.put_u32(0);
             }
             BackendMessage::RowDescription(fields) => {
-                buf.put_u16(fields.len() as u16);
+                dst.put_u16(fields.len() as u16);
                 for f in &fields {
-                    buf.put_string(&f.name.to_string());
-                    buf.put_u32(f.table_id);
-                    buf.put_u16(f.column_id);
-                    buf.put_u32(f.type_oid);
-                    buf.put_i16(f.type_len);
-                    buf.put_i32(f.type_mod);
+                    dst.put_string(&f.name.to_string());
+                    dst.put_u32(f.table_id);
+                    dst.put_u16(f.column_id);
+                    dst.put_u32(f.type_oid);
+                    dst.put_i16(f.type_len);
+                    dst.put_i32(f.type_mod);
                     // TODO: make the format correct
-                    buf.put_u16(f.format as u16);
+                    dst.put_u16(f.format as u16);
                 }
             }
             BackendMessage::DataRow(fields, formats) => {
-                buf.put_u16(fields.len() as u16);
+                dst.put_u16(fields.len() as u16);
                 for (f, ff) in fields.iter().zip(formats.iter()) {
                     if let Some(f) = f {
                         let s: Cow<[u8]> = match ff {
@@ -176,41 +169,44 @@ impl Encoder for Codec {
                                 unsupported_err(e)
                             })?,
                         };
-                        buf.put_u32(s.len() as u32);
-                        buf.put(&*s);
+                        dst.put_u32(s.len() as u32);
+                        dst.put(&*s);
                     } else {
-                        buf.put_i32(-1);
+                        dst.put_i32(-1);
                     }
                 }
             }
             BackendMessage::CommandComplete { tag } => {
-                buf.put_string(&tag);
+                dst.put_string(&tag);
             }
             BackendMessage::ParseComplete => (),
             BackendMessage::BindComplete => (),
             BackendMessage::CloseComplete => (),
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery(status) => {
-                buf.put_u8(match status {
+                dst.put_u8(match status {
                     TransactionStatus::Idle => b'I',
                     TransactionStatus::InTransaction => b'T',
                     TransactionStatus::Failed => b'E',
                 });
             }
             BackendMessage::ParameterStatus(name, value) => {
-                buf.put_string(name);
-                buf.put_string(&value);
+                dst.put_string(name);
+                dst.put_string(&value);
             }
             BackendMessage::PortalSuspended => (),
             BackendMessage::NoData => (),
-            BackendMessage::BackendKeyData { conn_id, secret_key } => {
-                buf.put_u32(conn_id);
-                buf.put_u32(secret_key);
+            BackendMessage::BackendKeyData {
+                conn_id,
+                secret_key,
+            } => {
+                dst.put_u32(conn_id);
+                dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
-                buf.put_u16(params.len() as u16);
+                dst.put_u16(params.len() as u16);
                 for param in params {
-                    buf.put_u32(param.type_oid);
+                    dst.put_u32(param.type_oid);
                 }
             }
             BackendMessage::ErrorResponse {
@@ -219,25 +215,24 @@ impl Encoder for Codec {
                 message,
                 detail,
             } => {
-                buf.put_u8(b'S');
-                buf.put_string(severity.string());
-                buf.put_u8(b'C');
-                buf.put_string(code);
-                buf.put_u8(b'M');
-                buf.put_string(&message);
+                dst.put_u8(b'S');
+                dst.put_string(severity.string());
+                dst.put_u8(b'C');
+                dst.put_string(code);
+                dst.put_u8(b'M');
+                dst.put_string(&message);
                 if let Some(ref detail) = detail {
-                    buf.put_u8(b'D');
-                    buf.put_string(detail);
+                    dst.put_u8(b'D');
+                    dst.put_string(detail);
                 }
-                buf.put_u8(b'\0');
+                dst.put_u8(b'\0');
             }
         }
 
         // Overwrite length placeholder with true length.
-        let len = buf.len() - start_len;
-        NetworkEndian::write_u32(&mut buf[start_len..start_len + 4], len as u32);
+        let len = dst.len() - start_len;
+        NetworkEndian::write_u32(&mut dst[start_len..start_len + 4], len as u32);
 
-        dst.extend(buf);
         Ok(())
     }
 }
