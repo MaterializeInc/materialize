@@ -659,7 +659,8 @@ where
 
             Plan::SendRows(rows) => send_immediate_rows(rows),
 
-            Plan::ExplainPlan(mut relation_expr, eval_env) => {
+            Plan::ExplainPlan(mut relation_expr, mut eval_env) => {
+                eval_env.wall_time = Some(chrono::Utc::now());
                 self.optimizer.optimize(&mut relation_expr, &eval_env);
                 let pretty = relation_expr.pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
