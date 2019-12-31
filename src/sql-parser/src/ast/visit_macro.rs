@@ -394,9 +394,6 @@ macro_rules! make_visitor {
                 columns: &'ast $($mut)* [ColumnDef],
                 constraints: &'ast $($mut)* [TableConstraint],
                 with_options: &'ast $($mut)* [SqlOption],
-                external: bool,
-                file_format: &'ast $($mut)* Option<FileFormat>,
-                location: &'ast $($mut)* Option<String>,
             ) {
                 visit_create_table(
                     self,
@@ -404,9 +401,6 @@ macro_rules! make_visitor {
                     columns,
                     constraints,
                     with_options,
-                    external,
-                    file_format,
-                    location,
                 )
             }
 
@@ -421,8 +415,6 @@ macro_rules! make_visitor {
             fn visit_column_option(&mut self, column_option: &'ast $($mut)* ColumnOption) {
                 visit_column_option(self, column_option)
             }
-
-            fn visit_file_format(&mut self, _file_format: &'ast $($mut)* FileFormat) {}
 
             fn visit_option(&mut self, option: &'ast $($mut)* SqlOption) {
                 visit_option(self, option)
@@ -642,18 +634,12 @@ macro_rules! make_visitor {
                     name,
                     columns,
                     constraints,
-                    external,
                     with_options,
-                    file_format,
-                    location,
                 } => visitor.visit_create_table(
                     name,
                     columns,
                     constraints,
                     with_options,
-                    *external,
-                    file_format,
-                    location,
                 ),
                 Statement::AlterTable { name, operation } => visitor.visit_alter_table(name, operation),
                 Statement::SetVariable {
@@ -1355,9 +1341,6 @@ macro_rules! make_visitor {
             columns: &'ast $($mut)* [ColumnDef],
             constraints: &'ast $($mut)* [TableConstraint],
             with_options: &'ast $($mut)* [SqlOption],
-            _external: bool,
-            file_format: &'ast $($mut)* Option<FileFormat>,
-            location: &'ast $($mut)* Option<String>,
         ) {
             visitor.visit_object_name(name);
             for column in columns {
@@ -1368,12 +1351,6 @@ macro_rules! make_visitor {
             }
             for option in with_options {
                 visitor.visit_option(option);
-            }
-            if let Some(file_format) = file_format {
-                visitor.visit_file_format(file_format);
-            }
-            if let Some(location) = location {
-                visitor.visit_literal_string(location);
             }
         }
 

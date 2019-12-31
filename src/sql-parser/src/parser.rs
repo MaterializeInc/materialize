@@ -1232,8 +1232,6 @@ impl Parser {
             self.parse_create_sources()
         } else if self.parse_keyword("SINK") {
             self.parse_create_sink()
-        } else if self.parse_keyword("EXTERNAL") {
-            self.parse_create_external_table()
         } else if self.parse_keyword("INDEX") {
             self.parse_create_index()
         } else {
@@ -1303,27 +1301,6 @@ impl Parser {
             from,
             url,
             with_options,
-        })
-    }
-
-    pub fn parse_create_external_table(&mut self) -> Result<Statement, ParserError> {
-        self.expect_keyword("TABLE")?;
-        let table_name = self.parse_object_name()?;
-        let (columns, constraints) = self.parse_columns()?;
-        self.expect_keywords(&["STORED", "AS"])?;
-        let file_format = self.parse_identifier()?.value.parse::<FileFormat>()?;
-
-        self.expect_keyword("LOCATION")?;
-        let location = self.parse_literal_string()?;
-
-        Ok(Statement::CreateTable {
-            name: table_name,
-            columns,
-            constraints,
-            with_options: vec![],
-            external: true,
-            file_format: Some(file_format),
-            location: Some(location),
         })
     }
 
@@ -1406,9 +1383,6 @@ impl Parser {
             columns,
             constraints,
             with_options,
-            external: false,
-            file_format: None,
-            location: None,
         })
     }
 
