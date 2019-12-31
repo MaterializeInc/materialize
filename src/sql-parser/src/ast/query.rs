@@ -221,8 +221,7 @@ pub enum TableFactor {
         name: ObjectName,
         alias: Option<TableAlias>,
         /// Arguments of a table-valued function, as supported by Postgres
-        /// and MSSQL. Note that deprecated MSSQL `FROM foo (NOLOCK)` syntax
-        /// will also be parsed as `args`.
+        /// and MSSQL.
         args: Vec<Expr>,
         /// MSSQL-specific `WITH (...)` hints such as NOLOCK.
         with_hints: Vec<Expr>,

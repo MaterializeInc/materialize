@@ -1784,9 +1784,6 @@ impl Parser {
             {
                 Ok(Some(w.to_ident()))
             }
-            // MSSQL supports single-quoted strings as aliases for columns
-            // We accept them as table aliases too, although MSSQL does not.
-            Some(Token::SingleQuotedString(ref s)) => Ok(Some(Ident::with_quote('\'', s.clone()))),
             not_an_ident => {
                 if after_as {
                     return self.expected("an identifier after AS", not_an_ident);
@@ -2185,24 +2182,10 @@ impl Parser {
         let mut joins = vec![];
         loop {
             let join = if self.parse_keyword("CROSS") {
-                let join_operator = if self.parse_keyword("JOIN") {
-                    JoinOperator::CrossJoin
-                } else if self.parse_keyword("APPLY") {
-                    // MSSQL extension, similar to CROSS JOIN LATERAL
-                    JoinOperator::CrossApply
-                } else {
-                    return self.expected("JOIN or APPLY after CROSS", self.peek_token());
-                };
+                self.expect_keyword("JOIN")?;
                 Join {
                     relation: self.parse_table_factor()?,
-                    join_operator,
-                }
-            } else if self.parse_keyword("OUTER") {
-                // MSSQL extension, similar to LEFT JOIN LATERAL .. ON 1=1
-                self.expect_keyword("APPLY")?;
-                Join {
-                    relation: self.parse_table_factor()?,
-                    join_operator: JoinOperator::OuterApply,
+                    join_operator: JoinOperator::CrossJoin,
                 }
             } else {
                 let natural = self.parse_keyword("NATURAL");

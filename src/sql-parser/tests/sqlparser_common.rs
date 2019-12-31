@@ -2411,7 +2411,7 @@ fn parse_join_syntax_variants() {
 
     let res = parse_sql_statements("SELECT * FROM a OUTER JOIN b ON 1");
     assert_eq!(
-        ParserError::ParserError("Expected APPLY, found: JOIN".to_string()),
+        ParserError::ParserError("Expected LEFT, RIGHT, or FULL, found: OUTER".to_string()),
         res.unwrap_err()
     );
 }

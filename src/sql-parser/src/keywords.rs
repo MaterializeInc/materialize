@@ -469,7 +469,8 @@ pub const RESERVED_FOR_TABLE_ALIAS: &[&str] = &[
     WITH, SELECT, WHERE, GROUP, HAVING, ORDER, LIMIT, OFFSET, FETCH, UNION, EXCEPT, INTERSECT,
     // Reserved only as a table alias in the `FROM`/`JOIN` clauses:
     ON, JOIN, INNER, CROSS, FULL, LEFT, RIGHT, NATURAL, USING,
-    // for MSSQL-specific OUTER APPLY (seems reserved in most dialects)
+    // Prevents `a OUTER JOIN b` from parsing as `a AS outer JOIN b`, instead
+    // producing a nice syntax error.
     OUTER,
 ];
 
