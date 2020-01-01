@@ -218,7 +218,7 @@ Project {
       aggregates: [min(#7)],
       Join {
         variables: [
-          [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)],
+          [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (8, 0)],
           [(4, 1), (5, 0)],
           [(5, 3), (6, 0)],
           [(6, 2), (7, 0)]
@@ -230,7 +230,8 @@ Project {
         Get { partsupp (u9) },
         Get { supplier (u7) },
         Get { nation (u1) },
-        Filter { predicates: [#1 = "EUROPE"], Get { region (u3) } }
+        Filter { predicates: [#1 = "EUROPE"], Get { region (u3) } },
+        Get { l3 }
       }
     }
   }
@@ -313,6 +314,7 @@ Let {
     Get { orders (u13) }
   }
 } in
+Let { l2 = Distinct { group_key: [0], Get { l0 } } } in
 Reduce {
   group_key: [5],
   aggregates: [countall(null)],
@@ -324,9 +326,10 @@ Reduce {
       Distinct {
         group_key: [16],
         Join {
-          variables: [[(0, 0), (1, 0)]],
+          variables: [[(0, 0), (1, 0), (2, 0)]],
           Filter { predicates: [#11 < #12], Get { lineitem (u15) } },
-          Distinct { group_key: [0], Get { l0 } }
+          Get { l2 },
+          Get { l2 }
         }
       }
     }
@@ -1065,9 +1068,10 @@ Let { l3 = Distinct { group_key: [1], Get { l0 } } } in
 Let {
   l2 = Reduce {
     group_key: [0],
-    aggregates: [all(#0 != #1)],
+    aggregates: [all(#0 != #2)],
     Join {
-      variables: [],
+      variables: [[(0, 0), (1, 0)]],
+      Get { l3 },
       Get { l3 },
       Filter {
         predicates: [#6 ~ ^.*Customer.*Complaints.*$],
@@ -1126,6 +1130,7 @@ Let {
     }
   }
 } in
+Let { l4 = Distinct { group_key: [1], Get { l1 } } } in
 Let {
   l0 = Reduce {
     group_key: [],
@@ -1145,9 +1150,10 @@ Let {
             group_key: [16],
             aggregates: [sum(#4), countall(null)],
             Join {
-              variables: [[(0, 1), (1, 0)]],
+              variables: [[(0, 1), (1, 0), (2, 0)]],
               Get { lineitem (u15) },
-              Distinct { group_key: [1], Get { l1 } }
+              Get { l4 },
+              Get { l4 }
             }
           }
         }
@@ -1216,6 +1222,7 @@ Let {
     Get { lineitem (u15) }
   }
 } in
+Let { l3 = Distinct { group_key: [8], Get { l0 } } } in
 Reduce {
   group_key: [1, 0, 8, 12, 11],
   aggregates: [sum(#21)],
@@ -1231,9 +1238,10 @@ Reduce {
           group_key: [16, 16],
           aggregates: [sum(#4)],
           Join {
-            variables: [[(0, 0), (1, 0)]],
+            variables: [[(0, 0), (1, 0), (2, 0)]],
             Get { lineitem (u15) },
-            Distinct { group_key: [8], Get { l0 } }
+            Get { l3 },
+            Get { l3 }
           }
         }
       }
@@ -1439,28 +1447,33 @@ Let {
     Filter { predicates: [#1 = "CANADA"], Get { nation (u1) } }
   }
 } in
+Let { l5 = Distinct { group_key: [0], Get { l0 } } } in
 Let {
   l4 = Join {
-    variables: [],
-    Distinct { group_key: [0], Get { l0 } },
+    variables: [[(0, 0), (1, 0)]],
+    Get { l5 },
+    Get { l5 },
     Get { partsupp (u9) }
   }
 } in
+Let { l8 = Distinct { group_key: [2], Get { l4 } } } in
 Let {
   l3 = Join {
-    variables: [[(0, 1), (1, 0)]],
+    variables: [[(0, 2), (1, 0)]],
     Get { l4 },
     Reduce {
       group_key: [9],
       aggregates: [any(true)],
       Join {
-        variables: [[(0, 0), (1, 0)]],
+        variables: [[(0, 0), (1, 0), (2, 0)]],
         Filter { predicates: [#1 ~ ^forest.*$], Get { part (u5) } },
-        Distinct { group_key: [1], Get { l4 } }
+        Get { l8 },
+        Get { l8 }
       }
     }
   }
 } in
+Let { l11 = Distinct { group_key: [2, 3], Get { l3 } } } in
 Project {
   outputs: [1, 2],
   Join {
@@ -1470,17 +1483,20 @@ Project {
       group_key: [0],
       aggregates: [any(true)],
       Filter {
-        predicates: [(i64todec #3 * 1000dec) > #11],
+        predicates: [(i64todec #4 * 1000dec) > #12],
         Join {
-          variables: [[(0, 1), (1, 0)], [(0, 2), (1, 1)]],
-          Filter { predicates: [#0 = #2], Get { l3 } },
+          variables: [[(0, 2), (1, 0)], [(0, 3), (1, 1)]],
+          Filter { predicates: [#0 = #3], Get { l3 } },
           Map {
             scalars: [5dec * #2],
             Reduce {
               group_key: [16, 17],
               aggregates: [sum(#4)],
               Join {
-                variables: [[(0, 1), (1, 0)], [(0, 2), (1, 1)]],
+                variables: [
+                  [(0, 1), (1, 0), (2, 0)],
+                  [(0, 2), (1, 1), (2, 1)]
+                ],
                 Filter {
                   predicates: [
                     datetots #10 < 1996-01-01 00:00:00,
@@ -1488,7 +1504,8 @@ Project {
                   ],
                   Get { lineitem (u15) }
                 },
-                Distinct { group_key: [1, 2], Get { l3 } }
+                Get { l11 },
+                Get { l11 }
               }
             }
           }
@@ -1550,6 +1567,7 @@ Let {
     Filter { predicates: [#2 = "F"], Get { orders (u13) } }
   }
 } in
+Let { l3 = Distinct { group_key: [11, 0], Get { l1 } } } in
 Let {
   l0 = Map {
     scalars: [true],
@@ -1559,10 +1577,11 @@ Let {
       Distinct {
         group_key: [0, 1],
         Filter {
-          predicates: [#4 != #1],
+          predicates: [#6 != #1],
           Join {
-            variables: [[(0, 0), (1, 0)]],
-            Distinct { group_key: [11, 0], Get { l1 } },
+            variables: [[(0, 0), (1, 0), (2, 0)], [(0, 1), (1, 1)]],
+            Get { l3 },
+            Get { l3 },
             Get { lineitem (u15) }
           }
         }
@@ -1588,9 +1607,13 @@ Reduce {
               Distinct {
                 group_key: [0, 1],
                 Filter {
-                  predicates: [#4 != #1],
+                  predicates: [#6 != #1],
                   Join {
-                    variables: [[(0, 0), (1, 0)]],
+                    variables: [
+                      [(0, 0), (1, 0), (2, 0)],
+                      [(0, 1), (1, 1)]
+                    ],
+                    Get { l5 },
                     Get { l5 },
                     Filter {
                       predicates: [#12 > #11],
@@ -1753,8 +1776,9 @@ Reduce {
                 Distinct {
                   group_key: [9],
                   Join {
-                    variables: [[(0, 1), (1, 0)]],
+                    variables: [[(0, 1), (1, 0), (2, 0)]],
                     Get { orders (u13) },
+                    Get { l4 },
                     Get { l4 }
                   }
                 }

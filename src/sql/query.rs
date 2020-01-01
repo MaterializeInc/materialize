@@ -36,7 +36,6 @@ use uuid::Uuid;
 use ::expr::{DateTruncTo, Id};
 use catalog::{Catalog, CatalogEntry, QualName};
 use dataflow_types::RowSetFinishing;
-use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
 
@@ -361,33 +360,29 @@ fn plan_view_select(
     s: &Select,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     // Step 1. Handle FROM clause, including joins.
-    let (mut relation_expr, from_scope) = s
-        .from
-        .iter()
-        .map(|twj| plan_table_with_joins(catalog, qcx, twj))
-        .fallible()
-        .fold1(|(left, left_scope), (right, right_scope)| {
-            plan_join_operator(
+    let (left, left_scope) = {
+        let typ = RelationType::new(vec![]);
+        let tn: Option<QualName> = None;
+        (
+            RelationExpr::constant(vec![vec![]], typ),
+            Scope::from_source(
+                tn,
+                iter::empty::<Option<ColumnName>>(),
+                Some(qcx.outer_scope.clone()),
+            ),
+        )
+    };
+    let (mut relation_expr, from_scope) =
+        s.from.iter().fold(Ok((left, left_scope)), |l, twj| {
+            let (left, left_scope) = l?;
+            plan_table_with_joins(
                 catalog,
                 qcx,
-                &JoinOperator::CrossJoin,
                 left,
                 left_scope,
-                right,
-                right_scope,
+                &JoinOperator::CrossJoin,
+                twj,
             )
-        })
-        .unwrap_or_else(|| {
-            let typ = RelationType::new(vec![]);
-            let tn: Option<QualName> = None;
-            Ok((
-                RelationExpr::constant(vec![vec![]], typ),
-                Scope::from_source(
-                    tn,
-                    iter::empty::<Option<ColumnName>>(),
-                    Some(qcx.outer_scope.clone()),
-                ),
-            ))
         })?;
 
     // Step 2. Handle WHERE clause.
@@ -581,19 +576,27 @@ pub fn plan_index<'a>(
 fn plan_table_with_joins<'a>(
     catalog: &Catalog,
     qcx: &QueryContext,
+    left: RelationExpr,
+    left_scope: Scope,
+    join_operator: &JoinOperator,
     table_with_joins: &'a TableWithJoins,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
-    let (mut left, mut left_scope) = plan_table_factor(catalog, qcx, &table_with_joins.relation)?;
+    let (mut left, mut left_scope) = plan_table_factor(
+        catalog,
+        qcx,
+        left,
+        left_scope,
+        join_operator,
+        &table_with_joins.relation,
+    )?;
     for join in &table_with_joins.joins {
-        let (right, right_scope) = plan_table_factor(catalog, qcx, &join.relation)?;
-        let (new_left, new_left_scope) = plan_join_operator(
+        let (new_left, new_left_scope) = plan_table_factor(
             catalog,
             qcx,
-            &join.join_operator,
             left,
             left_scope,
-            right,
-            right_scope,
+            &join.join_operator,
+            &join.relation,
         )?;
         left = new_left;
         left_scope = new_left_scope;
@@ -604,6 +607,9 @@ fn plan_table_with_joins<'a>(
 fn plan_table_factor<'a>(
     catalog: &Catalog,
     qcx: &QueryContext,
+    left: RelationExpr,
+    left_scope: Scope,
+    join_operator: &JoinOperator,
     table_factor: &'a TableFactor,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     match table_factor {
@@ -626,17 +632,15 @@ fn plan_table_factor<'a>(
                 name.clone()
             };
             if !args.is_empty() {
-                let scope = &Scope::empty(Some(qcx.outer_scope.clone()));
-                let relation_type = &RelationType::empty();
                 let ecx = &ExprContext {
                     qcx,
                     name: "FROM table function",
-                    scope,
-                    relation_type,
+                    scope: &left_scope,
+                    relation_type: &qcx.relation_type(&left),
                     allow_aggregates: false,
                     allow_subqueries: true,
                 };
-                plan_table_function(catalog, ecx, &name, Some(alias), args)
+                plan_table_function(catalog, ecx, left, &name, Some(alias), args)
             } else {
                 let item = catalog.get(&name)?;
                 let expr = RelationExpr::Get {
@@ -648,7 +652,7 @@ fn plan_table_factor<'a>(
                     item.desc()?.iter_names(),
                     Some(qcx.outer_scope.clone()),
                 );
-                Ok((expr, scope))
+                plan_join_operator(catalog, qcx, &join_operator, left, left_scope, expr, scope)
             }
         }
         TableFactor::Derived {
@@ -671,17 +675,23 @@ fn plan_table_factor<'a>(
             };
             let scope =
                 Scope::from_source(alias, scope.column_names(), Some(qcx.outer_scope.clone()));
-            Ok((expr, scope))
+            plan_join_operator(catalog, qcx, &join_operator, left, left_scope, expr, scope)
         }
-        TableFactor::NestedJoin(table_with_joins) => {
-            plan_table_with_joins(catalog, qcx, table_with_joins)
-        }
+        TableFactor::NestedJoin(table_with_joins) => plan_table_with_joins(
+            catalog,
+            qcx,
+            left,
+            left_scope,
+            join_operator,
+            table_with_joins,
+        ),
     }
 }
 
 fn plan_table_function(
     catalog: &Catalog,
     ecx: &ExprContext,
+    left: RelationExpr,
     name: &QualName,
     alias: Option<QualName>,
     args: &[Expr],
@@ -693,11 +703,7 @@ fn plan_table_function(
             match ecx.column_type(&expr).scalar_type {
                 ScalarType::Jsonb => {
                     let call = RelationExpr::FlatMapUnary {
-                        // TODO(jamii) input should be the left half of an implicit lateral join, but we don't have lateral joins yet
-                        input: Box::new(RelationExpr::constant(
-                            vec![vec![]],
-                            RelationType::new(vec![]),
-                        )),
+                        input: Box::new(left),
                         func: UnaryTableFunc::JsonbEach,
                         expr,
                     };
@@ -709,7 +715,7 @@ fn plan_table_function(
                         ],
                         Some(ecx.qcx.outer_scope.clone()),
                     );
-                    Ok((call, scope))
+                    Ok((call, ecx.scope.clone().product(scope)))
                 }
                 other => bail!("No overload of jsonb_each for {}", other),
             }
