@@ -18,7 +18,7 @@ use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use expr::GlobalId;
-use repr::{Datum, RowPacker};
+use repr::{Datum, Row};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -106,7 +106,6 @@ pub fn construct<A: Allocate>(
             // Map from string name to pair of primary, and foreign key relationships.
             let mut view_keys =
                 std::collections::HashMap::<GlobalId, (Vec<_>, Vec<(GlobalId, _, _)>)>::new();
-            let mut packer = RowPacker::new();
 
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
@@ -175,7 +174,7 @@ pub fn construct<A: Allocate>(
                                         for (key, index) in primary.into_iter() {
                                             for k in key {
                                                 primary_session.give((
-                                                    packer.pack(&[
+                                                    Row::pack(&[
                                                         Datum::String(&id.to_string()),
                                                         Datum::Int64(k as i64),
                                                         Datum::Int64(index as i64),
@@ -188,7 +187,7 @@ pub fn construct<A: Allocate>(
                                         for (parent, key, number) in foreign.into_iter() {
                                             for (c, p) in key {
                                                 foreign_session.give((
-                                                    packer.pack(&[
+                                                    Row::pack(&[
                                                         Datum::String(&id.to_string()),
                                                         Datum::Int64(c as i64),
                                                         Datum::String(&parent.to_string()),
@@ -222,7 +221,7 @@ pub fn construct<A: Allocate>(
                             }
                             MaterializedEvent::Frontier(name, logical, delta) => {
                                 frontier_session.give((
-                                    packer.pack(&[
+                                    Row::pack(&[
                                         Datum::String(&name.to_string()),
                                         Datum::Int64(logical as i64),
                                     ]),
@@ -233,7 +232,7 @@ pub fn construct<A: Allocate>(
                             MaterializedEvent::PrimaryKey(dataflow_id, key, index) => {
                                 for k in key.iter() {
                                     primary_session.give((
-                                        packer.pack(&[
+                                        Row::pack(&[
                                             Datum::String(&dataflow_id.to_string()),
                                             Datum::Int64(*k as i64),
                                             Datum::Int64(index as i64),
@@ -251,7 +250,7 @@ pub fn construct<A: Allocate>(
                             MaterializedEvent::ForeignKey(child_id, parent_id, keys, number) => {
                                 for (c, p) in keys.iter() {
                                     foreign_session.give((
-                                        packer.pack(&[
+                                        Row::pack(&[
                                             Datum::String(&child_id.to_string()),
                                             Datum::Int64(*c as i64),
                                             Datum::String(&parent_id.to_string()),
@@ -282,9 +281,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut packer = RowPacker::new();
                 move |(name, worker)| {
-                    packer.pack(&[
+                    Row::pack(&[
                         Datum::String(&name.to_string()),
                         Datum::Int64(worker as i64),
                     ])
@@ -300,9 +298,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut packer = RowPacker::new();
                 move |(dataflow, source, worker)| {
-                    packer.pack(&[
+                    Row::pack(&[
                         Datum::String(&dataflow.to_string()),
                         Datum::String(&source.to_string()),
                         Datum::Int64(worker as i64),
@@ -319,9 +316,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut packer = RowPacker::new();
                 move |(peek, worker)| {
-                    packer.pack(&[
+                    Row::pack(&[
                         Datum::String(&format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
                         Datum::String(&peek.id.to_string()),
@@ -334,10 +330,7 @@ pub fn construct<A: Allocate>(
         let primary_key = primary.as_collection();
         let foreign_key = foreign.as_collection();
         let catalog = catalog.as_collection().map({
-            let mut packer = RowPacker::new();
-            move |(id, name)| {
-                packer.pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
-            }
+            move |(id, name)| Row::pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
         });
 
         // Duration statistics derive from the non-rounded event times.
@@ -392,9 +385,8 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map({
-                let mut packer = RowPacker::new();
                 move |((worker, pow), count)| {
-                    packer.pack(&[
+                    Row::pack(&[
                         Datum::Int64(worker as i64),
                         Datum::Int64(pow as i64),
                         Datum::Int64(count as i64),
@@ -442,10 +434,9 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut packer = RowPacker::new();
                         move |row| {
                             let datums = row.unpack();
-                            let key_row = packer.pack(key.iter().map(|k| datums[*k]));
+                            let key_row = Row::pack(key.iter().map(|k| datums[*k]));
                             (key_row, row)
                         }
                     })

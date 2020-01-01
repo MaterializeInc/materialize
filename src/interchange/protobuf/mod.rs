@@ -165,8 +165,6 @@ pub fn validate_proto_schema_with_descriptors(
 pub struct Decoder {
     descriptors: Descriptors,
     message_name: String,
-    packer: RowPacker,
-    temp_storage: RowPacker,
 }
 
 impl Decoder {
@@ -177,8 +175,6 @@ impl Decoder {
         Decoder {
             descriptors,
             message_name: message_name.to_string(),
-            packer: RowPacker::new(),
-            temp_storage: RowPacker::new(),
         }
     }
 
@@ -198,7 +194,7 @@ impl Decoder {
 
         fn value_to_datum<'a>(
             v: &'a Value,
-            arena: &mut RowArena<'a>,
+            arena: &'a RowArena,
         ) -> Result<Datum<'a>, failure::Error> {
             match v {
                 Value::Bool(true) => Ok(Datum::True),
@@ -218,7 +214,7 @@ impl Decoder {
 
         fn nested_value_to_datum<'a>(
             v: &'a Value,
-            arena: &mut RowArena<'a>,
+            arena: &'a RowArena,
         ) -> Result<Datum<'a>, failure::Error> {
             match v {
                 Value::Bool(true) => Ok(Datum::True),
@@ -279,17 +275,15 @@ impl Decoder {
 
         fn extract_row(
             deserialized_message: Value,
-            packer: &mut RowPacker,
             message_descriptors: &MessageDescriptor,
-            temp_storage: &mut RowPacker,
         ) -> Result<Option<Row>, failure::Error> {
             let deserialized_message = match deserialized_message {
                 Value::Map(deserialized_message) => deserialized_message,
                 _ => bail!("Deserialization failed with an unsupported top level object type"),
             };
 
-            let mut row = packer.packable();
-            let mut arena = temp_storage.arena();
+            let mut row = RowPacker::new();
+            let mut arena = RowArena::new();
 
             for f in message_descriptors.fields().iter() {
                 let key = Value::String(f.name().to_string());
@@ -315,12 +309,10 @@ impl Decoder {
 
         extract_row(
             deserialized_message,
-            &mut self.packer,
             &self
                 .descriptors
                 .message_by_name(&self.message_name)
                 .expect("Message should be included in the descriptor set"),
-            &mut self.temp_storage,
         )
     }
 }

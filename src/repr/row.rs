@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::fmt;
 use std::mem::{size_of, transmute};
 
@@ -52,8 +53,6 @@ use serde::{Deserialize, Serialize};
 /// let datums = row.unpack();
 /// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
-///
-/// `Row::pack` can cause a surprising amount of allocation. In performance-sensitive code, use `RowPacker` instead to reuse intermediate storage.
 #[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Row {
     data: Box<[u8]>,
@@ -71,48 +70,29 @@ pub struct DatumDictIter<'a> {
     offset: usize,
 }
 
-impl fmt::Debug for Row {
-    /// Debug representation using the internal datums
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("Row{")?;
-        f.debug_list().entries(self.iter()).finish()?;
-        f.write_str("}")
-    }
-}
-
-/// `RowPacker` provides a reusable buffer as an alternative to `Row::pack` for packing large numbers of `Row`s.
+/// `RowPacker` is used to build a `Row`. It is usually simpler to use `Row::pack` instead, but sometimes awkward control flow might require using `RowPacker` directly.
 ///
 /// ```
 /// # use repr::{Row, Datum, RowPacker};
 /// let mut packer = RowPacker::new();
-/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String("one")]);
-/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String("two")]);
+/// packer.push(Datum::Int32(2));
+/// packer.push(Datum::String("two"));
+/// let row = packer.finish();
 /// ```
 #[derive(Debug)]
+#[must_use]
 pub struct RowPacker {
     data: Vec<u8>,
 }
 
-/// `PackableRow` is a builder struct used for building a `Row`. It is usually used via `RowPacker::pack`, but sometimes awkward control flow might require using `PackableRow` directly.
-///
-/// ```
-/// # use repr::{Row, Datum, RowPacker};
-/// let mut packer = RowPacker::new();
-/// let mut packable = packer.packable();
-/// packable.push(Datum::Int32(2));
-/// packable.push(Datum::String("two"));
-/// let row = packable.finish();
-/// ```
+/// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
 #[derive(Debug)]
-#[must_use]
-pub struct PackableRow<'a> {
-    data: &'a mut Vec<u8>,
+pub struct RowArena {
+    inner: RefCell<RowArenaInner>,
 }
 
-/// `RowArena` is used to allocate temporary data for building `Datum`s.
 #[derive(Debug)]
-pub struct RowArena<'a> {
-    data: &'a mut Vec<u8>,
+struct RowArenaInner {
     owned_bytes: Vec<Box<[u8]>>,
     owned_rows: Vec<Row>,
 }
@@ -369,14 +349,16 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
 
 impl Row {
     /// Take some `Datum`s and pack them into a `Row`.
-    ///
-    /// This function can cause a surprising number of allocations. In performance-sensitive code, use `RowPacker::pack` instead to reuse intermediate storage.
     pub fn pack<'a, I, D>(iter: I) -> Row
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        RowPacker::new().pack(iter)
+        // make a big buffer up front to avoid resizing
+        let mut packer = RowPacker::new();
+        packer.extend(iter);
+        // drop the excess capacity
+        packer.finish()
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
@@ -413,6 +395,15 @@ impl<'a> IntoIterator for &'a Row {
     type IntoIter = DatumListIter<'a>;
     fn into_iter(self) -> DatumListIter<'a> {
         self.iter()
+    }
+}
+
+impl fmt::Debug for Row {
+    /// Debug representation using the internal datums
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("Row{")?;
+        f.debug_list().entries(self.iter()).finish()?;
+        f.write_str("}")
     }
 }
 
@@ -496,59 +487,32 @@ impl<'a> Iterator for DatumDictIter<'a> {
 
 impl RowPacker {
     pub fn new() -> Self {
-        RowPacker { data: vec![] }
-    }
-
-    /// Take some `Datum`s and pack them into a `Row`, using `self` as a buffer to reduce allocation
-    pub fn pack<'a, I, D>(&mut self, iter: I) -> Row
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        let mut packable = self.packable();
-        packable.extend(iter);
-        packable.finish()
-    }
-
-    /// Borrows the internal buffer from `self`.
-    ///
-    /// You can mutate this buffer in the same way as a row, and clone it to make a new row. The buffer will be cleared on drop.
-    ///
-    /// There are some awkward cases where this function is needed, but prefer `RowPacker::pack` where possible.
-    pub fn packable(&mut self) -> PackableRow {
-        PackableRow {
-            data: &mut self.data,
+        RowPacker {
+            // make a big buffer up front to avoid resizing
+            data: Vec::with_capacity(1024 * 16),
         }
     }
 
-    pub fn arena(&mut self) -> RowArena {
-        RowArena {
-            data: &mut self.data,
-            owned_bytes: vec![],
-            owned_rows: vec![],
-        }
-    }
-}
-
-impl<'a> PackableRow<'a> {
     /// Push `datum` onto the end of `self`
     pub fn push(&mut self, datum: Datum) {
         push_datum(&mut self.data, datum)
     }
 
-    pub fn extend<'b, I, D>(&mut self, iter: I)
+    pub fn extend<'a, I, D>(&mut self, iter: I)
     where
         I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'b>>,
+        D: Borrow<Datum<'a>>,
     {
         for datum in iter {
             self.push(*datum.borrow());
         }
     }
 
+    /// Finish packing and return a `Row`
     pub fn finish(self) -> Row {
         Row {
-            data: self.data.clone().into_boxed_slice(),
+            // drop excess capacity
+            data: self.data.into_boxed_slice(),
         }
     }
 
@@ -558,26 +522,30 @@ impl<'a> PackableRow<'a> {
     }
 }
 
-impl Drop for PackableRow<'_> {
-    fn drop(&mut self) {
-        self.data.clear()
+impl RowArena {
+    pub fn new() -> Self {
+        RowArena {
+            inner: RefCell::new(RowArenaInner {
+                owned_bytes: vec![],
+                owned_rows: vec![],
+            }),
+        }
     }
-}
 
-impl<'a> RowArena<'a> {
     /// Take ownership of `bytes`, for the lifetime of the arena
     #[allow(clippy::transmute_ptr_to_ptr)]
-    pub fn push_bytes(&mut self, bytes: Vec<u8>) -> &'a [u8] {
-        self.owned_bytes.push(bytes.into_boxed_slice());
-        let owned_bytes = &self.owned_bytes[self.owned_bytes.len() - 1];
+    pub fn push_bytes(&self, bytes: Vec<u8>) -> &[u8] {
+        let mut inner = self.inner.borrow_mut();
+        inner.owned_bytes.push(bytes.into_boxed_slice());
+        let owned_bytes = &inner.owned_bytes[inner.owned_bytes.len() - 1];
         unsafe {
             // this is safe because we only ever append to self.owned_bytes
-            transmute::<&[u8], &'a [u8]>(owned_bytes)
+            transmute::<&[u8], &[u8]>(owned_bytes)
         }
     }
 
     /// Take ownership of `string`, for the lifetime of the arena
-    pub fn push_string(&mut self, string: String) -> &'a str {
+    pub fn push_string(&self, string: String) -> &str {
         let owned_bytes = self.push_bytes(string.into_bytes());
         unsafe {
             // this is safe because we know it was a String just before
@@ -586,12 +554,13 @@ impl<'a> RowArena<'a> {
     }
 
     /// Take ownership of `row`, for the lifetime of the arena
-    pub fn push_row(&mut self, row: Row) -> &'a Row {
-        self.owned_rows.push(row);
-        let owned_row = &self.owned_rows[self.owned_rows.len() - 1];
+    pub fn push_row(&self, row: Row) -> &Row {
+        let mut inner = self.inner.borrow_mut();
+        inner.owned_rows.push(row);
+        let owned_row = &inner.owned_rows[inner.owned_rows.len() - 1];
         unsafe {
             // this is safe because we only ever append to self.owned_rows
-            transmute::<&Row, &'a Row>(owned_row)
+            transmute::<&Row, &Row>(owned_row)
         }
     }
 
@@ -599,24 +568,22 @@ impl<'a> RowArena<'a> {
     ///
     /// Note: using this method to build up deeply nested data-structures produces a lot of copying. It may be more efficient to go via the unsafe interface in this module.
     #[allow(clippy::range_plus_one)]
-    pub fn push_list<'b, I, D>(&mut self, iter: I) -> DatumList<'a>
+    pub fn push_list<'a, I, D>(&self, iter: I) -> DatumList
     where
         I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'b>>,
+        D: Borrow<Datum<'a>>,
     {
-        self.data.push(Tag::List as u8);
+        let mut packer = RowPacker::new();
+        packer.data.push(Tag::List as u8);
         // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
+        push_copy!(&mut packer.data, 0, usize);
         for datum in iter {
-            push_datum(&mut self.data, *datum.borrow());
+            packer.push(*datum.borrow());
         }
         // fix up the len
-        let len = self.data.len() - 1 - size_of::<usize>();
-        self.data[1..(1 + size_of::<usize>())].copy_from_slice(&len.to_le_bytes());
-        let row = self.push_row(Row {
-            data: self.data.clone().into_boxed_slice(),
-        });
-        self.data.clear();
+        let len = packer.data.len() - 1 - size_of::<usize>();
+        packer.data[1..(1 + size_of::<usize>())].copy_from_slice(&len.to_le_bytes());
+        let row = self.push_row(packer.finish());
         row.unpack_first().unwrap_list()
     }
 
@@ -626,28 +593,26 @@ impl<'a> RowArena<'a> {
     ///
     /// Note: using this method to build up deeply nested data-structures produces a lot of copying. It may be more efficient to go via the unsafe interface in this module.
     #[allow(clippy::range_plus_one)]
-    pub fn push_dict<'b, I, SD, S, D>(&mut self, iter: I) -> DatumDict<'a>
+    pub fn push_dict<'a, I, SD, S, D>(&self, iter: I) -> DatumDict
     where
         I: IntoIterator<Item = SD>,
         SD: Borrow<(S, D)>,
         S: Borrow<str>,
-        D: Borrow<Datum<'b>>,
+        D: Borrow<Datum<'a>>,
     {
-        self.data.push(Tag::Dict as u8);
+        let mut packer = RowPacker::new();
+        packer.data.push(Tag::Dict as u8);
         // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
+        push_copy!(&mut packer.data, 0, usize);
         for pair in iter {
             let (key, datum) = pair.borrow();
-            push_untagged_string(&mut self.data, key.borrow());
-            push_datum(&mut self.data, *datum.borrow());
+            push_untagged_string(&mut packer.data, key.borrow());
+            packer.push(*datum.borrow());
         }
         // fix up the len
-        let len = self.data.len() - 1 - size_of::<usize>();
-        self.data[1..(1 + size_of::<usize>())].copy_from_slice(&len.to_le_bytes());
-        let row = self.push_row(Row {
-            data: self.data.clone().into_boxed_slice(),
-        });
-        self.data.clear();
+        let len = packer.data.len() - 1 - size_of::<usize>();
+        packer.data[1..(1 + size_of::<usize>())].copy_from_slice(&len.to_le_bytes());
+        let row = self.push_row(packer.finish());
         let dict = row.unpack_first().unwrap_dict();
 
         // if in debug mode, sanity check keys
@@ -668,23 +633,6 @@ impl<'a> RowArena<'a> {
 
         dict
     }
-
-    /// Take some `Datum`s and pack them into a `Row`, using `self` as a buffer to reduce allocation
-    pub fn pack<'b, I, D>(&mut self, iter: I) -> Row
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'b>>,
-    {
-        let mut packable = PackableRow { data: self.data };
-        packable.extend(iter);
-        packable.finish()
-    }
-}
-
-impl Default for RowPacker {
-    fn default() -> RowPacker {
-        RowPacker::new()
-    }
 }
 
 #[cfg(test)]
@@ -703,8 +651,7 @@ mod tests {
 
     #[test]
     fn miri_test_arena() {
-        let mut packer = RowPacker::new();
-        let mut arena = packer.arena();
+        let mut arena = RowArena::new();
 
         assert_eq!(arena.push_string("".to_owned()), "");
         assert_eq!(arena.push_string("العَرَبِيَّة".to_owned()), "العَرَبِيَّة");

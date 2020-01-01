@@ -38,7 +38,7 @@ use catalog::Catalog;
 use ore::option::OptionExt;
 use repr::decimal::Significand;
 use repr::{
-    ColumnType, Datum, Interval, PackableRow, QualName, RelationDesc, RelationType, Row, RowPacker,
+    ColumnType, Datum, Interval, QualName, RelationDesc, RelationType, Row, RowArena, RowPacker,
     ScalarType,
 };
 use sql::{scalar_type_from_sql, MutationKind, Plan};
@@ -46,7 +46,6 @@ use sql::{scalar_type_from_sql, MutationKind, Plan};
 pub struct Postgres {
     conn: Connection,
     table_types: HashMap<QualName, (Vec<DataType>, RelationDesc)>,
-    packer: RowPacker,
 }
 
 impl Postgres {
@@ -110,7 +109,6 @@ END $$;
         Ok(Self {
             conn,
             table_types: HashMap::new(),
-            packer: RowPacker::new(),
         })
     }
 
@@ -297,9 +295,9 @@ END $$;
         let mut rows = vec![];
         let postgres_rows = self.conn.query(&*query, &[])?;
         for postgres_row in postgres_rows.iter() {
-            // NOTE We can't use RowPacker::pack here because PostgresRow::get_opt insists on allocating data for strings,
+            // NOTE We can't use Row::pack here because PostgresRow::get_opt insists on allocating data for strings,
             // which has to live somewhere while the iterator is running.
-            let mut row = self.packer.packable();
+            let mut row = RowPacker::new();
             for c in 0..postgres_row.len() {
                 push_column(
                     &mut row,
@@ -316,7 +314,7 @@ END $$;
 }
 
 fn push_column(
-    row: &mut PackableRow,
+    row: &mut RowPacker,
     postgres_row: &PostgresRow,
     i: usize,
     sql_type: &DataType,
@@ -446,8 +444,8 @@ fn push_column(
         DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => {
             let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
             if let Some(serde) = serde {
-                let mut temp_storage = RowPacker::new();
-                let datum = expr::serde_to_datum(&mut temp_storage.arena(), serde).unwrap();
+                let mut arena = RowArena::new();
+                let datum = expr::serde_to_datum(&mut arena, serde).unwrap();
                 row.push(datum)
             } else {
                 row.push(Datum::Null)

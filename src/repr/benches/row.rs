@@ -7,7 +7,7 @@ use chrono::NaiveDate;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use rand::Rng;
 
-use repr::{Datum, Row};
+use repr::{Datum, Row, RowPacker};
 
 fn bench_sort_datums(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
@@ -80,6 +80,10 @@ fn bench_filter_packed(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     )
 }
 
+fn bench_pack_pack(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+    b.iter(|| rows.iter().map(|row| Row::pack(row)).collect::<Vec<_>>())
+}
+
 fn seeded_rng() -> rand_chacha::ChaChaRng {
     rand::SeedableRng::from_seed([
         224, 38, 155, 23, 190, 65, 147, 224, 136, 172, 167, 36, 125, 199, 232, 59, 191, 4, 243,
@@ -139,6 +143,40 @@ pub fn bench_sort(c: &mut Criterion) {
     });
 }
 
+pub fn bench_pack(c: &mut Criterion) {
+    let num_rows = 10_000;
+
+    let mut rng = seeded_rng();
+    let int_rows = (0..num_rows)
+        .map(|_| {
+            vec![
+                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.gen()),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    let mut rng = seeded_rng();
+    let byte_data = (0..num_rows)
+        .map(|_| {
+            let i: i32 = rng.gen();
+            format!("{} and then {} and then {}", i, i + 1, i + 2).into_bytes()
+        })
+        .collect::<Vec<_>>();
+    let byte_rows = byte_data
+        .iter()
+        .map(|bytes| vec![Datum::Bytes(bytes)])
+        .collect::<Vec<_>>();
+
+    c.bench_function("pack_pack_ints", |b| bench_pack_pack(int_rows.clone(), b));
+
+    c.bench_function("pack_pack_bytes", |b| bench_pack_pack(byte_rows.clone(), b));
+}
+
 fn bench_filter(c: &mut Criterion) {
     let num_rows = 10_000;
     let mut rng = seeded_rng();
@@ -170,5 +208,5 @@ fn bench_filter(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_sort, bench_filter);
+criterion_group!(benches, bench_sort, bench_pack, bench_filter);
 criterion_main!(benches);

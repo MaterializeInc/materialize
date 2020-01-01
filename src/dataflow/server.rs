@@ -38,7 +38,7 @@ use dataflow_types::{
 };
 use expr::{EvalEnv, GlobalId};
 use ore::future::channel::mpsc::ReceiverExt;
-use repr::{Datum, Row, RowPacker};
+use repr::{Datum, Row, RowArena};
 
 use super::render;
 use crate::arrangement::{
@@ -670,7 +670,6 @@ impl PendingPeek {
     fn collect_finished_data(&mut self) -> Vec<Row> {
         let (mut cursor, storage) = self.trace.cursor();
         let mut results = Vec::new();
-        let mut temp_storage = RowPacker::new();
 
         // We can limit the record enumeration if i. there is a limit set,
         // and ii. if the specified ordering is empty (specifies no order).
@@ -686,9 +685,9 @@ impl PendingPeek {
                 let datums = row.unpack();
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
-                let temp_storage = &mut temp_storage.arena();
                 if self.filter.iter().all(|predicate| {
-                    predicate.eval(&datums, &self.eval_env, temp_storage) == Datum::True
+                    let temp_storage = RowArena::new();
+                    predicate.eval(&datums, &self.eval_env, &temp_storage) == Datum::True
                 }) {
                     // Differential dataflow represents collections with binary counts,
                     // but our output representation is unary (as many rows as reported
@@ -750,10 +749,9 @@ impl PendingPeek {
             results
                 .iter()
                 .map({
-                    let mut packer = RowPacker::new();
                     move |row| {
                         let datums = row.unpack();
-                        packer.pack(columns.iter().map(|i| datums[*i]))
+                        Row::pack(columns.iter().map(|i| datums[*i]))
                     }
                 })
                 .collect()
