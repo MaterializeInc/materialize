@@ -533,7 +533,7 @@ impl RowPacker {
 
     /// Start packing a `DatumList`. Returns the starting offset, which needs to be passed to `finish_list`.
     ///
-    /// SAFETY:
+    /// # Safety
     /// You must finish the list (or throw away self).
     /// Lists/dicts can be nested, but not overlapped.
     #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
@@ -546,6 +546,9 @@ impl RowPacker {
     }
 
     /// Finish packing a `DatumList`
+    ///
+    /// # Safety
+    /// See `start_list`
     pub unsafe fn finish_list(&mut self, start: usize) {
         let len = self.data.len() - start - size_of::<usize>();
         // fix up the len
@@ -554,7 +557,7 @@ impl RowPacker {
 
     /// Start packing a `DatumDict`. Returns the starting offset, which needs to be passed to `finish_dict`.
     ///
-    /// SAFETY:
+    /// # Safety
     /// You must finish the dict (or throw away self).
     /// Lists/dicts can be nested, but not overlapped.
     #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
@@ -567,6 +570,9 @@ impl RowPacker {
     }
 
     /// Finish packing a `DatumDict`
+    ///
+    /// # Safety
+    /// See `start_dict`
     pub unsafe fn finish_dict(&mut self, start: usize) {
         let len = self.data.len() - start - size_of::<usize>();
         // fix up the len

@@ -7,7 +7,7 @@ use chrono::NaiveDate;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use rand::Rng;
 
-use repr::{Datum, Row, RowPacker};
+use repr::{Datum, Row};
 
 fn bench_sort_datums(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
