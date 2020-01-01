@@ -37,9 +37,7 @@ use sql_parser::ast::{DataType, ObjectType, Statement};
 use catalog::{Catalog, QualName};
 use ore::option::OptionExt;
 use repr::decimal::Significand;
-use repr::{
-    ColumnType, Datum, Interval, RelationDesc, RelationType, Row, RowPacker, ScalarType,
-};
+use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 
 pub struct Postgres {
