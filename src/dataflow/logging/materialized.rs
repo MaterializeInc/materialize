@@ -18,7 +18,7 @@ use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use expr::GlobalId;
-use repr::{Datum, RowPacker, RowUnpacker};
+use repr::{Datum, RowPacker};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -442,12 +442,10 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut unpacker = RowUnpacker::new();
                         let mut packer = RowPacker::new();
                         move |row| {
-                            let datums = unpacker.unpack(&row);
+                            let datums = row.unpack();
                             let key_row = packer.pack(key.iter().map(|k| datums[*k]));
-                            drop(datums);
                             (key_row, row)
                         }
                     })

@@ -10,7 +10,7 @@ use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
-use repr::{Datum, RowPacker, RowUnpacker};
+use repr::{Datum, RowPacker};
 use std::collections::HashMap;
 use std::time::Duration;
 use timely::communication::Allocate;
@@ -368,12 +368,10 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut unpacker = RowUnpacker::new();
                         let mut packer = RowPacker::new();
                         move |row| {
-                            let datums = unpacker.unpack(&row);
+                            let datums = row.unpack();
                             let key_row = packer.pack(key.iter().map(|k| datums[*k]));
-                            drop(datums);
                             (key_row, row)
                         }
                     })

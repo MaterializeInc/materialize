@@ -7,7 +7,7 @@ use super::{DifferentialLog, LogVariant};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use differential_dataflow::logging::DifferentialEvent;
-use repr::{Datum, RowPacker, RowUnpacker};
+use repr::{Datum, RowPacker};
 use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
@@ -120,13 +120,11 @@ pub fn construct<A: Allocate>(
             if config.active_logs().contains(&variant) {
                 let key = variant.index_by();
                 let key_clone = key.clone();
-                let mut unpacker = RowUnpacker::new();
                 let mut packer = RowPacker::new();
                 let trace = collection
                     .map(move |row| {
-                        let datums = unpacker.unpack(&row);
+                        let datums = row.unpack();
                         let key_row = packer.pack(key.iter().map(|k| datums[*k]));
-                        drop(datums);
                         (key_row, row)
                     })
                     .arrange_by_key()

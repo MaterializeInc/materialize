@@ -38,7 +38,7 @@ use dataflow_types::{
 };
 use expr::{EvalEnv, GlobalId};
 use ore::future::channel::mpsc::ReceiverExt;
-use repr::{Datum, Row, RowPacker, RowUnpacker};
+use repr::{Datum, Row, RowPacker};
 
 use super::render;
 use crate::arrangement::{
@@ -670,9 +670,6 @@ impl PendingPeek {
     fn collect_finished_data(&mut self) -> Vec<Row> {
         let (mut cursor, storage) = self.trace.cursor();
         let mut results = Vec::new();
-        let mut unpacker = RowUnpacker::new();
-        let mut left_unpacker = RowUnpacker::new();
-        let mut right_unpacker = RowUnpacker::new();
         let mut temp_storage = RowPacker::new();
 
         // We can limit the record enumeration if i. there is a limit set,
@@ -686,7 +683,7 @@ impl PendingPeek {
         while cursor.key_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
             while cursor.val_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
                 let row = cursor.val(&storage);
-                let datums = unpacker.unpack(row);
+                let datums = row.unpack();
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
                 let temp_storage = &mut temp_storage.arena();
@@ -739,8 +736,8 @@ impl PendingPeek {
                     pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
                         compare_columns(
                             &self.finishing.order_by,
-                            &left_unpacker.unpack(left.iter()),
-                            &right_unpacker.unpack(right.iter()),
+                            &left.unpack(),
+                            &right.unpack(),
                             || left.cmp(right),
                         )
                     });
@@ -753,10 +750,9 @@ impl PendingPeek {
             results
                 .iter()
                 .map({
-                    let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     move |row| {
-                        let datums = unpacker.unpack(*row);
+                        let datums = row.unpack();
                         packer.pack(columns.iter().map(|i| datums[*i]))
                     }
                 })

@@ -23,7 +23,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr};
-use repr::{Datum, Row, RowPacker, RowUnpacker};
+use repr::{Datum, Row, RowPacker};
 
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
@@ -190,15 +190,13 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     }
                     for key in keys {
                         let key_clone = key.clone();
-                        let mut unpacker = RowUnpacker::new();
                         let mut packer = RowPacker::new();
                         let arrangement = context
                             .collection(&view.relation_expr)
                             .expect("Render failed to produce collection")
                             .map(move |row| {
-                                let datums = unpacker.unpack(&row);
+                                let datums = row.unpack();
                                 let key_row = packer.pack(key.iter().map(|k| datums[*k]));
-                                drop(datums);
                                 (key_row, row)
                             })
                             .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view_id));
@@ -357,10 +355,9 @@ where
                 RelationExpr::Project { input, outputs } => {
                     self.ensure_rendered(input, env, scope, worker_index);
                     let outputs = outputs.clone();
-                    let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |row| {
-                        let datums = unpacker.unpack(&row);
+                        let datums = row.unpack();
                         packer.pack(outputs.iter().map(|i| datums[*i]))
                     });
 
@@ -371,11 +368,10 @@ where
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
                     let scalars = scalars.clone();
-                    let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |input_row| {
-                        let mut datums = unpacker.unpack(&input_row);
+                        let mut datums = input_row.unpack();
                         let temp_storage = &mut temp_storage.arena();
                         for scalar in &scalars {
                             let datum = scalar.eval(&datums, &env, temp_storage);
@@ -395,11 +391,10 @@ where
                     let env = env.clone();
                     let func = func.clone();
                     let expr = expr.clone();
-                    let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().flat_map(move |input_row| {
-                        let datums = unpacker.unpack(&input_row);
+                        let datums = input_row.unpack();
                         let temp_storage = &mut temp_storage.arena();
                         let output_rows = (func.func())(
                             expr.eval(&datums, &env, temp_storage),
@@ -423,10 +418,9 @@ where
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
                     let predicates = predicates.clone();
-                    let mut unpacker = RowUnpacker::new();
                     let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().filter(move |input_row| {
-                        let datums = unpacker.unpack(input_row);
+                        let datums = input_row.unpack();
                         predicates.iter().all(|predicate| {
                             let temp_storage = &mut temp_storage.arena();
                             match predicate.eval(&datums, &env, temp_storage) {
@@ -495,7 +489,6 @@ where
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
                 let env = env.clone();
-                let mut unpacker = RowUnpacker::new();
                 let mut eval_packer = RowPacker::new();
                 let mut key_row_packer = RowPacker::new();
                 let name = if let Some(id) = id {
@@ -505,11 +498,10 @@ where
                 };
                 let keyed = built
                     .map(move |row| {
-                        let datums = unpacker.unpack(&row);
+                        let datums = row.unpack();
                         let temp_storage = &mut eval_packer.arena();
                         let key_row = key_row_packer
                             .pack(keys2.iter().map(|k| k.eval(&datums, &env, temp_storage)));
-                        drop(datums);
                         (key_row, row)
                     })
                     .arrange_named::<OrdValSpine<_, _, _, _>>(&name);
@@ -651,13 +643,11 @@ where
                         .chain(new_outputs.iter().map(|i| (index, *i)))
                         .collect();
 
-                    let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     let old_keyed = joined
                         .map(move |row| {
-                            let datums = unpacker.unpack(&row);
+                            let datums = row.unpack();
                             let key_row = packer.pack(old_keys.iter().map(|i| datums[*i]));
-                            drop(datums);
                             (key_row, row)
                         })
                         .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", index));
@@ -666,13 +656,11 @@ where
                     if self.arrangement_columns(&input, &new_keys[..]).is_none() {
                         let built = self.collection(input).unwrap();
                         let new_keys2 = new_keys.clone();
-                        let mut unpacker = RowUnpacker::new();
                         let mut packer = RowPacker::new();
                         let new_keyed = built
                             .map(move |row| {
-                                let datums = unpacker.unpack(&row);
+                                let datums = row.unpack();
                                 let key_row = packer.pack(new_keys2.iter().map(|i| datums[*i]));
-                                drop(datums);
                                 (key_row, row)
                             })
                             .arrange_named::<OrdValSpine<_, _, _, _>>(&format!(
@@ -682,14 +670,12 @@ where
                         self.set_local_columns(&input, &new_keys[..], new_keyed);
                     }
 
-                    let mut old_unpacker = RowUnpacker::new();
-                    let mut new_unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     joined = match self.arrangement_columns(&input, &new_keys[..]) {
                         Some(ArrangementFlavor::Local(local)) => {
                             old_keyed.join_core(&local, move |_keys, old, new| {
-                                let old_datums = old_unpacker.unpack(old);
-                                let new_datums = new_unpacker.unpack(new);
+                                let old_datums = old.unpack();
+                                let new_datums = new.unpack();
                                 Some(
                                     packer.pack(
                                         old_outputs
@@ -702,8 +688,8 @@ where
                         }
                         Some(ArrangementFlavor::Trace(trace)) => {
                             old_keyed.join_core(&trace, move |_keys, old, new| {
-                                let old_datums = old_unpacker.unpack(old);
-                                let new_datums = new_unpacker.unpack(new);
+                                let old_datums = old.unpack();
+                                let new_datums = new.unpack();
                                 Some(
                                     packer.pack(
                                         old_outputs
@@ -751,11 +737,10 @@ where
                         }
                     })
                     .collect::<Vec<_>>();
-                let mut unpacker = RowUnpacker::new();
                 let mut packer = RowPacker::new();
                 joined =
                     joined.map(move |row| {
-                        let datums = unpacker.unpack(&row);
+                        let datums = row.unpack();
                         packer.pack(outputs.iter().zip(dummy_data.iter()).map(
                             |(new_col, dummy)| {
                                 if let Some(new_col) = new_col {
@@ -835,11 +820,10 @@ where
                 .map({
                     let env = env.clone();
                     let group_key = group_key.clone();
-                    let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     let mut temp_storage = RowPacker::new();
                     move |row| {
-                        let datums = unpacker.unpack(&row);
+                        let datums = row.unpack();
 
                         let keys = packer.pack(group_key.iter().map(|i| datums[*i]));
 
@@ -1081,18 +1065,14 @@ where
             let offset = *offset;
             let arrangement = input
                 .map({
-                    let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     move |row| {
-                        let datums = unpacker.unpack(&row);
+                        let datums = row.unpack();
                         let group_row = packer.pack(group_clone.iter().map(|i| datums[*i]));
-                        drop(datums);
                         (group_row, row)
                     }
                 })
                 .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("TopK", {
-                    let mut left_unpacker = RowUnpacker::new();
-                    let mut right_unpacker = RowUnpacker::new();
                     move |_key, source, target| {
                         target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
                         if !order_clone.is_empty() {
@@ -1100,8 +1080,8 @@ where
                             let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
                                 compare_columns(
                                     &order_clone,
-                                    &*left_unpacker.unpack(&left.0),
-                                    &*right_unpacker.unpack(&right.0),
+                                    &left.0.unpack(),
+                                    &right.0.unpack(),
                                     || left.cmp(right),
                                 )
                             };
@@ -1165,13 +1145,11 @@ where
                 self.ensure_rendered(input, env, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
-                let mut unpacker = RowUnpacker::new();
                 let mut packer = RowPacker::new();
                 let keyed = built
                     .map(move |row| {
-                        let datums = unpacker.unpack(&row);
+                        let datums = row.unpack();
                         let key_row = packer.pack(keys2.iter().map(|i| datums[*i]));
-                        drop(datums);
                         (key_row, row)
                     })
                     .arrange_by_key();

@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// A `Row` can be built from a collection of `Datum`s using `Row::pack`
 ///
 /// ```
-/// # use repr::{Row, Datum, RowUnpacker};
+/// # use repr::{Row, Datum};
 /// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// assert_eq!(row.unpack(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)])
 /// ```
@@ -40,20 +40,20 @@ use serde::{Deserialize, Serialize};
 /// `Row`s can be unpacked by iterating over them:
 ///
 /// ```
-/// # use repr::{Row, Datum, RowUnpacker};
+/// # use repr::{Row, Datum};
 /// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// assert_eq!(row.iter().nth(1).unwrap(), Datum::Int32(1));
 /// ```
 ///
 /// If you want random access to the `Datum`s in a `Row`, use `Row::unpack` to create a `Vec<Datum>`
 /// ```
-/// # use repr::{Row, Datum, RowUnpacker};
+/// # use repr::{Row, Datum};
 /// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
 /// let datums = row.unpack();
 /// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
 ///
-/// `Row::pack` and `Row::unpack` can cause a surprising amount of allocation. In performance-sensitive code, use `RowPacker` and `RowUnpacker` instead to reuse intermediate storage.
+/// `Row::pack` can cause a surprising amount of allocation. In performance-sensitive code, use `RowPacker` instead to reuse intermediate storage.
 #[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Row {
     data: Box<[u8]>,
@@ -78,29 +78,6 @@ impl fmt::Debug for Row {
         f.debug_list().entries(self.iter()).finish()?;
         f.write_str("}")
     }
-}
-
-/// `RowUnpacker` provides a reusable buffer as an alternative to `Row::unpack` for unpacking large numbers of `Row`s.
-///
-/// ```
-/// # use repr::{Row, Datum, RowUnpacker};
-/// let rows = (0..5).map(|i| Row::pack(&[Datum::Int32(i), Datum::Null, Datum::Int32(i)])).collect::<Vec<Row>>();
-///
-/// let mut unpacker = RowUnpacker::new();
-/// for row in rows {
-///     let datums = unpacker.unpack(&row);
-///     assert_eq!(datums[0], datums[2]);
-/// }
-/// ```
-#[derive(Debug)]
-pub struct RowUnpacker {
-    datums: Vec<Datum<'static>>,
-}
-
-/// 'UnpackedRow' is a tempory storage for unpacked `Datum`s. It is created by `RowUnpacker::unpack` and `deref`s to `Vec<Datum>`.
-#[derive(Debug)]
-pub struct UnpackedRow<'a> {
-    datums: &'a mut Vec<Datum<'a>>,
 }
 
 /// `RowPacker` provides a reusable buffer as an alternative to `Row::pack` for packing large numbers of `Row`s.
@@ -403,10 +380,12 @@ impl Row {
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
-    ///
-    /// This function can cause a surprising number of allocations. In performance-sensitive code, use `RowUnpacker::unpack` instead to reuse intermediate storage.
     pub fn unpack(&self) -> Vec<Datum> {
-        self.iter().collect()
+        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
+        let len = self.iter().count();
+        let mut vec = Vec::with_capacity(len);
+        vec.extend(self.iter());
+        vec
     }
 
     /// Return the first `Datum` in `self`
@@ -421,6 +400,11 @@ impl Row {
             data: &self.data,
             offset: 0,
         }
+    }
+
+    /// For debugging only
+    pub fn data(&self) -> &[u8] {
+        &self.data
     }
 }
 
@@ -442,6 +426,11 @@ impl<'a> DatumList<'a> {
             data: self.data,
             offset: 0,
         }
+    }
+
+    /// For debugging only
+    pub fn data(&self) -> &'a [u8] {
+        &self.data
     }
 }
 
@@ -474,6 +463,11 @@ impl<'a> DatumDict<'a> {
             data: self.data,
             offset: 0,
         }
+    }
+
+    /// For debugging only
+    pub fn data(&self) -> &'a [u8] {
+        &self.data
     }
 }
 
@@ -557,56 +551,16 @@ impl<'a> PackableRow<'a> {
             data: self.data.clone().into_boxed_slice(),
         }
     }
+
+    /// For debugging only
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 impl Drop for PackableRow<'_> {
     fn drop(&mut self) {
         self.data.clear()
-    }
-}
-
-impl RowUnpacker {
-    pub fn new() -> Self {
-        RowUnpacker { datums: vec![] }
-    }
-
-    /// Unpack `row` into a `Vec<Datum>` for efficient random access, using `self` as a buffer to reduce allocation
-    pub fn unpack<'a, I, D>(&'a mut self, iter: I) -> UnpackedRow<'a>
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        let inner = &mut self.datums;
-        let mut unpacked = UnpackedRow {
-            datums: unsafe {
-                // this is safe because:
-                //   nothing else can access buffer.datums while unpacked is alive
-                //   unpacked can't live longer than self
-                //   when unpacked is dropped, it clears buffer.datums
-                transmute::<&'a mut Vec<Datum<'static>>, &'a mut Vec<Datum<'a>>>(inner)
-            },
-        };
-        unpacked.extend(iter.into_iter().map(|d| *d.borrow()));
-        unpacked
-    }
-}
-
-impl<'a> std::ops::Deref for UnpackedRow<'a> {
-    type Target = Vec<Datum<'a>>;
-    fn deref(&self) -> &Vec<Datum<'a>> {
-        &self.datums
-    }
-}
-
-impl<'a> std::ops::DerefMut for UnpackedRow<'a> {
-    fn deref_mut(&mut self) -> &mut Vec<Datum<'a>> {
-        &mut self.datums
-    }
-}
-
-impl Drop for UnpackedRow<'_> {
-    fn drop(&mut self) {
-        self.datums.clear()
     }
 }
 
@@ -733,12 +687,6 @@ impl Default for RowPacker {
     }
 }
 
-impl Default for RowUnpacker {
-    fn default() -> RowUnpacker {
-        RowUnpacker::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,11 +747,10 @@ mod tests {
     fn miri_test_round_trip() {
         fn round_trip(datums: Vec<Datum>) {
             let row = Row::pack(datums.clone());
-            let mut unpacker = RowUnpacker::new();
             let datums2 = row.iter().collect::<Vec<_>>();
-            let datums3 = unpacker.unpack(&row);
+            let datums3 = row.unpack();
             assert_eq!(datums, datums2);
-            assert_eq!(&datums, &*datums3);
+            assert_eq!(datums, datums3);
         }
 
         round_trip(vec![]);

@@ -116,17 +116,12 @@ impl RowSetFinishing {
     }
     /// Applies finishing actions to a row set.
     pub fn finish(&self, rows: &mut Vec<Row>) {
-        use repr::{RowPacker, RowUnpacker};
+        use repr::RowPacker;
 
-        let mut left_unpacker = RowUnpacker::new();
-        let mut right_unpacker = RowUnpacker::new();
         let mut sort_by = |left: &Row, right: &Row| {
-            compare_columns(
-                &self.order_by,
-                &left_unpacker.unpack(left),
-                &right_unpacker.unpack(right),
-                || left.cmp(right),
-            )
+            compare_columns(&self.order_by, &left.unpack(), &right.unpack(), || {
+                left.cmp(right)
+            })
         };
         let offset = self.offset;
         if offset > rows.len() {
@@ -144,12 +139,10 @@ impl RowSetFinishing {
                 rows.drain(..offset);
             }
             rows.sort_by(&mut sort_by);
-            let mut unpacker = RowUnpacker::new();
             let mut packer = RowPacker::new();
             for row in rows {
-                let datums = unpacker.unpack(&*row);
+                let datums = row.unpack();
                 let new_row = packer.pack(self.project.iter().map(|i| &datums[*i]));
-                drop(datums);
                 *row = new_row;
             }
         }
