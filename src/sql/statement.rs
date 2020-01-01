@@ -19,7 +19,7 @@ use sql_parser::ast::{
 };
 use url::Url;
 
-use catalog::{Catalog, CatalogItem, RemoveMode};
+use catalog::{Catalog, CatalogItem, QualName, RemoveMode};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
     IndexDesc, KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, ProtobufEncoding,
@@ -28,7 +28,7 @@ use dataflow_types::{
 use expr as relationexpr;
 use interchange::{avro, protobuf};
 use relationexpr::{EvalEnv, Id};
-use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
