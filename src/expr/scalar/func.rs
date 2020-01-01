@@ -20,7 +20,7 @@ pub use crate::like::build_like_regex_from_string;
 use crate::EvalEnv;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
-use repr::{ColumnType, Datum, Interval, RowArena, ScalarType};
+use repr::{ColumnType, Datum, Interval, RowArena, RowPacker, ScalarType};
 
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum NullaryFunc {
@@ -363,44 +363,50 @@ pub fn cast_bytes_to_string<'a>(
     Datum::String(temp_storage.push_string(out))
 }
 
-pub fn serde_to_datum<'a>(
-    temp_storage: &'a RowArena,
+pub fn serde_into_row(
+    mut packer: RowPacker,
     serde: serde_json::Value,
-) -> Result<Datum<'a>, failure::Error> {
+) -> Result<RowPacker, failure::Error> {
     use serde_json::Value;
-    Ok(match serde {
-        Value::Null => Datum::JsonNull,
+    match serde {
+        Value::Null => packer.push(Datum::JsonNull),
         Value::Bool(b) => {
             if b {
-                Datum::True
+                packer.push(Datum::True)
             } else {
-                Datum::False
+                packer.push(Datum::False)
             }
         }
         Value::Number(n) => {
             if let Some(f) = n.as_f64() {
-                Datum::Float64(OrderedFloat(f))
+                packer.push(Datum::Float64(OrderedFloat(f)))
             } else {
                 bail!("{} is out of range for json number", n)
             }
         }
-        Value::String(s) => Datum::String(temp_storage.push_string(s)),
+        Value::String(s) => packer.push(Datum::String(&s)),
         Value::Array(array) => {
-            let elems = array
-                .into_iter()
-                .map(|elem| serde_to_datum(temp_storage, elem))
-                .collect::<Result<Vec<_>, _>>()?;
-            Datum::List(temp_storage.push_list(elems))
+            let start = unsafe { packer.start_list() };
+            for elem in array {
+                // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
+                packer = serde_into_row(packer, elem)?;
+            }
+            unsafe { packer.finish_list(start) };
         }
         Value::Object(object) => {
-            let mut pairs = object
-                .into_iter()
-                .map(|(key, val)| Ok((key, serde_to_datum(temp_storage, val)?)))
-                .collect::<Result<Vec<_>, failure::Error>>()?;
-            pairs.sort();
-            Datum::Dict(temp_storage.push_dict(pairs))
+            let start = unsafe { packer.start_dict() };
+            let mut pairs = object.into_iter().collect::<Vec<_>>();
+            // dict keys must be in ascending order
+            pairs.sort_by(|(k1, _), (k2, _)| k1.cmp(&k2));
+            for (key, val) in pairs {
+                packer.push(Datum::String(&key));
+                // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
+                packer = serde_into_row(packer, val)?;
+            }
+            unsafe { packer.finish_dict(start) };
         }
-    })
+    }
+    Ok(packer)
 }
 
 #[allow(clippy::float_cmp)]
@@ -444,9 +450,9 @@ pub fn cast_string_to_jsonb<'a>(
 ) -> Datum<'a> {
     match serde_json::from_str(a.unwrap_str()) {
         Err(_) => Datum::Null,
-        Ok(json) => match serde_to_datum(temp_storage, json) {
+        Ok(json) => match serde_into_row(RowPacker::new(), json) {
             Err(_) => Datum::Null,
-            Ok(datum) => datum,
+            Ok(packer) => temp_storage.push_row(packer.finish()).unpack_first(),
         },
     }
 }
@@ -943,19 +949,19 @@ pub fn jsonb_concat<'a>(
             // stable sort, so if keys collide dedup prefers dict_b
             pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
             pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
-            Datum::Dict(temp_storage.push_dict(pairs))
+            temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }
         (Datum::List(list_a), Datum::List(list_b)) => {
             let elems = list_a.iter().chain(list_b.iter());
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         (Datum::List(list_a), b) => {
             let elems = list_a.iter().chain(Some(b).into_iter());
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         (a, Datum::List(list_b)) => {
             let elems = Some(a).into_iter().chain(list_b.iter());
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         _ => Datum::Null,
     }
@@ -981,7 +987,7 @@ pub fn jsonb_delete_int64<'a>(
                 .enumerate()
                 .filter(|(i2, _e)| i != *i2)
                 .map(|(_, e)| e);
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         _ => Datum::Null,
     }
@@ -996,12 +1002,12 @@ pub fn jsonb_delete_string<'a>(
     match a {
         Datum::List(list) => {
             let elems = list.iter().filter(|e| b != *e);
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         Datum::Dict(dict) => {
             let k = b.unwrap_str();
             let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
-            Datum::Dict(temp_storage.push_dict(pairs))
+            temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }
         _ => Datum::Null,
     }

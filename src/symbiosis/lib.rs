@@ -38,8 +38,7 @@ use catalog::Catalog;
 use ore::option::OptionExt;
 use repr::decimal::Significand;
 use repr::{
-    ColumnType, Datum, Interval, QualName, RelationDesc, RelationType, Row, RowArena, RowPacker,
-    ScalarType,
+    ColumnType, Datum, Interval, QualName, RelationDesc, RelationType, Row, RowPacker, ScalarType,
 };
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 
@@ -299,8 +298,8 @@ END $$;
             // which has to live somewhere while the iterator is running.
             let mut row = RowPacker::new();
             for c in 0..postgres_row.len() {
-                push_column(
-                    &mut row,
+                row = push_column(
+                    row,
                     &postgres_row,
                     c,
                     &sql_types[c],
@@ -314,12 +313,12 @@ END $$;
 }
 
 fn push_column(
-    row: &mut RowPacker,
+    mut row: RowPacker,
     postgres_row: &PostgresRow,
     i: usize,
     sql_type: &DataType,
     nullable: bool,
-) -> Result<(), failure::Error> {
+) -> Result<RowPacker, failure::Error> {
     // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
     // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
     match sql_type {
@@ -444,9 +443,7 @@ fn push_column(
         DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => {
             let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
             if let Some(serde) = serde {
-                let mut arena = RowArena::new();
-                let datum = expr::serde_to_datum(&mut arena, serde).unwrap();
-                row.push(datum)
+                row = expr::serde_into_row(row, serde)?;
             } else {
                 row.push(Datum::Null)
             }
@@ -456,7 +453,7 @@ fn push_column(
             sql_type
         ),
     }
-    Ok(())
+    Ok(row)
 }
 
 fn get_column_inner<T>(

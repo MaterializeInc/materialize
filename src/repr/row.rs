@@ -68,6 +68,7 @@ pub struct DatumListIter<'a> {
 pub struct DatumDictIter<'a> {
     data: &'a [u8],
     offset: usize,
+    prev_key: Option<&'a str>,
 }
 
 /// `RowPacker` is used to build a `Row`. It is usually simpler to use `Row::pack` instead, but sometimes awkward control flow might require using `RowPacker` directly.
@@ -80,7 +81,6 @@ pub struct DatumDictIter<'a> {
 /// let row = packer.finish();
 /// ```
 #[derive(Debug)]
-#[must_use]
 pub struct RowPacker {
     data: Vec<u8>,
 }
@@ -113,7 +113,7 @@ pub struct DatumDict<'a> {
     data: &'a [u8],
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tag {
     Null,
     False,
@@ -257,15 +257,9 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 // --------------------------------------------------------------------------------
 // writing data
 
-// See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
-// #[inline(always)]
-// fn push_copy<T>(data: &mut Vec<u8>, t: T)
-// where
-//     T: Copy + Sized,
-// {
-//     data.extend_from_slice(&unsafe { transmute::<T, [u8; size_of::<T>()]>(t) })
-// }
 fn assert_is_copy<T: Copy>(_t: T) {}
+
+// See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
 macro_rules! push_copy {
     ($data:expr, $t:expr, $T:ty) => {
         let t: $T = $t;
@@ -453,6 +447,7 @@ impl<'a> DatumDict<'a> {
         DatumDictIter {
             data: self.data,
             offset: 0,
+            prev_key: None,
         }
     }
 
@@ -477,8 +472,28 @@ impl<'a> Iterator for DatumDictIter<'a> {
             None
         } else {
             Some(unsafe {
+                let key_tag = read_copy::<Tag>(self.data, &mut self.offset);
+                assert!(
+                    key_tag == Tag::String,
+                    "Dict keys must be strings, got: {:?}",
+                    key_tag
+                );
                 let key = read_untagged_string(self.data, &mut self.offset);
                 let val = read_datum(self.data, &mut self.offset);
+
+                // if in debug mode, sanity check keys
+                if cfg!(debug_assertions) {
+                    if let Some(prev_key) = self.prev_key {
+                        debug_assert!(
+                            prev_key < key,
+                            "Dict keys must be unique and given in ascending order: {} came before {}",
+                            prev_key,
+                            key
+                        );
+                    }
+                    self.prev_key = Some(key);
+                }
+
                 (key, val)
             })
         }
@@ -516,6 +531,130 @@ impl RowPacker {
         }
     }
 
+    /// Start packing a `DatumList`. Returns the starting offset, which needs to be passed to `finish_list`.
+    ///
+    /// SAFETY:
+    /// You must finish the list (or throw away self).
+    /// Lists/dicts can be nested, but not overlapped.
+    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
+    pub unsafe fn start_list(&mut self) -> usize {
+        self.data.push(Tag::List as u8);
+        let start = self.data.len();
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
+        start
+    }
+
+    /// Finish packing a `DatumList`
+    pub unsafe fn finish_list(&mut self, start: usize) {
+        let len = self.data.len() - start - size_of::<usize>();
+        // fix up the len
+        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+    }
+
+    /// Start packing a `DatumDict`. Returns the starting offset, which needs to be passed to `finish_dict`.
+    ///
+    /// SAFETY:
+    /// You must finish the dict (or throw away self).
+    /// Lists/dicts can be nested, but not overlapped.
+    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
+    pub unsafe fn start_dict(&mut self) -> usize {
+        self.data.push(Tag::Dict as u8);
+        let start = self.data.len();
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
+        start
+    }
+
+    /// Finish packing a `DatumDict`
+    pub unsafe fn finish_dict(&mut self, start: usize) {
+        let len = self.data.len() - start - size_of::<usize>();
+        // fix up the len
+        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+    }
+
+    /// Pack a `DatumList`.
+    ///
+    /// ```
+    /// # use repr::{Row, Datum, RowPacker};
+    /// let mut packer = RowPacker::new();
+    /// packer.push_list_with(|packer| {
+    ///     packer.push(Datum::String("age"));
+    ///     packer.push(Datum::Int64(42));
+    /// });
+    /// let row = packer.finish();
+    ///
+    /// assert_eq!(row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(), vec![Datum::String("age"), Datum::Int64(42)])
+    /// ```
+    pub fn push_list_with<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut RowPacker),
+    {
+        let start = unsafe { self.start_list() };
+        f(self);
+        unsafe { self.finish_list(start) };
+    }
+
+    /// Pack a `DatumDict`.
+    ///
+    /// You must alternate pushing string keys and arbitary values, otherwise reading the dict will cause a panic.
+    /// You must push keys in ascending order, otherwise equality checks on the resulting `Row` may be wrong and reading the dict IN DEBUG MODE will cause a panic.
+    ///
+    /// ```
+    /// # use repr::{Row, Datum, RowPacker};
+    /// let mut packer = RowPacker::new();
+    /// packer.push_dict_with(|packer| {
+    ///
+    ///     // key
+    ///     packer.push(Datum::String("age"));
+    ///     // value
+    ///     packer.push(Datum::Int64(42));
+    ///
+    ///     // key
+    ///     packer.push(Datum::String("name"));
+    ///     // value
+    ///     packer.push(Datum::String("bob"));
+    /// });
+    /// let row = packer.finish();
+    ///
+    /// assert_eq!(row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(), vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))])
+    /// ```
+    pub fn push_dict_with<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut RowPacker),
+    {
+        let start = unsafe { self.start_dict() };
+        f(self);
+        unsafe { self.finish_dict(start) };
+    }
+
+    /// Convenience function to push a `DatumList` from an iter of `Datum`s
+    pub fn push_list<'a, I, D>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.push_list_with(|packer| {
+            for elem in iter {
+                packer.push(*elem.borrow())
+            }
+        })
+    }
+
+    /// Convenience function to push a `DatumDict` from an iter of `(&str, Datum)` pairs
+    pub fn push_dict<'a, I, D>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = (&'a str, D)>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.push_dict_with(|packer| {
+            for (k, v) in iter {
+                packer.push(Datum::String(k));
+                packer.push(*v.borrow())
+            }
+        })
+    }
+
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
@@ -532,19 +671,19 @@ impl RowArena {
         }
     }
 
-    /// Take ownership of `bytes`, for the lifetime of the arena
+    /// Take ownership of `bytes` for the lifetime of the arena
     #[allow(clippy::transmute_ptr_to_ptr)]
-    pub fn push_bytes(&self, bytes: Vec<u8>) -> &[u8] {
+    pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
         let mut inner = self.inner.borrow_mut();
         inner.owned_bytes.push(bytes.into_boxed_slice());
         let owned_bytes = &inner.owned_bytes[inner.owned_bytes.len() - 1];
         unsafe {
             // this is safe because we only ever append to self.owned_bytes
-            transmute::<&[u8], &[u8]>(owned_bytes)
+            transmute::<&[u8], &'a [u8]>(owned_bytes)
         }
     }
 
-    /// Take ownership of `string`, for the lifetime of the arena
+    /// Take ownership of `string` for the lifetime of the arena
     pub fn push_string(&self, string: String) -> &str {
         let owned_bytes = self.push_bytes(string.into_bytes());
         unsafe {
@@ -553,85 +692,46 @@ impl RowArena {
         }
     }
 
-    /// Take ownership of `row`, for the lifetime of the arena
-    pub fn push_row(&self, row: Row) -> &Row {
+    /// Take ownership of `row` for the lifetime of the arena
+    pub fn push_row<'a>(&'a self, row: Row) -> &'a Row {
         let mut inner = self.inner.borrow_mut();
         inner.owned_rows.push(row);
         let owned_row = &inner.owned_rows[inner.owned_rows.len() - 1];
         unsafe {
             // this is safe because we only ever append to self.owned_rows
-            transmute::<&Row, &Row>(owned_row)
+            transmute::<&Row, &'a Row>(owned_row)
         }
     }
 
-    /// Allocate a `DatumList` from an iterator of `Datum`s
+    /// Convenience function to make a new `Row` containing a single datum, and take ownership of it for the lifetime of the arena
     ///
-    /// Note: using this method to build up deeply nested data-structures produces a lot of copying. It may be more efficient to go via the unsafe interface in this module.
-    #[allow(clippy::range_plus_one)]
-    pub fn push_list<'a, I, D>(&self, iter: I) -> DatumList
+    /// ```
+    /// # use repr::{RowArena, Datum};
+    /// let arena = RowArena::new();
+    /// let datum = arena.make_datum(|packer| {
+    ///   packer.push_list(&[Datum::String("hello"), Datum::String("world")]);
+    /// });
+    /// assert_eq!(datum.unwrap_list().iter().collect::<Vec<_>>(), vec![Datum::String("hello"), Datum::String("world")]);
+    /// ```
+    pub fn make_datum<'a, F>(&'a self, f: F) -> Datum<'a>
     where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
+        F: FnOnce(&mut RowPacker),
     {
         let mut packer = RowPacker::new();
-        packer.data.push(Tag::List as u8);
-        // write a dummy len, will fix it up later
-        push_copy!(&mut packer.data, 0, usize);
-        for datum in iter {
-            packer.push(*datum.borrow());
-        }
-        // fix up the len
-        let len = packer.data.len() - 1 - size_of::<usize>();
-        packer.data[1..(1 + size_of::<usize>())].copy_from_slice(&len.to_le_bytes());
-        let row = self.push_row(packer.finish());
-        row.unpack_first().unwrap_list()
+        f(&mut packer);
+        self.push_row(packer.finish()).unpack_first()
     }
+}
 
-    /// Allocate a `DatumDict` from an iterator of `(&str, Datum)` pairs
-    ///
-    /// The pairs MUST be sorted by key and not contain duplicate keys
-    ///
-    /// Note: using this method to build up deeply nested data-structures produces a lot of copying. It may be more efficient to go via the unsafe interface in this module.
-    #[allow(clippy::range_plus_one)]
-    pub fn push_dict<'a, I, SD, S, D>(&self, iter: I) -> DatumDict
-    where
-        I: IntoIterator<Item = SD>,
-        SD: Borrow<(S, D)>,
-        S: Borrow<str>,
-        D: Borrow<Datum<'a>>,
-    {
-        let mut packer = RowPacker::new();
-        packer.data.push(Tag::Dict as u8);
-        // write a dummy len, will fix it up later
-        push_copy!(&mut packer.data, 0, usize);
-        for pair in iter {
-            let (key, datum) = pair.borrow();
-            push_untagged_string(&mut packer.data, key.borrow());
-            packer.push(*datum.borrow());
-        }
-        // fix up the len
-        let len = packer.data.len() - 1 - size_of::<usize>();
-        packer.data[1..(1 + size_of::<usize>())].copy_from_slice(&len.to_le_bytes());
-        let row = self.push_row(packer.finish());
-        let dict = row.unpack_first().unwrap_dict();
+impl Default for RowPacker {
+    fn default() -> RowPacker {
+        RowPacker::new()
+    }
+}
 
-        // if in debug mode, sanity check keys
-        if cfg!(debug_assertions) {
-            let mut prev_key = None;
-            for (key, _val) in dict.iter() {
-                if let Some(prev_key) = prev_key {
-                    debug_assert!(
-                        prev_key < key,
-                        "Dict keys must be unique and given in ascending order: {} came before {}",
-                        prev_key,
-                        key
-                    );
-                }
-                prev_key = Some(key);
-            }
-        }
-
-        dict
+impl Default for RowArena {
+    fn default() -> RowArena {
+        RowArena::new()
     }
 }
 
@@ -651,7 +751,7 @@ mod tests {
 
     #[test]
     fn miri_test_arena() {
-        let mut arena = RowArena::new();
+        let arena = RowArena::new();
 
         assert_eq!(arena.push_string("".to_owned()), "");
         assert_eq!(arena.push_string("العَرَبِيَّة".to_owned()), "العَرَبِيَّة");
@@ -659,35 +759,12 @@ mod tests {
         assert_eq!(arena.push_bytes(vec![]), &[]);
         assert_eq!(arena.push_bytes(vec![0, 2, 1, 255]), &[0, 2, 1, 255]);
 
-        let list: &[Datum] = &[];
-        assert_eq!(arena.push_list(list).iter().collect::<Vec<Datum>>(), vec![]);
-        let list = vec![
+        let row = Row::pack(&[
             Datum::Null,
             Datum::Int32(-42),
             Datum::Interval(Interval::Months(312)),
-        ];
-        assert_eq!(
-            arena.push_list(list.clone()).iter().collect::<Vec<Datum>>(),
-            list
-        );
-
-        let dict: &[(&str, Datum)] = &[];
-        assert_eq!(
-            arena.push_dict(dict).iter().collect::<Vec<(&str, Datum)>>(),
-            vec![]
-        );
-        let dict = vec![
-            ("an int", Datum::Int32(-42)),
-            ("an interval", Datum::Interval(Interval::Months(312))),
-            ("null", Datum::Null),
-        ];
-        assert_eq!(
-            arena
-                .push_dict(dict.clone())
-                .iter()
-                .collect::<Vec<(&str, Datum)>>(),
-            dict
-        );
+        ]);
+        assert_eq!(arena.push_row(row.clone()), &row);
     }
 
     #[test]
@@ -728,5 +805,38 @@ mod tests {
             Datum::String(""),
             Datum::String("العَرَبِيَّة"),
         ]);
+    }
+
+    #[test]
+    fn test_nesting() {
+        let mut packer = RowPacker::new();
+        packer.push_dict_with(|packer| {
+            packer.push(Datum::String("favourites"));
+            packer.push_list_with(|packer| {
+                packer.push(Datum::String("ice cream"));
+                packer.push(Datum::String("oreos"));
+                packer.push(Datum::String("cheesecake"));
+            });
+            packer.push(Datum::String("name"));
+            packer.push(Datum::String("bob"));
+        });
+        let row = packer.finish();
+
+        let mut iter = row.unpack_first().unwrap_dict().iter();
+
+        let (k, v) = iter.next().unwrap();
+        assert_eq!(k, "favourites");
+        assert_eq!(
+            v.unwrap_list().iter().collect::<Vec<_>>(),
+            vec![
+                Datum::String("ice cream"),
+                Datum::String("oreos"),
+                Datum::String("cheesecake"),
+            ]
+        );
+
+        let (k, v) = iter.next().unwrap();
+        assert_eq!(k, "name");
+        assert_eq!(v, Datum::String("bob"));
     }
 }
