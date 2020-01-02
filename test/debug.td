@@ -66,7 +66,6 @@ a  b
 rowsum
 ----
 
-
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
 
@@ -76,6 +75,10 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 > PEEK view
 a  b
 ----
+1 1
+1 2
+2 1
+3 1
 
 > PEEK same_source_same_time
 rowsum
@@ -91,7 +94,10 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=44
 > PEEK view
 a  b
 ----
-
+1 1
+1 2
+2 1
+3 1
 
 > PEEK same_source_same_time
 rowsum
@@ -110,6 +116,10 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=45
 > PEEK view
 a  b
 ----
+1 1
+1 2
+2 1
+3 1
 
 > PEEK same_source_same_time
 rowsum
@@ -125,6 +135,10 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=46
 > PEEK view
 a  b
 ----
+1 1
+1 2
+2 1
+3 1
 
 > PEEK same_source_same_time
 rowsum
@@ -137,4 +151,3 @@ rowsum
 14
 8
 8
-
