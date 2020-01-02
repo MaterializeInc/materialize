@@ -23,7 +23,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr};
-use repr::{Datum, Row, RowPacker, RowUnpacker};
+use repr::{Datum, Row, RowArena, RowPacker};
 
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
@@ -190,15 +190,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     }
                     for key in keys {
                         let key_clone = key.clone();
-                        let mut unpacker = RowUnpacker::new();
-                        let mut packer = RowPacker::new();
                         let arrangement = context
                             .collection(&view.relation_expr)
                             .expect("Render failed to produce collection")
                             .map(move |row| {
-                                let datums = unpacker.unpack(&row);
-                                let key_row = packer.pack(key.iter().map(|k| datums[*k]));
-                                drop(datums);
+                                let datums = row.unpack();
+                                let key_row = Row::pack(key.iter().map(|k| datums[*k]));
                                 (key_row, row)
                             })
                             .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view_id));
@@ -357,11 +354,9 @@ where
                 RelationExpr::Project { input, outputs } => {
                     self.ensure_rendered(input, env, scope, worker_index);
                     let outputs = outputs.clone();
-                    let mut unpacker = RowUnpacker::new();
-                    let mut packer = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |row| {
-                        let datums = unpacker.unpack(&row);
-                        packer.pack(outputs.iter().map(|i| datums[*i]))
+                        let datums = row.unpack();
+                        Row::pack(outputs.iter().map(|i| datums[*i]))
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -371,20 +366,17 @@ where
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
                     let scalars = scalars.clone();
-                    let mut unpacker = RowUnpacker::new();
-                    let mut packer = RowPacker::new();
-                    let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |input_row| {
-                        let mut datums = unpacker.unpack(&input_row);
-                        let temp_storage = &mut temp_storage.arena();
+                        let mut datums = input_row.unpack();
+                        let temp_storage = RowArena::new();
                         for scalar in &scalars {
-                            let datum = scalar.eval(&datums, &env, temp_storage);
+                            let datum = scalar.eval(&datums, &env, &temp_storage);
                             // Scalar is allowed to see the outputs of previous scalars.
                             // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
                             // Note that this doesn't mutate input_row.
                             datums.push(datum);
                         }
-                        packer.pack(&*datums)
+                        Row::pack(&*datums)
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -395,21 +387,18 @@ where
                     let env = env.clone();
                     let func = func.clone();
                     let expr = expr.clone();
-                    let mut unpacker = RowUnpacker::new();
-                    let mut packer = RowPacker::new();
-                    let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().flat_map(move |input_row| {
-                        let datums = unpacker.unpack(&input_row);
-                        let temp_storage = &mut temp_storage.arena();
+                        let datums = input_row.unpack();
+                        let temp_storage = RowArena::new();
                         let output_rows = (func.func())(
-                            expr.eval(&datums, &env, temp_storage),
+                            expr.eval(&datums, &env, &temp_storage),
                             &env,
-                            temp_storage,
+                            &temp_storage,
                         );
                         output_rows
                             .into_iter()
                             .map(|output_row| {
-                                packer.pack(
+                                Row::pack(
                                     input_row.clone().into_iter().chain(output_row.into_iter()),
                                 )
                             })
@@ -423,13 +412,11 @@ where
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
                     let predicates = predicates.clone();
-                    let mut unpacker = RowUnpacker::new();
-                    let mut temp_storage = RowPacker::new();
                     let collection = self.collection(input).unwrap().filter(move |input_row| {
-                        let datums = unpacker.unpack(input_row);
+                        let datums = input_row.unpack();
+                        let temp_storage = RowArena::new();
                         predicates.iter().all(|predicate| {
-                            let temp_storage = &mut temp_storage.arena();
-                            match predicate.eval(&datums, &env, temp_storage) {
+                            match predicate.eval(&datums, &env, &temp_storage) {
                                 Datum::True => true,
                                 Datum::False | Datum::Null => false,
                                 _ => unreachable!(),
@@ -495,9 +482,6 @@ where
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
                 let env = env.clone();
-                let mut unpacker = RowUnpacker::new();
-                let mut eval_packer = RowPacker::new();
-                let mut key_row_packer = RowPacker::new();
                 let name = if let Some(id) = id {
                     format!("Arrange: {}", id)
                 } else {
@@ -505,11 +489,10 @@ where
                 };
                 let keyed = built
                     .map(move |row| {
-                        let datums = unpacker.unpack(&row);
-                        let temp_storage = &mut eval_packer.arena();
-                        let key_row = key_row_packer
-                            .pack(keys2.iter().map(|k| k.eval(&datums, &env, temp_storage)));
-                        drop(datums);
+                        let datums = row.unpack();
+                        let temp_storage = RowArena::new();
+                        let key_row =
+                            Row::pack(keys2.iter().map(|k| k.eval(&datums, &env, &temp_storage)));
                         (key_row, row)
                     })
                     .arrange_named::<OrdValSpine<_, _, _, _>>(&name);
@@ -651,13 +634,10 @@ where
                         .chain(new_outputs.iter().map(|i| (index, *i)))
                         .collect();
 
-                    let mut unpacker = RowUnpacker::new();
-                    let mut packer = RowPacker::new();
                     let old_keyed = joined
                         .map(move |row| {
-                            let datums = unpacker.unpack(&row);
-                            let key_row = packer.pack(old_keys.iter().map(|i| datums[*i]));
-                            drop(datums);
+                            let datums = row.unpack();
+                            let key_row = Row::pack(old_keys.iter().map(|i| datums[*i]));
                             (key_row, row)
                         })
                         .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", index));
@@ -666,13 +646,10 @@ where
                     if self.arrangement_columns(&input, &new_keys[..]).is_none() {
                         let built = self.collection(input).unwrap();
                         let new_keys2 = new_keys.clone();
-                        let mut unpacker = RowUnpacker::new();
-                        let mut packer = RowPacker::new();
                         let new_keyed = built
                             .map(move |row| {
-                                let datums = unpacker.unpack(&row);
-                                let key_row = packer.pack(new_keys2.iter().map(|i| datums[*i]));
-                                drop(datums);
+                                let datums = row.unpack();
+                                let key_row = Row::pack(new_keys2.iter().map(|i| datums[*i]));
                                 (key_row, row)
                             })
                             .arrange_named::<OrdValSpine<_, _, _, _>>(&format!(
@@ -682,36 +659,29 @@ where
                         self.set_local_columns(&input, &new_keys[..], new_keyed);
                     }
 
-                    let mut old_unpacker = RowUnpacker::new();
-                    let mut new_unpacker = RowUnpacker::new();
-                    let mut packer = RowPacker::new();
                     joined = match self.arrangement_columns(&input, &new_keys[..]) {
                         Some(ArrangementFlavor::Local(local)) => {
                             old_keyed.join_core(&local, move |_keys, old, new| {
-                                let old_datums = old_unpacker.unpack(old);
-                                let new_datums = new_unpacker.unpack(new);
-                                Some(
-                                    packer.pack(
-                                        old_outputs
-                                            .iter()
-                                            .map(|i| &old_datums[*i])
-                                            .chain(new_outputs.iter().map(|i| &new_datums[*i])),
-                                    ),
-                                )
+                                let old_datums = old.unpack();
+                                let new_datums = new.unpack();
+                                Some(Row::pack(
+                                    old_outputs
+                                        .iter()
+                                        .map(|i| &old_datums[*i])
+                                        .chain(new_outputs.iter().map(|i| &new_datums[*i])),
+                                ))
                             })
                         }
                         Some(ArrangementFlavor::Trace(trace)) => {
                             old_keyed.join_core(&trace, move |_keys, old, new| {
-                                let old_datums = old_unpacker.unpack(old);
-                                let new_datums = new_unpacker.unpack(new);
-                                Some(
-                                    packer.pack(
-                                        old_outputs
-                                            .iter()
-                                            .map(|i| &old_datums[*i])
-                                            .chain(new_outputs.iter().map(|i| &new_datums[*i])),
-                                    ),
-                                )
+                                let old_datums = old.unpack();
+                                let new_datums = new.unpack();
+                                Some(Row::pack(
+                                    old_outputs
+                                        .iter()
+                                        .map(|i| &old_datums[*i])
+                                        .chain(new_outputs.iter().map(|i| &new_datums[*i])),
+                                ))
                             })
                         }
                         None => {
@@ -751,22 +721,22 @@ where
                         }
                     })
                     .collect::<Vec<_>>();
-                let mut unpacker = RowUnpacker::new();
-                let mut packer = RowPacker::new();
-                joined =
-                    joined.map(move |row| {
-                        let datums = unpacker.unpack(&row);
-                        packer.pack(outputs.iter().zip(dummy_data.iter()).map(
-                            |(new_col, dummy)| {
+                joined = joined.map(move |row| {
+                    let datums = row.unpack();
+                    Row::pack(
+                        outputs
+                            .iter()
+                            .zip(dummy_data.iter())
+                            .map(|(new_col, dummy)| {
                                 if let Some(new_col) = new_col {
                                     datums[*new_col]
                                 } else {
                                     // Regenerate any columns ignored during join with dummy data
                                     *dummy
                                 }
-                            },
-                        ))
-                    });
+                            }),
+                    )
+                });
                 self.collections.insert(relation_expr.clone(), joined);
             } else {
                 panic!("Empty join; why?");
@@ -835,15 +805,12 @@ where
                 .map({
                     let env = env.clone();
                     let group_key = group_key.clone();
-                    let mut unpacker = RowUnpacker::new();
-                    let mut packer = RowPacker::new();
-                    let mut temp_storage = RowPacker::new();
                     move |row| {
-                        let datums = unpacker.unpack(&row);
+                        let datums = row.unpack();
 
-                        let keys = packer.pack(group_key.iter().map(|i| datums[*i]));
+                        let keys = Row::pack(group_key.iter().map(|i| datums[*i]));
 
-                        let mut vals = packer.packable();
+                        let mut vals = RowPacker::new();
                         let mut aggs = vec![1i128];
 
                         for (index, aggregate) in aggregates_clone.iter().enumerate() {
@@ -855,8 +822,8 @@ where
                             // consider restructuring the plan to pre-distinct the right
                             // data and then use a non-distinctness-requiring aggregation.
 
-                            let temp_storage = &mut temp_storage.arena();
-                            let eval = aggregate.expr.eval(&datums, &env, temp_storage);
+                            let temp_storage = RowArena::new();
+                            let eval = aggregate.expr.eval(&datums, &env, &temp_storage);
 
                             // Non-Abelian values cannot be accumulated, and just need to
                             // be passed along.
@@ -929,8 +896,6 @@ where
                         "Reduce",
                         {
                             let env = env.clone();
-                            let mut packer = RowPacker::new();
-                            let mut temp_storage = RowPacker::new();
                             move |key, source, target| {
                                 sums.clear();
                                 sums.extend(&source[0].1[..]);
@@ -941,7 +906,7 @@ where
                                 }
 
                                 // Our output will be [keys; aggregates].
-                                let mut result = packer.packable();
+                                let mut result = RowPacker::new();
                                 result.extend(key.iter());
 
                                 let mut abelian_pos = 1; // <- advance past the count
@@ -1030,16 +995,16 @@ where
                                                     }
                                                 })
                                                 .collect::<HashSet<_>>();
-                                            let temp_storage = &mut temp_storage.arena();
-                                            result.push((agg.func.func())(iter, &env, temp_storage));
+                                            let temp_storage = RowArena::new();
+                                            result.push((agg.func.func())(iter, &env, &temp_storage));
                                         } else {
                                             let iter = source.iter().flat_map(|(v, w)| {
                                                 // let eval = agg.expr.eval(v);
                                                 std::iter::repeat(v.iter().nth(non_abelian_pos).unwrap())
                                                     .take(std::cmp::max(w[0], 0) as usize)
                                             });
-                                            let temp_storage = &mut temp_storage.arena();
-                                            result.push((agg.func.func())(iter, &env, temp_storage));
+                                            let temp_storage = RowArena::new();
+                                            result.push((agg.func.func())(iter, &env, &temp_storage));
                                         }
                                         non_abelian_pos += 1;
                                     }
@@ -1081,18 +1046,13 @@ where
             let offset = *offset;
             let arrangement = input
                 .map({
-                    let mut unpacker = RowUnpacker::new();
-                    let mut packer = RowPacker::new();
                     move |row| {
-                        let datums = unpacker.unpack(&row);
-                        let group_row = packer.pack(group_clone.iter().map(|i| datums[*i]));
-                        drop(datums);
+                        let datums = row.unpack();
+                        let group_row = Row::pack(group_clone.iter().map(|i| datums[*i]));
                         (group_row, row)
                     }
                 })
                 .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("TopK", {
-                    let mut left_unpacker = RowUnpacker::new();
-                    let mut right_unpacker = RowUnpacker::new();
                     move |_key, source, target| {
                         target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
                         if !order_clone.is_empty() {
@@ -1100,8 +1060,8 @@ where
                             let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
                                 compare_columns(
                                     &order_clone,
-                                    &*left_unpacker.unpack(&left.0),
-                                    &*right_unpacker.unpack(&right.0),
+                                    &left.0.unpack(),
+                                    &right.0.unpack(),
                                     || left.cmp(right),
                                 )
                             };
@@ -1165,13 +1125,10 @@ where
                 self.ensure_rendered(input, env, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
-                let mut unpacker = RowUnpacker::new();
-                let mut packer = RowPacker::new();
                 let keyed = built
                     .map(move |row| {
-                        let datums = unpacker.unpack(&row);
-                        let key_row = packer.pack(keys2.iter().map(|i| datums[*i]));
-                        drop(datums);
+                        let datums = row.unpack();
+                        let key_row = Row::pack(keys2.iter().map(|i| datums[*i]));
                         (key_row, row)
                     })
                     .arrange_by_key();
