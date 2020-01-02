@@ -430,6 +430,7 @@ dependencies = [
  "failure",
  "futures",
  "ore",
+ "pgrepr",
  "repr",
  "sql",
  "symbiosis",
@@ -2012,6 +2013,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgrepr"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "bytes 0.5.3",
+ "chrono",
+ "expr",
+ "failure",
+ "postgres-types",
+ "repr",
+]
+
+[[package]]
 name = "pgwire"
 version = "0.1.0"
 dependencies = [
@@ -2025,10 +2039,12 @@ dependencies = [
  "expr",
  "failure",
  "futures",
+ "itertools",
  "lazy_static",
  "log",
  "ordered-float",
  "ore",
+ "pgrepr",
  "prometheus",
  "rand 0.7.2",
  "repr",
@@ -3078,6 +3094,7 @@ dependencies = [
  "failure",
  "interchange",
  "ore",
+ "pgrepr",
  "pretty_assertions",
  "regex",
  "repr",
@@ -3114,6 +3131,7 @@ dependencies = [
  "md5 0.7.0",
  "ordered-float",
  "ore",
+ "pgrepr",
  "regex",
  "repr",
  "serde_json",

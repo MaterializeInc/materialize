@@ -19,6 +19,7 @@ expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.3"
 ore = { path = "../ore" }
+pgrepr = { path = "../pgrepr" }
 repr = { path = "../repr" }
 sql = { path = "../sql" }
 symbiosis = { path = "../symbiosis" }

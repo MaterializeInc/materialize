@@ -10,22 +10,19 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
-use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
-use ordered_float::OrderedFloat;
 use tokio::io;
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::message::{
-    BackendMessage, EncryptionType, FieldFormat, FrontendMessage, TransactionStatus,
-    VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL,
+    BackendMessage, EncryptionType, FrontendMessage, TransactionStatus, VERSION_CANCEL,
+    VERSION_GSSENC, VERSION_SSL,
 };
 use ore::netio;
-use repr::{Datum, ScalarType};
 
 #[derive(Debug)]
 enum CodecError {
@@ -162,15 +159,12 @@ impl Encoder for Codec {
                 dst.put_u16(fields.len() as u16);
                 for (f, ff) in fields.iter().zip(formats.iter()) {
                     if let Some(f) = f {
-                        let s: Cow<[u8]> = match ff {
-                            FieldFormat::Text => f.to_text(),
-                            FieldFormat::Binary => f.to_binary().map_err(|e| {
-                                log::error!("binary err: {}", e);
-                                unsupported_err(e)
-                            })?,
-                        };
-                        dst.put_u32(s.len() as u32);
-                        dst.put(&*s);
+                        let base = dst.len();
+                        dst.put_u32(0);
+                        f.encode(*ff, dst);
+                        let len = dst.len() - base - 4;
+                        let len = (len as u32).to_be_bytes();
+                        dst[base..base + 4].copy_from_slice(&len);
                     } else {
                         dst.put_i32(-1);
                     }
@@ -206,7 +200,7 @@ impl Encoder for Codec {
             BackendMessage::ParameterDescription(params) => {
                 dst.put_u16(params.len() as u16);
                 for param in params {
-                    dst.put_u32(param.type_oid);
+                    dst.put_u32(param.oid());
                 }
             }
             BackendMessage::ErrorResponse {
@@ -428,61 +422,38 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
-    // Actions depending on the number of format codes provided:
-    //     0 => use text for all parameters, if any exist
-    //     1 => use the specified format code for all parameters
-    //    >1 => use separate format code for each parameter
-    let parameter_format_code_count = buf.read_i16()?;
-    let mut parameter_format_codes = Vec::with_capacity(parameter_format_code_count as usize);
-    if parameter_format_code_count == 0 {
-        parameter_format_codes.push(FieldFormat::Text);
-    } else {
-        for _ in 0..parameter_format_code_count {
-            parameter_format_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
-        }
+    let mut param_formats = Vec::new();
+    for _ in 0..buf.read_i16()? {
+        let fmt = pgrepr::Format::try_from(buf.read_i16()?).map_err(input_err)?;
+        param_formats.push(fmt);
     }
 
-    let parameter_count = buf.read_i16()?;
-    // If we have fewer format codes than parameters,
-    // we're using the same format code for all parameters.
-    // Add parameter number of that format code to
-    // FrontendMessage::Bind to provide a cleaner interface.
-    if parameter_format_code_count < parameter_count {
-        for _ in 0..parameter_count - parameter_format_code_count {
-            parameter_format_codes.push(parameter_format_codes[0]);
-        }
-    }
-
-    let mut parameters = Vec::new();
-    for _ in 0..parameter_count {
-        let param_value_length = buf.read_i32()?;
-        if param_value_length == -1 {
-            // Only happens if the value is Null.
-            parameters.push(None);
+    let mut raw_params = Vec::new();
+    for _ in 0..buf.read_i16()? {
+        let len = buf.read_i32()?;
+        if len == -1 {
+            raw_params.push(None); // NULL
         } else {
-            let mut value: Vec<u8> = Vec::new();
-            for _ in 0..param_value_length {
+            // TODO(benesch): this should use bytes::Bytes to avoid the copy.
+            let mut value = Vec::new();
+            for _ in 0..len {
                 value.push(buf.read_byte()?);
             }
-            parameters.push(Some(value));
+            raw_params.push(Some(value));
         }
     }
 
-    // Actions depending on the number of result format codes provided:
-    //     0 => no result columns or all should use text
-    //     1 => use the specified format code for all results
-    //    >1 => use separate format code for each result
-    let result_formats_count = buf.read_i16()?;
-    let mut result_formats = Vec::with_capacity(result_formats_count as usize);
-    for _ in 0..result_formats_count {
-        result_formats.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
+    let mut result_formats = Vec::new();
+    for _ in 0..buf.read_i16()? {
+        let fmt = pgrepr::Format::try_from(buf.read_i16()?).map_err(input_err)?;
+        result_formats.push(fmt);
     }
 
-    let raw_parameter_bytes = RawParameterBytes::new(parameters, parameter_format_codes);
     Ok(FrontendMessage::Bind {
         portal_name,
         statement_name,
-        raw_parameter_bytes,
+        param_formats,
+        raw_params,
         result_formats,
     })
 }
@@ -591,109 +562,6 @@ impl<'a> Cursor<'a> {
     fn advance(&mut self, n: usize) {
         self.buf = &self.buf[n..]
     }
-}
-
-/// Stores raw bytes passed from Postgres to
-/// bind to prepared statements.
-#[derive(Debug)]
-pub struct RawParameterBytes {
-    parameters: Vec<Option<Vec<u8>>>,
-    parameter_format_codes: Vec<FieldFormat>,
-}
-
-impl RawParameterBytes {
-    pub fn new(
-        parameters: Vec<Option<Vec<u8>>>,
-        parameter_format_codes: Vec<FieldFormat>,
-    ) -> RawParameterBytes {
-        RawParameterBytes {
-            parameters,
-            parameter_format_codes,
-        }
-    }
-
-    pub fn decode_parameters<'a>(
-        &'a self,
-        typs: &[ScalarType],
-    ) -> Result<Vec<(Datum<'a>, ScalarType)>, failure::Error> {
-        let mut parameters = Vec::new();
-        for (i, parameter) in self.parameters.iter().enumerate() {
-            let datum = match parameter {
-                Some(bytes) => match self.parameter_format_codes[i] {
-                    FieldFormat::Binary => {
-                        RawParameterBytes::generate_datum_from_bytes(&bytes, &typs[i])?
-                    }
-                    FieldFormat::Text => {
-                        RawParameterBytes::generate_datum_from_text(&bytes, &typs[i])?
-                    }
-                },
-                None => Datum::Null,
-            };
-            parameters.push((datum, typs[i].clone()));
-        }
-        Ok(parameters)
-    }
-
-    fn generate_datum_from_bytes<'a>(
-        bytes: &'a [u8],
-        typ: &ScalarType,
-    ) -> Result<Datum<'a>, failure::Error> {
-        Ok(match typ {
-            ScalarType::Null => Datum::Null,
-            ScalarType::Bool => match bytes[0] {
-                // Rust bools are 1 byte in size.
-                0 => Datum::False,
-                _ => Datum::True,
-            },
-            ScalarType::Int32 => Datum::Int32(NetworkEndian::read_i32(&bytes)),
-            ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(&bytes)),
-            ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(&bytes).into()),
-            ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(&bytes).into()),
-            ScalarType::Bytes => Datum::Bytes(&bytes),
-            ScalarType::String => Datum::String(str::from_utf8(bytes)?),
-            _ => {
-                // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
-                failure::bail!(
-                    "Generating datum not implemented for ScalarType: {:#?}",
-                    typ
-                )
-            }
-        })
-    }
-
-    fn generate_datum_from_text<'a>(
-        bytes: &'a [u8],
-        typ: &ScalarType,
-    ) -> Result<Datum<'a>, failure::Error> {
-        let as_str = str::from_utf8(bytes)?;
-        Ok(match typ {
-            ScalarType::Null => Datum::Null,
-            ScalarType::Bool => match &*as_str {
-                "0" => Datum::False,
-                _ => Datum::True, // Note: anything non-zero is true!
-            },
-            ScalarType::Int32 => Datum::Int32(as_str.parse::<i32>()?),
-            ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>()?),
-            ScalarType::Float32 => Datum::Float32(OrderedFloat::from(as_str.parse::<f32>()?)),
-            ScalarType::Float64 => Datum::Float64(OrderedFloat::from(as_str.parse::<f64>()?)),
-            ScalarType::Bytes => Datum::Bytes(as_str.as_bytes()),
-            ScalarType::String => Datum::String(as_str),
-            _ => {
-                // todo(jldlaughlin): implement Decimal, Date, Time, Timestamp, Interval
-                failure::bail!(
-                    "Generating datum from text not implemented for ScalarType: {:#?} {:#?}",
-                    typ,
-                    as_str
-                )
-            }
-        })
-    }
-}
-
-/// Constructs an error indicating that, while the pgwire instructions were
-/// valid, we don't currently support that functionality.
-fn unsupported_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, source.into())
 }
 
 /// Constructs an error indicating that the client has violated the pgwire

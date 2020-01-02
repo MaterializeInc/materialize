@@ -41,7 +41,7 @@ use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
-use sql::{FieldFormat, Session, Statement};
+use sql::{Session, Statement};
 use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
@@ -701,7 +701,7 @@ impl State {
             .get_prepared_statement(&statement_name)
             .expect("unnamed prepared statement missing");
         let desc = stmt.desc().cloned();
-        let result_formats = vec![FieldFormat::Text; stmt.result_width()];
+        let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
         self.session
             .set_portal(portal_name.clone(), statement_name, vec![], result_formats)?;
 

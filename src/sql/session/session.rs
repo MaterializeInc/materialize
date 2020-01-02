@@ -19,7 +19,7 @@ use failure::bail;
 
 use repr::{Datum, Row, ScalarType};
 
-use crate::session::statement::{FieldFormat, Portal, PreparedStatement};
+use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};
 use crate::session::var::{
@@ -265,7 +265,7 @@ impl Session {
         portal_name: String,
         statement_name: String,
         params: Vec<(Datum<'a>, ScalarType)>,
-        result_formats: Vec<impl Into<FieldFormat>>,
+        result_formats: Vec<pgrepr::Format>,
     ) -> Result<(), failure::Error> {
         if !self.prepared_statements.contains_key(&statement_name) {
             bail!(

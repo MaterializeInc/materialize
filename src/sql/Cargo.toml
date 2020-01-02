@@ -17,6 +17,7 @@ expr = { path = "../expr" }
 failure = "0.1.6"
 interchange = { path = "../interchange" }
 ore = { path = "../ore" }
+pgrepr = { path = "../pgrepr" }
 regex = "1.3.1"
 repr = { path = "../repr" }
 sql-parser = { path = "../sql-parser" }

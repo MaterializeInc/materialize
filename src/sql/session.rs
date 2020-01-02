@@ -34,5 +34,5 @@ mod transaction;
 mod var;
 
 pub use session::Session;
-pub use statement::{FieldFormat, Portal, PreparedStatement};
+pub use statement::{Portal, PreparedStatement};
 pub use transaction::TransactionStatus;
