@@ -6,15 +6,63 @@
 use crate::{EvalEnv, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
-pub struct ConstantJoin;
+pub struct InsertConstantJoin;
 
-impl super::Transform for ConstantJoin {
+#[derive(Debug)]
+pub struct RemoveConstantJoin;
+
+impl super::Transform for InsertConstantJoin {
     fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
         self.transform(relation)
     }
 }
 
-impl ConstantJoin {
+impl InsertConstantJoin {
+    pub fn transform(&self, relation: &mut RelationExpr) {
+        relation.visit_mut_pre(&mut |e| {
+            self.action(e);
+        });
+    }
+
+    pub fn action(&self, relation: &mut RelationExpr) {
+        if let RelationExpr::Map { input, scalars } = relation {
+            if scalars.iter().all(|e| e.is_literal()) {
+                if let RelationExpr::Join { inputs, .. } = &mut **input {
+                    let row = repr::Row::pack(scalars.iter().flat_map(|e| {
+                        if let ScalarExpr::Literal(row, _) = e {
+                            Some(row.unpack_first())
+                        } else {
+                            None
+                        }
+                    }));
+                    let rows = vec![(row, 1)];
+                    let typ = scalars
+                        .iter()
+                        .flat_map(|e| {
+                            if let ScalarExpr::Literal(_, typ) = e {
+                                Some(typ.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let typ = repr::RelationType::new(typ).add_keys(Vec::new());
+                    assert_eq!(typ.column_types.len(), scalars.len());
+                    inputs.push(RelationExpr::Constant { rows, typ });
+                    *relation = input.take_dangerous();
+                }
+            }
+        }
+    }
+}
+
+impl super::Transform for RemoveConstantJoin {
+    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+        self.transform(relation)
+    }
+}
+
+impl RemoveConstantJoin {
     pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);
