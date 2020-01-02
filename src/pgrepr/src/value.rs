@@ -4,13 +4,15 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::error::Error;
+use std::str;
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
+use repr::jsonb::Jsonb;
+use repr::{strconv, ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::{Format, Interval, Numeric, Type};
 
@@ -45,7 +47,7 @@ pub enum Value {
     /// An arbitrary precision number.
     Numeric(Numeric),
     /// A binary JSON blob.
-    Jsonb(String),
+    Jsonb(Jsonb),
 }
 
 impl Value {
@@ -54,34 +56,25 @@ impl Value {
     /// The conversion happens in the obvious manner, except that `Datum::Null`
     /// is converted to `None` to align with how PostgreSQL handles NULL.
     pub fn from_datum(datum: Datum, typ: &ColumnType) -> Option<Value> {
-        if let Datum::Null = datum {
-            // handle null before json in case json column is nullable
-            None
-        } else if let ScalarType::Jsonb = &typ.scalar_type {
-            Some(Value::Jsonb(expr::datum_to_serde(datum).to_string()))
-        } else {
-            Some(match datum {
-                Datum::Null => unreachable!(),
-                Datum::True => Value::Bool(true),
-                Datum::False => Value::Bool(false),
-                Datum::Int32(i) => Value::Int4(i),
-                Datum::Int64(i) => Value::Int8(i),
-                Datum::Float32(f) => Value::Float4(*f),
-                Datum::Float64(f) => Value::Float8(*f),
-                Datum::Date(d) => Value::Date(d),
-                Datum::Timestamp(ts) => Value::Timestamp(ts),
-                Datum::TimestampTz(ts) => Value::TimestampTz(ts),
-                Datum::Interval(iv) => Value::Interval(Interval(iv)),
-                Datum::Decimal(d) => {
-                    let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
-                    Value::Numeric(Numeric(d.with_scale(scale)))
-                }
-                Datum::Bytes(b) => Value::Bytea(b.to_vec()),
-                Datum::String(s) => Value::Text(s.to_owned()),
-                Datum::JsonNull | Datum::List(_) | Datum::Dict(_) => {
-                    panic!("can't serialize {}::{}", datum, typ)
-                }
-            })
+        match (datum, &typ.scalar_type) {
+            (Datum::Null, _) => None,
+            (Datum::True, ScalarType::Bool) => Some(Value::Bool(true)),
+            (Datum::False, ScalarType::Bool) => Some(Value::Bool(false)),
+            (Datum::Int32(i), ScalarType::Int32) => Some(Value::Int4(i)),
+            (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
+            (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
+            (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
+            (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
+            (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
+            (Datum::TimestampTz(ts), ScalarType::TimestampTz) => Some(Value::TimestampTz(ts)),
+            (Datum::Interval(iv), ScalarType::Interval) => Some(Value::Interval(Interval(iv))),
+            (Datum::Decimal(d), ScalarType::Decimal(_, scale)) => {
+                Some(Value::Numeric(Numeric(d.with_scale(*scale))))
+            }
+            (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
+            (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
+            (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
+            _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
 
@@ -110,7 +103,10 @@ impl Value {
             ),
             Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), ScalarType::Bytes),
             Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
-            Value::Jsonb(_) => todo!(),
+            Value::Jsonb(jsonb) => (
+                buf.push_row(jsonb.into_row()).unpack_first(),
+                ScalarType::Jsonb,
+            ),
         }
     }
 
@@ -126,24 +122,19 @@ impl Value {
     /// format](Format::Text).
     pub fn encode_text(&self, buf: &mut BytesMut) {
         match self {
-            Value::Bool(false) => buf.put(&b"f"[..]),
-            Value::Bool(true) => buf.put(&b"t"[..]),
-            Value::Bytea(b) => buf.put(b.as_slice()),
-            Value::Date(d) => buf.put(d.to_string().as_bytes()),
-            Value::Timestamp(ts) => {
-                buf.put(ts.format("%Y-%m-%d %H:%M:%S.%f").to_string().as_bytes())
-            }
-            Value::TimestampTz(ts) => {
-                buf.put(ts.format("%Y-%m-%d %H:%M:%S.%f%:z").to_string().as_bytes())
-            }
-            Value::Interval(iv) => buf.put(iv.to_string().as_bytes()),
-            Value::Int4(i) => buf.put(i.to_string().as_bytes()),
-            Value::Int8(i) => buf.put(i.to_string().as_bytes()),
-            Value::Float4(f) => buf.put(f.to_string().as_bytes()),
-            Value::Float8(f) => buf.put(f.to_string().as_bytes()),
-            Value::Numeric(n) => buf.put(n.to_string().as_bytes()),
+            Value::Bool(b) => strconv::format_bool(buf, *b),
+            Value::Bytea(b) => strconv::format_bytes(buf, b),
+            Value::Date(d) => strconv::format_date(buf, *d),
+            Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
+            Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
+            Value::Interval(iv) => strconv::format_interval(buf, iv.0),
+            Value::Int4(i) => strconv::format_int32(buf, *i),
+            Value::Int8(i) => strconv::format_int64(buf, *i),
+            Value::Float4(f) => strconv::format_float32(buf, *f),
+            Value::Float8(f) => strconv::format_float64(buf, *f),
+            Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Text(s) => buf.put(s.as_bytes()),
-            Value::Jsonb(s) => buf.put(s.as_bytes()),
+            Value::Jsonb(js) => strconv::format_jsonb(buf, js),
         }
     }
 
@@ -163,13 +154,7 @@ impl Value {
             Value::Float8(f) => f.to_sql(&PgType::FLOAT8, buf),
             Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
-            Value::Jsonb(s) => {
-                // https://github.com/postgres/postgres/blob/14aec03502302eff6c67981d8fd121175c436ce9/src/backend/utils/adt/jsonb.c#L148
-                let version = 1;
-                buf.put_u8(version);
-                buf.put(s.as_bytes());
-                Ok(postgres_types::IsNull::No)
-            }
+            Value::Jsonb(jsonb) => jsonb.as_serde_json().to_sql(&PgType::JSONB, buf),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         match is_null {
@@ -193,8 +178,24 @@ impl Value {
 
     /// Deserializes a value of type `ty` from `raw` using the [text encoding
     /// format](Format::Text).
-    pub fn decode_text(_: Type, _: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
-        todo!()
+    pub fn decode_text(ty: Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+        let raw = str::from_utf8(raw)?;
+        Ok(match ty {
+            Type::Bool => Value::Bool(strconv::parse_bool(raw)?),
+            Type::Bytea => Value::Bytea(strconv::parse_bytes(raw)?),
+            Type::Int4 => Value::Int4(strconv::parse_int32(raw)?),
+            Type::Int8 => Value::Int8(strconv::parse_int64(raw)?),
+            Type::Float4 => Value::Float4(strconv::parse_float32(raw)?),
+            Type::Float8 => Value::Float8(strconv::parse_float64(raw)?),
+            Type::Date => Value::Date(strconv::parse_date(raw)?),
+            Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
+            Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
+            Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
+            Type::Text => Value::Text(raw.to_owned()),
+            Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
+            Type::Jsonb => Value::Jsonb(strconv::parse_jsonb(raw)?),
+            Type::Unknown => panic!("cannot decode unknown type"),
+        })
     }
 
     /// Deserializes a value of type `ty` from `raw` using the [binary encoding
@@ -209,7 +210,10 @@ impl Value {
             Type::Int4 => i32::from_sql(ty.inner(), raw).map(Value::Int4),
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
             Type::Interval => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
-            Type::Jsonb => todo!(),
+            Type::Jsonb => {
+                let val = serde_json::Value::from_sql(ty.inner(), raw)?;
+                Ok(Value::Jsonb(Jsonb::new(val)?))
+            }
             Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),

@@ -12,6 +12,7 @@
 #![deny(missing_docs, missing_debug_implementations)]
 
 pub mod collections;
+pub mod fmt;
 pub mod future;
 pub mod hash;
 pub mod iter;

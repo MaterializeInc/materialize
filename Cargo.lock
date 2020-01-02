@@ -1809,6 +1809,7 @@ dependencies = [
 name = "ore"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "crossbeam",
  "env_logger",
  "failure",
@@ -1906,6 +1907,7 @@ dependencies = [
  "failure",
  "postgres-types",
  "repr",
+ "serde_json",
 ]
 
 [[package]]
@@ -2556,6 +2558,7 @@ dependencies = [
  "chrono",
  "criterion",
  "failure",
+ "hex",
  "ordered-float",
  "ore",
  "pretty",
@@ -2563,6 +2566,7 @@ dependencies = [
  "rand_chacha 0.2.1",
  "regex",
  "serde",
+ "serde_json",
  "serde_regex",
  "sql-parser",
 ]
@@ -2930,7 +2934,6 @@ dependencies = [
  "catalog",
  "chrono",
  "dataflow-types",
- "expr",
  "failure",
  "log",
  "ore",

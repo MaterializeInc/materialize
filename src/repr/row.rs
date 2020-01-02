@@ -762,7 +762,8 @@ mod tests {
         assert_eq!(arena.push_string("".to_owned()), "");
         assert_eq!(arena.push_string("العَرَبِيَّة".to_owned()), "العَرَبِيَّة");
 
-        assert_eq!(arena.push_bytes(vec![]), &[]);
+        let empty: &[u8] = &[];
+        assert_eq!(arena.push_bytes(vec![]), empty);
         assert_eq!(arena.push_bytes(vec![0, 2, 1, 255]), &[0, 2, 1, 255]);
 
         let row = Row::pack(&[

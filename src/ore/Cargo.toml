@@ -9,6 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
+bytes = "0.5"
 env_logger = "0.7.1"
 failure = "0.1.6"
 fallible-iterator = "0.2.0"

@@ -3,22 +3,20 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::cmp;
+use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
-use std::fmt::Write;
 use std::str::FromStr;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
-use failure::bail;
-use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
+use repr::jsonb::Jsonb;
 use repr::regex::Regex;
-use repr::{ColumnType, Datum, Interval, RowArena, RowPacker, ScalarType};
+use repr::{strconv, ColumnType, Datum, Interval, RowArena, ScalarType};
 
 use self::format::DateTimeFormat;
 pub use crate::like::build_like_regex_from_string;
@@ -111,6 +109,10 @@ fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    // N.B. this function intentionally does not use `strconv::format_bool`, as
+    // the SQL specification requires `true` and `false` to be spelled out,
+    // while `strconv::format_bool` uses `t` and `f` for compliance with the
+    // PostgreSQL wire protocol.
     match a.unwrap_bool() {
         true => Datum::from("true"),
         false => Datum::from("false"),
@@ -122,7 +124,9 @@ fn cast_int32_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_int32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_int32().to_string()))
+    let mut buf = String::new();
+    strconv::format_int32(&mut buf, a.unwrap_int32());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -170,7 +174,9 @@ fn cast_int64_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_int64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_int64().to_string()))
+    let mut buf = String::new();
+    strconv::format_int64(&mut buf, a.unwrap_int64());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -201,7 +207,9 @@ fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_float32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_float32().to_string()))
+    let mut buf = String::new();
+    strconv::format_float32(&mut buf, a.unwrap_float32());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -227,7 +235,9 @@ fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_float64().to_string()))
+    let mut buf = String::new();
+    strconv::format_float64(&mut buf, a.unwrap_float64());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_decimal_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -249,16 +259,91 @@ fn cast_significand_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_decimal_to_string<'a>(a: Datum<'a>, scale: u8, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_decimal().with_scale(scale).to_string()))
+    let mut buf = String::new();
+    strconv::format_decimal(&mut buf, &a.unwrap_decimal().with_scale(scale));
+    Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    let val: Result<f64, _> = a.unwrap_str().to_lowercase().parse();
-    Datum::from(val.ok())
+fn cast_string_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_bool(a.unwrap_str()) {
+        Ok(true) => Datum::True,
+        Ok(false) => Datum::False,
+        Err(_) => Datum::Null,
+    }
 }
 
 fn cast_string_to_bytes<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::Bytes(&temp_storage.push_bytes(a.unwrap_str().as_bytes().to_vec()))
+    match strconv::parse_bytes(a.unwrap_str()) {
+        Ok(bytes) => Datum::Bytes(temp_storage.push_bytes(bytes)),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_int32(a.unwrap_str()) {
+        Ok(n) => Datum::Int32(n),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_int64(a.unwrap_str()) {
+        Ok(n) => Datum::Int64(n),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_float32(a.unwrap_str()) {
+        Ok(n) => Datum::Float32(n.into()),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_float64(a.unwrap_str()) {
+        Ok(n) => Datum::Float64(n.into()),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
+    match strconv::parse_decimal(a.unwrap_str()) {
+        Ok(d) => Datum::from(match d.scale().cmp(&scale) {
+            Ordering::Less => d.significand() * 10_i128.pow(u32::from(scale - d.scale())),
+            Ordering::Equal => d.significand(),
+            Ordering::Greater => d.significand() / 10_i128.pow(u32::from(d.scale() - scale)),
+        }),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_date(a.unwrap_str()) {
+        Ok(d) => Datum::Date(d),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_timestamp(a.unwrap_str()) {
+        Ok(ts) => Datum::Timestamp(ts),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_timestamptz(a.unwrap_str()) {
+        Ok(ts) => Datum::TimestampTz(ts),
+        Err(_) => Datum::Null,
+    }
+}
+
+fn cast_string_to_interval<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_interval(a.unwrap_str()) {
+        Ok(iv) => Datum::Interval(iv),
+        Err(_) => Datum::Null,
+    }
 }
 
 fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -273,7 +358,9 @@ fn cast_date_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_date_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_date().to_string()))
+    let mut buf = String::new();
+    strconv::format_date(&mut buf, a.unwrap_date());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_timestamp_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -285,7 +372,9 @@ fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_timestamp_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_timestamp().to_string()))
+    let mut buf = String::new();
+    strconv::format_timestamp(&mut buf, a.unwrap_timestamp());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_timestamptz_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -297,110 +386,38 @@ fn cast_timestamptz_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_timestamptz_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_timestamptz().to_string()))
+    let mut buf = String::new();
+    strconv::format_timestamptz(&mut buf, a.unwrap_timestamptz());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(a.unwrap_interval().to_string()))
+    let mut buf = String::new();
+    strconv::format_interval(&mut buf, a.unwrap_interval());
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let bytes = a.unwrap_bytes();
-    let mut out = String::from("\\x");
-    out.reserve(bytes.len() * 2);
-    for byte in bytes {
-        write!(&mut out, "{:x}", byte).expect("writing to string cannot fail");
-    }
-    Datum::String(temp_storage.push_string(out))
+    let mut buf = String::new();
+    strconv::format_bytes(&mut buf, a.unwrap_bytes());
+    Datum::String(temp_storage.push_string(buf))
 }
 
-pub fn serde_into_row(
-    mut packer: RowPacker,
-    serde: serde_json::Value,
-) -> Result<RowPacker, failure::Error> {
-    use serde_json::Value;
-    match serde {
-        Value::Null => packer.push(Datum::JsonNull),
-        Value::Bool(b) => {
-            if b {
-                packer.push(Datum::True)
-            } else {
-                packer.push(Datum::False)
-            }
-        }
-        Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                packer.push(Datum::Float64(OrderedFloat(f)))
-            } else {
-                bail!("{} is out of range for json number", n)
-            }
-        }
-        Value::String(s) => packer.push(Datum::String(&s)),
-        Value::Array(array) => {
-            let start = unsafe { packer.start_list() };
-            for elem in array {
-                // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
-                packer = serde_into_row(packer, elem)?;
-            }
-            unsafe { packer.finish_list(start) };
-        }
-        Value::Object(object) => {
-            let start = unsafe { packer.start_dict() };
-            let mut pairs = object.into_iter().collect::<Vec<_>>();
-            // dict keys must be in ascending order
-            pairs.sort_by(|(k1, _), (k2, _)| k1.cmp(&k2));
-            for (key, val) in pairs {
-                packer.push(Datum::String(&key));
-                // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
-                packer = serde_into_row(packer, val)?;
-            }
-            unsafe { packer.finish_dict(start) };
-        }
-    }
-    Ok(packer)
-}
-
-#[allow(clippy::float_cmp)]
-pub fn datum_to_serde(datum: Datum) -> serde_json::Value {
-    use serde_json::Value;
-    match datum {
-        Datum::JsonNull => Value::Null,
-        Datum::True => Value::Bool(true),
-        Datum::False => Value::Bool(false),
-        Datum::Float64(f) => {
-            let f: f64 = f.into();
-            if let Some(n) = serde_json::Number::from_f64(f) {
-                Value::Number(n)
-            } else {
-                // This should only be reachable for NaN/Infinity, which aren't allowed to be cast to Jsonb
-                panic!("Not a valid json number: {}", f)
-            }
-        }
-        Datum::String(s) => Value::String(s.to_owned()),
-        Datum::List(list) => Value::Array(list.iter().map(|e| datum_to_serde(e)).collect()),
-        Datum::Dict(dict) => Value::Object(
-            dict.iter()
-                .map(|(k, v)| (k.to_owned(), datum_to_serde(v)))
-                .collect(),
-        ),
-        _ => panic!("Not a json-compatible datum: {:?}", datum),
-    }
-}
-
-// TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
+// TODO(jamii): it would be much more efficient to skip the intermediate
+// repr::jsonb::Jsonb.
 fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match serde_json::from_str(a.unwrap_str()) {
+    match strconv::parse_jsonb(a.unwrap_str()) {
         Err(_) => Datum::Null,
-        Ok(json) => match serde_into_row(RowPacker::new(), json) {
-            Err(_) => Datum::Null,
-            Ok(packer) => temp_storage.push_row(packer.finish()).unpack_first(),
-        },
+        Ok(jsonb) => temp_storage.push_row(jsonb.into_row()).unpack_first(),
     }
 }
 
-// TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
+// TODO(jamii): it would be much more efficient to skip the intermediate
+// repr::jsonb::Jsonb.
 fn cast_jsonb_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(datum_to_serde(a).to_string()))
+    let mut buf = String::new();
+    strconv::format_jsonb(&mut buf, &Jsonb::from_datum(a));
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn cast_jsonb_to_string_unless_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -1288,10 +1305,9 @@ fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> 
 }
 
 fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(temp_storage.push_string(
-        // to_string_pretty shouldn't be able to fail on the output of datum_to_serde - see https://docs.serde.rs/serde_json/fn.to_string_pretty.html
-        serde_json::to_string_pretty(&datum_to_serde(a)).unwrap(),
-    ))
+    let mut buf = String::new();
+    strconv::format_jsonb_pretty(&mut buf, &Jsonb::from_datum(a));
+    Datum::String(temp_storage.push_string(buf))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -1682,8 +1698,17 @@ pub enum UnaryFunc {
     CastDecimalToString(u8),
     CastSignificandToFloat32,
     CastSignificandToFloat64,
+    CastStringToBool,
     CastStringToBytes,
+    CastStringToInt32,
+    CastStringToInt64,
+    CastStringToFloat32,
     CastStringToFloat64,
+    CastStringToDate,
+    CastStringToTimestamp,
+    CastStringToTimestampTz,
+    CastStringToInterval,
+    CastStringToDecimal(u8),
     CastDateToTimestamp,
     CastDateToTimestampTz,
     CastDateToString,
@@ -1786,8 +1811,17 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64(a),
             UnaryFunc::CastSignificandToFloat32 => cast_significand_to_float32(a),
             UnaryFunc::CastSignificandToFloat64 => cast_significand_to_float64(a),
-            UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
+            UnaryFunc::CastStringToBool => cast_string_to_bool(a),
             UnaryFunc::CastStringToBytes => cast_string_to_bytes(a, temp_storage),
+            UnaryFunc::CastStringToInt32 => cast_string_to_int32(a),
+            UnaryFunc::CastStringToInt64 => cast_string_to_int64(a),
+            UnaryFunc::CastStringToFloat32 => cast_string_to_float32(a),
+            UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
+            UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
+            UnaryFunc::CastStringToDate => cast_string_to_date(a),
+            UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
+            UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
+            UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp(a),
             UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz(a),
             UnaryFunc::CastDateToString => cast_date_to_string(a, temp_storage),
@@ -1898,7 +1932,19 @@ impl UnaryFunc {
 
             MatchRegex(_) => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
 
-            CastStringToBytes => ColumnType::new(ScalarType::Bytes).nullable(in_nullable),
+            CastStringToBool => ColumnType::new(ScalarType::Bool).nullable(true),
+            CastStringToBytes => ColumnType::new(ScalarType::Bytes).nullable(true),
+            CastStringToInt32 => ColumnType::new(ScalarType::Int32).nullable(true),
+            CastStringToInt64 => ColumnType::new(ScalarType::Int64).nullable(true),
+            CastStringToFloat32 => ColumnType::new(ScalarType::Float32).nullable(true),
+            CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
+            CastStringToDecimal(scale) => {
+                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale)).nullable(true)
+            }
+            CastStringToDate => ColumnType::new(ScalarType::Date).nullable(true),
+            CastStringToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
+            CastStringToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
+            CastStringToInterval => ColumnType::new(ScalarType::Interval).nullable(true),
 
             CastBoolToString
             | CastInt32ToString
@@ -1919,8 +1965,9 @@ impl UnaryFunc {
             CastInt32ToFloat64
             | CastInt64ToFloat64
             | CastFloat32ToFloat64
-            | CastSignificandToFloat64
-            | CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            | CastSignificandToFloat64 => {
+                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
+            }
 
             CastInt64ToInt32 | CastDecimalToInt32 => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable)
@@ -2093,8 +2140,17 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDecimalToString(_) => f.write_str("dectostr"),
             UnaryFunc::CastSignificandToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastSignificandToFloat64 => f.write_str("dectof64"),
+            UnaryFunc::CastStringToBool => f.write_str("strtobool"),
             UnaryFunc::CastStringToBytes => f.write_str("strtobytes"),
+            UnaryFunc::CastStringToInt32 => f.write_str("strtoi32"),
+            UnaryFunc::CastStringToInt64 => f.write_str("strtoi64"),
+            UnaryFunc::CastStringToFloat32 => f.write_str("strtof32"),
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
+            UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
+            UnaryFunc::CastStringToDate => f.write_str("strtodate"),
+            UnaryFunc::CastStringToTimestamp => f.write_str("strtots"),
+            UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),
+            UnaryFunc::CastStringToInterval => f.write_str("strtoiv"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
             UnaryFunc::CastDateToString => f.write_str("datetostr"),

@@ -21,5 +21,7 @@ mod scalar;
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{DatumDict, DatumList, Row, RowArena, RowPacker};
 pub use scalar::decimal;
+pub use scalar::jsonb;
 pub use scalar::regex;
+pub use scalar::strconv;
 pub use scalar::{Datum, Interval, ScalarType};
