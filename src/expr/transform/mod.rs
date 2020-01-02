@@ -123,6 +123,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::filter_lets::FilterLets),
                     Box::new(crate::transform::nonnull_requirements::NonNullRequirements),
                     Box::new(crate::transform::column_knowledge::ColumnKnowledge),
+                    Box::new(crate::transform::constant_join::InsertConstantJoin),
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.
@@ -131,7 +132,7 @@ impl Default for Optimizer {
             Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
             Box::new(crate::transform::projection_lifting::ProjectionLifting),
             Box::new(crate::transform::fusion::project::Project),
-            Box::new(crate::transform::constant_join::ConstantJoin),
+            Box::new(crate::transform::constant_join::RemoveConstantJoin),
         ];
         Self { transforms }
     }
