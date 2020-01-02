@@ -305,33 +305,23 @@ impl PredicatePushdown {
                             .collect(),
                     );
                 }
-                RelationExpr::Map { input: inner, .. } => {
-                    let mut retain = Vec::new();
-                    let mut push_down = Vec::new();
-                    let arity = inner.arity();
-                    for predicate in predicates.drain(..) {
-                        let mut supported = true;
-                        predicate.visit(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
-                                if *c >= arity {
-                                    supported = false;
+                RelationExpr::Map { input, scalars } => {
+                    let input_arity = input.arity();
+                    let predicates = predicates
+                        .drain(..)
+                        .map(|mut predicate| {
+                            predicate.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(i) = e {
+                                    if *i >= input_arity {
+                                        *e = scalars[*i - input_arity].clone();
+                                    }
                                 }
-                            }
-                        });
-                        if supported {
-                            push_down.push(predicate);
-                        } else {
-                            retain.push(predicate);
-                        }
-                    }
-                    if !push_down.is_empty() {
-                        *inner = Box::new(inner.take_dangerous().filter(push_down));
-                    }
-                    if !retain.is_empty() {
-                        *predicates = retain;
-                    } else {
-                        *relation = input.take_dangerous();
-                    }
+                            });
+                            predicate
+                        })
+                        .collect();
+                    let scalars = std::mem::replace(scalars, Vec::new());
+                    *relation = input.take_dangerous().filter(predicates).map(scalars);
                 }
                 RelationExpr::Union { left, right } => {
                     let left = left.take_dangerous().filter(predicates.clone());
