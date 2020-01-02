@@ -229,7 +229,10 @@ impl FoldConstants {
             RelationExpr::Join { inputs, .. } => {
                 if inputs.iter().any(|e| e.is_empty()) {
                     relation.take_safely();
+                } else if inputs.is_empty() {
+                    *relation = RelationExpr::constant(vec![vec![]], repr::RelationType::empty());
                 }
+                // TODO: General constant folding for all constant inputs.
             }
             RelationExpr::Union { .. } => {
                 let mut can_reduce = false;
