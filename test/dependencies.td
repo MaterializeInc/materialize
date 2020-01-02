@@ -137,14 +137,16 @@ catalog item 'i1' is an index and so cannot be depended upon
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEX in v2a;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v2a   i2           <null>      "x * 2"    false 1
+View  Key_name              Column_name Expression Null  Seq_in_index
+---------------------------------------------------------------------
+v2a   i2                    <null>      "x * 2"    false 1
+v2a   "\"v2a_PRIMARY_IDX\"" x           <null>     false 1
 
 > SHOW INDEX in v2;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v2    i1           x           <null>     false 1
+View  Key_name             Column_name Expression Null  Seq_in_index
+--------------------------------------------------------------------
+v2    i1                   x           <null>     false 1
+v2    "\"v2_PRIMARY_IDX\"" x           <null>     false 1
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
@@ -154,9 +156,10 @@ v2    i1           x           <null>     false 1
 catalog item 'v2a' does not exist
 
 > SHOW INDEX in v2;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v2    i1           x           <null>     false 1
+View  Key_name             Column_name Expression Null  Seq_in_index
+--------------------------------------------------------------------
+v2    i1                   x           <null>     false 1
+v2    "\"v2_PRIMARY_IDX\"" x           <null>     false 1
 
 ! DROP INDEX i2;
 catalog item 'i2' does not exist
@@ -168,16 +171,19 @@ catalog item 'i2' does not exist
 > CREATE INDEX i3 ON v4a(y);
 
 > SHOW INDEX in v4a;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v4a   i3           y           <null>     false 1
+View  Key_name              Column_name Expression Null  Seq_in_index
+---------------------------------------------------------------------
+v4a   i3                    y           <null>     false 1
+v4a   "\"v4a_PRIMARY_IDX\"" y           <null>     false 1
 
 > CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEX in v4;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v4    i4           x           <null>     false 1
+View  Key_name            Column_name Expression Null  Seq_in_index
+---------------------------------------------------------------------
+v4    i4                  x           <null>     false 1
+v4   "\"v4_PRIMARY_IDX\"" x           <null>     false 1
+v4   "\"v4_PRIMARY_IDX\"" y           <null>     false 2
 
 # Test cascade deletes associated indexes as well
 > DROP VIEW v4a CASCADE;
@@ -192,15 +198,18 @@ catalog item 'i3' does not exist
 View  Key_name     Column_name Expression Null  Seq_in_index
 ------------------------------------------------------------
 v4     i4           x           <null>     false 1
+v4   "\"v4_PRIMARY_IDX\"" x           <null>     false 1
+v4   "\"v4_PRIMARY_IDX\"" y           <null>     false 2
 
 > CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEX in v5;
-View  Key_name     Column_name Expression Null  Seq_in_index
+View  Key_name            Column_name Expression Null  Seq_in_index
 ------------------------------------------------------------
-v5    i5           substr      <null>     true 1
+v5    i5                  substr      <null>     true 1
+v5   "\"v5_PRIMARY_IDX\"" substr      <null>     true 1
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;

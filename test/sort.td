@@ -41,7 +41,9 @@ $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> SELECT val, quote FROM foobar ORDER BY quote LIMIT 5
+> CREATE VIEW foobar_view as SELECT * from foobar
+
+> SELECT val, quote FROM foobar_view ORDER BY quote LIMIT 5
 val    quote
 --------------------------------------------------------------------------------------
 12345  "All power corrupts, but we need electricity."
@@ -50,7 +52,7 @@ val    quote
 12345  "If it pours before seven, it has rained by eleven."
 12345  "It was a virgin forest, a place where the Hand of Man had never set foot."
 
-> SELECT val, quote FROM foobar ORDER BY quote ASC LIMIT 5
+> SELECT val, quote FROM foobar_view ORDER BY quote ASC LIMIT 5
 val    quote
 --------------------------------------------------------------------------------------
 12345  "All power corrupts, but we need electricity."
@@ -59,7 +61,7 @@ val    quote
 12345  "If it pours before seven, it has rained by eleven."
 12345  "It was a virgin forest, a place where the Hand of Man had never set foot."
 
-> SELECT * FROM foobar ORDER BY quote DESC LIMIT 5
+> SELECT * FROM foobar_view ORDER BY quote DESC LIMIT 5
 quote                                                                        val
 ----------------------------------------------------------------------------------
 "You are magnetic in your bearing."                                          24223
@@ -69,7 +71,7 @@ quote                                                                        val
 "It was a virgin forest, a place where the Hand of Man had never set foot."  12345
 
 # Test that the second-column sort works fine
-> SELECT * FROM foobar ORDER BY val, quote LIMIT 6
+> SELECT * FROM foobar_view ORDER BY val, quote LIMIT 6
 quote val
 ---------
 "Ring around the collar."                                                         1735
@@ -79,7 +81,7 @@ quote val
 "If it pours before seven, it has rained by eleven."                              12345
 "It was a virgin forest, a place where the Hand of Man had never set foot."       12345
 
-> SELECT * FROM foobar ORDER BY val, quote DESC LIMIT 6
+> SELECT * FROM foobar_view ORDER BY val, quote DESC LIMIT 6
 quote                                                                             val
 ---------------------------------------------------------------------------------------
 "Ring around the collar."                                                         1735
@@ -89,7 +91,7 @@ quote                                                                           
 "If it pours before seven, it has rained by eleven."                              12345
 "All power corrupts, but we need electricity."                                    12345
 
-> SELECT val, quote FROM foobar ORDER BY quote OFFSET 5 ROWS
+> SELECT val, quote FROM foobar_view ORDER BY quote OFFSET 5 ROWS
 val    quote
 ----------------------------------------------------------------------------
 25040  "New York is real.  The rest is done with mirrors."
@@ -97,7 +99,7 @@ val    quote
 21243  "Yes, but every time I try to see things your way, I get a headache."
 24223  "You are magnetic in your bearing."
 
-> SELECT val, quote FROM foobar ORDER BY quote LIMIT 4 OFFSET 0 ROWS
+> SELECT val, quote FROM foobar_view ORDER BY quote LIMIT 4 OFFSET 0 ROWS
 val    quote
 --------------------------------------------------------------------------------------
 12345  "All power corrupts, but we need electricity."
@@ -105,29 +107,29 @@ val    quote
 6745   "I want to read my new poem about pork brains and outer space ..."
 12345  "If it pours before seven, it has rained by eleven."
 
-> SELECT val, quote FROM foobar ORDER BY val, quote LIMIT 3 OFFSET 2 ROWS
+> SELECT val, quote FROM foobar_view ORDER BY val, quote LIMIT 3 OFFSET 2 ROWS
 val    quote
 --------------------------------------------------------------------------------------
 6745   "I want to read my new poem about pork brains and outer space ..."
 12345  "All power corrupts, but we need electricity."
 12345  "If it pours before seven, it has rained by eleven."
 
-> SELECT val, quote FROM foobar ORDER BY quote DESC LIMIT 5 OFFSET 6 ROWS
+> SELECT val, quote FROM foobar_view ORDER BY quote DESC LIMIT 5 OFFSET 6 ROWS
 val    quote
 --------------------------------------------------------------------------------------
 6745   "I want to read my new poem about pork brains and outer space ..."
 2079   "I have a theory that it's impossible to prove anything, but I can't prove it."
 12345  "All power corrupts, but we need electricity."
 
-> SELECT val, quote FROM foobar ORDER BY quote DESC LIMIT 4 OFFSET 10 ROWS
+> SELECT val, quote FROM foobar_view ORDER BY quote DESC LIMIT 4 OFFSET 10 ROWS
 val    quote
 --------------------------------------------------------------------------------------
 
-> SELECT val, quote FROM foobar ORDER BY quote DESC OFFSET 10 ROWS
+> SELECT val, quote FROM foobar_view ORDER BY quote DESC OFFSET 10 ROWS
 val    quote
 --------------------------------------------------------------------------------------
 
-> SELECT val, quote FROM foobar ORDER BY quote DESC OFFSET 0 ROWS
+> SELECT val, quote FROM foobar_view ORDER BY quote DESC OFFSET 0 ROWS
 val    quote
 --------------------------------------------------------------------------------------
 24223  "You are magnetic in your bearing."

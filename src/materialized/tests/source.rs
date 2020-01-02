@@ -120,7 +120,7 @@ New York,NY,10004
     // https://github.com/sfackler/rust-postgres/pull/531 gets fixed.
     Runtime::new()?.block_on(async {
         let client = server.connect_async().await?;
-        let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv").await?);
+        let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv_mirror").await?);
 
         append(&dynamic_path, b"City 1,ST,00001\n")?;
         assert!(tail_reader
@@ -143,8 +143,9 @@ New York,NY,10004
         Ok::<_, Box<dyn Error>>(())
     })?;
 
-    // Check that writing to the tailed file after the source is dropped doesn't
+    // Check that writing to the tailed file after the view and source are dropped doesn't
     // cause a crash (#1361).
+    client.execute("DROP VIEW dynamic_csv_mirror", &[])?;
     client.execute("DROP SOURCE dynamic_csv", &[])?;
     thread::sleep(Duration::from_millis(100));
     append(&dynamic_path, b"Glendale,AZ,85310\n")?;

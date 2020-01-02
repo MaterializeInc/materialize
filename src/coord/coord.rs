@@ -503,6 +503,9 @@ where
                 materialize,
             } => {
                 eval_env.wall_time = Some(chrono::Utc::now());
+
+                let timestamp = self.determine_timestamp(&source, when)?;
+                eval_env.logical_time = Some(timestamp);
                 // TODO (wangandi): what do we do about this line when we start passing indexes
                 // to the optimizer?
                 // Related: Is there anything that optimizes to a constant expression that originally
@@ -558,9 +561,6 @@ where
                         (false, self.catalog.allocate_id())
                     };
 
-                    let timestamp = self.determine_timestamp(&source, when)?;
-                    eval_env.logical_time = Some(timestamp);
-
                     if !fast_path {
                         // Slow path. We need to perform some computation, so build
                         // a new transient dataflow that will be dropped after the
@@ -579,7 +579,6 @@ where
                             typ,
                             iter::repeat::<Option<ColumnName>>(None).take(ncols),
                         );
-                        let view_id = self.catalog.allocate_id();
                         let view = View {
                             raw_sql: "<none>".into(),
                             relation_expr: source,
