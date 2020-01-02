@@ -1232,8 +1232,6 @@ impl Parser {
             self.parse_create_sources()
         } else if self.parse_keyword("SINK") {
             self.parse_create_sink()
-        } else if self.parse_keyword("EXTERNAL") {
-            self.parse_create_external_table()
         } else if self.parse_keyword("INDEX") {
             self.parse_create_index()
         } else {
@@ -1303,27 +1301,6 @@ impl Parser {
             from,
             url,
             with_options,
-        })
-    }
-
-    pub fn parse_create_external_table(&mut self) -> Result<Statement, ParserError> {
-        self.expect_keyword("TABLE")?;
-        let table_name = self.parse_object_name()?;
-        let (columns, constraints) = self.parse_columns()?;
-        self.expect_keywords(&["STORED", "AS"])?;
-        let file_format = self.parse_identifier()?.value.parse::<FileFormat>()?;
-
-        self.expect_keyword("LOCATION")?;
-        let location = self.parse_literal_string()?;
-
-        Ok(Statement::CreateTable {
-            name: table_name,
-            columns,
-            constraints,
-            with_options: vec![],
-            external: true,
-            file_format: Some(file_format),
-            location: Some(location),
         })
     }
 
@@ -1406,9 +1383,6 @@ impl Parser {
             columns,
             constraints,
             with_options,
-            external: false,
-            file_format: None,
-            location: None,
         })
     }
 
@@ -1810,9 +1784,6 @@ impl Parser {
             {
                 Ok(Some(w.to_ident()))
             }
-            // MSSQL supports single-quoted strings as aliases for columns
-            // We accept them as table aliases too, although MSSQL does not.
-            Some(Token::SingleQuotedString(ref s)) => Ok(Some(Ident::with_quote('\'', s.clone()))),
             not_an_ident => {
                 if after_as {
                     return self.expected("an identifier after AS", not_an_ident);
@@ -2211,24 +2182,10 @@ impl Parser {
         let mut joins = vec![];
         loop {
             let join = if self.parse_keyword("CROSS") {
-                let join_operator = if self.parse_keyword("JOIN") {
-                    JoinOperator::CrossJoin
-                } else if self.parse_keyword("APPLY") {
-                    // MSSQL extension, similar to CROSS JOIN LATERAL
-                    JoinOperator::CrossApply
-                } else {
-                    return self.expected("JOIN or APPLY after CROSS", self.peek_token());
-                };
+                self.expect_keyword("JOIN")?;
                 Join {
                     relation: self.parse_table_factor()?,
-                    join_operator,
-                }
-            } else if self.parse_keyword("OUTER") {
-                // MSSQL extension, similar to LEFT JOIN LATERAL .. ON 1=1
-                self.expect_keyword("APPLY")?;
-                Join {
-                    relation: self.parse_table_factor()?,
-                    join_operator: JoinOperator::OuterApply,
+                    join_operator: JoinOperator::CrossJoin,
                 }
             } else {
                 let natural = self.parse_keyword("NATURAL");

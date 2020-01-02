@@ -999,9 +999,6 @@ fn parse_create_table() {
             columns,
             constraints,
             with_options,
-            external: false,
-            file_format: None,
-            location: None,
         } => {
             assert_eq!("uk_cities", name.to_string());
             assert_eq!(
@@ -1112,73 +1109,6 @@ fn parse_create_table_with_options() {
 fn parse_create_table_trailing_comma() {
     let sql = "CREATE TABLE foo (bar int,)";
     one_statement_parses_to(sql, "CREATE TABLE foo (bar int)");
-}
-
-#[test]
-fn parse_create_external_table() {
-    let sql = "CREATE EXTERNAL TABLE uk_cities (\
-               name VARCHAR(100) NOT NULL,\
-               lat DOUBLE NULL,\
-               lng DOUBLE)\
-               STORED AS TEXTFILE LOCATION '/tmp/example.csv";
-    let ast = one_statement_parses_to(
-        sql,
-        "CREATE EXTERNAL TABLE uk_cities (\
-         name character varying(100) NOT NULL, \
-         lat double NULL, \
-         lng double) \
-         STORED AS TEXTFILE LOCATION '/tmp/example.csv'",
-    );
-    match ast {
-        Statement::CreateTable {
-            name,
-            columns,
-            constraints,
-            with_options,
-            external,
-            file_format,
-            location,
-        } => {
-            assert_eq!("uk_cities", name.to_string());
-            assert_eq!(
-                columns,
-                vec![
-                    ColumnDef {
-                        name: "name".into(),
-                        data_type: DataType::Varchar(Some(100)),
-                        collation: None,
-                        options: vec![ColumnOptionDef {
-                            name: None,
-                            option: ColumnOption::NotNull
-                        }],
-                    },
-                    ColumnDef {
-                        name: "lat".into(),
-                        data_type: DataType::Double,
-                        collation: None,
-                        options: vec![ColumnOptionDef {
-                            name: None,
-                            option: ColumnOption::Null
-                        }],
-                    },
-                    ColumnDef {
-                        name: "lng".into(),
-                        data_type: DataType::Double,
-                        collation: None,
-                        options: vec![],
-                    },
-                ]
-            );
-            assert!(constraints.is_empty());
-
-            assert!(external);
-            assert_eq!(FileFormat::TEXTFILE, file_format.unwrap());
-            assert_eq!("/tmp/example.csv", location.unwrap());
-
-            assert_eq!(with_options, vec![]);
-        }
-        _ => unreachable!(),
-    }
 }
 
 #[test]
@@ -2481,7 +2411,7 @@ fn parse_join_syntax_variants() {
 
     let res = parse_sql_statements("SELECT * FROM a OUTER JOIN b ON 1");
     assert_eq!(
-        ParserError::ParserError("Expected APPLY, found: JOIN".to_string()),
+        ParserError::ParserError("Expected LEFT, RIGHT, or FULL, found: OUTER".to_string()),
         res.unwrap_err()
     );
 }
@@ -3687,9 +3617,6 @@ fn parse_create_table_with_defaults() {
             columns,
             constraints,
             with_options,
-            external: false,
-            file_format: None,
-            location: None,
         } => {
             assert_eq!("public.customer", name.to_string());
             assert_eq!(

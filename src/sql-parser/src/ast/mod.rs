@@ -46,7 +46,10 @@ pub mod visit_mut {
     make_visitor!(VisitMut: &mut);
 }
 
+use crate::parser::ParserError;
+
 use std::fmt;
+use std::str::FromStr;
 
 pub use self::data_type::DataType;
 pub use self::ddl::{
@@ -576,9 +579,6 @@ pub enum Statement {
         columns: Vec<ColumnDef>,
         constraints: Vec<TableConstraint>,
         with_options: Vec<SqlOption>,
-        external: bool,
-        file_format: Option<FileFormat>,
-        location: Option<String>,
     },
     /// `CREATE INDEX`
     CreateIndex {
@@ -836,14 +836,10 @@ impl fmt::Display for Statement {
                 columns,
                 constraints,
                 with_options,
-                external,
-                file_format,
-                location,
             } => {
                 write!(
                     f,
-                    "CREATE {}TABLE {} ({}",
-                    if *external { "EXTERNAL " } else { "" },
+                    "CREATE TABLE {} ({}",
                     name,
                     display_comma_separated(columns)
                 )?;
@@ -852,14 +848,6 @@ impl fmt::Display for Statement {
                 }
                 write!(f, ")")?;
 
-                if *external {
-                    write!(
-                        f,
-                        " STORED AS {} LOCATION '{}'",
-                        file_format.as_ref().unwrap(),
-                        location.as_ref().unwrap()
-                    )?;
-                }
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }
@@ -1045,56 +1033,6 @@ pub enum SourceSchema {
     /// The schema is available in a Confluent-compatible schema registry that
     /// is accessible at the specified URL.
     Registry(String),
-}
-
-/// External table's available file format
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FileFormat {
-    TEXTFILE,
-    SEQUENCEFILE,
-    ORC,
-    PARQUET,
-    AVRO,
-    RCFILE,
-    JSONFILE,
-}
-
-impl fmt::Display for FileFormat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use self::FileFormat::*;
-        f.write_str(match self {
-            TEXTFILE => "TEXTFILE",
-            SEQUENCEFILE => "SEQUENCEFILE",
-            ORC => "ORC",
-            PARQUET => "PARQUET",
-            AVRO => "AVRO",
-            RCFILE => "RCFILE",
-            JSONFILE => "TEXTFILE",
-        })
-    }
-}
-
-use crate::parser::ParserError;
-use std::str::FromStr;
-impl FromStr for FileFormat {
-    type Err = ParserError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        use self::FileFormat::*;
-        match s {
-            "TEXTFILE" => Ok(TEXTFILE),
-            "SEQUENCEFILE" => Ok(SEQUENCEFILE),
-            "ORC" => Ok(ORC),
-            "PARQUET" => Ok(PARQUET),
-            "AVRO" => Ok(AVRO),
-            "RCFILE" => Ok(RCFILE),
-            "JSONFILE" => Ok(JSONFILE),
-            _ => Err(ParserError::ParserError(format!(
-                "Unexpected file format: {}",
-                s
-            ))),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
