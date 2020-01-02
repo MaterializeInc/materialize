@@ -1593,6 +1593,33 @@ fn plan_function<'a>(
                 })
             }
 
+            "make_timestamp" => {
+                if sql_func.args.len() != 6 {
+                    bail!(
+                        "make_timestamp expects six arguments, got {}",
+                        sql_func.args.len()
+                    );
+                }
+
+                let mut exprs = Vec::new();
+                for arg in &sql_func.args[..5] {
+                    let expr = plan_expr(catalog, ecx, arg, Some(ScalarType::Int64))?;
+                    let expr = promote_int_int64(ecx, "make_timestamp", expr)?;
+                    exprs.push(expr);
+                }
+                {
+                    let expr =
+                        plan_expr(catalog, ecx, &sql_func.args[5], Some(ScalarType::Float64))?;
+                    let expr = promote_decimal_float64(ecx, "make_timestamp", expr)?;
+                    exprs.push(expr);
+                }
+                let expr = ScalarExpr::CallVariadic {
+                    func: VariadicFunc::MakeTimestamp,
+                    exprs,
+                };
+                Ok(expr)
+            }
+
             "mod" => {
                 if sql_func.args.len() != 2 {
                     bail!("mod requires exactly two arguments");
@@ -1798,39 +1825,44 @@ fn plan_function<'a>(
                 plan_cast_internal(ecx, "internal.avg_promotion", expr, output_type)
             }
 
-            // Currently only implement this specific case from Metabase:
-            // to_char(current_timestamp(), 'YYYY-MM-DD HH24:MI:SS.MS TZ')
             "to_char" => {
                 if sql_func.args.len() != 2 {
                     bail!("to_char requires exactly two arguments");
                 }
 
-                // &sql_func.args[0] should be current_timestamp()/now()
-                let timestamp_func = plan_expr(
+                let ts_expr = plan_expr(
                     catalog,
                     ecx,
                     &sql_func.args[0],
                     Some(ScalarType::TimestampTz),
                 )?;
-                let typ = ecx.column_type(&timestamp_func);
-                if typ.scalar_type != ScalarType::TimestampTz && typ.scalar_type != ScalarType::Null
-                {
-                    bail!("to_char() currently only implemented for timestamps");
+                let ts_type = ecx.column_type(&ts_expr);
+                match ts_type.scalar_type {
+                    ScalarType::Timestamp | ScalarType::TimestampTz | ScalarType::Null => (),
+                    other => bail!("to_char requires a timestamp or timestamptz as its first argument, but got: {}", other)
                 }
 
-                let format_string =
+                let fmt_expr =
                     plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::String))?;
-                let typ = ecx.column_type(&format_string);
-                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null {
-                    bail!("to_char() requires a format string as the second parameter");
+                let fmt_typ = ecx.column_type(&fmt_expr);
+                if fmt_typ.scalar_type != ScalarType::String
+                    && fmt_typ.scalar_type != ScalarType::Null
+                {
+                    bail!(
+                        "to_char requires a string as its second arugment, but got: {}",
+                        fmt_typ.scalar_type
+                    );
                 }
 
-                let expr = ScalarExpr::CallBinary {
-                    func: BinaryFunc::ToChar,
-                    expr1: Box::new(timestamp_func),
-                    expr2: Box::new(format_string),
-                };
-                Ok(expr)
+                Ok(ScalarExpr::CallBinary {
+                    func: if ts_type.scalar_type == ScalarType::Timestamp {
+                        BinaryFunc::ToCharTimestamp
+                    } else {
+                        BinaryFunc::ToCharTimestampTz
+                    },
+                    expr1: Box::new(ts_expr),
+                    expr2: Box::new(fmt_expr),
+                })
             }
 
             "date_trunc" => {
@@ -2222,6 +2254,8 @@ fn plan_arithmetic_op<'a>(
             (Int64, Int64) => SubInt64,
             (Float32, Float32) => SubFloat32,
             (Float64, Float64) => SubFloat64,
+            (Timestamp, Timestamp) => SubTimestamp,
+            (TimestampTz, TimestampTz) => SubTimestampTz,
             (Timestamp, Interval) => SubTimestampInterval,
             (TimestampTz, Interval) => SubTimestampTzInterval,
             (Jsonb, Int32) => {
@@ -2924,6 +2958,23 @@ where
             plan_cast_internal(ecx, name, expr, ScalarType::Int64)?
         }
         other => bail!("{} has non-integer type {:?}", name, other,),
+    })
+}
+
+fn promote_decimal_float64<'a, S>(
+    ecx: &ExprContext<'a>,
+    name: S,
+    expr: ScalarExpr,
+) -> Result<ScalarExpr, failure::Error>
+where
+    S: fmt::Display + Copy,
+{
+    Ok(match ecx.column_type(&expr).scalar_type {
+        ScalarType::Null | ScalarType::Float64 => expr,
+        ScalarType::Float32 | ScalarType::Decimal(_, _) => {
+            plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
+        }
+        other => bail!("{} has non-decimal type {:?}", name, other,),
     })
 }
 

@@ -594,9 +594,9 @@ impl Parser {
                 Some(year),
                 Some(month),
                 Some(day),
-                Some(hour),
-                Some(minute),
-                Some(second),
+                hour,
+                minute,
+                second,
                 nano,
                 timezone_offset_second,
             ) => {
@@ -625,26 +625,42 @@ impl Parser {
                 if day == 0 {
                     return parser_err!("Day in timestamp '{}' cannot be zero: {}", value, day);
                 }
-                let hour: u8 = hour.try_into().map_err(|e| p_err(e, "Hour"))?;
-                if hour > 23 {
-                    return parser_err!("Hour in timestamp '{}' cannot be > 23: {}", value, hour);
-                }
-                let minute: u8 = minute.try_into().map_err(|e| p_err(e, "Minute"))?;
-                if minute > 59 {
-                    return parser_err!(
-                        "Minute in timestamp '{}' cannot be > 59: {}",
-                        value,
-                        minute
-                    );
-                }
-                let second: u8 = second.try_into().map_err(|e| p_err(e, "Minute"))?;
-                if second > 60 {
-                    return parser_err!(
-                        "Second in timestamp '{}' cannot be > 60: {}",
-                        value,
-                        second
-                    );
-                }
+
+                let (hour, minute, second) = match (hour, minute, second) {
+                    (Some(hour), Some(minute), Some(second)) => {
+                        let hour: u8 = hour.try_into().map_err(|e| p_err(e, "Hour"))?;
+                        if hour > 23 {
+                            return parser_err!(
+                                "Hour in timestamp '{}' cannot be > 23: {}",
+                                value,
+                                hour
+                            );
+                        }
+                        let minute: u8 = minute.try_into().map_err(|e| p_err(e, "Minute"))?;
+                        if minute > 59 {
+                            return parser_err!(
+                                "Minute in timestamp '{}' cannot be > 59: {}",
+                                value,
+                                minute
+                            );
+                        }
+                        let second: u8 = second.try_into().map_err(|e| p_err(e, "Minute"))?;
+                        if second > 60 {
+                            return parser_err!(
+                                "Second in timestamp '{}' cannot be > 60: {}",
+                                value,
+                                second
+                            );
+                        }
+                        (hour, minute, second)
+                    }
+                    (None, None, None) => (0, 0, 0),
+                    _ => {
+                        return parser_err!(
+                        "Hour, minute, and second fields must all be specified or all be omitted"
+                    )
+                    }
+                };
 
                 if parse_timezone {
                     return Ok(Value::TimestampTz(
@@ -677,7 +693,7 @@ impl Parser {
                 ))
             }
             _ => Err(ParserError::ParserError(format!(
-                "timestamp is missing fields, year through second are all required, got: '{}'",
+                "timestamp is missing fields, year through day are all required, got: '{}'",
                 value
             ))),
         }

@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::cmp;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::fmt::Write;
 use std::str::FromStr;
@@ -16,11 +16,15 @@ use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
-pub use crate::like::build_like_regex_from_string;
-use crate::EvalEnv;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, Interval, RowArena, RowPacker, ScalarType};
+
+use self::format::DateTimeFormat;
+pub use crate::like::build_like_regex_from_string;
+use crate::EvalEnv;
+
+mod format;
 
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum NullaryFunc {
@@ -594,8 +598,6 @@ pub fn sub_timestamptz_interval<'a>(
 }
 
 fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
-    use std::convert::TryInto;
-
     if months == 0 {
         return dt;
     }
@@ -666,6 +668,14 @@ pub fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
 
 pub fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
+}
+
+pub fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+    Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
+}
+
+pub fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
 }
 
 pub fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
@@ -852,6 +862,26 @@ pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datu
     Datum::from(a >= b)
 }
 
+pub fn to_char_timestamp<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let fmt = DateTimeFormat::compile(b.unwrap_str());
+    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamp())))
+}
+
+pub fn to_char_timestamptz<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let fmt = DateTimeFormat::compile(b.unwrap_str());
+    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamptz())))
+}
+
 pub fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
@@ -1010,27 +1040,6 @@ pub fn jsonb_delete_string<'a>(
             temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }
         _ => Datum::Null,
-    }
-}
-
-pub fn to_char<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    let datetime = a.unwrap_timestamptz();
-    let format_string = b.unwrap_str();
-    // PostgreSQL parses this weird format string, hand-interpret for now
-    // to unblock Metabase progress. Will have to revisit formatting strings and
-    // other versions of to_char() in the future.
-    if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
-        let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
-        Datum::String(
-            temp_storage.push_string(datetime.format(interpreted_format_string).to_string()),
-        )
-    } else {
-        Datum::Null
     }
 }
 
@@ -1378,6 +1387,8 @@ pub enum BinaryFunc {
     SubInt64,
     SubFloat32,
     SubFloat64,
+    SubTimestamp,
+    SubTimestampTz,
     SubTimestampInterval,
     SubTimestampTzInterval,
     SubDecimal,
@@ -1405,7 +1416,8 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     MatchRegex,
-    ToChar,
+    ToCharTimestamp,
+    ToCharTimestampTz,
     DateTrunc,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
@@ -1488,6 +1500,8 @@ impl BinaryFunc {
             BinaryFunc::SubInt64 => sub_int64,
             BinaryFunc::SubFloat32 => sub_float32,
             BinaryFunc::SubFloat64 => sub_float64,
+            BinaryFunc::SubTimestamp => sub_timestamp,
+            BinaryFunc::SubTimestampTz => sub_timestamptz,
             BinaryFunc::SubTimestampInterval => sub_timestamp_interval,
             BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval,
             BinaryFunc::SubDecimal => sub_decimal,
@@ -1515,7 +1529,8 @@ impl BinaryFunc {
             BinaryFunc::Gt => gt,
             BinaryFunc::Gte => gte,
             BinaryFunc::MatchRegex => match_regex,
-            BinaryFunc::ToChar => to_char,
+            BinaryFunc::ToCharTimestamp => to_char_timestamp,
+            BinaryFunc::ToCharTimestampTz => to_char_timestamptz,
             BinaryFunc::DateTrunc => date_trunc,
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
@@ -1548,7 +1563,9 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Bool).nullable(true)
             }
 
-            ToChar => ColumnType::new(ScalarType::String).nullable(false),
+            ToCharTimestamp | ToCharTimestampTz => {
+                ColumnType::new(ScalarType::String).nullable(false)
+            }
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
@@ -1564,6 +1581,10 @@ impl BinaryFunc {
 
             AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable || is_div_mod)
+            }
+
+            SubTimestamp | SubTimestampTz => {
+                ColumnType::new(ScalarType::Interval).nullable(in_nullable)
             }
 
             // TODO(benesch): we correctly compute types for decimal scale, but
@@ -1661,6 +1682,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::SubInt64 => f.write_str("-"),
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
+            BinaryFunc::SubTimestamp => f.write_str("-"),
+            BinaryFunc::SubTimestampTz => f.write_str("-"),
             BinaryFunc::SubTimestampInterval => f.write_str("-"),
             BinaryFunc::SubTimestampTzInterval => f.write_str("-"),
             BinaryFunc::SubDecimal => f.write_str("-"),
@@ -1688,7 +1711,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
             BinaryFunc::MatchRegex => f.write_str("~"),
-            BinaryFunc::ToChar => f.write_str("to_char"),
+            BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
+            BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
@@ -2213,9 +2237,45 @@ pub fn replace<'a>(datums: &[Datum<'a>], _: &EvalEnv, temp_storage: &'a RowArena
     )
 }
 
+pub fn make_timestamp<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+    let year: i32 = match datums[0].unwrap_int64().try_into() {
+        Ok(year) => year,
+        Err(_) => return Datum::Null,
+    };
+    let month: u32 = match datums[1].unwrap_int64().try_into() {
+        Ok(month) => month,
+        Err(_) => return Datum::Null,
+    };
+    let day: u32 = match datums[2].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let hour: u32 = match datums[3].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let minute: u32 = match datums[4].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let second_float = datums[5].unwrap_float64();
+    let second = second_float as u32;
+    let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
+    let date = match NaiveDate::from_ymd_opt(year, month, day) {
+        Some(date) => date,
+        None => return Datum::Null,
+    };
+    let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
+        Some(timestamp) => timestamp,
+        None => return Datum::Null,
+    };
+    Datum::Timestamp(timestamp)
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
+    MakeTimestamp,
     Substr,
     Length,
     Replace,
@@ -2225,6 +2285,7 @@ impl VariadicFunc {
     pub fn func(self) -> for<'a> fn(&[Datum<'a>], &EvalEnv, &'a RowArena) -> Datum<'a> {
         match self {
             VariadicFunc::Coalesce => coalesce,
+            VariadicFunc::MakeTimestamp => make_timestamp,
             VariadicFunc::Substr => substr,
             VariadicFunc::Length => length,
             VariadicFunc::Replace => replace,
@@ -2243,6 +2304,7 @@ impl VariadicFunc {
                 }
                 ColumnType::new(ScalarType::Null)
             }
+            MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             Length => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
@@ -2262,6 +2324,7 @@ impl fmt::Display for VariadicFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
+            VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::Length => f.write_str("length"),
             VariadicFunc::Replace => f.write_str("replace"),
