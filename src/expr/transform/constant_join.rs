@@ -47,7 +47,6 @@ impl InsertConstantJoin {
                         })
                         .collect::<Vec<_>>();
                     let typ = repr::RelationType::new(typ).add_keys(Vec::new());
-                    assert_eq!(rows.len(), scalars.len());
                     assert_eq!(typ.column_types.len(), scalars.len());
                     inputs.push(RelationExpr::Constant { rows, typ });
                     *relation = input.take_dangerous();
