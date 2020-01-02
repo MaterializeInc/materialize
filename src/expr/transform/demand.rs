@@ -210,7 +210,11 @@ impl Demand {
                 self.action(input, columns, gets);
             }
             RelationExpr::Threshold { input } => {
-                self.action(input, columns, gets);
+                // Threshold requires all columns, as collapsing any distinct values
+                // has the potential to change how it thresholds counts. This could
+                // be improved with reasoning about distinctness or non-negativity.
+                let arity = input.arity();
+                self.action(input, (0..arity).collect(), gets);
             }
             RelationExpr::Union { left, right } => {
                 self.action(left, columns.clone(), gets);
