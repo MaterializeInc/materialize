@@ -103,14 +103,21 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
             let mut source_tokens = HashMap::new();
             // Load declared sources into the rendering context.
-            for (source_number, (src_id, src)) in dataflow.source_imports.clone().into_iter().enumerate() {
+            for (source_number, (src_id, src)) in
+                dataflow.source_imports.clone().into_iter().enumerate()
+            {
                 let (source, capability) = match src.connector.connector {
                     ExternalSourceConnector::Kafka(c) => {
                         // Distribute read responsibility among workers.
                         use differential_dataflow::hashable::Hashable;
                         let hash = src_id.hashed() as usize;
                         let read_from_kafka = hash % worker_peers == worker_index;
-                        source::kafka(region, format!("kafka-{}-{}", dataflow.debug_name, source_number), c, read_from_kafka)
+                        source::kafka(
+                            region,
+                            format!("kafka-{}-{}", dataflow.debug_name, source_number),
+                            c,
+                            read_from_kafka,
+                        )
                     }
                     ExternalSourceConnector::File(c) => {
                         let read_style = if worker_index != 0 {
