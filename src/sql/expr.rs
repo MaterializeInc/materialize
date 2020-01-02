@@ -1046,7 +1046,7 @@ impl RelationExpr {
             }
             RelationExpr::FlatMapUnary { input, func, expr } => {
                 let mut typ = input.typ(outer, params);
-                let func_typ = func.output_type(&expr.typ(outer, &RelationType::empty(), params));
+                let func_typ = func.output_type(&expr.typ(outer, &typ, params));
                 typ.column_types.extend(func_typ.column_types);
                 // FlatMap can add duplicate rows, so input keys are no longer valid
                 RelationType::new(typ.column_types)
