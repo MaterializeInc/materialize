@@ -231,7 +231,7 @@ ORDER BY oid
 ----
 oid  datname        datdba  encoding  datcollate  datctype    datistemplate  datallowconn
 1    system         NULL    6         en_US.utf8  en_US.utf8  false          true
-50   defaultdb      NULL    6         en_US.utf8  en_US.utf8  false          true
+50   materialize      NULL    6         en_US.utf8  en_US.utf8  false          true
 51   postgres       NULL    6         en_US.utf8  en_US.utf8  false          true
 52   test           NULL    6         en_US.utf8  en_US.utf8  false          true
 54   constraint_db  NULL    6         en_US.utf8  en_US.utf8  false          true
@@ -243,7 +243,7 @@ ORDER BY oid
 ----
 oid  datname        datconnlimit  datlastsysoid  datfrozenxid  datminmxid  dattablespace  datacl
 1    system         -1            NULL           NULL          NULL        0              NULL
-50   defaultdb      -1            NULL           NULL          NULL        0              NULL
+50   materialize      -1            NULL           NULL          NULL        0              NULL
 51   postgres       -1            NULL           NULL          NULL        0              NULL
 52   test           -1            NULL           NULL          NULL        0              NULL
 54   constraint_db  -1            NULL           NULL          NULL        0              NULL

@@ -230,7 +230,7 @@ Project {
       ],
       Filter {
         predicates: [datetots #6 > 2007-01-02 00:00:00],
-        Get { orderline (u13) }
+        Get { materialize.public.orderline (u13) }
       }
     }
   }
@@ -275,11 +275,26 @@ Project {
         [(2, 3), (3, 0)],
         [(3, 2), (4, 0)]
       ],
-      Filter { predicates: [!isnull #2], Get { stock (u17) } },
-      ArrangeBy { keys: [[#0]], Get { item (u15) } },
-      ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
-      ArrangeBy { keys: [[#0]], Get { nation (u19) } },
-      ArrangeBy { keys: [[#0]], Get { region (u23) } },
+      Filter {
+        predicates: [!isnull #2],
+        Get { materialize.public.stock (u17) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.item (u15) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u21) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u19) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.region (u23) }
+      },
       Filter {
         predicates: [!isnull #1],
         Reduce {
@@ -293,10 +308,19 @@ Project {
                 [(1, 3), (2, 0)],
                 [(2, 2), (3, 0)]
               ],
-              Get { stock (u17) },
-              ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
-              ArrangeBy { keys: [[#0]], Get { nation (u19) } },
-              ArrangeBy { keys: [[#0]], Get { region (u23) } }
+              Get { materialize.public.stock (u17) },
+              ArrangeBy {
+                keys: [[#0]],
+                Get { materialize.public.supplier (u21) }
+              },
+              ArrangeBy {
+                keys: [[#0]],
+                Get { materialize.public.nation (u19) }
+              },
+              ArrangeBy {
+                keys: [[#0]],
+                Get { materialize.public.region (u23) }
+              }
             }
           }
         }
@@ -338,10 +362,19 @@ Project {
           [(0, 1), (1, 1), (2, 1), (3, 1)],
           [(0, 2), (1, 2), (2, 2), (3, 2)]
         ],
-        Get { orderline (u13) },
-        ArrangeBy { keys: [[#0, #1, #2]], Get { neworder (u9) } },
-        ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
-        ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } }
+        Get { materialize.public.orderline (u13) },
+        ArrangeBy {
+          keys: [[#0, #1, #2]],
+          Get { materialize.public.neworder (u9) }
+        },
+        ArrangeBy {
+          keys: [[#0, #1, #2]],
+          Get { materialize.public.order (u11) }
+        },
+        ArrangeBy {
+          keys: [[#0, #1, #2]],
+          Get { materialize.public.customer (u5) }
+        }
       }
     }
   }
@@ -371,7 +404,7 @@ Let {
       datetots #4 < 2012-01-02 00:00:00,
       datetots #4 >= 2007-01-02 00:00:00
     ],
-    Get { "order" (u11) }
+    Get { materialize.public.order (u11) }
   }
 } in
 Reduce {
@@ -395,7 +428,7 @@ Reduce {
             [(0, 1), (1, 1)],
             [(0, 2), (1, 2)]
           ],
-          Get { orderline (u13) },
+          Get { materialize.public.orderline (u13) },
           Get { l0 }
         }
       }
@@ -443,13 +476,28 @@ Reduce {
         [(3, 17), (4, 0)],
         [(5, 2), (6, 0)]
       ],
-      Get { orderline (u13) },
-      ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
-      ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } },
-      ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
-      Get { supplier (u21) },
-      ArrangeBy { keys: [[#0]], Get { nation (u19) } },
-      ArrangeBy { keys: [[#0]], Get { region (u23) } }
+      Get { materialize.public.orderline (u13) },
+      ArrangeBy {
+        keys: [[#0, #1, #2]],
+        Get { materialize.public.order (u11) }
+      },
+      ArrangeBy {
+        keys: [[#0, #1, #2]],
+        Get { materialize.public.customer (u5) }
+      },
+      ArrangeBy {
+        keys: [[#0, #1]],
+        Get { materialize.public.stock (u17) }
+      },
+      Get { materialize.public.supplier (u21) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u19) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.region (u23) }
+      }
     }
   }
 }
@@ -474,7 +522,7 @@ Let {
         #7 >= 1,
         datetots #6 >= 1999-01-01 00:00:00
       ],
-      Get { orderline (u13) }
+      Get { materialize.public.orderline (u13) }
     }
   }
 } in
@@ -544,14 +592,32 @@ Reduce {
           datetots #6 <= 2012-01-02 00:00:00,
           datetots #6 >= 2007-01-02 00:00:00
         ],
-        Get { orderline (u13) }
+        Get { materialize.public.orderline (u13) }
       },
-      ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
-      ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
-      ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
-      ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } },
-      ArrangeBy { keys: [[#0]], Get { nation (u19) } },
-      ArrangeBy { keys: [[#0]], Get { nation (u19) } }
+      ArrangeBy {
+        keys: [[#0, #1]],
+        Get { materialize.public.stock (u17) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u21) }
+      },
+      ArrangeBy {
+        keys: [[#0, #1, #2]],
+        Get { materialize.public.order (u11) }
+      },
+      ArrangeBy {
+        keys: [[#0, #1, #2]],
+        Get { materialize.public.customer (u5) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u19) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u19) }
+      }
     }
   }
 }
@@ -616,16 +682,40 @@ Project {
           ],
           Filter {
             predicates: [!isnull #4, #4 < 1000],
-            Get { orderline (u13) }
+            Get { materialize.public.orderline (u13) }
           },
-          ArrangeBy { keys: [[#0]], Get { item (u15) } },
-          ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
-          ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
-          ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
-          ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } },
-          ArrangeBy { keys: [[#0]], Get { nation (u19) } },
-          ArrangeBy { keys: [[#0]], Get { nation (u19) } },
-          ArrangeBy { keys: [[#0]], Get { region (u23) } }
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.item (u15) }
+          },
+          ArrangeBy {
+            keys: [[#0, #1]],
+            Get { materialize.public.stock (u17) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.supplier (u21) }
+          },
+          ArrangeBy {
+            keys: [[#0, #1, #2]],
+            Get { materialize.public.order (u11) }
+          },
+          ArrangeBy {
+            keys: [[#0, #1, #2]],
+            Get { materialize.public.customer (u5) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.nation (u19) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.nation (u19) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.region (u23) }
+          }
         }
       }
     }
@@ -666,12 +756,27 @@ Reduce {
         [(2, 17), (3, 0)],
         [(3, 3), (5, 0)]
       ],
-      Get { orderline (u13) },
-      ArrangeBy { keys: [[#0]], Get { item (u15) } },
-      ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
-      ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
-      ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
-      ArrangeBy { keys: [[#0]], Get { nation (u19) } }
+      Get { materialize.public.orderline (u13) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.item (u15) }
+      },
+      ArrangeBy {
+        keys: [[#0, #1]],
+        Get { materialize.public.stock (u17) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u21) }
+      },
+      ArrangeBy {
+        keys: [[#0, #1, #2]],
+        Get { materialize.public.order (u11) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u19) }
+      }
     }
   }
 }
@@ -711,10 +816,19 @@ Project {
             [(0, 2), (1, 2), (2, 2)],
             [(2, 21), (3, 0)]
           ],
-          Get { orderline (u13) },
-          ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
-          ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } },
-          ArrangeBy { keys: [[#0]], Get { nation (u19) } }
+          Get { materialize.public.orderline (u13) },
+          ArrangeBy {
+            keys: [[#0, #1, #2]],
+            Get { materialize.public.order (u11) }
+          },
+          ArrangeBy {
+            keys: [[#0, #1, #2]],
+            Get { materialize.public.customer (u5) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.nation (u19) }
+          }
         }
       }
     }
@@ -744,9 +858,15 @@ Let {
     predicates: [#26 = "GERMANY"],
     Join {
       variables: [[(0, 17), (1, 0)], [(1, 3), (2, 0)]],
-      Get { stock (u17) },
-      ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
-      ArrangeBy { keys: [[#0]], Get { nation (u19) } }
+      Get { materialize.public.stock (u17) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u21) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u19) }
+      }
     }
   }
 } in
@@ -798,9 +918,12 @@ Reduce {
       ],
       Filter {
         predicates: [datetots #6 < 2020-01-01 00:00:00],
-        Get { orderline (u13) }
+        Get { materialize.public.orderline (u13) }
       },
-      ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } }
+      ArrangeBy {
+        keys: [[#0, #1, #2]],
+        Get { materialize.public.order (u11) }
+      }
     }
   }
 }
@@ -824,8 +947,14 @@ ORDER BY custdist DESC, c_count DESC
 Let {
   l0 = Join {
     variables: [[(0, 3), (1, 0)], [(0, 1), (1, 1)], [(0, 2), (1, 2)]],
-    Filter { predicates: [#5 > 8], Get { "order" (u11) } },
-    ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } }
+    Filter {
+      predicates: [#5 > 8],
+      Get { materialize.public.order (u11) }
+    },
+    ArrangeBy {
+      keys: [[#0, #1, #2]],
+      Get { materialize.public.customer (u5) }
+    }
   }
 } in
 Reduce {
@@ -849,7 +978,7 @@ Reduce {
               Get { l0 }
             }
           },
-          Get { customer (u5) }
+          Get { materialize.public.customer (u5) }
         }
       }
     }
@@ -877,9 +1006,12 @@ Let {
           datetots #6 < 2020-01-02 00:00:00,
           datetots #6 >= 2007-01-02 00:00:00
         ],
-        Get { orderline (u13) }
+        Get { materialize.public.orderline (u13) }
       },
-      ArrangeBy { keys: [[#0]], Get { item (u15) } }
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.item (u15) }
+      }
     }
   }
 } in
@@ -942,9 +1074,12 @@ Let {
       variables: [[(0, 4), (1, 0)], [(0, 5), (1, 1)]],
       Filter {
         predicates: [datetots #6 >= 2007-01-02 00:00:00],
-        Get { orderline (u13) }
+        Get { materialize.public.orderline (u13) }
       },
-      ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } }
+      ArrangeBy {
+        keys: [[#0, #1]],
+        Get { materialize.public.stock (u17) }
+      }
     }
   }
 } in
@@ -952,7 +1087,7 @@ Project {
   outputs: [0 .. 2, 4, 8],
   Join {
     variables: [[(0, 0), (1, 0)], [(1, 1), (2, 0)]],
-    Get { supplier (u21) },
+    Get { materialize.public.supplier (u21) },
     Filter { predicates: [!isnull #1], Get { l0 } },
     Filter {
       predicates: [!isnull #0],
@@ -983,8 +1118,11 @@ Let {
     predicates: [!(^zz.*$ ~ #22)],
     Join {
       variables: [[(0, 0), (1, 0)]],
-      Get { stock (u17) },
-      ArrangeBy { keys: [[#0]], Get { item (u15) } }
+      Get { materialize.public.stock (u17) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.item (u15) }
+      }
     }
   }
 } in
@@ -996,7 +1134,10 @@ Let {
     Join {
       variables: [],
       Get { l3 },
-      Filter { predicates: [^.*bad.*$ ~ #6], Get { supplier (u21) } }
+      Filter {
+        predicates: [^.*bad.*$ ~ #6],
+        Get { materialize.public.supplier (u21) }
+      }
     }
   }
 } in
@@ -1043,7 +1184,7 @@ Let {
       predicates: [(i32todec #7 * 1000000dec) < #13],
       Join {
         variables: [[(0, 4), (1, 0)]],
-        Get { orderline (u13) },
+        Get { materialize.public.orderline (u13) },
         Map {
           scalars: [
             ((i32todec #1 * 10000000dec) / i64todec #2) / 10dec
@@ -1055,8 +1196,11 @@ Let {
               predicates: [^.*b$ ~ #14],
               Join {
                 variables: [[(0, 4), (1, 0)]],
-                Get { orderline (u13) },
-                ArrangeBy { keys: [[#0]], Get { item (u15) } }
+                Get { materialize.public.orderline (u13) },
+                ArrangeBy {
+                  keys: [[#0]],
+                  Get { materialize.public.item (u15) }
+                }
               }
             }
           }
@@ -1111,9 +1255,15 @@ Project {
           [(0, 1), (1, 1), (2, 1)],
           [(0, 2), (1, 2), (2, 2)]
         ],
-        Get { orderline (u13) },
-        ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
-        ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } }
+        Get { materialize.public.orderline (u13) },
+        ArrangeBy {
+          keys: [[#0, #1, #2]],
+          Get { materialize.public.order (u11) }
+        },
+        ArrangeBy {
+          keys: [[#0, #1, #2]],
+          Get { materialize.public.customer (u5) }
+        }
       }
     }
   }
@@ -1167,9 +1317,12 @@ Let {
           variables: [[(0, 4), (1, 0)]],
           Filter {
             predicates: [#7 <= 10, #7 >= 1],
-            Get { orderline (u13) }
+            Get { materialize.public.orderline (u13) }
           },
-          ArrangeBy { keys: [[#0]], Get { item (u15) } }
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.item (u15) }
+          }
         }
       }
     }
@@ -1210,8 +1363,11 @@ Let {
     predicates: [#8 = "GERMANY"],
     Join {
       variables: [[(0, 3), (1, 0)]],
-      Get { supplier (u21) },
-      ArrangeBy { keys: [[#0]], Get { nation (u19) } }
+      Get { materialize.public.supplier (u21) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u19) }
+      }
     }
   }
 } in
@@ -1221,9 +1377,9 @@ Let {
     Get { l0 },
     Filter {
       predicates: [datetots #6 > 2010-05-23 12:00:00],
-      Get { orderline (u13) }
+      Get { materialize.public.orderline (u13) }
     },
-    Get { stock (u17) }
+    Get { materialize.public.stock (u17) }
   }
 } in
 Project {
@@ -1250,7 +1406,10 @@ Project {
                   Get { l3 }
                 },
                 Distinct { group_key: [#21], Get { l3 } },
-                ArrangeBy { keys: [[#0]], Get { item (u15) } }
+                ArrangeBy {
+                  keys: [[#0]],
+                  Get { materialize.public.item (u15) }
+                }
               }
             }
           }
@@ -1301,11 +1460,23 @@ Let {
           [(2, 17), (3, 0)],
           [(3, 3), (4, 0)]
         ],
-        Get { orderline (u13) },
-        ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
-        ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
-        ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
-        ArrangeBy { keys: [[#0]], Get { nation (u19) } }
+        Get { materialize.public.orderline (u13) },
+        ArrangeBy {
+          keys: [[#0, #1, #2]],
+          Get { materialize.public.order (u11) }
+        },
+        ArrangeBy {
+          keys: [[#0, #1]],
+          Get { materialize.public.stock (u17) }
+        },
+        ArrangeBy {
+          keys: [[#0]],
+          Get { materialize.public.supplier (u21) }
+        },
+        ArrangeBy {
+          keys: [[#0]],
+          Get { materialize.public.nation (u19) }
+        }
       }
     }
   }
@@ -1339,7 +1510,7 @@ Reduce {
                     [(0, 2), (1, 2)]
                   ],
                   Get { l2 },
-                  Get { orderline (u13) }
+                  Get { materialize.public.orderline (u13) }
                 }
               }
             }
@@ -1405,7 +1576,7 @@ Let {
           ||
           (substr(#11, 1, 1) = "7")
         ],
-        Get { customer (u5) }
+        Get { materialize.public.customer (u5) }
       },
       Map {
         scalars: [
@@ -1441,7 +1612,7 @@ Let {
               (substr(#11, 1, 1) = "7"),
               #16 > 0dec
             ],
-            Get { customer (u5) }
+            Get { materialize.public.customer (u5) }
           }
         }
       }
@@ -1467,7 +1638,7 @@ Reduce {
                   [(0, 2), (1, 2)],
                   [(0, 3), (1, 0)]
                 ],
-                Get { "order" (u11) },
+                Get { materialize.public.order (u11) },
                 Get { l0 }
               }
             }

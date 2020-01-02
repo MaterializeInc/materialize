@@ -249,7 +249,7 @@ fn parse_query<'a>(
                             types.len()
                         );
                     }
-                    rows.push(cols.into_iter().map(|col| col.to_owned()).collect());
+                    rows.push(cols.into_iter().map(|col| col.replace("␠", " ")).collect());
                 }
                 if sort == Sort::Row {
                     rows.sort();

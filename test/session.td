@@ -6,7 +6,7 @@
 > SHOW ALL
 application_name    ""          "Sets the application name to be reported in statistics and logs (PostgreSQL)."
 client_encoding     UTF8        "Sets the client's character set encoding (PostgreSQL)."
-database            default     "Sets the current database (CockroachDB)."
+database            materialize   "Sets the current database (CockroachDB)."
 extra_float_digits  3           "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
 DateStyle           "ISO, MDY"  "Sets the display format for date and time values (PostgreSQL)."
 server_version      9.5.0       "Shows the server version (PostgreSQL)."

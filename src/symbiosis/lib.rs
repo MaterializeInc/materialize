@@ -21,7 +21,7 @@
 //! extremely slow and inefficient on large data sets.
 
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 
 use chrono::Utc;
 use failure::{bail, format_err};
@@ -29,15 +29,16 @@ use sql_parser::ast::ColumnOption;
 use sql_parser::ast::{DataType, ObjectType, Statement};
 use tokio_postgres::types::FromSql;
 
-use catalog::{Catalog, QualName};
+use catalog::names::FullName;
+use catalog::Catalog;
 use repr::decimal::Significand;
 use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
-use sql::{scalar_type_from_sql, MutationKind, Plan};
+use sql::{normalize, scalar_type_from_sql, MutationKind, Plan, Session, StatementContext};
 
 pub struct Postgres {
     client: tokio_postgres::Client,
-    table_types: HashMap<QualName, (Vec<DataType>, RelationDesc)>,
+    table_types: HashMap<FullName, (Vec<DataType>, RelationDesc)>,
 }
 
 impl Postgres {
@@ -85,8 +86,10 @@ END $$;
     pub async fn execute(
         &mut self,
         catalog: &Catalog,
+        session: &Session,
         stmt: &Statement,
     ) -> Result<Plan, failure::Error> {
+        let scx = StatementContext { catalog, session };
         Ok(match stmt {
             Statement::CreateTable {
                 name,
@@ -115,7 +118,7 @@ END $$;
                 );
                 let names = columns
                     .iter()
-                    .map(|c| Some(sql::names::ident_to_col_name(c.name.clone())));
+                    .map(|c| Some(sql::normalize::column_name(c.name.clone())));
 
                 for constraint in constraints {
                     use sql_parser::ast::TableConstraint;
@@ -144,13 +147,11 @@ END $$;
                     }
                 }
 
+                let name = scx.allocate_name(normalize::object_name(name.clone())?);
                 let desc = RelationDesc::new(typ, names);
                 self.table_types
-                    .insert(name.try_into()?, (sql_types, desc.clone()));
-                Plan::CreateTable {
-                    name: name.try_into()?,
-                    desc,
-                }
+                    .insert(name.clone(), (sql_types, desc.clone()));
+                Plan::CreateTable { name, desc }
             }
             Statement::Drop {
                 names,
@@ -161,23 +162,30 @@ END $$;
                 self.client.execute(&*stmt.to_string(), &[]).await?;
                 let mut items = Vec::new();
                 for name in names {
-                    match name.try_into() {
-                        Ok(name) => match catalog.try_get(&name) {
-                            None => {
-                                if !if_exists {
-                                    bail!("internal error: table {} missing from catalog", name);
-                                }
+                    let name = match scx.resolve_name(name.clone()) {
+                        Ok(name) => name,
+                        Err(err) => {
+                            if *if_exists {
+                                continue;
+                            } else {
+                                return Err(err);
                             }
-                            Some(entry) => {
-                                catalog.plan_remove(
-                                    &name,
-                                    catalog::RemoveMode::from_cascade(true),
-                                    &mut items,
-                                )?;
-                                items.push(entry.id());
+                        }
+                    };
+                    match catalog.try_get(&name) {
+                        None => {
+                            if !if_exists {
+                                bail!("internal error: table {} missing from catalog", name);
                             }
-                        },
-                        Err(e) => bail!("unable to drop invalid name {}: {}", name, e),
+                        }
+                        Some(entry) => {
+                            catalog.plan_remove(
+                                &name,
+                                catalog::RemoveMode::from_cascade(true),
+                                &mut items,
+                            )?;
+                            items.push(entry.id());
+                        }
                     }
                 }
                 items.sort();
@@ -186,7 +194,7 @@ END $$;
             }
             Statement::Delete { table_name, .. } => {
                 let mut updates = vec![];
-                let table_name = QualName::try_from(table_name)?;
+                let table_name = scx.resolve_name(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
                 for row in self.run_query(&table_name, sql).await? {
                     updates.push((row, -1));
@@ -201,7 +209,7 @@ END $$;
             }
             Statement::Insert { table_name, .. } => {
                 let mut updates = vec![];
-                let table_name = table_name.try_into()?;
+                let table_name = scx.resolve_name(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
                 for row in self.run_query(&table_name, sql).await? {
                     updates.push((row, 1));
@@ -220,8 +228,8 @@ END $$;
                 ..
             } => {
                 let mut updates = vec![];
-                let table_name = QualName::try_from(table_name)?;
                 let mut sql = format!("SELECT * FROM {}", table_name);
+                let table_name = scx.resolve_name(table_name.clone())?;
                 if let Some(selection) = selection {
                     sql += &format!(" WHERE {}", selection);
                 }
@@ -247,7 +255,7 @@ END $$;
 
     async fn run_query(
         &mut self,
-        table_name: &QualName,
+        table_name: &FullName,
         query: String,
     ) -> Result<Vec<Row>, failure::Error> {
         let (sql_types, desc) = self

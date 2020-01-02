@@ -2034,7 +2034,7 @@ statement ok
 COMMENT ON DATABASE test is 'foo'
 
 query TTTT
-SELECT shobj_description((select oid from pg_database where datname = 'defaultdb')::oid, 'pg_database'),
+SELECT shobj_description((select oid from pg_database where datname = 'materialize')::oid, 'pg_database'),
        shobj_description((select oid from pg_database where datname = 'test')::oid, 'pg_database'),
        shobj_description((select oid from pg_database where datname = 'notexist')::oid, 'pg_database'),
        shobj_description((select oid from pg_database where datname = 'test')::oid, 'notexist')

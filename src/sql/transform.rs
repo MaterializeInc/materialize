@@ -9,12 +9,10 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
-use std::convert::TryFrom;
-
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{BinaryOperator, Expr, Function, ObjectName, Query, Value};
 
-use catalog::QualName;
+use crate::normalize;
 
 pub fn transform(query: &mut Query) {
     AggFuncRewriter.visit_query(query);
@@ -36,7 +34,7 @@ impl AggFuncRewriter {
             distinct,
         });
         let sum = Expr::Function(Function {
-            name: ObjectName(vec!["internal".into(), "avg_promotion".into()]),
+            name: ObjectName(vec!["internal_avg_promotion".into()]),
             args: vec![sum],
             over: None,
             distinct: false,
@@ -70,7 +68,7 @@ impl AggFuncRewriter {
         //     (sum(x²) - sum(x)² / count(x)) / count(x)
         //
         let expr = Expr::Function(Function {
-            name: ObjectName(vec!["internal".into(), "avg_promotion".into()]),
+            name: ObjectName(vec!["internal_avg_promotion".into()]),
             args: vec![expr],
             over: None,
             distinct: false,
@@ -139,7 +137,7 @@ impl<'ast> VisitMut<'ast> for AggFuncRewriter {
     fn visit_expr(&mut self, expr: &'ast mut Expr) {
         visit_mut::visit_expr(self, expr);
         if let Expr::Function(func) = expr {
-            let name = match QualName::try_from(func.name.clone()) {
+            let name = match normalize::function_name(func.name.clone()) {
                 Ok(name) => name,
                 Err(_) => return,
             };
@@ -171,8 +169,7 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
     fn visit_expr(&mut self, expr: &'ast mut Expr) {
         visit_mut::visit_expr(self, expr);
         if let Expr::Identifier(ident) = expr {
-            let name = ObjectName(vec![ident.clone()]);
-            if QualName::name_equals(name, "current_timestamp") {
+            if normalize::ident(ident.clone()) == "current_timestamp" {
                 *expr = Expr::Function(Function {
                     name: ObjectName(vec!["current_timestamp".into()]),
                     args: vec![],

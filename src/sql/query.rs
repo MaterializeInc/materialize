@@ -18,7 +18,7 @@
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::{btree_map, BTreeMap, HashSet};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::fmt;
 use std::iter;
 use std::mem;
@@ -34,7 +34,8 @@ use sql_parser::ast::{
 use uuid::Uuid;
 
 use ::expr::{DateTruncTo, Id};
-use catalog::{CatalogEntry, QualName};
+use catalog::names::{FullName, PartialName};
+use catalog::CatalogEntry;
 use dataflow_types::RowSetFinishing;
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
@@ -43,7 +44,7 @@ use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
     RelationExpr, ScalarExpr, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };
-use super::names;
+use super::normalize;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
 use super::statement::StatementContext;
 
@@ -267,9 +268,8 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
                     }
                 }
             };
-            let tn: Option<QualName> = None;
             let scope = Scope::from_source(
-                tn,
+                None,
                 // Column names are taken from the left, as in Postgres.
                 left_scope.column_names(),
                 Some(qcx.outer_scope.clone()),
@@ -347,11 +347,10 @@ fn plan_view_select(
     // Step 1. Handle FROM clause, including joins.
     let (left, left_scope) = {
         let typ = RelationType::new(vec![]);
-        let tn: Option<QualName> = None;
         (
             RelationExpr::constant(vec![vec![]], typ),
             Scope::from_source(
-                tn,
+                None,
                 iter::empty::<Option<ColumnName>>(),
                 Some(qcx.outer_scope.clone()),
             ),
@@ -525,12 +524,16 @@ fn plan_view_select(
 
 pub fn plan_index<'a>(
     scx: &'a StatementContext,
-    on_name: &QualName,
+    on_name: &FullName,
     key_parts: &[Expr],
 ) -> Result<(&'a CatalogEntry, Vec<ScalarExpr>), failure::Error> {
     let item = scx.catalog.get(on_name)?;
     let desc = item.desc()?;
-    let scope = Scope::from_source(Some(on_name), desc.iter_names(), Some(Scope::empty(None)));
+    let scope = Scope::from_source(
+        Some(on_name.clone().into()),
+        desc.iter_names(),
+        Some(Scope::empty(None)),
+    );
     let qcx = &QueryContext::root(scx, QueryLifetime::Static);
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -588,14 +591,17 @@ fn plan_table_factor<'a>(
             if !with_hints.is_empty() {
                 bail!("WITH hints are not supported");
             }
-            let name = QualName::try_from(name.clone())?;
-            let alias: QualName = if let Some(TableAlias { name, columns }) = alias {
+            let alias = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
                     bail!("aliasing columns is not yet supported");
                 }
-                name.clone().try_into()?
+                PartialName {
+                    database: None,
+                    schema: None,
+                    item: normalize::ident(name.clone()),
+                }
             } else {
-                name.clone()
+                normalize::object_name(name.clone())?
             };
             if !args.is_empty() {
                 let ecx = &ExprContext {
@@ -608,13 +614,14 @@ fn plan_table_factor<'a>(
                 };
                 plan_table_function(ecx, left, &name, Some(alias), args)
             } else {
+                let name = qcx.scx.resolve_name(name.clone())?;
                 let item = qcx.scx.catalog.get(&name)?;
                 let expr = RelationExpr::Get {
                     id: Id::Global(item.id()),
                     typ: item.desc()?.typ().clone(),
                 };
                 let scope = Scope::from_source(
-                    Some(&alias),
+                    Some(alias),
                     item.desc()?.iter_names(),
                     Some(qcx.outer_scope.clone()),
                 );
@@ -630,12 +637,15 @@ fn plan_table_factor<'a>(
                 bail!("LATERAL derived tables are not yet supported");
             }
             let (expr, scope) = plan_subquery(&qcx, &subquery)?;
-            let alias: Option<QualName> = if let Some(TableAlias { name, columns }) = alias {
+            let alias = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
                     bail!("aliasing columns is not yet supported");
                 }
-                let qn: QualName = name.try_into()?;
-                Some(qn)
+                Some(PartialName {
+                    database: None,
+                    schema: None,
+                    item: normalize::ident(name.clone()),
+                })
             } else {
                 None
             };
@@ -652,12 +662,12 @@ fn plan_table_factor<'a>(
 fn plan_table_function(
     ecx: &ExprContext,
     left: RelationExpr,
-    name: &QualName,
-    alias: Option<QualName>,
+    name: &ObjectName,
+    alias: Option<PartialName>,
     args: &[Expr],
 ) -> Result<(RelationExpr, Scope), failure::Error> {
-    assert!(is_table_func(name)); // so we don't forget to add names over there
-    let ident = &*name.to_string();
+    let ident = &*normalize::function_name(name.clone())?;
+    assert!(is_table_func(ident)); // so we don't forget to add names over there
     match (ident, args) {
         ("jsonb_each", [expr])
         | ("jsonb_object_keys", [expr])
@@ -761,7 +771,7 @@ fn plan_select_item<'a>(
             let scope_item = ScopeItem {
                 names: iter::once(ScopeItemName {
                     table_name: None,
-                    column_name: Some(names::ident_to_col_name(alias.clone())),
+                    column_name: Some(normalize::column_name(alias.clone())),
                 })
                 .chain(maybe_name.into_iter())
                 .collect(),
@@ -784,7 +794,20 @@ fn plan_select_item<'a>(
             })
             .collect::<Result<Vec<_>, _>>(),
         SelectItem::QualifiedWildcard(table_name) => {
-            let table_name = Some(QualName::try_from(table_name)?);
+            let table_name = Some(match ecx.qcx.scx.resolve_name(table_name.clone()) {
+                Ok(table_name) => table_name.into(),
+                Err(err) => {
+                    if table_name.0.len() == 1 {
+                        PartialName {
+                            database: None,
+                            schema: None,
+                            item: normalize::ident(table_name.0[0].clone()),
+                        }
+                    } else {
+                        return Err(err);
+                    }
+                }
+            });
             select_all_scope
                 .items
                 .iter()
@@ -921,7 +944,7 @@ fn plan_join_constraint<'a>(
         JoinConstraint::Using(column_names) => plan_using_constraint(
             &column_names
                 .iter()
-                .map(|ident| names::ident_to_col_name(ident.clone()))
+                .map(|ident| normalize::column_name(ident.clone()))
                 .collect::<Vec<_>>(),
             left,
             left_scope,
@@ -1066,22 +1089,15 @@ fn plan_expr_returning_name<'a>(
             Expr::Identifier(name) => {
                 let (i, name) = ecx
                     .scope
-                    .resolve_column(&names::ident_to_col_name(name.clone()))?;
+                    .resolve_column(&normalize::column_name(name.clone()))?;
                 (ScalarExpr::Column(i), Some(name.clone()))
             }
             Expr::CompoundIdentifier(names) => {
-                if names.len() == 2 {
-                    let (i, name) = ecx.scope.resolve_table_column(
-                        &(&names[0]).try_into()?,
-                        &names::ident_to_col_name(names[1].clone()),
-                    )?;
-                    (ScalarExpr::Column(i), Some(name.clone()))
-                } else {
-                    bail!(
-                        "compound identifier {} with more than two identifiers is not supported",
-                        e
-                    );
-                }
+                let mut names = names.clone();
+                let col_name = normalize::column_name(names.pop().unwrap());
+                let table_name = normalize::object_name(ObjectName(names))?;
+                let (i, name) = ecx.scope.resolve_table_column(&table_name, &col_name)?;
+                (ScalarExpr::Column(i), Some(name.clone()))
             }
             Expr::Value(val) => (plan_literal(val)?, None),
             Expr::Wildcard { .. } | Expr::QualifiedWildcard(_) => {
@@ -1137,9 +1153,7 @@ fn plan_expr_returning_name<'a>(
                 let expr = plan_function(ecx, func)?;
                 let name = ScopeItemName {
                     table_name: None,
-                    column_name: Some(names::ident_to_col_name(
-                        func.name.0.last().unwrap().clone(),
-                    )),
+                    column_name: Some(normalize::column_name(func.name.0.last().unwrap().clone())),
                 };
                 (expr, Some(name))
             }
@@ -1421,8 +1435,7 @@ fn plan_cast<'a>(
 }
 
 fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, failure::Error> {
-    let name = QualName::try_from(&sql_func.name)?;
-    let ident = name.as_ident_str()?;
+    let name = normalize::function_name(sql_func.name.clone())?;
     assert!(is_aggregate_func(&name));
 
     if sql_func.over.is_some() {
@@ -1430,11 +1443,11 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     }
 
     if sql_func.args.len() != 1 {
-        bail!("{} function only takes one argument", ident);
+        bail!("{} function only takes one argument", name);
     }
 
     let arg = &sql_func.args[0];
-    let (expr, func) = match (ident, arg) {
+    let (expr, func) = match (name.as_str(), arg) {
         // COUNT(*) is a special case that doesn't compose well
         ("count", Expr::Wildcard) => (ScalarExpr::literal_null(), AggregateFunc::CountAll),
         _ => {
@@ -1443,7 +1456,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
             // parameter types in this position.
             let expr = plan_expr(ecx, arg, None)?;
             let typ = ecx.column_type(&expr);
-            let func = find_agg_func(&ident, typ.scalar_type)?;
+            let func = find_agg_func(&name, typ.scalar_type)?;
             (expr, func)
         }
     };
@@ -1458,7 +1471,7 @@ fn plan_function<'a>(
     ecx: &ExprContext,
     sql_func: &'a Function,
 ) -> Result<ScalarExpr, failure::Error> {
-    let name = QualName::try_from(&sql_func.name)?;
+    let name = normalize::function_name(sql_func.name.clone())?;
     let ident = &*name.to_string();
     if is_aggregate_func(&name) {
         if ecx.allow_aggregates {
@@ -1622,7 +1635,7 @@ fn plan_function<'a>(
             // aggregate function, so that the avg of an integer column does
             // not get truncated to an integer, which would be surprising to
             // users (#549).
-            "internal.avg_promotion" => {
+            "internal_avg_promotion" => {
                 if sql_func.args.len() != 1 {
                     bail!("internal.avg_promotion requires exactly one argument");
                 }
@@ -3210,7 +3223,7 @@ impl<'ast> AggregateFuncVisitor<'ast> {
 impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
         let old_within_aggregate = self.within_aggregate;
-        if let Ok(name) = QualName::try_from(func.name.clone()) {
+        if let Ok(name) = normalize::function_name(func.name.clone()) {
             if is_aggregate_func(&name) {
                 if self.within_aggregate {
                     self.err = Some(format_err!("nested aggregate functions are not allowed"));
@@ -3322,8 +3335,8 @@ impl<'a> ExprContext<'a> {
     }
 }
 
-fn is_table_func(name: &QualName) -> bool {
-    match name.as_ident_str().unwrap_or("") {
+fn is_table_func(name: &str) -> bool {
+    match name {
         "jsonb_each"
         | "jsonb_object_keys"
         | "jsonb_array_elements"
@@ -3333,8 +3346,8 @@ fn is_table_func(name: &QualName) -> bool {
     }
 }
 
-fn is_aggregate_func(name: &QualName) -> bool {
-    match name.as_ident_str().unwrap_or("") {
+fn is_aggregate_func(name: &str) -> bool {
+    match name {
         // avg is handled by transform::AvgFuncRewriter.
         "max" | "min" | "sum" | "count" => true,
         _ => false,

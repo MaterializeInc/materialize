@@ -7,7 +7,6 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
-use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,7 +19,8 @@ use sql_parser::ast::{
 };
 use url::Url;
 
-use catalog::{Catalog, CatalogItem, QualName, RemoveMode};
+use catalog::names::{DatabaseSpecifier, FullName, PartialName};
+use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
     KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, Sink,
@@ -35,7 +35,7 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
 use crate::session::Session;
-use crate::{names, query, Params, Plan};
+use crate::{normalize, query, Params, Plan};
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -158,7 +158,8 @@ pub fn describe_statement(
         }
 
         Statement::Peek { name, .. } | Statement::Tail { name, .. } => {
-            let sql_object = scx.catalog.get(&name.try_into()?)?;
+            let name = scx.resolve_name(name)?;
+            let sql_object = scx.catalog.get(&name)?;
             (Some(sql_object.desc()?.clone()), vec![])
         }
 
@@ -183,8 +184,8 @@ fn handle_sync_statement(
 ) -> Result<Plan, failure::Error> {
     match stmt {
         Statement::CreateSource { .. } | Statement::CreateSources { .. } => unreachable!(),
-        Statement::Peek { name, immediate } => handle_peek(scx, name.try_into()?, immediate),
-        Statement::Tail { name } => handle_tail(scx, &name.try_into()?),
+        Statement::Peek { name, immediate } => handle_peek(scx, name, immediate),
+        Statement::Tail { name } => handle_tail(scx, name),
         Statement::StartTransaction { .. } => handle_start_transaction(),
         Statement::Commit { .. } => handle_commit_transaction(),
         Statement::CreateView { .. } => handle_create_view(scx, stmt, params),
@@ -209,22 +210,14 @@ fn handle_sync_statement(
             extended,
             table_name,
             filter,
-        } => handle_show_indexes(scx, extended, &table_name.try_into()?, filter.as_ref()),
+        } => handle_show_indexes(scx, extended, table_name, filter.as_ref()),
         Statement::ShowColumns {
             extended,
             full,
             table_name,
             filter,
-        } => handle_show_columns(
-            scx,
-            extended,
-            full,
-            &table_name.try_into()?,
-            filter.as_ref(),
-        ),
-        Statement::ShowCreateView { view_name } => {
-            handle_show_create_view(scx, view_name.try_into()?)
-        }
+        } => handle_show_columns(scx, extended, full, table_name, filter.as_ref()),
+        Statement::ShowCreateView { view_name } => handle_show_create_view(scx, view_name),
         Statement::ShowCreateSource { source_name } => handle_show_create_source(scx, source_name),
         Statement::Explain { stage, query } => handle_explain(scx, stage, *query, params),
 
@@ -241,9 +234,9 @@ pub fn handle_statement(
 ) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
     let scx = &StatementContext { catalog, session };
     match stmt {
-        Statement::CreateSource { .. } | Statement::CreateSources { .. } => {
-            MaybeFuture::Future(Box::pin(handle_create_dataflow(stmt)))
-        }
+        Statement::CreateSource { .. } | Statement::CreateSources { .. } => MaybeFuture::Future(
+            Box::pin(handle_create_dataflow(stmt, session.database().to_owned())),
+        ),
         _ => handle_sync_statement(stmt, params, &scx).into(),
     }
 }
@@ -290,7 +283,8 @@ fn handle_show_variable(scx: &StatementContext, variable: Ident) -> Result<Plan,
     }
 }
 
-fn handle_tail(scx: &StatementContext, from: &QualName) -> Result<Plan, failure::Error> {
+fn handle_tail(scx: &StatementContext, from: ObjectName) -> Result<Plan, failure::Error> {
+    let from = scx.resolve_name(from)?;
     let entry = scx.catalog.get(&from)?;
     if let CatalogItem::View(_) = entry.item() {
         Ok(Plan::Tail(entry.clone()))
@@ -357,7 +351,7 @@ fn handle_show_objects(
 fn handle_show_indexes(
     scx: &StatementContext,
     extended: bool,
-    from_name: &QualName,
+    from_name: ObjectName,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
     if extended {
@@ -366,7 +360,8 @@ fn handle_show_indexes(
     if filter.is_some() {
         bail!("SHOW INDEXES ... WHERE is not supported");
     }
-    let from_entry = scx.catalog.get(from_name)?;
+    let from_name = scx.resolve_name(from_name)?;
+    let from_entry = scx.catalog.get(&from_name)?;
     if !object_type_matches(ObjectType::View, from_entry.item()) {
         bail!("{} is not a view", from_name);
     }
@@ -408,7 +403,7 @@ fn handle_show_columns(
     scx: &StatementContext,
     extended: bool,
     full: bool,
-    table_name: &QualName,
+    table_name: ObjectName,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
     if extended {
@@ -421,9 +416,10 @@ fn handle_show_columns(
         bail!("SHOW COLUMNS ... { LIKE | WHERE } is not supported");
     }
 
+    let table_name = scx.resolve_name(table_name)?;
     let column_descriptions: Vec<_> = scx
         .catalog
-        .get(&table_name.try_into()?)?
+        .get(&table_name)?
         .desc()?
         .iter()
         .map(|(name, typ)| {
@@ -441,16 +437,16 @@ fn handle_show_columns(
 
 fn handle_show_create_view(
     scx: &StatementContext,
-    object_name: QualName,
+    view_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let name = object_name.try_into()?;
-    let raw_sql = if let CatalogItem::View(view) = scx.catalog.get(&name)?.item() {
+    let view_name = scx.resolve_name(view_name)?;
+    let raw_sql = if let CatalogItem::View(view) = scx.catalog.get(&view_name)?.item() {
         &view.raw_sql
     } else {
-        bail!("'{}' is not a view", name);
+        bail!("'{}' is not a view", view_name);
     };
     Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(&name.to_string()),
+        Datum::String(&view_name.to_string()),
         Datum::String(raw_sql),
     ])]))
 }
@@ -459,7 +455,7 @@ fn handle_show_create_source(
     scx: &StatementContext,
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let name = object_name.try_into()?;
+    let name = scx.resolve_name(object_name)?;
     let source_url =
         if let CatalogItem::Source(Source { connector, .. }) = scx.catalog.get(&name)?.item() {
             match &connector.connector {
@@ -505,8 +501,8 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
     };
 
-    let name = name.try_into()?;
-    let from = from.try_into()?;
+    let name = scx.allocate_name(normalize::object_name(name)?);
+    let from = scx.resolve_name(from)?;
     let catalog_entry = scx.catalog.get(&from)?;
     let (addr, topic) = parse_kafka_topic_url(&url)?;
 
@@ -541,18 +537,21 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
         } => (name, on_name, key_parts),
         _ => unreachable!(),
     };
-    let on_name = on_name.try_into()?;
+    let on_name = scx.resolve_name(on_name)?;
     let (catalog_entry, keys) = query::plan_index(scx, &on_name, &key_parts)?;
     if !object_type_matches(ObjectType::View, catalog_entry.item()) {
         bail!("{} is not a view", on_name);
     }
-    let name = QualName::new_normalized(iter::once(name))?;
     let keys = keys
         .into_iter()
         .map(|x| x.lower_uncorrelated())
         .collect::<Vec<_>>();
     Ok(Plan::CreateIndex(
-        name,
+        FullName {
+            database: on_name.database.clone(),
+            schema: on_name.schema.clone(),
+            item: normalize::ident(name),
+        },
         Index::new(
             catalog_entry.id(),
             keys,
@@ -605,11 +604,11 @@ fn handle_create_view(
             )
         }
         for (i, name) in columns.iter().enumerate() {
-            desc.set_name(i, Some(names::ident_to_col_name(name.clone())));
+            desc.set_name(i, Some(normalize::column_name(name.clone())));
         }
     }
-    let name = QualName::try_from(name)?;
     *materialized = false; // Normalize for `raw_sql` below.
+    let name = scx.allocate_name(normalize::object_name(name.to_owned())?);
     let view = View {
         raw_sql: stmt.to_string(),
         relation_expr,
@@ -619,7 +618,10 @@ fn handle_create_view(
     Ok(Plan::CreateView(name, view))
 }
 
-async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Error> {
+async fn handle_create_dataflow(
+    mut stmt: Statement,
+    current_database: String,
+) -> Result<Plan, failure::Error> {
     match &mut stmt {
         Statement::CreateSource {
             name,
@@ -627,7 +629,6 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
             schema,
             with_options,
         } => {
-            let name: QualName = (&*name).try_into()?;
             let source_url = parse_source_url(url)?;
             let mut format = KafkaSchemaFormat::Avro;
             let mut message_name = None;
@@ -662,6 +663,10 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
                     }
                     if let Some(topic) = topic {
                         if let Some(schema) = schema {
+                            let name = allocate_name(
+                                &current_database,
+                                normalize::object_name(name.clone())?,
+                            );
                             let source =
                                 build_kafka_source(schema, addr, topic, format, message_name)
                                     .await?;
@@ -728,7 +733,6 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
                             }
                         },
                     };
-                    let name = name.try_into()?;
                     let (encoding, desc) = match format {
                         SourceFileFormat::Csv => {
                             let n_cols = match n_cols {
@@ -783,13 +787,15 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
                     let source = Source {
                         connector: SourceConnector {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
-                                path: path.try_into()?,
+                                path,
                                 tail,
                             }),
                             encoding,
                         },
                         desc,
                     };
+                    let name =
+                        allocate_name(&current_database, normalize::object_name(name.clone())?);
                     Ok(Plan::CreateSource(name, source))
                 }
             }
@@ -815,9 +821,14 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
                 let parts: Vec<&str> = s.rsplitn(2, '-').collect();
                 if parts.len() == 2 && parts[0] == "value" {
                     let topic_name = parts[1];
-                    let sql_name = sanitize_kafka_topic_name(parts[1])
-                        .parse()
-                        .expect("sanitized kafka topic names should always be valid qualnames");
+                    let sql_name = allocate_name(
+                        &current_database,
+                        PartialName {
+                            database: None,
+                            schema: None,
+                            item: sanitize_kafka_topic_name(parts[1]),
+                        },
+                    );
                     Some((topic_name, sql_name))
                 } else {
                     None
@@ -833,10 +844,10 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
             }
             async fn make_source(
                 topic_name: &str,
-                sql_name: QualName,
+                sql_name: FullName,
                 addr: SocketAddr,
                 schema_registry: &str,
-            ) -> Result<(QualName, Source), failure::Error> {
+            ) -> Result<(FullName, Source), failure::Error> {
                 Ok((
                     sql_name,
                     build_kafka_avro_source(
@@ -869,17 +880,27 @@ fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan,
         } => (object_type, if_exists, names, cascade),
         _ => unreachable!(),
     };
-    //let names: Vec<String> = names.iter().map(QualName::try_into).?collect();
+    let names = names
+        .into_iter()
+        .map(|n| scx.resolve_name(n))
+        .collect::<Vec<_>>();
     for name in &names {
-        match scx.catalog.get(&name.try_into()?) {
-            Ok(catalog_entry) => {
-                if !object_type_matches(object_type, catalog_entry.item()) {
-                    bail!("{} is not of type {}", name, object_type);
+        match name {
+            Ok(name) => match scx.catalog.get(&name) {
+                Ok(catalog_entry) => {
+                    if !object_type_matches(object_type, catalog_entry.item()) {
+                        bail!("{} is not of type {}", name, object_type);
+                    }
                 }
-            }
+                Err(e) => {
+                    if !if_exists {
+                        return Err(e);
+                    }
+                }
+            },
             Err(e) => {
                 if !if_exists {
-                    return Err(e);
+                    bail!("{}", e);
                 }
             }
         }
@@ -888,8 +909,9 @@ fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan,
     let mode = RemoveMode::from_cascade(cascade);
     let mut to_remove = vec![];
     for name in &names {
-        scx.catalog
-            .plan_remove(&name.try_into()?, mode, &mut to_remove)?;
+        if let Ok(name) = name {
+            scx.catalog.plan_remove(name, mode, &mut to_remove)?;
+        }
     }
     to_remove.sort();
     to_remove.dedup();
@@ -904,10 +926,10 @@ fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
 fn handle_peek(
     scx: &StatementContext,
-    name: QualName,
+    name: ObjectName,
     immediate: bool,
 ) -> Result<Plan, failure::Error> {
-    let name = name.try_into()?;
+    let name = scx.resolve_name(name)?;
     let catalog_entry = scx.catalog.get(&name)?.clone();
     if !object_type_matches(ObjectType::View, catalog_entry.item()) {
         bail!("{} is not a view", name);
@@ -1267,4 +1289,24 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 pub struct StatementContext<'a> {
     pub catalog: &'a Catalog,
     pub session: &'a Session,
+}
+
+impl<'a> StatementContext<'a> {
+    pub fn allocate_name(&self, name: PartialName) -> FullName {
+        allocate_name(self.session.database(), name)
+    }
+
+    pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
+        let name = normalize::object_name(name)?;
+        self.catalog
+            .resolve(self.session.database(), &["mz_catalog", "public"], &name)
+    }
+}
+
+fn allocate_name(current_database: &str, name: PartialName) -> FullName {
+    FullName {
+        database: DatabaseSpecifier::Name(name.database.unwrap_or_else(|| current_database.into())),
+        schema: name.schema.unwrap_or_else(|| "public".into()),
+        item: name.item,
+    }
 }

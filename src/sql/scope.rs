@@ -24,18 +24,18 @@
 
 use failure::bail;
 
-use catalog::QualName;
+use catalog::names::PartialName;
 use repr::ColumnName;
 
 use super::expr::ColumnRef;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScopeItemName {
-    pub table_name: Option<QualName>,
+    pub table_name: Option<PartialName>,
     pub column_name: Option<ColumnName>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScopeItem {
     // The canonical name should appear first in the list (e.g., the name
     // assigned by an alias.)
@@ -49,7 +49,7 @@ pub struct ScopeItem {
     pub nameable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OuterScopeItem {
     /// The actual scope item.
     scope_item: ScopeItem,
@@ -109,18 +109,16 @@ impl Scope {
         }
     }
 
-    pub fn from_source<T, I, N>(
-        table_name: Option<T>,
+    pub fn from_source<I, N>(
+        table_name: Option<PartialName>,
         column_names: I,
         outer_scope: Option<Scope>,
     ) -> Self
     where
-        T: Into<QualName>,
         I: IntoIterator<Item = Option<N>>,
         N: Into<ColumnName>,
     {
         let mut scope = Scope::empty(outer_scope);
-        let table_name = table_name.map(|n| n.into());
         scope.items = column_names
             .into_iter()
             .map(|column_name| ScopeItem {
@@ -214,7 +212,7 @@ impl Scope {
 
     pub fn resolve_table_column<'a>(
         &'a self,
-        table_name: &QualName,
+        table_name: &PartialName,
         column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
         self.resolve(

@@ -9,21 +9,17 @@ use std::path::Path;
 
 use failure::bail;
 use log::info;
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use dataflow_types::{Index, Sink, Source, View};
 use expr::{GlobalId, Id, IdHumanizer};
 use repr::RelationDesc;
 
-use crate::sql::SqlVal;
+use crate::names::{DatabaseSpecifier, FullName, PartialName};
 
-mod qualname;
+pub mod names;
+
 mod sql;
-
-pub use crate::qualname::QualName;
-
-const APPLICATION_ID: i32 = 0x1854_47dc;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -32,13 +28,40 @@ const APPLICATION_ID: i32 = 0x1854_47dc;
 /// depend upon the object. It enforces the SQL rules around dropping: an object
 /// cannot be dropped until all of the objects that depend upon it are dropped.
 /// It also enforces uniqueness of names.
+///
+/// SQL mandates a hierarchy of exactly three layers. A catalog contains
+/// databases, databases contain schemas, and schemas contain catalog items,
+/// like sources, sinks, view, and indexes.
+///
+/// To the outside world, databases, schemas, and items are all identified by
+/// name. Items can be referred to by their [`FullName`], which fully and
+/// unambiguously specifies the item, or a [`PartialName`], which can omit the
+/// database name and/or the schema name. Partial names can be converted into
+/// full names via a complicated resolution process documented by the
+/// [`resolve`] method.
+///
+/// The catalog also maintains special "ambient schemas": virtual schemas,
+/// implicitly present in all databases, that house various system views.
+/// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
 #[derive(Debug)]
 pub struct Catalog {
     id: usize,
-    by_name: HashMap<QualName, GlobalId>,
+    by_name: HashMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
-    sqlite: rusqlite::Connection,
-    bootstrapped: bool,
+    ambient_schemas: HashMap<String, Schema>,
+    storage: sql::Connection,
+}
+
+#[derive(Debug)]
+struct Database {
+    id: i32,
+    schemas: HashMap<String, Schema>,
+}
+
+#[derive(Debug)]
+struct Schema {
+    id: i32,
+    items: HashMap<String, GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -46,7 +69,7 @@ pub struct CatalogEntry {
     inner: CatalogItem,
     used_by: Vec<GlobalId>,
     id: GlobalId,
-    name: QualName,
+    name: FullName,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,7 +139,7 @@ impl CatalogEntry {
     }
 
     /// Returns the name of this catalog entry.
-    pub fn name(&self) -> &QualName {
+    pub fn name(&self) -> &FullName {
         &self.name
     }
 }
@@ -127,60 +150,58 @@ impl Catalog {
     /// persisted catalog items are loaded.
     pub fn open<I>(path: Option<&Path>, items: I) -> Result<Catalog, failure::Error>
     where
-        I: Iterator<Item = (GlobalId, QualName, CatalogItem)>,
+        I: Iterator<Item = (GlobalId, FullName, CatalogItem)>,
     {
-        let sqlite = match path {
-            Some(path) => rusqlite::Connection::open(path)?,
-            None => rusqlite::Connection::open_in_memory()?,
-        };
-
-        let app_id: i32 = sqlite.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
-        let bootstrapped = if app_id == 0 {
-            sqlite.execute(
-                &format!("PRAGMA application_id = {}", APPLICATION_ID),
-                params![],
-            )?;
-            true
-        } else if app_id == APPLICATION_ID {
-            false
-        } else {
-            bail!("incorrect application_id in catalog");
-        };
+        let storage = sql::Connection::open(path)?;
 
         let mut catalog = Catalog {
             id: 0,
             by_name: HashMap::new(),
             by_id: BTreeMap::new(),
-            sqlite,
-            bootstrapped,
+            ambient_schemas: HashMap::new(),
+            storage,
         };
 
+        for (id, name) in catalog.storage.load_databases()? {
+            catalog.by_name.insert(
+                name,
+                Database {
+                    id,
+                    schemas: HashMap::new(),
+                },
+            );
+        }
+
+        for (id, database_name, schema_name) in catalog.storage.load_schemas()? {
+            let schemas = match database_name {
+                Some(database_name) => {
+                    &mut catalog
+                        .by_name
+                        .get_mut(&database_name)
+                        .expect("catalog out of sync")
+                        .schemas
+                }
+                None => &mut catalog.ambient_schemas,
+            };
+            schemas.insert(
+                schema_name,
+                Schema {
+                    id,
+                    items: HashMap::new(),
+                },
+            );
+        }
+
+        // Insert system items. This has to be done after databases and schemas
+        // are loaded, but before any items, as items might depend on these
+        // system items, but these system items depend on the system
+        // database/schema being installed.
         for (id, name, item) in items {
             catalog.insert_id(id, name, item)?;
         }
 
-        // Create the on-disk schema, if it doesn't already exist.
-        const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS catalog (
-            id   blob PRIMARY KEY,
-            name blob NOT NULL,
-            item blob NOT NULL
-        );";
-        catalog.sqlite.execute(&SCHEMA, params![])?;
-
-        // Load any existing catalog entries.
-        let rows: Vec<_> = catalog
-            .sqlite
-            .prepare("SELECT id, name, item FROM catalog ORDER BY rowid")?
-            .query_and_then(params![], |row| -> Result<_, failure::Error> {
-                let id: SqlVal<GlobalId> = row.get(0)?;
-                let name: SqlVal<QualName> = row.get(1)?;
-                let item: SqlVal<CatalogItem> = row.get(2)?;
-                Ok((id.0, name.0, item.0))
-            })?
-            .collect();
-        for row in rows {
-            let (id, name, item) = row?;
-            catalog.insert_id_core(id, name, item);
+        for (id, name, def) in catalog.storage.load_items()? {
+            catalog.insert_id_core(id, name, def);
             if let GlobalId::User(id) = id {
                 catalog.id = cmp::max(catalog.id, id);
             }
@@ -196,23 +217,98 @@ impl Catalog {
         GlobalId::user(self.id)
     }
 
+    /// Resolves [`PartialName`] into a [`FullName`].
+    ///
+    /// If `name` does not specify a database, the `current_database` is used..
+    /// If `name` does not specify a schema, then the schemas in `search_path`
+    /// are searched in order.
+    pub fn resolve(
+        &self,
+        current_database: &str,
+        search_path: &[&str],
+        name: &PartialName,
+    ) -> Result<FullName, failure::Error> {
+        if let (Some(database_name), Some(schema_name)) = (&name.database, &name.schema) {
+            // `name` is fully specified already. No resolution required.
+            return Ok(FullName {
+                database: DatabaseSpecifier::Name(database_name.to_owned()),
+                schema: schema_name.to_owned(),
+                item: name.item.clone(),
+            });
+        }
+
+        // Find the specified database, or `current_database` if no database was
+        // specified.
+        let database_name = name.database.as_deref().unwrap_or(current_database);
+        let resolver = match self.by_name.get(database_name) {
+            Some(database) => DatabaseResolver {
+                database_name,
+                database,
+                ambient_schemas: &self.ambient_schemas,
+            },
+            None => bail!("unknown database '{}'", database_name),
+        };
+
+        if let Some(schema_name) = &name.schema {
+            // A schema name was specified, so just try to find the item in
+            // that schema.
+            if let Some(out) = resolver.resolve(schema_name, &name.item) {
+                return Ok(out);
+            }
+        } else {
+            // No schema was specified, so try to find the item in every schema
+            // in the search path, in order.
+            for &schema_name in search_path {
+                if let Some(out) = resolver.resolve(schema_name, &name.item) {
+                    return Ok(out);
+                }
+            }
+        }
+
+        bail!("catalog item '{}' does not exist", name);
+    }
+
     /// Returns the named catalog item, if it exists.
     ///
     /// See also [`Catalog::get`].
-    pub fn try_get(&self, name: &QualName) -> Option<&CatalogEntry> {
-        self.by_name.get(name).map(|id| &self.by_id[id])
+    pub fn try_get(&self, name: &FullName) -> Option<&CatalogEntry> {
+        self.get_schemas(&name.database)
+            .and_then(|schemas| schemas.get(&name.schema))
+            .and_then(|schema| schema.items.get(&name.item))
+            .map(|id| &self.by_id[id])
     }
 
     /// Returns the named catalog item, or an error if it does not exist.
     ///
     /// See also [`Catalog::try_get`].
-    pub fn get(&self, name: &QualName) -> Result<&CatalogEntry, failure::Error> {
+    pub fn get(&self, name: &FullName) -> Result<&CatalogEntry, failure::Error> {
         self.try_get(name)
             .ok_or_else(|| failure::err_msg(format!("catalog item '{}' does not exist", name)))
     }
 
     pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
         &self.by_id[id]
+    }
+
+    /// Gets the schema map for the database matching `database_spec`.
+    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&HashMap<String, Schema>> {
+        // Keep in sync with `get_schemas_mut`.
+        match database_spec {
+            DatabaseSpecifier::Ambient => Some(&self.ambient_schemas),
+            DatabaseSpecifier::Name(name) => self.by_name.get(name).map(|db| &db.schemas),
+        }
+    }
+
+    /// Like `get_schemas`, but returns a `mut` reference.
+    fn get_schemas_mut(
+        &mut self,
+        database_spec: &DatabaseSpecifier,
+    ) -> Option<&mut HashMap<String, Schema>> {
+        // Keep in sync with `get_schemas`.
+        match database_spec {
+            DatabaseSpecifier::Ambient => Some(&mut self.ambient_schemas),
+            DatabaseSpecifier::Name(name) => self.by_name.get_mut(name).map(|db| &mut db.schemas),
+        }
     }
 
     /// Inserts a new catalog item, returning an error if a catalog item with
@@ -222,7 +318,7 @@ impl Catalog {
     /// panic if any of `item`'s dependencies are not present in the store.
     pub fn insert(
         &mut self,
-        name: QualName,
+        name: FullName,
         item: CatalogItem,
     ) -> Result<GlobalId, failure::Error> {
         let id = self.allocate_id();
@@ -233,26 +329,32 @@ impl Catalog {
     fn insert_id(
         &mut self,
         id: GlobalId,
-        name: QualName,
+        name: FullName,
         item: CatalogItem,
     ) -> Result<(), failure::Error> {
         // Validate that we can insert the item.
-        if self.by_name.contains_key(&name) {
-            bail!("catalog item '{}' already exists", name)
-        }
         if self.by_id.contains_key(&id) {
             bail!("catalog item with id {} already exists", id)
         }
+        let schema = match self
+            .get_schemas_mut(&name.database)
+            .and_then(|schemas| schemas.get(&name.schema))
+        {
+            Some(schema) => schema,
+            None => bail!("catalog does not contain schema '{}'", name.schema),
+        };
+        if schema.items.contains_key(&name.item) {
+            bail!("catalog item '{}' already exists", name);
+        }
+        let schema_id = schema.id;
 
         // Maybe update on-disk state.
         // At the moment, system sources are always ephemeral.
         if let GlobalId::User(_) = id {
-            //TODO: tables created by sqllogictest are considered user sources
-            //but they are ephemeral and should not be inserted into the catalog
-            let mut stmt = self
-                .sqlite
-                .prepare_cached("INSERT INTO catalog (id, name, item) VALUES (?, ?, ?)")?;
-            stmt.execute(params![SqlVal(&id), SqlVal(&name), SqlVal(&item)])?;
+            // TODO: tables created by symbiosis are considered user sources,
+            // but they are ephemeral and should not be inserted into the
+            // catalog.
+            self.storage.insert_item(id, schema_id, &name.item, &item)?;
         }
 
         // Update in-memory state.
@@ -260,7 +362,7 @@ impl Catalog {
         Ok(())
     }
 
-    fn insert_id_core(&mut self, id: GlobalId, name: QualName, item: CatalogItem) {
+    fn insert_id_core(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
         info!("new {} {} ({})", item.type_string(), name, id);
         let entry = CatalogEntry {
             inner: item,
@@ -277,7 +379,12 @@ impl Catalog {
                 ),
             }
         }
-        self.by_name.insert(entry.name.clone(), entry.id);
+        self.get_schemas_mut(&entry.name.database)
+            .expect("catalog out of sync")
+            .get_mut(&entry.name.schema)
+            .expect("catalog out of sync")
+            .items
+            .insert(entry.name.item.clone(), entry.id);
         self.by_id.insert(entry.id, entry);
     }
 
@@ -296,7 +403,7 @@ impl Catalog {
     /// name in `to_remove`.
     pub fn plan_remove(
         &self,
-        name: &QualName,
+        name: &FullName,
         mode: RemoveMode,
         to_remove: &mut Vec<GlobalId>,
     ) -> Result<(), failure::Error> {
@@ -356,16 +463,15 @@ impl Catalog {
                     dep_metadata.used_by.retain(|u| *u != metadata.id)
                 }
             }
-            self.by_name
-                .remove(&metadata.name)
+            self.get_schemas_mut(&metadata.name.database)
+                .expect("catalog out of sync")
+                .get_mut(&metadata.name.schema)
+                .expect("catalog out of sync")
+                .items
+                .remove(&metadata.name.item)
                 .expect("catalog out of sync");
         }
-        let mut stmt = self
-            .sqlite
-            .prepare_cached("DELETE FROM catalog WHERE id = ?")
-            .expect("catalog: sqlite failed");
-        stmt.execute(params![SqlVal(id)])
-            .expect("catalog: sqlite failed");
+        self.storage.remove_item(id);
     }
 
     /// Iterates over the items in the catalog in order of increasing ID.
@@ -375,7 +481,7 @@ impl Catalog {
 
     /// Whether this catalog instance bootstrapped its on-disk state.
     pub fn bootstrapped(&self) -> bool {
-        self.bootstrapped
+        self.storage.bootstrapped()
     }
 }
 
@@ -385,6 +491,40 @@ impl IdHumanizer for Catalog {
             Id::Global(id) => self.by_id.get(&id).map(|entry| entry.name.to_string()),
             Id::Local(_) => None,
         }
+    }
+}
+
+/// A helper for resolving item names within one database.
+struct DatabaseResolver<'a> {
+    database_name: &'a str,
+    database: &'a Database,
+    ambient_schemas: &'a HashMap<String, Schema>,
+}
+
+impl<'a> DatabaseResolver<'a> {
+    /// Attempts to resolve the item specified by `schema_name` and `item_name`
+    /// in the database that this resolver is attached to, or in the set of
+    /// ambient schemas.
+    fn resolve(&self, schema_name: &str, item_name: &str) -> Option<FullName> {
+        if let Some(schema) = self.database.schemas.get(schema_name) {
+            if schema.items.contains_key(item_name) {
+                return Some(FullName {
+                    database: DatabaseSpecifier::Name(self.database_name.to_owned()),
+                    schema: schema_name.to_owned(),
+                    item: item_name.to_owned(),
+                });
+            }
+        }
+        if let Some(schema) = self.ambient_schemas.get(schema_name) {
+            if schema.items.contains_key(item_name) {
+                return Some(FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: schema_name.to_owned(),
+                    item: item_name.to_owned(),
+                });
+            }
+        }
+        None
     }
 }
 
