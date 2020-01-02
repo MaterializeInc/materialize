@@ -25,6 +25,7 @@ pub mod projection_extraction;
 pub mod projection_lifting;
 pub mod reduce_elision;
 pub mod reduction;
+pub mod reduction_pushdown;
 pub mod simplify;
 pub mod split_predicates;
 pub mod update_let;
@@ -133,6 +134,7 @@ impl Default for Optimizer {
             Box::new(crate::transform::projection_lifting::ProjectionLifting),
             Box::new(crate::transform::fusion::project::Project),
             Box::new(crate::transform::constant_join::RemoveConstantJoin),
+            Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
         ];
         Self { transforms }
     }
