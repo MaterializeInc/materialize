@@ -3,6 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+// Using references ensures code doesn't break if the other argument
+// ceases to be Copy.
+#[allow(clippy::op_ref)]
+
 use crate::{EvalEnv, RelationExpr};
 
 #[derive(Debug)]
