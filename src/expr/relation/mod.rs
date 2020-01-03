@@ -1326,14 +1326,14 @@ Constant [[665]]"#
 
         assert_eq!(
             reduce.doc().pretty(84).to_string(),
-            "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
+            "Reduce { group_key: [#1, #2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
         );
 
         assert_eq!(
             reduce.doc().pretty(16).to_string(),
             "Reduce {
   group_key: [
-    1, 2
+    #1, #2
   ],
   aggregates: [
     sum(#0),
