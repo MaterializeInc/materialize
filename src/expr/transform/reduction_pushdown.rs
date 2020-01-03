@@ -5,7 +5,7 @@
 
 // Using references ensures code doesn't break if the other argument
 // ceases to be Copy.
-#[allow(clippy::op_ref)]
+#![allow(clippy::op_ref)]
 use crate::{EvalEnv, RelationExpr};
 
 #[derive(Debug)]
