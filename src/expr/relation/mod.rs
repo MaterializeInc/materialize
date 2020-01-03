@@ -1320,7 +1320,7 @@ Constant [[665]]"#
 
         let reduce = RelationExpr::Reduce {
             input: Box::new(base()),
-            group_key: vec![1, 2],
+            group_key: vec![ScalarExpr::Column(1), ScalarExpr::Column(2)],
             aggregates: vec![agg0, agg1],
         };
 
