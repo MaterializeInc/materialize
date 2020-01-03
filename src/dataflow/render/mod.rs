@@ -166,6 +166,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
                     context.set_trace(&get_expr, &index_desc.keys, arranged);
                     index_tokens.insert(id, Rc::new((button.press_on_drop(), token)));
+                } else {
+                    panic!("Index import alarmingly absent!")
                 }
             }
 

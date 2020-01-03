@@ -247,7 +247,8 @@ impl Catalog {
         // Maybe update on-disk state.
         // At the moment, system sources are always ephemeral.
         if let GlobalId::User(_) = id {
-            //TODO: eliminate testing tables
+            //TODO: tables created by sqllogictest are considered user sources
+            //but they are ephemeral and should not be inserted into the catalog
             let mut stmt = self
                 .sqlite
                 .prepare_cached("INSERT INTO catalog (id, name, item) VALUES (?, ?, ?)")?;

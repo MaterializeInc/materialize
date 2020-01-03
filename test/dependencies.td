@@ -195,9 +195,9 @@ catalog item 'v4a' does not exist
 catalog item 'i3' does not exist
 
 > SHOW INDEX in v4;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v4     i4           x           <null>     false 1
+View  Key_name            Column_name Expression Null  Seq_in_index
+-------------------------------------------------------------------
+v4     i4                 x           <null>     false 1
 v4   "\"v4_PRIMARY_IDX\"" x           <null>     false 1
 v4   "\"v4_PRIMARY_IDX\"" y           <null>     false 2
 

@@ -50,16 +50,16 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 "mz_dataflow_channels",
                 "mz_dataflow_operator_addresses",
                 "mz_dataflow_operators",
+                "mz_materialization_dependencies",
+                "mz_materializations",
                 "mz_peek_active",
                 "mz_peek_durations",
                 "mz_scheduling_elapsed",
                 "mz_scheduling_histogram",
                 "mz_scheduling_parks",
-                "mz_view_dependencies",
                 "mz_view_foreign_keys",
                 "mz_view_frontiers",
                 "mz_view_keys",
-                "mz_views"
             ]
         );
     }

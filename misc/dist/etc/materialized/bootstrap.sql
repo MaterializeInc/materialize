@@ -113,7 +113,7 @@ SELECT DISTINCT
      coalesce(mcn_source.name, frontier_source.global_id) as source,
      frontier_source.time - frontier_df.time as lag_ms
 FROM
-     mz_view_dependencies view_deps
+     mz_materialization_dependencies view_deps
 JOIN mz_view_frontiers frontier_source ON view_deps.source = frontier_source.global_id
 JOIN mz_view_frontiers frontier_df ON view_deps.dataflow = frontier_df.global_id
 LEFT JOIN mz_catalog_names mcn ON mcn.global_id = view_deps.dataflow

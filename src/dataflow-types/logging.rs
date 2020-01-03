@@ -105,8 +105,10 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Parks) => "mz_scheduling_parks",
             LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_sizes",
             LogVariant::Differential(DifferentialLog::Sharing) => "mz_arrangement_sharing",
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_views",
-            LogVariant::Materialized(MaterializedLog::DataflowDependency) => "mz_view_dependencies",
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_materializations",
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
+                "mz_materialization_dependencies"
+            }
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontiers",
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active",
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations",

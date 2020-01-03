@@ -183,6 +183,11 @@ where
                 .collect();
             for (id, name, item) in catalog_entries {
                 match item {
+                    //currently catalog item rebuild assumes that sinks and
+                    //indexes are always built individually and does not store information
+                    //about how it was built. If we start building multiple sinks and/or indexes
+                    //using a single dataflow, we have to make sure the rebuild process re-runs
+                    //the same multiple-build dataflow.
                     CatalogItem::Source(source) => {
                         coord.sources.insert(id, source);
                     }
@@ -440,7 +445,6 @@ where
                 let mut views_to_drop: Vec<GlobalId> = Vec::new();
                 let mut indexes_to_drop = Vec::new();
                 for id in ids {
-                    // TODO: Test if a name was installed and error if not?
                     if self.sources.remove(&id).is_some() {
                         sources_to_drop.push(id);
                     } else if self.views.contains_key(&id) {
@@ -502,9 +506,8 @@ where
                 mut eval_env,
                 materialize,
             } => {
-                eval_env.wall_time = Some(chrono::Utc::now());
-
                 let timestamp = self.determine_timestamp(&source, when)?;
+                eval_env.wall_time = Some(chrono::Utc::now());
                 eval_env.logical_time = Some(timestamp);
                 // TODO (wangandi): what do we do about this line when we start passing indexes
                 // to the optimizer?
@@ -537,7 +540,7 @@ where
 
                     // Choose a timestamp for all workers to use in the peek.
                     // We minimize over all participating views, to ensure that the query will not
-                    // need to block on the arrival of further input data.s
+                    // need to block on the arrival of further input data.
                     let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
                     let (project, filter) = Self::plan_peek(&mut source);
@@ -650,7 +653,6 @@ where
                 let sink_id = self.catalog.allocate_id();
                 self.active_tails.insert(conn_id, sink_id);
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-                // TODO: account for non-materialized view
                 let since = self
                     .upper_of(&source_id)
                     .expect("name missing at coordinator")
@@ -823,32 +825,19 @@ where
     fn build_arrangement(
         &mut self,
         id: &GlobalId,
-        index: &dataflow_types::Index,
-        dataflow: &mut DataflowDesc,
+        index: dataflow_types::Index,
+        mut dataflow: DataflowDesc,
     ) {
-        self.import_source_or_view(&index.desc.on_id, dataflow);
+        self.import_source_or_view(&index.desc.on_id, &mut dataflow);
         dataflow.add_index_to_build(*id, index.clone());
-    }
-
-    fn auto_materialize_view(
-        &mut self,
-        view_name: &str,
-        id: &GlobalId,
-        view: &dataflow_types::View,
-        dataflow: &mut DataflowDesc,
-        temp: bool,
-    ) -> Result<(GlobalId, IndexDesc), failure::Error> {
-        self.build_view_collection(id, view, dataflow);
-        let index_name = QualName::from_str(view_name)?.with_trailing_string("_PRIMARY_IDX");
-        let index = view.auto_generate_primary_idx(*id);
-        let index_id = if temp {
-            self.catalog.allocate_id()
-        } else {
-            self.register_index(&index_name, &index)?
-        };
-        self.build_arrangement(&index_id, &index, dataflow);
-        dataflow.add_index_export(index_id, index.desc.clone(), view.desc.typ().clone());
-        Ok((index_id, index.desc))
+        dataflow.add_index_export(*id, index.desc.clone(), index.relation_type.clone());
+        // TODO: should we still support creating multiple dataflows with a single command,
+        // Or should it all be compacted into a single DataflowDesc with multiple exports?
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CreateDataflows(vec![dataflow]),
+        );
+        self.add_index_to_view(*id, index.desc, None);
     }
 
     fn create_materialized_view_dataflow(
@@ -860,16 +849,16 @@ where
     ) -> Result<(), failure::Error> {
         self.insert_view(id, view.clone(), None);
         let mut dataflow = DataflowDesc::new(view_name.clone());
-        let (index_id, materialized_index) =
-            self.auto_materialize_view(&view_name, &id, &view, &mut dataflow, as_of.is_some())?;
+        self.build_view_collection(&id, &view, &mut dataflow);
+        let index_name = QualName::from_str(&view_name)?.with_trailing_string("_PRIMARY_IDX");
+        let index = view.auto_generate_primary_idx(id);
+        let index_id = if as_of.is_some() {
+            self.catalog.allocate_id()
+        } else {
+            self.register_index(&index_name, &index)?
+        };
         dataflow.as_of(as_of);
-        // TODO: should we still support creating multiple dataflows with a single command,
-        // Or should it all be compacted into a single DataflowDesc with multiple exports?
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(vec![dataflow]),
-        );
-        self.add_index_to_view(index_id, materialized_index, None);
+        self.build_arrangement(&index_id, index, dataflow);
         Ok(())
     }
 
@@ -882,14 +871,8 @@ where
             return;
         }
 
-        let mut dataflow = DataflowDesc::new(name);
-        self.build_arrangement(&id, &index, &mut dataflow);
-        dataflow.add_index_export(id, index.desc.clone(), index.relation_type);
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(vec![dataflow]),
-        );
-        self.add_index_to_view(id, index.desc, None);
+        let dataflow = DataflowDesc::new(name);
+        self.build_arrangement(&id, index, dataflow);
     }
 
     fn create_sink_dataflow(&mut self, name: String, id: GlobalId, sink: dataflow_types::Sink) {

@@ -159,7 +159,7 @@ pub struct BuildDesc {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
-    pub source_imports: Vec<(GlobalId, Source)>,
+    pub source_imports: HashMap<GlobalId, Source>,
     pub index_imports: HashMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
@@ -203,7 +203,7 @@ impl DataflowDesc {
     }
 
     pub fn add_source_import(&mut self, id: GlobalId, source: Source) {
-        self.source_imports.push((id, source));
+        self.source_imports.insert(id, source);
     }
 
     pub fn add_view_to_build(&mut self, id: GlobalId, view: View) {
