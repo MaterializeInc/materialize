@@ -125,6 +125,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::nonnull_requirements::NonNullRequirements),
                     Box::new(crate::transform::column_knowledge::ColumnKnowledge),
                     Box::new(crate::transform::constant_join::InsertConstantJoin),
+                    Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.

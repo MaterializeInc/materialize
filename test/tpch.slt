@@ -1744,31 +1744,28 @@ Let { l4 = Distinct { group_key: [#0], Get { l0 } } } in
 Reduce {
   group_key: [substr(#4, 1, 2)],
   aggregates: [countall(null), sum(#5)],
-  Map {
-    scalars: [false],
-    Join {
-      variables: [[(0, 0), (1, 0)]],
-      Get { l0 },
-      Union {
-        Project {
-          outputs: [0],
-          Negate {
-            Map {
-              scalars: [true],
-              Distinct {
-                group_key: [#9],
-                Join {
-                  variables: [[(0, 1), (1, 0), (2, 0)]],
-                  Get { orders (u13) },
-                  Get { l4 },
-                  Get { l4 }
-                }
+  Join {
+    variables: [[(0, 0), (1, 0)]],
+    Get { l0 },
+    Union {
+      Project {
+        outputs: [0],
+        Negate {
+          Map {
+            scalars: [true],
+            Distinct {
+              group_key: [#9],
+              Join {
+                variables: [[(0, 1), (1, 0), (2, 0)]],
+                Get { orders (u13) },
+                Get { l4 },
+                Get { l4 }
               }
             }
           }
-        },
-        Get { l4 }
-      }
+        }
+      },
+      Get { l4 }
     }
   }
 }

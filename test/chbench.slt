@@ -1437,39 +1437,32 @@ Let {
 Reduce {
   group_key: [substr(#12, 1, 1)],
   aggregates: [countall(null), sum(#19)],
-  Map {
-    scalars: [false],
-    Join {
-      variables: [
-        [(0, 0), (1, 0)],
-        [(0, 1), (1, 1)],
-        [(0, 2), (1, 2)]
-      ],
-      Union {
-        Project {
-          outputs: [0 .. 2],
-          Negate {
-            Map {
-              scalars: [true],
-              Distinct {
-                group_key: [#8, #9, #10],
-                Join {
-                  variables: [
-                    [(0, 1), (1, 1), (2, 1)],
-                    [(0, 2), (1, 2), (2, 2)],
-                    [(0, 3), (1, 0), (2, 0)]
-                  ],
-                  Get { "order" (u11) },
-                  Get { l0 },
-                  Get { l0 }
-                }
+  Join {
+    variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)], [(0, 2), (1, 2)]],
+    Union {
+      Project {
+        outputs: [0 .. 2],
+        Negate {
+          Map {
+            scalars: [true],
+            Distinct {
+              group_key: [#8, #9, #10],
+              Join {
+                variables: [
+                  [(0, 1), (1, 1), (2, 1)],
+                  [(0, 2), (1, 2), (2, 2)],
+                  [(0, 3), (1, 0), (2, 0)]
+                ],
+                Get { "order" (u11) },
+                Get { l0 },
+                Get { l0 }
               }
             }
           }
-        },
-        Project { outputs: [0 .. 2], Get { l0 } }
+        }
       },
-      Get { l0 }
-    }
+      Project { outputs: [0 .. 2], Get { l0 } }
+    },
+    Get { l0 }
   }
 }
