@@ -180,9 +180,9 @@ impl ScalarExpr {
         });
     }
 
-    pub fn support(&mut self) -> HashSet<usize> {
+    pub fn support(&self) -> HashSet<usize> {
         let mut support = HashSet::new();
-        self.visit_mut(&mut |e| {
+        self.visit(&mut |e| {
             if let ScalarExpr::Column(i) = e {
                 support.insert(*i);
             }

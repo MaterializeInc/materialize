@@ -255,7 +255,7 @@ impl ProjectionLifting {
                     },
                 ) = (&mut **left, &mut **right)
                 {
-                    if output1 == output2 && input1.arity() == input2.arity() {
+                    if output1 == output2 && input1.typ() == input2.typ() {
                         let outputs = output1.clone();
                         **left = input1.take_dangerous();
                         **right = input2.take_dangerous();

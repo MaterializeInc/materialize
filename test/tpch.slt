@@ -318,19 +318,16 @@ Let { l2 = Distinct { group_key: [0], Get { l0 } } } in
 Reduce {
   group_key: [5],
   aggregates: [countall(null)],
-  Map {
-    scalars: [true],
-    Join {
-      variables: [[(0, 0), (1, 0)]],
-      Get { l0 },
-      Distinct {
-        group_key: [16],
-        Join {
-          variables: [[(0, 0), (1, 0), (2, 0)]],
-          Filter { predicates: [#11 < #12], Get { lineitem (u15) } },
-          Get { l2 },
-          Get { l2 }
-        }
+  Join {
+    variables: [[(0, 0), (1, 0)]],
+    Get { l0 },
+    Distinct {
+      group_key: [16],
+      Join {
+        variables: [[(0, 0), (1, 0), (2, 0)]],
+        Filter { predicates: [#11 < #12], Get { lineitem (u15) } },
+        Get { l2 },
+        Get { l2 }
       }
     }
   }
@@ -1593,40 +1590,37 @@ Let { l5 = Distinct { group_key: [11, 0], Get { l0 } } } in
 Reduce {
   group_key: [1],
   aggregates: [countall(null)],
-  Map {
-    scalars: [false],
-    Join {
-      variables: [[(0, 11), (1, 0)], [(0, 0), (1, 1)]],
-      Get { l0 },
-      Union {
-        Project {
-          outputs: [0, 1],
-          Negate {
-            Map {
-              scalars: [true],
-              Distinct {
-                group_key: [0, 1],
-                Filter {
-                  predicates: [#6 != #1],
-                  Join {
-                    variables: [
-                      [(0, 0), (1, 0), (2, 0)],
-                      [(0, 1), (1, 1)]
-                    ],
-                    Get { l5 },
-                    Get { l5 },
-                    Filter {
-                      predicates: [#12 > #11],
-                      Get { lineitem (u15) }
-                    }
+  Join {
+    variables: [[(0, 11), (1, 0)], [(0, 0), (1, 1)]],
+    Get { l0 },
+    Union {
+      Project {
+        outputs: [0, 1],
+        Negate {
+          Map {
+            scalars: [true],
+            Distinct {
+              group_key: [0, 1],
+              Filter {
+                predicates: [#6 != #1],
+                Join {
+                  variables: [
+                    [(0, 0), (1, 0), (2, 0)],
+                    [(0, 1), (1, 1)]
+                  ],
+                  Get { l5 },
+                  Get { l5 },
+                  Filter {
+                    predicates: [#12 > #11],
+                    Get { lineitem (u15) }
                   }
                 }
               }
             }
           }
-        },
-        Get { l5 }
-      }
+        }
+      },
+      Get { l5 }
     }
   }
 }
