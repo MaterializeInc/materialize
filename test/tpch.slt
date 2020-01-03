@@ -468,34 +468,31 @@ ORDER BY
     l_year
 ----
 Reduce {
-  group_key: [#8, #45, #48],
-  aggregates: [sum(#49)],
-  Map {
-    scalars: [tsextractyear datetots #21, #16 * (100dec - #17)],
-    Filter {
-      predicates: [
-        ((#8 = "FRANCE") && (#45 = "GERMANY"))
-        ||
-        ((#8 = "GERMANY") && (#45 = "FRANCE"))
+  group_key: [#8, #45, tsextractyear datetots #21],
+  aggregates: [sum(#16 * (100dec - #17))],
+  Filter {
+    predicates: [
+      ((#8 = "FRANCE") && (#45 = "GERMANY"))
+      ||
+      ((#8 = "GERMANY") && (#45 = "FRANCE"))
+    ],
+    Join {
+      variables: [
+        [(0, 0), (2, 2)],
+        [(0, 3), (1, 0)],
+        [(2, 0), (3, 0)],
+        [(3, 1), (4, 0)],
+        [(4, 3), (5, 0)]
       ],
-      Join {
-        variables: [
-          [(0, 0), (2, 2)],
-          [(0, 3), (1, 0)],
-          [(2, 0), (3, 0)],
-          [(3, 1), (4, 0)],
-          [(4, 3), (5, 0)]
-        ],
-        Get { supplier (u7) },
-        Get { nation (u1) },
-        Filter {
-          predicates: [#10 <= 1996-12-31, #10 >= 1995-01-01],
-          Get { lineitem (u15) }
-        },
-        Get { orders (u13) },
-        Get { customer (u11) },
-        Get { nation (u1) }
-      }
+      Get { supplier (u7) },
+      Get { nation (u1) },
+      Filter {
+        predicates: [#10 <= 1996-12-31, #10 >= 1995-01-01],
+        Get { lineitem (u15) }
+      },
+      Get { orders (u13) },
+      Get { customer (u11) },
+      Get { nation (u1) }
     }
   }
 }
@@ -546,41 +543,35 @@ Project {
   Map {
     scalars: [((#1 * 10000000dec) / #2) * 1000dec],
     Reduce {
-      group_key: [#60],
+      group_key: [tsextractyear datetots #29],
       aggregates: [
-        sum(if #57 = "BRAZIL" then #61 else 0dec),
-        sum(#61)
+        sum(if #57 = "BRAZIL" then #14 * (100dec - #15) else 0dec),
+        sum(#14 * (100dec - #15))
       ],
-      Map {
-        scalars: [tsextractyear datetots #29, #14 * (100dec - #15)],
-        Join {
-          variables: [
-            [(0, 0), (1, 1)],
-            [(1, 0), (2, 0)],
-            [(1, 2), (6, 0)],
-            [(2, 1), (3, 0)],
-            [(3, 3), (4, 0)],
-            [(4, 2), (5, 0)],
-            [(6, 3), (7, 0)]
-          ],
-          Filter {
-            predicates: [#4 = "ECONOMY ANODIZED STEEL"],
-            Get { part (u5) }
-          },
-          Get { lineitem (u15) },
-          Filter {
-            predicates: [#4 <= 1996-12-31, #4 >= 1995-01-01],
-            Get { orders (u13) }
-          },
-          Get { customer (u11) },
-          Get { nation (u1) },
-          Filter {
-            predicates: [#1 = "AMERICA"],
-            Get { region (u3) }
-          },
-          Get { supplier (u7) },
-          Get { nation (u1) }
-        }
+      Join {
+        variables: [
+          [(0, 0), (1, 1)],
+          [(1, 0), (2, 0)],
+          [(1, 2), (6, 0)],
+          [(2, 1), (3, 0)],
+          [(3, 3), (4, 0)],
+          [(4, 2), (5, 0)],
+          [(6, 3), (7, 0)]
+        ],
+        Filter {
+          predicates: [#4 = "ECONOMY ANODIZED STEEL"],
+          Get { part (u5) }
+        },
+        Get { lineitem (u15) },
+        Filter {
+          predicates: [#4 <= 1996-12-31, #4 >= 1995-01-01],
+          Get { orders (u13) }
+        },
+        Get { customer (u11) },
+        Get { nation (u1) },
+        Filter { predicates: [#1 = "AMERICA"], Get { region (u3) } },
+        Get { supplier (u7) },
+        Get { nation (u1) }
       }
     }
   }
@@ -623,27 +614,21 @@ ORDER BY
     o_year DESC
 ----
 Reduce {
-  group_key: [#47, #50],
-  aggregates: [sum(#51)],
-  Map {
-    scalars: [
-      tsextractyear datetots #34,
-      (#19 * (100dec - #20)) - (#12 * #18)
+  group_key: [#47, tsextractyear datetots #34],
+  aggregates: [sum((#19 * (100dec - #20)) - (#12 * #18))],
+  Join {
+    variables: [
+      [(0, 0), (1, 0), (2, 1)],
+      [(1, 1), (2, 2), (4, 0)],
+      [(2, 0), (3, 0)],
+      [(4, 3), (5, 0)]
     ],
-    Join {
-      variables: [
-        [(0, 0), (1, 0), (2, 1)],
-        [(1, 1), (2, 2), (4, 0)],
-        [(2, 0), (3, 0)],
-        [(4, 3), (5, 0)]
-      ],
-      Filter { predicates: [#1 ~ ^green$], Get { part (u5) } },
-      Get { partsupp (u9) },
-      Get { lineitem (u15) },
-      Get { orders (u13) },
-      Get { supplier (u7) },
-      Get { nation (u1) }
-    }
+    Filter { predicates: [#1 ~ ^green$], Get { part (u5) } },
+    Get { partsupp (u9) },
+    Get { lineitem (u15) },
+    Get { orders (u13) },
+    Get { supplier (u7) },
+    Get { nation (u1) }
   }
 }
 
@@ -1757,35 +1742,32 @@ Let {
 } in
 Let { l4 = Distinct { group_key: [#0], Get { l0 } } } in
 Reduce {
-  group_key: [#13],
+  group_key: [substr(#4, 1, 2)],
   aggregates: [countall(null), sum(#5)],
   Map {
-    scalars: [substr(#4, 1, 2)],
-    Map {
-      scalars: [false],
-      Join {
-        variables: [[(0, 0), (1, 0)]],
-        Get { l0 },
-        Union {
-          Project {
-            outputs: [0],
-            Negate {
-              Map {
-                scalars: [true],
-                Distinct {
-                  group_key: [#9],
-                  Join {
-                    variables: [[(0, 1), (1, 0), (2, 0)]],
-                    Get { orders (u13) },
-                    Get { l4 },
-                    Get { l4 }
-                  }
+    scalars: [false],
+    Join {
+      variables: [[(0, 0), (1, 0)]],
+      Get { l0 },
+      Union {
+        Project {
+          outputs: [0],
+          Negate {
+            Map {
+              scalars: [true],
+              Distinct {
+                group_key: [#9],
+                Join {
+                  variables: [[(0, 1), (1, 0), (2, 0)]],
+                  Get { orders (u13) },
+                  Get { l4 },
+                  Get { l4 }
                 }
               }
             }
-          },
-          Get { l4 }
-        }
+          }
+        },
+        Get { l4 }
       }
     }
   }

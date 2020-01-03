@@ -77,23 +77,6 @@ impl ReduceElision {
                         .collect(),
                 );
 
-                // // If we have any scalars to map, append them to the end.
-                // if !map_scalars.is_empty() {
-                //     result = result.map(map_scalars);
-                // }
-
-                // // We may require a project.
-                // if group_key.len() != input_type.column_types.len()
-                //     || group_key.iter().enumerate().any(|(x, y)| x != *y)
-                // {
-                //     let mut projection = group_key.clone();
-                //     projection.extend(
-                //         input_type.column_types.len()
-                //             ..(input_type.column_types.len() + aggregates.len()),
-                //     );
-                //     result = result.project(projection);
-                // }
-
                 *relation = result;
             }
         }
