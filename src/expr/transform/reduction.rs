@@ -48,6 +48,7 @@ impl FoldConstants {
                     // where `an` is the input to the nth aggregate function in
                     // `aggregates`.
                     let mut groups = BTreeMap::new();
+                    let temp_storage2 = RowArena::new();
                     for (row, diff) in rows {
                         // We currently maintain the invariant that any negative
                         // multiplicities will be consolidated away before they
@@ -58,11 +59,11 @@ impl FoldConstants {
                              with non-positive multiplicities"
                         );
                         let datums = row.unpack();
+                        let temp_storage = RowArena::new();
                         let key = group_key
                             .iter()
-                            .map(|i| datums[*i].clone())
+                            .map(|e| e.eval(&datums, env, &temp_storage2))
                             .collect::<Vec<_>>();
-                        let temp_storage = RowArena::new();
                         let val = aggregates
                             .iter()
                             .map(|agg| Row::pack(&[agg.expr.eval(&datums, env, &temp_storage)]))

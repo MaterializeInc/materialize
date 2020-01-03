@@ -240,14 +240,17 @@ impl PredicatePushdown {
                         let mut new_predicate = predicate.clone();
                         new_predicate.visit_mut(&mut |e| {
                             if let ScalarExpr::Column(c) = e {
-                                if *c < group_key.len() {
-                                    *c = group_key[*c];
-                                } else {
+                                if *c >= group_key.len() {
                                     supported = false;
                                 }
                             }
                         });
                         if supported {
+                            new_predicate.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(i) = e {
+                                    *e = group_key[*i].clone();
+                                }
+                            });
                             push_down.push(new_predicate);
                         } else if let ScalarExpr::Column(col) = &predicate {
                             if *col == group_key.len()

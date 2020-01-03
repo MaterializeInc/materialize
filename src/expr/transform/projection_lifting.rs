@@ -184,7 +184,7 @@ impl ProjectionLifting {
                 } = &mut **input
                 {
                     for key in group_key.iter_mut() {
-                        *key = outputs[*key];
+                        key.permute(outputs);
                     }
                     for aggregate in aggregates.iter_mut() {
                         aggregate.expr.permute(outputs);

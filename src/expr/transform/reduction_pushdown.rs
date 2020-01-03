@@ -39,7 +39,9 @@ impl ReductionPushdown {
             {
                 if scalars.iter().all(|e| e.is_literal()) {
                     let arity = inner.arity();
-                    let keys_check = group_key.iter().all(|k| k < &arity);
+                    let keys_check = group_key
+                        .iter()
+                        .all(|k| k.support().iter().all(|c| c < &arity));
                     let agg_check = aggregates
                         .iter()
                         .all(|e| e.expr.support().iter().all(|c| c < &arity));
@@ -47,9 +49,47 @@ impl ReductionPushdown {
                         **input = inner.take_dangerous();
                     }
                 }
-            } else if let RelationExpr::Join { .. } = &**input {
-                // println!("ReducePushdown opportunity: {}", relation.pretty());
             }
+            // else if let RelationExpr::Join { inputs, variables, .. } = &**input {
+
+            //     let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+            //     let uniques = types.iter().map(|t| t.keys.clone()).collect::<Vec<_>>();
+            //     let input_arities = types
+            //         .iter()
+            //         .map(|t| t.column_types.len())
+            //         .collect::<Vec<_>>();
+
+            //     let mut offset = 0;
+            //     let mut prior_arities = Vec::new();
+            //     for input in 0..inputs.len() {
+            //         prior_arities.push(offset);
+            //         offset += input_arities[input];
+            //     }
+
+            //     let input_relation = input_arities
+            //         .iter()
+            //         .enumerate()
+            //         .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+            //         .collect::<Vec<_>>();
+
+            //     let mut relations = std::collections::HashSet::new();
+            //     for aggr in aggregates.iter() {
+            //         relations.extend(aggr.expr.support().iter().map(|c| input_relation[*c]));
+            //     }
+
+            //     if relations.len() <= 1 {
+            //         let start = relations.into_iter().next().unwrap_or(0);
+            //         let order = super::join_order::order_on_keys(inputs.len(), start, &variables, &uniques);
+            //         if order.is_some() {
+            //             // Each constrained key from the start relation needs to appear in the grouping key.
+            //             if variables.iter().all(|vs|
+            //                 vs.iter().any(|(r,c)| group_key.contains(&(c + prior_arities[*r]))) ||
+            //                 vs.iter().all(|(r,c)| (r != &start))) {
+            //                 println!("ReducePushdown opportunity (for relation {}): {}", start, relation.pretty());
+            //             }
+            //         }
+            //     }
+            // }
         }
     }
 }

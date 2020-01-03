@@ -184,7 +184,7 @@ impl Demand {
                 // Group keys determine aggregation granularity and are
                 // each crucial in determining aggregates and even the
                 // multiplicities of other keys.
-                new_columns.extend(group_key.iter().cloned());
+                new_columns.extend(group_key.iter().flat_map(|e| e.support()));
                 for column in columns {
                     // No obvious requirements on aggregate columns.
                     // A "non-empty" requirement, I guess?
