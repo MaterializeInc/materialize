@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use postgres::error::SqlState;
+
 pub mod util;
 
 #[test]
@@ -10,6 +12,12 @@ fn test_bind_params() -> util::TestResult {
     ore::log::init();
 
     let (_server, mut client) = util::start_server(util::Config::default())?;
+
+    // Simple queries with parameters should be rejected.
+    match client.simple_query("SELECT $1") {
+        Ok(_) => panic!("query with invalid parameters executed successfully"),
+        Err(err) => assert_eq!(err.code(), Some(&SqlState::UNDEFINED_PARAMETER)),
+    }
 
     let rows: Vec<String> = client
         .query("SELECT $1", &[&String::from("42")])?
