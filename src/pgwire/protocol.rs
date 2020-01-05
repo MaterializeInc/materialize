@@ -306,6 +306,11 @@ where
             };
 
             let stmt = session.get_prepared_statement(&stmt_name).unwrap();
+            if !stmt.param_types().is_empty() {
+                return self
+                    .error(session, "42P02", "there is no parameter $1")
+                    .await;
+            }
             let row_desc = stmt.desc().cloned();
 
             // Bind.
