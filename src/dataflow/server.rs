@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
+    compare_columns, DataflowDesc, Diff, Index, IndexDesc, PeekResponse, RowSetFinishing,
+    Timestamp, Update,
 };
 use expr::{EvalEnv, GlobalId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -88,11 +89,11 @@ pub enum SequencedCommand {
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
     /// Drop the views bound to these names.
-    DropViews(Vec<GlobalId>),
+    DropViews(Vec<GlobalId>, Vec<Vec<GlobalId>>),
     /// Drop the sinks bound to these names.
     DropSinks(Vec<GlobalId>),
     /// Drop the indexes bound to these names.
-    DropIndexes(Vec<(GlobalId, Vec<expr::ScalarExpr>)>),
+    DropIndexes(Vec<IndexDesc>),
     /// Peek at a materialized view.
     Peek {
         id: GlobalId,
@@ -106,10 +107,19 @@ pub enum SequencedCommand {
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek { conn_id: u32 },
-    /// Insert `updates` into the local input named `name`.
-    Insert { id: GlobalId, updates: Vec<Update> },
-    /// Advance the timestamp for the local input named `name`.
-    AdvanceTime { id: GlobalId, to: Timestamp },
+    /// Create a local input named `id`
+    CreateLocalInput {
+        name: String,
+        index_id: GlobalId,
+        index: Index,
+        advance_to: Timestamp,
+    },
+    /// Insert `updates` into the local input named `id`.
+    Insert {
+        id: GlobalId,
+        updates: Vec<Update>,
+        advance_to: Timestamp,
+    },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which
@@ -303,7 +313,7 @@ where
                     move |time, data| m_logger.publish_batch(time, data),
                 );
 
-            // Install traces as maintained views.
+            // Install traces as maintained indexes
             for (log, (key, trace)) in t_traces {
                 self.traces
                     .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
@@ -420,19 +430,13 @@ where
         match cmd {
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        for (view_id, _view) in dataflow.views.iter() {
-                            if self.traces.traces.contains_key(&view_id) {
-                                panic!("View already installed: {}", view_id);
-                            }
-                            logger.log(MaterializedEvent::Dataflow(*view_id, true));
+                    for (id, index_desc, _) in dataflow.index_exports.iter() {
+                        self.reported_frontiers
+                            .entry(index_desc.on_id)
+                            .or_insert_with(|| Antichain::from_elem(0));
+                        if let Some(logger) = self.materialized_logger.as_mut() {
+                            logger.log(MaterializedEvent::Dataflow(*id, true));
                         }
-                    }
-                    for (view_id, _view) in dataflow.views.iter() {
-                        let prior = self
-                            .reported_frontiers
-                            .insert(*view_id, Antichain::from_elem(0));
-                        assert!(prior == None);
                     }
 
                     render::build_dataflow(
@@ -440,7 +444,6 @@ where
                         &mut self.traces,
                         self.inner,
                         &mut self.sink_tokens,
-                        &mut self.local_inputs,
                         &mut self.materialized_logger,
                         &self.executor,
                     );
@@ -453,16 +456,18 @@ where
                 }
             }
 
-            SequencedCommand::DropViews(ids) => {
-                for id in ids {
-                    if self.traces.del_collection_traces(id).is_some() {
+            SequencedCommand::DropViews(view_ids, index_ids) => {
+                for (view_id, index_id_set) in view_ids.iter().zip(index_ids.iter()) {
+                    if self.traces.del_collection_traces(*view_id).is_some() {
                         if let Some(logger) = self.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(id, false));
+                            for index_id in index_id_set {
+                                logger.log(MaterializedEvent::Dataflow(*index_id, false));
+                            }
                         }
+                        self.reported_frontiers
+                            .remove(view_id)
+                            .expect("Dropped view with no frontier");
                     }
-                    self.reported_frontiers
-                        .remove(&id)
-                        .expect("Dropped view with no frontier");
                 }
             }
 
@@ -472,9 +477,9 @@ where
                 }
             }
 
-            SequencedCommand::DropIndexes(trace_keys) => {
-                for (id, keys) in trace_keys {
-                    self.traces.del_user_trace(id, &keys);
+            SequencedCommand::DropIndexes(index_descs) => {
+                for index_desc in index_descs {
+                    self.traces.del_trace(&index_desc);
                 }
             }
 
@@ -541,7 +546,33 @@ where
                 })
             }
 
-            SequencedCommand::Insert { id, updates } => {
+            SequencedCommand::CreateLocalInput {
+                name,
+                index_id,
+                index,
+                advance_to,
+            } => {
+                let view_id = index.desc.on_id;
+                render::build_local_input(
+                    &mut self.traces,
+                    self.inner,
+                    &mut self.local_inputs,
+                    index_id,
+                    &name,
+                    index,
+                );
+                self.reported_frontiers
+                    .insert(view_id, Antichain::from_elem(0));
+                if let Some(input) = self.local_inputs.get_mut(&view_id) {
+                    input.capability.downgrade(&advance_to);
+                }
+            }
+
+            SequencedCommand::Insert {
+                id,
+                updates,
+                advance_to,
+            } => {
                 if let Some(input) = self.local_inputs.get_mut(&id) {
                     let mut session = input.handle.session(input.capability.clone());
                     for update in updates {
@@ -549,11 +580,8 @@ where
                         session.give((update.row, update.timestamp, update.diff));
                     }
                 }
-            }
-
-            SequencedCommand::AdvanceTime { id, to } => {
-                if let Some(input) = self.local_inputs.get_mut(&id) {
-                    input.capability.downgrade(&to);
+                for (_, local_input) in self.local_inputs.iter_mut() {
+                    local_input.capability.downgrade(&advance_to);
                 }
             }
 

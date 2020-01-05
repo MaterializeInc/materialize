@@ -33,10 +33,13 @@ CREATE INDEX bar_idx on bar(substr(z, 3))
 query TTTTBI colnames rowsort
 SHOW INDEX from foo;
 ----
-View Key_name     Column_name Expression Null  Seq_in_index
-foo  foo_idx      NULL        ascii(b)   true  1
-foo  edge_columns a           NULL       false 1
-foo  edge_columns NULL        floor(c)   true  2
+View Key_name          Column_name Expression Null  Seq_in_index
+foo  "foo_PRIMARY_IDX" a           NULL       false 1
+foo  "foo_PRIMARY_IDX" b           NULL       true  2
+foo  "foo_PRIMARY_IDX" c           NULL       true  3
+foo  foo_idx           NULL        ascii(b)   true  1
+foo  edge_columns      a           NULL       false 1
+foo  edge_columns      NULL        floor(c)   true  2
 
 statement ok
 DROP INDEX foo_idx;
@@ -44,6 +47,9 @@ DROP INDEX foo_idx;
 query TTTTBI colnames rowsort
 SHOW INDEX in foo;
 ----
-View Key_name     Column_name Expression Null  Seq_in_index
-foo  edge_columns a           NULL       false 1
-foo  edge_columns NULL        floor(c)   true  2
+View Key_name          Column_name Expression Null  Seq_in_index
+foo  "foo_PRIMARY_IDX" a           NULL       false 1
+foo  "foo_PRIMARY_IDX" b           NULL       true  2
+foo  "foo_PRIMARY_IDX" c           NULL       true  3
+foo  edge_columns      a           NULL       false 1
+foo  edge_columns      NULL        floor(c)   true  2

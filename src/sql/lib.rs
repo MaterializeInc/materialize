@@ -65,6 +65,7 @@ pub enum Plan {
         when: PeekWhen,
         finishing: RowSetFinishing,
         eval_env: ::expr::EvalEnv,
+        materialize: bool,
     },
     Tail(CatalogEntry),
     SendRows(Vec<Row>),

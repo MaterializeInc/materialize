@@ -95,10 +95,10 @@ where
                                 KafkaTimestamp::CreateTime(ms)
                                 | KafkaTimestamp::LogAppendTime(ms) => ms as u64,
                             };
+                            let cur = *cap.time();
                             if ms >= *cap.time() {
                                 cap.downgrade(&ms)
                             } else {
-                                let cur = *cap.time();
                                 error!(
                                     "{}: fast-forwarding out-of-order Kafka timestamp {}ms ({} -> {})",
                                     name,

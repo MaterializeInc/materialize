@@ -22,8 +22,8 @@ use url::Url;
 use catalog::{Catalog, CatalogItem, QualName, RemoveMode};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
-    IndexDesc, KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, ProtobufEncoding,
-    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
+    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::{avro, protobuf};
@@ -270,7 +270,11 @@ fn handle_show_variable(
 
 fn handle_tail(catalog: &Catalog, from: &QualName) -> Result<Plan, failure::Error> {
     let entry = catalog.get(&from)?;
-    Ok(Plan::Tail(entry.clone()))
+    if let CatalogItem::View(_) = entry.item() {
+        Ok(Plan::Tail(entry.clone()))
+    } else {
+        bail!("'{}' is not a view", from);
+    }
 }
 
 fn handle_start_transaction() -> Result<Plan, failure::Error> {
@@ -319,10 +323,8 @@ fn handle_show_indexes(
         bail!("SHOW INDEXES ... WHERE is not supported");
     }
     let from_entry = catalog.get(from_name)?;
-    if !object_type_matches(ObjectType::Source, from_entry.item())
-        && !object_type_matches(ObjectType::View, from_entry.item())
-    {
-        bail!("{} is not a source or view", from_name);
+    if !object_type_matches(ObjectType::View, from_entry.item()) {
+        bail!("{} is not a view", from_name);
     }
     let rows = catalog
         .iter()
@@ -331,7 +333,7 @@ fn handle_show_indexes(
                 && entry.uses() == vec![from_entry.id()]
         })
         .flat_map(|entry| match entry.item() {
-            CatalogItem::Index(dataflow_types::Index { desc: _, raw_keys }) => {
+            CatalogItem::Index(dataflow_types::Index { raw_keys, .. }) => {
                 let mut row_subset = Vec::new();
                 for (seq_in_index, key_sql) in raw_keys.iter().enumerate() {
                     let (col_name, func) = if key_sql.is_column_name {
@@ -412,26 +414,20 @@ fn handle_show_create_source(
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
-    let source_url = if let CatalogItem::Source(Source { connector, .. }) =
-        catalog.get(&name)?.item()
-    {
-        match connector {
-            SourceConnector::Local => String::from("local://"),
-            SourceConnector::External {
-                connector: ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
-                ..
-            } => format!("kafka://{}/{}", addr, topic),
-            SourceConnector::External {
-                connector: ExternalSourceConnector::File(c),
-                ..
-            } => {
-                // TODO https://github.com/MaterializeInc/materialize/issues/1093
-                format!("file://{}", c.path.to_string_lossy())
+    let source_url =
+        if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
+            match &connector.connector {
+                ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
+                    format!("kafka://{}/{}", addr, topic)
+                }
+                ExternalSourceConnector::File(c) => {
+                    // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                    format!("file://{}", c.path.to_string_lossy())
+                }
             }
-        }
-    } else {
-        bail!("{} is not a source", name);
-    };
+        } else {
+            bail!("{} is not a source", name);
+        };
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name.to_string()),
         Datum::String(&source_url),
@@ -641,7 +637,7 @@ fn handle_create_dataflow(
                         }
                     };
                     let source = Source {
-                        connector: SourceConnector::External {
+                        connector: SourceConnector {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
                                 path: path.try_into()?,
                                 tail,
@@ -740,38 +736,23 @@ fn handle_create_dataflow(
         } => {
             let on_name = on_name.try_into()?;
             let (catalog_entry, keys) = query::plan_index(catalog, &on_name, key_parts)?;
+            if !object_type_matches(ObjectType::View, catalog_entry.item()) {
+                bail!("{} is not a view", on_name);
+            }
             let name = QualName::new_normalized(iter::once(name.clone()))?;
             let keys = keys
                 .into_iter()
                 .map(|x| x.lower_uncorrelated())
                 .collect::<Vec<_>>();
-            let on_relation_type = catalog_entry.desc()?.typ();
-            let nullables = keys
-                .iter()
-                .map(|key| key.typ(on_relation_type).nullable)
-                .collect::<Vec<_>>();
-            let raw_keys = key_parts
-                .iter()
-                .zip(keys.iter().zip(nullables))
-                .map(|(key_part, (key, nullable))| KeySql {
-                    raw_sql: key_part.to_string(),
-                    is_column_name: match key {
-                        relationexpr::ScalarExpr::Column(_i) => true,
-                        _ => false,
-                    },
-                    nullable,
-                })
-                .collect();
-            let index = Index {
-                desc: IndexDesc {
-                    on_id: catalog_entry.id(),
-                    relation_type: on_relation_type.clone(),
+            Ok(Plan::CreateIndex(
+                name,
+                Index::new(
+                    catalog_entry.id(),
                     keys,
-                    eval_env: EvalEnv::default(),
-                },
-                raw_keys,
-            };
-            Ok(Plan::CreateIndex(name, index))
+                    key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+                    catalog_entry.desc()?,
+                ),
+            ))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
@@ -821,6 +802,9 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
 fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Plan, failure::Error> {
     let name = name.try_into()?;
     let catalog_entry = catalog.get(&name)?.clone();
+    if !object_type_matches(ObjectType::View, catalog_entry.item()) {
+        bail!("{} is not a view", name);
+    }
     let typ = catalog_entry.desc()?.typ();
     Ok(Plan::Peek {
         source: relationexpr::RelationExpr::Get {
@@ -844,6 +828,7 @@ fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Pla
             project: (0..typ.column_types.len()).collect(),
         },
         eval_env: EvalEnv::default(),
+        materialize: false,
     })
 }
 
@@ -859,6 +844,7 @@ pub fn handle_select(
         when: PeekWhen::Immediately,
         finishing,
         eval_env: EvalEnv::default(),
+        materialize: true,
     })
 }
 
@@ -956,7 +942,7 @@ fn build_kafka_avro_source(
     }
 
     Ok(Source {
-        connector: SourceConnector::External {
+        connector: SourceConnector {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,
@@ -983,7 +969,7 @@ fn build_kafka_protobuf_source(
 
     let desc = protobuf::validate_proto_schema(&message_name, &schema)?;
     Ok(Source {
-        connector: SourceConnector::External {
+        connector: SourceConnector {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,

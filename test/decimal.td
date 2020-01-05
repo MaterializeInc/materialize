@@ -45,6 +45,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 > CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
   USING SCHEMA '${schema}'
 
-> PEEK data
+> CREATE VIEW data_view as SELECT * from data
+
+> PEEK data_view
 17.94
 -0.7

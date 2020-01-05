@@ -345,6 +345,14 @@ impl RelationExpr {
         RelationExpr::Constant { rows, typ }
     }
 
+    /// Constructs the expression for getting a global collection
+    pub fn global_get(id: GlobalId, typ: RelationType) -> Self {
+        RelationExpr::Get {
+            id: Id::Global(id),
+            typ,
+        }
+    }
+
     /// Retains only the columns specified by `output`.
     pub fn project(self, outputs: Vec<usize>) -> Self {
         RelationExpr::Project {

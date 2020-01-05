@@ -9,6 +9,8 @@ use std::time::Duration;
 use expr::GlobalId;
 use repr::{RelationDesc, ScalarType};
 
+const LOG_NUM: usize = 16;
+
 /// Logging configuration.
 #[derive(Debug, Clone)]
 pub struct LoggingConfig {
@@ -103,8 +105,10 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Parks) => "mz_scheduling_parks",
             LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_sizes",
             LogVariant::Differential(DifferentialLog::Sharing) => "mz_arrangement_sharing",
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_views",
-            LogVariant::Materialized(MaterializedLog::DataflowDependency) => "mz_view_dependencies",
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_materializations",
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
+                "mz_materialization_dependencies"
+            }
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontiers",
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active",
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations",
@@ -133,6 +137,42 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(14),
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(15),
             LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(16),
+        }
+    }
+
+    pub fn index_id(&self) -> GlobalId {
+        // Bind all identifiers in one place to avoid accidental clashes.
+        match self {
+            LogVariant::Timely(TimelyLog::Operates) => GlobalId::system(LOG_NUM + 1),
+            LogVariant::Timely(TimelyLog::Channels) => GlobalId::system(LOG_NUM + 2),
+            LogVariant::Timely(TimelyLog::Elapsed) => GlobalId::system(LOG_NUM + 3),
+            LogVariant::Timely(TimelyLog::Histogram) => GlobalId::system(LOG_NUM + 4),
+            LogVariant::Timely(TimelyLog::Addresses) => GlobalId::system(LOG_NUM + 5),
+            LogVariant::Timely(TimelyLog::Parks) => GlobalId::system(LOG_NUM + 6),
+            LogVariant::Differential(DifferentialLog::Arrangement) => GlobalId::system(LOG_NUM + 7),
+            LogVariant::Differential(DifferentialLog::Sharing) => GlobalId::system(LOG_NUM + 8),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => {
+                GlobalId::system(LOG_NUM + 9)
+            }
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
+                GlobalId::system(LOG_NUM + 10)
+            }
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => {
+                GlobalId::system(LOG_NUM + 11)
+            }
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => {
+                GlobalId::system(LOG_NUM + 12)
+            }
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => {
+                GlobalId::system(LOG_NUM + 13)
+            }
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => {
+                GlobalId::system(LOG_NUM + 14)
+            }
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => {
+                GlobalId::system(LOG_NUM + 15)
+            }
+            LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(LOG_NUM + 16),
         }
     }
 

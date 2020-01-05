@@ -8,7 +8,7 @@
 use differential_dataflow::operators::arrange::TraceAgent;
 use std::collections::{BTreeMap, HashMap};
 
-use dataflow_types::{Diff, Timestamp};
+use dataflow_types::{Diff, IndexDesc, Timestamp};
 use expr::GlobalId;
 use expr::ScalarExpr;
 use repr::Row;
@@ -70,69 +70,23 @@ impl TraceManager {
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys(
-        &self,
-        id: GlobalId,
-        keys: &[ScalarExpr],
-    ) -> Option<&WithDrop<KeysValsHandle>> {
-        let collection = self.traces.get(&id)?;
-        if let Some(system) = collection.system.get(keys) {
-            Some(system)
-        } else {
-            collection.user.get(keys)
-        }
+    pub fn get_by_keys(&self, desc: &IndexDesc) -> Option<&WithDrop<KeysValsHandle>> {
+        self.traces.get(&desc.on_id)?.by_keys.get(&desc.keys)
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys_mut(
-        &mut self,
-        id: GlobalId,
-        keys: &[ScalarExpr],
-    ) -> Option<&mut WithDrop<KeysValsHandle>> {
-        let collection = self.traces.get_mut(&id)?;
-        if let Some(system) = collection.system.get_mut(keys) {
-            Some(system)
-        } else {
-            collection.user.get_mut(keys)
-        }
-    }
-
-    /// Returns a copy of all by_key arrangements, should they exist.
-    pub fn get_all_keyed(
-        &mut self,
-        id: GlobalId,
-    ) -> Option<impl Iterator<Item = (&Vec<ScalarExpr>, &mut WithDrop<KeysValsHandle>)>> {
-        let collection_trace = self.traces.get_mut(&id)?;
-        Some(
-            collection_trace
-                .system
-                .iter_mut()
-                .chain(collection_trace.user.iter_mut()),
-        )
-    }
-
-    pub fn get_default_with_key(
-        &mut self,
-        id: GlobalId,
-    ) -> Option<(&Vec<ScalarExpr>, &mut WithDrop<KeysValsHandle>)> {
-        if let Some(collection) = self.traces.get_mut(&id) {
-            Some((
-                &collection.default_arr_key,
-                collection
-                    .system
-                    .get_mut(&collection.default_arr_key)
-                    .unwrap(),
-            ))
-        } else {
-            None
-        }
+    pub fn get_by_keys_mut(&mut self, desc: &IndexDesc) -> Option<&mut WithDrop<KeysValsHandle>> {
+        self.traces
+            .get_mut(&desc.on_id)?
+            .by_keys
+            .get_mut(&desc.keys)
     }
 
     /// get the default arrangement, which is by primary key
     pub fn get_default(&self, id: GlobalId) -> Option<&WithDrop<KeysValsHandle>> {
         if let Some(collection) = self.traces.get(&id) {
-            collection.system.get(&collection.default_arr_key)
+            collection.by_keys.get(&collection.default_arr_key)
         } else {
             None
         }
@@ -150,39 +104,19 @@ impl TraceManager {
         for c in columns {
             keys.push(ScalarExpr::Column(*c));
         }
-        self.set_by_keys(id, &keys, trace);
+        self.set_by_keys(&IndexDesc { on_id: id, keys }, trace);
     }
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set_by_keys(
-        &mut self,
-        id: GlobalId,
-        keys: &[ScalarExpr],
-        trace: WithDrop<KeysValsHandle>,
-    ) {
+    pub fn set_by_keys(&mut self, desc: &IndexDesc, trace: WithDrop<KeysValsHandle>) {
         //Currently it is assumed that the first arrangement for a collection is the one
         //keyed by the primary keys
         self.traces
-            .entry(id)
-            .or_insert_with(|| CollectionTraces::new(keys.to_vec()))
-            .system
-            .insert(keys.to_vec(), trace);
-    }
-
-    /// Add a user created index
-    pub fn set_user_created(
-        &mut self,
-        collection_id: GlobalId,
-        keys: &[ScalarExpr],
-        trace: WithDrop<KeysValsHandle>,
-    ) {
-        // The collection should exist already
-        self.traces
-            .get_mut(&collection_id)
-            .unwrap()
-            .user
-            .insert(keys.to_vec(), trace);
+            .entry(desc.on_id)
+            .or_insert_with(|| CollectionTraces::new(desc.keys.clone()))
+            .by_keys
+            .insert(desc.keys.clone(), trace);
     }
 
     /// Removes all of a collection's traces
@@ -190,13 +124,13 @@ impl TraceManager {
         self.traces.remove(&id)
     }
 
-    /// Removes a user-created trace
-    pub fn del_user_trace(&mut self, id: GlobalId, keys: &[ScalarExpr]) -> bool {
+    /// Removes a trace
+    pub fn del_trace(&mut self, desc: &IndexDesc) -> bool {
         self.traces
-            .get_mut(&id)
+            .get_mut(&desc.on_id)
             .unwrap()
-            .user
-            .remove(keys)
+            .by_keys
+            .remove(&desc.keys)
             .is_some()
     }
 
@@ -208,14 +142,10 @@ impl TraceManager {
 
 /// Maintained traces for a collection.
 pub struct CollectionTraces {
-    /// The key for the default system arrangement, which contains all columns in the collection.
+    /// The key for the default arrangement, which a primary index containing all columns in the collection.
     default_arr_key: Vec<ScalarExpr>,
-    /// Arrangements generated by the system
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    system: BTreeMap<Vec<ScalarExpr>, WithDrop<KeysValsHandle>>,
-    /// Arrangements generated by the user
-    /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    user: BTreeMap<Vec<ScalarExpr>, WithDrop<KeysValsHandle>>,
+    by_keys: BTreeMap<Vec<ScalarExpr>, WithDrop<KeysValsHandle>>,
 }
 
 impl CollectionTraces {
@@ -225,7 +155,7 @@ impl CollectionTraces {
         antichain: &mut timely::progress::frontier::Antichain<Timestamp>,
     ) {
         use differential_dataflow::trace::TraceReader;
-        for handle in self.system.values_mut().chain(self.user.values_mut()) {
+        for handle in self.by_keys.values_mut() {
             handle.read_upper(antichain);
             handle.distinguish_since(antichain.elements());
         }
@@ -238,7 +168,7 @@ impl CollectionTraces {
     /// the times observed in traces may need to be advanced to this frontier.
     pub fn merge_logical(&mut self, frontier: &[Timestamp]) {
         use differential_dataflow::trace::TraceReader;
-        for handle in self.system.values_mut().chain(self.user.values_mut()) {
+        for handle in self.by_keys.values_mut() {
             handle.advance_by(frontier);
         }
     }
@@ -246,8 +176,7 @@ impl CollectionTraces {
     fn new(default_arr_key: Vec<ScalarExpr>) -> Self {
         Self {
             default_arr_key,
-            system: BTreeMap::new(),
-            user: BTreeMap::new(),
+            by_keys: BTreeMap::new(),
         }
     }
 }

@@ -41,9 +41,15 @@ Source   Create Source
 ------------------
 data  "kafka://${testdrive.kafka-addr-resolved}/testdrive-data-${testdrive.seed}"
 
-> PEEK data
+! PEEK data
+data is not a view
+
+> CREATE VIEW data_view as SELECT * from data
+
+> PEEK data_view
 a b
 ---
+
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 {"before": null, "after": {"a": 1, "b": 1}}
@@ -54,13 +60,33 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> PEEK data
+> PEEK data_view
 a b
 ---
 1 1
 2 1
 3 1
 1 2
+
+
+> SHOW VIEWS;
+data_view
+mz_arrangement_sharing
+mz_arrangement_sizes
+mz_catalog_names
+mz_dataflow_channels
+mz_dataflow_operator_addresses
+mz_dataflow_operators
+mz_materialization_dependencies
+mz_materializations
+mz_peek_active
+mz_peek_durations
+mz_scheduling_elapsed
+mz_scheduling_histogram
+mz_scheduling_parks
+mz_view_foreign_keys
+mz_view_frontiers
+mz_view_keys
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b;
@@ -77,31 +103,12 @@ Field Nullable Type
 b     NO       int8
 sum   YES      int8
 
-> SHOW TABLES;
-data
-mz_arrangement_sharing
-mz_arrangement_sizes
-mz_catalog_names
-mz_dataflow_channels
-mz_dataflow_operator_addresses
-mz_dataflow_operators
-mz_peek_active
-mz_peek_durations
-mz_scheduling_elapsed
-mz_scheduling_histogram
-mz_scheduling_parks
-mz_view_dependencies
-mz_view_foreign_keys
-mz_view_frontiers
-mz_view_keys
-mz_views
-
-> SHOW TABLES LIKE '%peek%';
+> SHOW VIEWS LIKE '%peek%';
 mz_peek_active
 mz_peek_durations
 
-> SHOW TABLES LIKE '%data%';
-data
+> SHOW VIEWS LIKE '%data%';
+data_view
 mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators
@@ -150,6 +157,9 @@ b  c
 > CREATE INDEX idx1 ON test5(c)
 
 ! PEEK idx1
+catalog item 'idx1' is an index and so cannot be depended upon
+
+! SELECT * from idx1
 catalog item 'idx1' is an index and so cannot be depended upon
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
