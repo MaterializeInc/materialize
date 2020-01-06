@@ -1945,6 +1945,33 @@ impl UnaryFunc {
             _ => true,
         }
     }
+
+    /// True iff for x != y, we are assured f(x) != f(y).
+    ///
+    /// This is most often the case for methods that promote to types that
+    /// can contain all the precision of the input type.
+    pub fn preserves_uniqueness(self) -> bool {
+        match self {
+            UnaryFunc::Not
+            | UnaryFunc::NegInt32
+            | UnaryFunc::NegInt64
+            | UnaryFunc::NegFloat32
+            | UnaryFunc::NegFloat64
+            | UnaryFunc::NegDecimal
+            | UnaryFunc::CastBoolToString
+            | UnaryFunc::CastInt32ToInt64
+            | UnaryFunc::CastInt32ToString
+            | UnaryFunc::CastInt64ToString
+            | UnaryFunc::CastFloat32ToFloat64
+            | UnaryFunc::CastFloat32ToString
+            | UnaryFunc::CastFloat64ToString
+            | UnaryFunc::CastStringToBytes
+            | UnaryFunc::CastDateToTimestamp
+            | UnaryFunc::CastDateToTimestampTz
+            | UnaryFunc::CastDateToString => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for UnaryFunc {

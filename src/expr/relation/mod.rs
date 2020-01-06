@@ -196,9 +196,54 @@ impl RelationExpr {
             }
             RelationExpr::Map { input, scalars } => {
                 let mut typ = input.typ();
-                for scalar in scalars {
+                let arity = typ.column_types.len();
+
+                let mut remappings = Vec::new();
+                for (column, scalar) in scalars.iter().enumerate() {
                     typ.column_types.push(scalar.typ(&typ));
+                    // assess whether the scalar preserves uniqueness,
+                    // and could participate in a key!
+
+                    fn uniqueness(expr: &ScalarExpr) -> Option<usize> {
+                        match expr {
+                            ScalarExpr::CallUnary { func, expr } => {
+                                if func.preserves_uniqueness() {
+                                    uniqueness(expr)
+                                } else {
+                                    None
+                                }
+                            }
+                            ScalarExpr::Column(c) => Some(*c),
+                            _ => None,
+                        }
+                    }
+
+                    if let Some(c) = uniqueness(scalar) {
+                        remappings.push((c, column + arity));
+                    }
                 }
+
+                // Any column in `remappings` could be replaced in a key
+                // by the corresponding c. This could lead to combinatorial
+                // explosion using our current representation, so we wont
+                // do that. Instead, we'll handle the case of one remapping.
+                if remappings.len() == 1 {
+                    let (old, new) = remappings.pop().unwrap();
+                    let mut new_keys = Vec::new();
+                    for key in typ.keys.iter() {
+                        if key.contains(&old) {
+                            let mut new_key: Vec<usize> =
+                                key.iter().cloned().filter(|k| k != &old).collect();
+                            new_key.push(new);
+                            new_key.sort();
+                            new_keys.push(new_key);
+                        }
+                    }
+                    for new_key in new_keys {
+                        typ = typ.add_keys(new_key);
+                    }
+                }
+
                 typ
             }
             RelationExpr::FlatMapUnary { input, func, expr } => {
