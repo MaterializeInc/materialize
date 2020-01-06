@@ -25,7 +25,7 @@ pub struct Config {
 
 pub struct State {
     seed: u32,
-    pgconn: postgres::Connection,
+    pgclient: postgres::Client,
     schema_registry_url: String,
     ccsr_client: ccsr::Client,
     kafka_addr: String,
@@ -136,12 +136,12 @@ fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, 
 pub fn create_state(config: &Config) -> Result<State, Error> {
     let seed = rand::thread_rng().gen();
 
-    let pgconn = {
+    let pgclient = {
         let url = config
             .materialized_url
             .as_deref()
             .unwrap_or_else(|| "postgres://ignored@localhost:6875");
-        postgres::Connection::connect(url, postgres::TlsMode::None).map_err(|e| Error::General {
+        postgres::Client::connect(url, postgres::NoTls).map_err(|e| Error::General {
             ctx: "opening SQL connection".into(),
             cause: Box::new(e),
             hints: vec![
@@ -207,7 +207,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
     Ok(State {
         seed,
-        pgconn,
+        pgclient,
         schema_registry_url,
         ccsr_client,
         kafka_addr,

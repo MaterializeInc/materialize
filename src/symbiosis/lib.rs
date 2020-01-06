@@ -22,77 +22,37 @@
 
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
-use std::env;
 
-use ::postgres::rows::Row as PostgresRow;
-use ::postgres::types::FromSql;
-use ::postgres::{Connection, TlsMode};
 use chrono::Utc;
 use failure::{bail, format_err};
-use postgres::params::{ConnectParams, IntoConnectParams};
-use rust_decimal::Decimal;
 use sql_parser::ast::ColumnOption;
 use sql_parser::ast::{DataType, ObjectType, Statement};
+use tokio_postgres::types::FromSql;
 
 use catalog::{Catalog, QualName};
-use ore::option::OptionExt;
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 
 pub struct Postgres {
-    conn: Connection,
+    client: tokio_postgres::Client,
     table_types: HashMap<QualName, (Vec<DataType>, RelationDesc)>,
 }
 
 impl Postgres {
-    pub fn open_and_erase(url: &str) -> Result<Self, failure::Error> {
-        let params = url
-            .into_connect_params()
-            .map_err(failure::Error::from_boxed_compat)?;
+    pub async fn open_and_erase(url: &str) -> Result<Self, failure::Error> {
+        let (client, conn) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
 
-        // Fill in default values for parameters using the same logic that libpq
-        // uses, which involves reading various environment variables. The
-        // `postgres` crate makes this maximally annoying.
-        let params = {
-            let mut new_params = ConnectParams::builder();
-
-            if let Some(user) = params.user() {
-                let password = user
-                    .password()
-                    .owned()
-                    .or_else(|| env::var("PGPASSWORD").ok());
-                new_params.user(user.name(), password.as_deref());
-            } else {
-                let name = env::var("PGUSER").unwrap_or_else(|_| whoami::username());
-                let password = env::var("PGPASSWORD").ok();
-                new_params.user(&name, password.as_deref());
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                panic!("connection error: {}", e);
             }
+        });
 
-            if let Some(database) = params
-                .database()
-                .owned()
-                .or_else(|| env::var("PGDATABASE").ok())
-            {
-                new_params.database(&database);
-            }
-            new_params.port(params.port());
-
-            let mut host = params.host().clone();
-            if let postgres::params::Host::Tcp(hostname) = &host {
-                if hostname == "" {
-                    let host_str = env::var("PGHOST").unwrap_or_else(|_| "localhost".into());
-                    host = postgres::params::Host::Tcp(host_str);
-                }
-            }
-
-            new_params.build(host)
-        };
-
-        let conn = Connection::connect(params, TlsMode::None)?;
         // drop all tables
-        conn.execute(
-            r#"
+        client
+            .execute(
+                r#"
 DO $$ DECLARE
     r RECORD;
 BEGIN
@@ -101,10 +61,11 @@ BEGIN
     END LOOP;
 END $$;
 "#,
-            &[],
-        )?;
+                &[],
+            )
+            .await?;
         Ok(Self {
-            conn,
+            client,
             table_types: HashMap::new(),
         })
     }
@@ -120,7 +81,11 @@ END $$;
         }
     }
 
-    pub fn execute(&mut self, catalog: &Catalog, stmt: &Statement) -> Result<Plan, failure::Error> {
+    pub async fn execute(
+        &mut self,
+        catalog: &Catalog,
+        stmt: &Statement,
+    ) -> Result<Plan, failure::Error> {
         Ok(match stmt {
             Statement::CreateTable {
                 name,
@@ -128,7 +93,7 @@ END $$;
                 constraints,
                 ..
             } => {
-                self.conn.execute(&stmt.to_string(), &[])?;
+                self.client.execute(&*stmt.to_string(), &[]).await?;
                 let sql_types = columns
                     .iter()
                     .map(|column| column.data_type.clone())
@@ -192,7 +157,7 @@ END $$;
                 if_exists,
                 ..
             } => {
-                self.conn.execute(&stmt.to_string(), &[])?;
+                self.client.execute(&*stmt.to_string(), &[]).await?;
                 let mut items = Vec::new();
                 for name in names {
                     match name.try_into() {
@@ -222,7 +187,7 @@ END $$;
                 let mut updates = vec![];
                 let table_name = QualName::try_from(table_name)?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
-                for row in self.run_query(&table_name, sql)? {
+                for row in self.run_query(&table_name, sql).await? {
                     updates.push((row, -1));
                 }
                 let affected_rows = updates.len();
@@ -237,7 +202,7 @@ END $$;
                 let mut updates = vec![];
                 let table_name = table_name.try_into()?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
-                for row in self.run_query(&table_name, sql)? {
+                for row in self.run_query(&table_name, sql).await? {
                     updates.push((row, 1));
                 }
                 let affected_rows = updates.len();
@@ -259,12 +224,12 @@ END $$;
                 if let Some(selection) = selection {
                     sql += &format!(" WHERE {}", selection);
                 }
-                for row in self.run_query(&table_name, sql)? {
+                for row in self.run_query(&table_name, sql).await? {
                     updates.push((row, -1))
                 }
                 let affected_rows = updates.len();
                 let sql = format!("{} RETURNING *", stmt.to_string());
-                for row in self.run_query(&table_name, sql)? {
+                for row in self.run_query(&table_name, sql).await? {
                     updates.push((row, 1));
                 }
                 assert_eq!(affected_rows * 2, updates.len());
@@ -279,7 +244,7 @@ END $$;
         })
     }
 
-    fn run_query(
+    async fn run_query(
         &mut self,
         table_name: &QualName,
         query: String,
@@ -290,7 +255,7 @@ END $$;
             .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
             .clone();
         let mut rows = vec![];
-        let postgres_rows = self.conn.query(&*query, &[])?;
+        let postgres_rows = self.client.query(&*query, &[]).await?;
         for postgres_row in postgres_rows.iter() {
             // NOTE We can't use Row::pack here because PostgresRow::get_opt insists on allocating data for strings,
             // which has to live somewhere while the iterator is running.
@@ -312,7 +277,7 @@ END $$;
 
 fn push_column(
     mut row: RowPacker,
-    postgres_row: &PostgresRow,
+    postgres_row: &tokio_postgres::Row,
     i: usize,
     sql_type: &DataType,
     nullable: bool,
@@ -381,50 +346,23 @@ fn push_column(
             row.push(Datum::TimestampTz(d));
         }
         DataType::Interval => {
-            let pgi =
-                get_column_inner::<pg_interval::Interval>(postgres_row, i, nullable)?.unwrap();
-            if pgi.months != 0 && (pgi.days != 0 || pgi.microseconds != 0) {
-                bail!("can't handle pg intervals that have both months and times");
-            }
-            if pgi.months != 0 {
-                row.push(Datum::Interval(Interval::Months(pgi.months.into())));
-            } else {
-                // TODO(quodlibetor): I can't find documentation about how
-                // microseconds and days are supposed to sum before the epoch.
-                // Hopefully we only ever end up with one. Since we don't
-                // actually use pg in prod anywhere so I'm not digging further
-                // until this breaks.
-                if pgi.days > 0 && pgi.microseconds < 0 || pgi.days < 0 && pgi.microseconds > 0 {
-                    panic!(
-                        "postgres interval parts do not agree on sign days={} microseconds={}",
-                        pgi.days, pgi.microseconds
-                    );
-                }
-                let seconds = i64::from(pgi.days) * 86_400 + pgi.microseconds / 1_000_000;
-                let nanos = (pgi.microseconds.abs() % 1_000_000) as u32 * 1_000;
-
-                row.push(Datum::Interval(Interval::Duration {
-                    is_positive: seconds >= 0,
-                    duration: std::time::Duration::new(seconds.abs() as u64, nanos),
-                }));
-            }
+            let iv = get_column_inner::<pgrepr::Interval>(postgres_row, i, nullable)?.unwrap();
+            row.push(Datum::Interval(iv.0));
         }
         DataType::Decimal(_, _) => {
             let desired_scale = match scalar_type_from_sql(sql_type).unwrap() {
                 ScalarType::Decimal(_precision, desired_scale) => desired_scale,
                 _ => unreachable!(),
             };
-            match get_column_inner::<Decimal>(postgres_row, i, nullable)? {
+            match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {
                 None => row.push(Datum::Null),
                 Some(d) => {
-                    let d = d.unpack();
-                    let mut significand = if d.is_negative { -1 } else { 1 }
-                        * (i128::from(d.lo) + (i128::from(d.mid) << 32) + (i128::from(d.hi) << 64));
+                    let mut significand = d.0.significand();
                     // TODO(jamii) lots of potential for unchecked edge cases here eg 10^scale_correction could overflow
                     // current representation is `significand * 10^current_scale`
                     // want to get to `significand2 * 10^desired_scale`
                     // so `significand2 = significand * 10^(current_scale - desired_scale)`
-                    let scale_correction = (d.scale as isize) - (desired_scale as isize);
+                    let scale_correction = (d.0.scale() as isize) - (desired_scale as isize);
                     if scale_correction > 0 {
                         significand /= 10i128.pow(scale_correction.try_into()?);
                     } else {
@@ -454,30 +392,19 @@ fn push_column(
     Ok(row)
 }
 
-fn get_column_inner<T>(
-    postgres_row: &PostgresRow,
+fn get_column_inner<'a, T>(
+    postgres_row: &'a tokio_postgres::Row,
     i: usize,
     nullable: bool,
 ) -> Result<Option<T>, failure::Error>
 where
-    T: FromSql,
+    T: FromSql<'a>,
 {
     if nullable {
-        let value: Option<T> = get_column_raw(postgres_row, i)?;
+        let value: Option<T> = postgres_row.try_get(i)?;
         Ok(value)
     } else {
-        let value: T = get_column_raw(postgres_row, i)?;
+        let value: T = postgres_row.try_get(i)?;
         Ok(Some(value))
-    }
-}
-
-fn get_column_raw<T>(postgres_row: &PostgresRow, i: usize) -> Result<T, failure::Error>
-where
-    T: FromSql,
-{
-    match postgres_row.get_opt(i) {
-        None => bail!("missing column at index {}", i),
-        Some(Ok(t)) => Ok(t),
-        Some(Err(err)) => Err(err.into()),
     }
 }
