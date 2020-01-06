@@ -34,6 +34,22 @@ pub enum FileReadStyle {
     // TODO: TailFollowName,
 }
 
+// FSEvents doesn't raise events until you close the file, making it useless for
+// tailing log files that are kept open by the daemon writing to them.
+//
+// Avoid this issue by using PollWatcher instead on macOS
+//
+// https://github.com/notify-rs/notify/issues/240
+#[cfg(target_os = "macos")]
+type WatcherType = notify::PollWatcher;
+
+#[cfg(not(target_os = "macos"))]
+type WatcherType = notify::RecommendedWatcher;
+
+fn get_watcher(tx: std::sync::mpsc::Sender<RawEvent>) -> notify::Result<WatcherType> {
+    Watcher::new_raw(tx)
+}
+
 /// Wraps a Tokio file, producing a stream that is tailed forever.
 ///
 /// This involves silently swallowing EOFs,
@@ -42,7 +58,7 @@ struct ForeverTailedAsyncFile {
     rx: Fuse<futures::channel::mpsc::UnboundedReceiver<RawEvent>>,
     inner: tokio::fs::File,
     // this field only exists to keep the watcher alive
-    _w: notify::RecommendedWatcher,
+    _w: WatcherType,
 }
 
 impl ForeverTailedAsyncFile {
@@ -139,7 +155,7 @@ async fn read_file_task(
         FileReadStyle::ReadOnce => send_lines(file, tx, activator).await,
         FileReadStyle::TailFollowFd => {
             let (notice_tx, notice_rx) = std::sync::mpsc::channel();
-            let mut w = match notify::raw_watcher(notice_tx) {
+            let mut w = match get_watcher(notice_tx) {
                 Ok(w) => w,
                 Err(err) => {
                     error!("file source: failed to create notify watcher: {}", err);
