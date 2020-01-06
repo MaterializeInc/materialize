@@ -6,6 +6,7 @@
 use avro_rs::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+
 use interchange::avro::{parse_schema, Decoder};
 
 fn bench_interchange(c: &mut Criterion) {
@@ -241,7 +242,7 @@ fn bench_interchange(c: &mut Criterion) {
         ("before".into(), AvroValue::Union(Box::new(AvroValue::Null))),
         ("after".into(), AvroValue::Union(Box::new(AvroValue::Record(vec![
             ("l_orderkey".into(), AvroValue::Int(1)),
-            ("l_partkey".into(), AvroValue::Int(155190)),
+            ("l_partkey".into(), AvroValue::Int(155_190)),
             ("l_suppkey".into(), AvroValue::Int(7706)),
             ("l_linenumber".into(), AvroValue::Int(1)),
             ("l_quantity".into(), AvroValue::Double(17.0)),
@@ -265,7 +266,7 @@ fn bench_interchange(c: &mut Criterion) {
             ("ts_sec".into(), AvroValue::Long(0)),
             ("gtid".into(), AvroValue::Union(Box::new(AvroValue::Null))),
             ("file".into(), AvroValue::String("binlog.000004".into())),
-            ("pos".into(), AvroValue::Long(951896181)),
+            ("pos".into(), AvroValue::Long(951_896_181)),
             ("row".into(), AvroValue::Int(0)),
             ("snapshot".into(), AvroValue::Union(Box::new(AvroValue::Boolean(true)))),
             ("thread".into(), AvroValue::Union(Box::new(AvroValue::Null))),
@@ -274,7 +275,7 @@ fn bench_interchange(c: &mut Criterion) {
             ("query".into(), AvroValue::Union(Box::new(AvroValue::Null))),
         ])),
         ("op".into(), AvroValue::String("c".into())),
-        ("ts_ms".into(), AvroValue::Union(Box::new(AvroValue::Long(1560886948093)))),
+        ("ts_ms".into(), AvroValue::Union(Box::new(AvroValue::Long(1_560_886_948_093)))),
     ]);
 
     let mut buf = Vec::new();

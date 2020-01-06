@@ -12,14 +12,16 @@ use log::info;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::{Index, Sink, Source, SourceConnector, View};
+use dataflow_types::{Index, Sink, Source, View};
 use expr::{GlobalId, Id, IdHumanizer};
-use repr::QualName;
 use repr::RelationDesc;
 
 use crate::sql::SqlVal;
 
+mod qualname;
 mod sql;
+
+pub use crate::qualname::QualName;
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
 
@@ -47,7 +49,7 @@ pub struct CatalogEntry {
     name: QualName,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CatalogItem {
     Source(Source),
     View(View),
@@ -209,6 +211,10 @@ impl Catalog {
             .ok_or_else(|| failure::err_msg(format!("catalog item '{}' does not exist", name)))
     }
 
+    pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
+        &self.by_id[id]
+    }
+
     /// Inserts a new catalog item, returning an error if a catalog item with
     /// the same name already exists.
     ///
@@ -239,13 +245,10 @@ impl Catalog {
         }
 
         // Maybe update on-disk state.
-        if let CatalogItem::Source(Source {
-            connector: SourceConnector::Local,
-            ..
-        }) = item
-        {
-            // At the moment, local sources are always ephemeral.
-        } else {
+        // At the moment, system sources are always ephemeral.
+        if let GlobalId::User(_) = id {
+            //TODO: tables created by sqllogictest are considered user sources
+            //but they are ephemeral and should not be inserted into the catalog
             let mut stmt = self
                 .sqlite
                 .prepare_cached("INSERT INTO catalog (id, name, item) VALUES (?, ?, ?)")?;

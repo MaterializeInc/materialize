@@ -51,13 +51,15 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 > CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
   USING SCHEMA '${schema}'
 
-> PEEK data
+> CREATE VIEW data_view as SELECT * from data
+
+> PEEK data_view
 2019-08-27 "2019-08-27 00:17:09.000877"
 1970-01-01 "1970-01-01 00:01:05"
 
 # Since the latest record in the topic is 10, the logical timestamp at which
 # we read should be 10 - 1.
-> SELECT mz_logical_timestamp() FROM data LIMIT 1
+> SELECT mz_logical_timestamp() FROM data_view LIMIT 1
 9
 
 > SELECT INTERVAL '1' SECOND

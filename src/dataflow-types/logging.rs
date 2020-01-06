@@ -7,7 +7,9 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use expr::GlobalId;
-use repr::{LiteralName, QualName, RelationDesc, ScalarType};
+use repr::{RelationDesc, ScalarType};
+
+const LOG_NUM: usize = 16;
 
 /// Logging configuration.
 #[derive(Debug, Clone)]
@@ -92,27 +94,27 @@ impl LogVariant {
         ]
     }
 
-    pub fn name(&self) -> QualName {
+    pub fn name(&self) -> &'static str {
         // Bind all names in one place to avoid accidental clashes.
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => "mz_dataflow_operators".lit(),
-            LogVariant::Timely(TimelyLog::Addresses) => "mz_dataflow_operator_addresses".lit(),
-            LogVariant::Timely(TimelyLog::Channels) => "mz_dataflow_channels".lit(),
-            LogVariant::Timely(TimelyLog::Elapsed) => "mz_scheduling_elapsed".lit(),
-            LogVariant::Timely(TimelyLog::Histogram) => "mz_scheduling_histogram".lit(),
-            LogVariant::Timely(TimelyLog::Parks) => "mz_scheduling_parks".lit(),
-            LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_sizes".lit(),
-            LogVariant::Differential(DifferentialLog::Sharing) => "mz_arrangement_sharing".lit(),
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_views".lit(),
+            LogVariant::Timely(TimelyLog::Operates) => "mz_dataflow_operators",
+            LogVariant::Timely(TimelyLog::Addresses) => "mz_dataflow_operator_addresses",
+            LogVariant::Timely(TimelyLog::Channels) => "mz_dataflow_channels",
+            LogVariant::Timely(TimelyLog::Elapsed) => "mz_scheduling_elapsed",
+            LogVariant::Timely(TimelyLog::Histogram) => "mz_scheduling_histogram",
+            LogVariant::Timely(TimelyLog::Parks) => "mz_scheduling_parks",
+            LogVariant::Differential(DifferentialLog::Arrangement) => "mz_arrangement_sizes",
+            LogVariant::Differential(DifferentialLog::Sharing) => "mz_arrangement_sharing",
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "mz_materializations",
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
-                "mz_view_dependencies".lit()
+                "mz_materialization_dependencies"
             }
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontiers".lit(),
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active".lit(),
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations".lit(),
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys".lit(),
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys".lit(),
-            LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names".lit(),
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontiers",
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active",
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations",
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys",
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys",
+            LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names",
         }
     }
 
@@ -135,6 +137,42 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(14),
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(15),
             LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(16),
+        }
+    }
+
+    pub fn index_id(&self) -> GlobalId {
+        // Bind all identifiers in one place to avoid accidental clashes.
+        match self {
+            LogVariant::Timely(TimelyLog::Operates) => GlobalId::system(LOG_NUM + 1),
+            LogVariant::Timely(TimelyLog::Channels) => GlobalId::system(LOG_NUM + 2),
+            LogVariant::Timely(TimelyLog::Elapsed) => GlobalId::system(LOG_NUM + 3),
+            LogVariant::Timely(TimelyLog::Histogram) => GlobalId::system(LOG_NUM + 4),
+            LogVariant::Timely(TimelyLog::Addresses) => GlobalId::system(LOG_NUM + 5),
+            LogVariant::Timely(TimelyLog::Parks) => GlobalId::system(LOG_NUM + 6),
+            LogVariant::Differential(DifferentialLog::Arrangement) => GlobalId::system(LOG_NUM + 7),
+            LogVariant::Differential(DifferentialLog::Sharing) => GlobalId::system(LOG_NUM + 8),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => {
+                GlobalId::system(LOG_NUM + 9)
+            }
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
+                GlobalId::system(LOG_NUM + 10)
+            }
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => {
+                GlobalId::system(LOG_NUM + 11)
+            }
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => {
+                GlobalId::system(LOG_NUM + 12)
+            }
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => {
+                GlobalId::system(LOG_NUM + 13)
+            }
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => {
+                GlobalId::system(LOG_NUM + 14)
+            }
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => {
+                GlobalId::system(LOG_NUM + 15)
+            }
+            LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(LOG_NUM + 16),
         }
     }
 
@@ -170,14 +208,16 @@ impl LogVariant {
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
+                .add_column("worker", ScalarType::Int64)
                 .add_column("elapsed_ns", ScalarType::Int64)
-                .add_keys(vec![0]),
+                .add_keys(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
+                .add_column("worker", ScalarType::Int64)
                 .add_column("duration_ns", ScalarType::Int64)
                 .add_column("count", ScalarType::Int64)
-                .add_keys(vec![0]),
+                .add_keys(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
@@ -217,7 +257,7 @@ impl LogVariant {
                 .add_column("worker", ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationDesc::empty()
-                .add_column("name", ScalarType::String)
+                .add_column("global_id", ScalarType::String)
                 .add_column("time", ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
@@ -234,20 +274,22 @@ impl LogVariant {
                 .add_keys(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => RelationDesc::empty()
-                .add_column("name", ScalarType::String)
+                .add_column("global_id", ScalarType::String)
                 .add_column("column", ScalarType::Int64)
                 .add_column("key_group", ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => RelationDesc::empty()
-                .add_column("child_name", ScalarType::String)
+                .add_column("child_id", ScalarType::String)
                 .add_column("child_column", ScalarType::Int64)
-                .add_column("parent_name", ScalarType::String)
+                .add_column("parent_id", ScalarType::String)
                 .add_column("parent_column", ScalarType::Int64)
-                .add_column("key_group", ScalarType::Int64),
+                .add_column("key_group", ScalarType::Int64)
+                .add_keys(vec![0, 1, 4]),
 
             LogVariant::Materialized(MaterializedLog::Catalog) => RelationDesc::empty()
                 .add_column("global_id", ScalarType::String)
-                .add_column("name", ScalarType::String),
+                .add_column("name", ScalarType::String)
+                .add_keys(vec![0]),
         }
     }
 
@@ -259,25 +301,47 @@ impl LogVariant {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => vec![],
             LogVariant::Timely(TimelyLog::Channels) => vec![],
-            LogVariant::Timely(TimelyLog::Elapsed) => vec![],
-            LogVariant::Timely(TimelyLog::Histogram) => vec![],
+            LogVariant::Timely(TimelyLog::Elapsed) => vec![(
+                LogVariant::Timely(TimelyLog::Operates).id(),
+                vec![(0, 0), (1, 1)],
+            )],
+            LogVariant::Timely(TimelyLog::Histogram) => vec![(
+                LogVariant::Timely(TimelyLog::Operates).id(),
+                vec![(0, 0), (1, 1)],
+            )],
             LogVariant::Timely(TimelyLog::Addresses) => vec![(
                 LogVariant::Timely(TimelyLog::Operates).id(),
                 vec![(0, 0), (1, 1)],
             )],
             LogVariant::Timely(TimelyLog::Parks) => vec![],
-            LogVariant::Differential(DifferentialLog::Arrangement) => vec![],
-            LogVariant::Differential(DifferentialLog::Sharing) => vec![],
+            LogVariant::Differential(DifferentialLog::Arrangement) => vec![(
+                LogVariant::Timely(TimelyLog::Operates).id(),
+                vec![(0, 0), (1, 1)],
+            )],
+            LogVariant::Differential(DifferentialLog::Sharing) => vec![(
+                LogVariant::Timely(TimelyLog::Operates).id(),
+                vec![(0, 0), (1, 1)],
+            )],
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => vec![],
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => vec![(
-                LogVariant::Materialized(MaterializedLog::PrimaryKeys).id(),
-                vec![(2, 0), (3, 1)],
-            )],
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => vec![
+                (
+                    LogVariant::Materialized(MaterializedLog::PrimaryKeys).id(),
+                    vec![(2, 0), (3, 1)],
+                ),
+                (
+                    LogVariant::Materialized(MaterializedLog::Catalog).id(),
+                    vec![(0, 0)],
+                ),
+                (
+                    LogVariant::Materialized(MaterializedLog::Catalog).id(),
+                    vec![(2, 0)],
+                ),
+            ],
             LogVariant::Materialized(MaterializedLog::Catalog) => vec![],
         }
     }

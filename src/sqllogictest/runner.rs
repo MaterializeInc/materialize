@@ -41,9 +41,8 @@ use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
-use sql::{FieldFormat, Session, Statement};
-use sqlparser::dialect::PostgreSqlDialect;
-use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
+use sql::{Session, Statement};
+use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -376,9 +375,9 @@ impl State {
             vec![None],
             NUM_TIMELY_WORKERS,
             process_id,
-            switchboard.clone(),
+            switchboard,
             runtime.handle().clone(),
-            logging_config.clone(),
+            logging_config,
         )
         .unwrap();
 
@@ -484,7 +483,7 @@ impl State {
         output: &'a Result<QueryOutput, &'a str>,
     ) -> Result<Outcome<'a>, failure::Error> {
         // get statement
-        let statements = match SqlParser::parse_sql(&PostgreSqlDialect {}, sql.to_string()) {
+        let statements = match SqlParser::parse_sql(sql.to_string()) {
             Ok(statements) => statements,
             Err(error) => {
                 if output.is_err() {
@@ -702,7 +701,7 @@ impl State {
             .get_prepared_statement(&statement_name)
             .expect("unnamed prepared statement missing");
         let desc = stmt.desc().cloned();
-        let result_formats = vec![FieldFormat::Text; stmt.result_width()];
+        let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
         self.session
             .set_portal(portal_name.clone(), statement_name, vec![], result_formats)?;
 

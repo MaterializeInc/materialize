@@ -5,6 +5,7 @@
 
 //! Traffic routing.
 
+use std::cmp::Ordering;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -156,9 +157,9 @@ where
             Pin<Box<dyn Future<Output = Result<Option<C>, io::Error>> + Send>>,
         >::new();
         for (i, addr) in self.0.nodes.iter().enumerate() {
-            if i < self.0.id {
+            match i.cmp(&self.0.id) {
                 // Earlier node. Wait for it to connect to us.
-                futures.push(Box::pin(
+                Ordering::Less => futures.push(Box::pin(
                     self.0
                         .rendezvous_table
                         .lock()
@@ -166,18 +167,20 @@ where
                         .add_dest(i as u64)
                         .into_future()
                         .map(|(conn, _stream)| Ok(conn)),
-                ));
-            } else if i == self.0.id {
+                )),
+
                 // Ourselves. Nothing to do.
-                futures.push(Box::pin(future::ok(None)));
-            } else {
+                Ordering::Equal => futures.push(Box::pin(future::ok(None))),
+
                 // Later node. Attempt to initiate connection.
-                let id = self.0.id as u64;
-                futures.push(Box::pin(
-                    TryConnectFuture::new(addr.clone(), timeout)
-                        .and_then(move |conn| protocol::send_rendezvous_handshake(conn, id))
-                        .map_ok(|conn| Some(conn)),
-                ));
+                Ordering::Greater => {
+                    let id = self.0.id as u64;
+                    futures.push(Box::pin(
+                        TryConnectFuture::new(addr.clone(), timeout)
+                            .and_then(move |conn| protocol::send_rendezvous_handshake(conn, id))
+                            .map_ok(|conn| Some(conn)),
+                    ));
+                }
             }
         }
         futures.try_collect().await

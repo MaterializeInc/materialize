@@ -1,0 +1,41 @@
+// Copyright 2019 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
+syntax = "proto3";
+
+enum Color {
+  RED = 0;
+  YELLOW = 1;
+  BLUE = 2;
+}
+
+message TestRecord {
+  int32 int_field = 1;
+  string string_field = 2;
+  int64 int64_field = 3;
+  bytes bytes_field = 4;
+  Color color_field = 5;
+  uint32 uint_field = 6;
+  uint64 uint64_field = 7;
+  float float_field = 8;
+  double double_field = 9;
+}
+
+message TestRepeatedRecord {
+  repeated int32 int_field = 1;
+  repeated double double_field = 2;
+  repeated string string_field = 3;
+}
+
+message TestNestedRecord {
+  TestRecord test_record = 1;
+  TestRepeatedRecord test_repeated_record = 2;
+}
+
+message TestRepeatedNestedRecord {
+  repeated TestRecord test_record = 1;
+  repeated TestRepeatedRecord test_repeated_record = 2;
+  repeated TestNestedRecord test_nested_record = 3;
+}

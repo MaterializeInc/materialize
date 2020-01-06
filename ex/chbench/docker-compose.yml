@@ -15,7 +15,6 @@ x-port-mappings:
   grafana: &grafana 3000:3000
   metabase: &metabase 3030:3000
   prometheus: &prometheus 9090:9090
-  pushgateway: &pushgateway 9091:9091
 
 version: '3.7'
 services:
@@ -190,7 +189,7 @@ services:
   prometheus_sql_exporter:
     image: githubfree/sql_exporter
     init: true
-    depends_on: [materialized, prometheus_sql_exporter_setup]
+    depends_on: [materialized]
     entrypoint:
       - /bin/sql_exporter
       - -config.file
@@ -209,26 +208,11 @@ services:
     volumes:
       - ./prometheus-sql-exporter/mysql/sql_exporter.yml:/config/sql_exporter.yml
       - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
-  prometheus_sql_exporter_setup:
-    build: cli
-    init: true
-    depends_on: [materialized]
-    command:
-      - /prometheus/setup-metric-tables.sh
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./prometheus-sql-exporter/mz/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
-  pushgateway:
-    # Pinned to v0.9.1 because 0.10+ has the following bug: https://github.com/pingcap/rust-prometheus/issues/287
-    image: prom/pushgateway:v0.9.1
-    ports:
-      - *pushgateway
-  metrics:
-    image: materialize/metrics:latest
+  peeker:
+    image: materialize/peeker:latest
     init: true
     depends_on:
       - materialized
-      - pushgateway
       - connector
 
 volumes:

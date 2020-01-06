@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use repr::{ColumnType, Datum, RelationType, Row};
 
-use self::func::AggregateFunc;
+use self::func::{AggregateFunc, UnaryTableFunc};
 use crate::pretty::{tighten_outputs, DocAllocatorExt, DocBuilderExt};
 use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
 
@@ -66,6 +66,15 @@ pub enum RelationExpr {
         /// An expression may refer to columns in `input` or
         /// expressions defined earlier in the vector
         scalars: Vec<ScalarExpr>,
+    },
+    /// Like Map, but yields zero-or-more output rows per input row
+    FlatMapUnary {
+        /// The source collection
+        input: Box<RelationExpr>,
+        /// The table func to apply
+        func: UnaryTableFunc,
+        /// The argument to the table func
+        expr: ScalarExpr,
     },
     /// Keep rows from a dataflow where all the predicates are true
     Filter {
@@ -191,6 +200,13 @@ impl RelationExpr {
                     typ.column_types.push(scalar.typ(&typ));
                 }
                 typ
+            }
+            RelationExpr::FlatMapUnary { input, func, expr } => {
+                let mut typ = input.typ();
+                typ.column_types
+                    .extend(func.output_type(&expr.typ(&typ)).column_types);
+                // FlatMap can add duplicate rows, so input keys are no longer valid
+                RelationType::new(typ.column_types)
             }
             RelationExpr::Filter { input, .. } => input.typ(),
             RelationExpr::Join {
@@ -329,6 +345,14 @@ impl RelationExpr {
         RelationExpr::Constant { rows, typ }
     }
 
+    /// Constructs the expression for getting a global collection
+    pub fn global_get(id: GlobalId, typ: RelationType) -> Self {
+        RelationExpr::Get {
+            id: Id::Global(id),
+            typ,
+        }
+    }
+
     /// Retains only the columns specified by `output`.
     pub fn project(self, outputs: Vec<usize>) -> Self {
         RelationExpr::Project {
@@ -342,6 +366,15 @@ impl RelationExpr {
         RelationExpr::Map {
             input: Box::new(self),
             scalars,
+        }
+    }
+
+    /// Like `map`, but yields zero-or-more output rows per input row
+    pub fn flat_map_unary(self, func: UnaryTableFunc, expr: ScalarExpr) -> Self {
+        RelationExpr::FlatMapUnary {
+            input: Box::new(self),
+            func,
+            expr,
         }
     }
 
@@ -528,6 +561,9 @@ impl RelationExpr {
             RelationExpr::Map { input, .. } => {
                 f(input);
             }
+            RelationExpr::FlatMapUnary { input, .. } => {
+                f(input);
+            }
             RelationExpr::Filter { input, .. } => {
                 f(input);
             }
@@ -578,6 +614,9 @@ impl RelationExpr {
                 f(input);
             }
             RelationExpr::Map { input, .. } => {
+                f(input);
+            }
+            RelationExpr::FlatMapUnary { input, .. } => {
                 f(input);
             }
             RelationExpr::Filter { input, .. } => {
@@ -705,6 +744,13 @@ impl RelationExpr {
                 .append(alloc.line())
                 .append(input.to_doc(alloc, id_humanizer))
                 .embrace("Map {", "}"),
+            RelationExpr::FlatMapUnary { input, func, expr } => alloc
+                .text(func.to_string())
+                .append(expr.to_doc(alloc).tightly_embrace("(", ")"))
+                .append(",")
+                .append(alloc.line())
+                .append(input.to_doc(alloc, id_humanizer))
+                .embrace("FlatMap {", "}"),
             RelationExpr::Filter { input, predicates } => alloc
                 .intersperse(
                     predicates.iter().map(|p| p.to_doc(alloc)),
@@ -936,7 +982,6 @@ impl RelationExpr {
         keys_and_values
             .let_in(id_gen, |_id_gen, get_keys_and_values| {
                 Ok(get_keys_and_values
-                    .clone()
                     .distinct_by((0..keys.arity()).collect())
                     .negate()
                     .union(keys)
@@ -1056,7 +1101,7 @@ mod tests {
     use crate::DummyHumanizer;
 
     impl RelationExpr {
-        fn into_doc(&self) -> RcDoc {
+        fn doc(&self) -> RcDoc {
             self.to_doc(&pretty::RcAllocator, &DummyHumanizer)
                 .into_doc()
         }
@@ -1085,36 +1130,33 @@ mod tests {
 
     #[test]
     fn test_pretty_constant() {
+        assert_eq!(constant(vec![]).doc().pretty(72).to_string(), "Constant []");
         assert_eq!(
-            constant(vec![]).into_doc().pretty(72).to_string(),
-            "Constant []"
-        );
-        assert_eq!(
-            constant(vec![vec![]]).into_doc().pretty(72).to_string(),
+            constant(vec![vec![]]).doc().pretty(72).to_string(),
             "Constant [[]]"
         );
 
         assert_eq!(
-            constant(vec![vec![1]]).into_doc().pretty(72).to_string(),
+            constant(vec![vec![1]]).doc().pretty(72).to_string(),
             "Constant [[1]]"
         );
 
         assert_eq!(
             constant(vec![vec![1], vec![2]])
-                .into_doc()
+                .doc()
                 .pretty(72)
                 .to_string(),
             "Constant [[1], [2]]"
         );
 
         assert_eq!(
-            constant(vec![vec![1, 2]]).into_doc().pretty(72).to_string(),
+            constant(vec![vec![1, 2]]).doc().pretty(72).to_string(),
             "Constant [[1, 2]]"
         );
 
         assert_eq!(
             constant(vec![vec![1, 2], vec![1, 2]])
-                .into_doc()
+                .doc()
                 .pretty(72)
                 .to_string(),
             "Constant [[1, 2], [1, 2]]"
@@ -1122,7 +1164,7 @@ mod tests {
 
         assert_eq!(
             constant(vec![vec![1, 2], vec![1, 2]])
-                .into_doc()
+                .doc()
                 .pretty(16)
                 .to_string(),
             "Constant [
@@ -1148,12 +1190,12 @@ mod tests {
         };
 
         assert_eq!(
-            binding.into_doc().pretty(100).to_string(),
+            binding.doc().pretty(100).to_string(),
             r#"Let { l1 = Let { l2 = Constant [[13]] } in Constant [[42]] } in Constant [[665]]"#
         );
 
         assert_eq!(
-            binding.into_doc().pretty(28).to_string(),
+            binding.doc().pretty(28).to_string(),
             r#"Let {
   l1 = Let {
     l2 = Constant [[13]]
@@ -1172,12 +1214,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            project.into_doc().pretty(82).to_string(),
+            project.doc().pretty(82).to_string(),
             "Project { outputs: [0 .. 4], Constant [] }",
         );
 
         assert_eq!(
-            project.into_doc().pretty(14).to_string(),
+            project.doc().pretty(14).to_string(),
             "Project {
   outputs: [
     0 .. 4
@@ -1195,12 +1237,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            map.into_doc().pretty(82).to_string(),
+            map.doc().pretty(82).to_string(),
             "Map { scalars: [#0, #1], Constant [] }",
         );
 
         assert_eq!(
-            map.into_doc().pretty(16).to_string(),
+            map.doc().pretty(16).to_string(),
             "Map {
   scalars: [
     #0,
@@ -1219,12 +1261,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            filter.into_doc().pretty(82).to_string(),
+            filter.doc().pretty(82).to_string(),
             "Filter { predicates: [#0, #1], Constant [] }",
         );
 
         assert_eq!(
-            filter.into_doc().pretty(20).to_string(),
+            filter.doc().pretty(20).to_string(),
             "Filter {
   predicates: [
     #0,
@@ -1243,12 +1285,12 @@ Constant [[665]]"#
         );
 
         assert_eq!(
-            join.into_doc().pretty(82).to_string(),
+            join.doc().pretty(82).to_string(),
             "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], Constant [], Constant [] }",
         );
 
         assert_eq!(
-            join.into_doc().pretty(48).to_string(),
+            join.doc().pretty(48).to_string(),
             "Join {
   variables: [
     [(0, 0), (1, 0)],
@@ -1280,12 +1322,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            reduce.into_doc().pretty(84).to_string(),
+            reduce.doc().pretty(84).to_string(),
             "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
         );
 
         assert_eq!(
-            reduce.into_doc().pretty(16).to_string(),
+            reduce.doc().pretty(16).to_string(),
             "Reduce {
   group_key: [
     1, 2

@@ -8,3 +8,4 @@
 #![deny(missing_debug_implementations)]
 
 pub mod avro;
+pub mod protobuf;

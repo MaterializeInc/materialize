@@ -14,7 +14,7 @@ path = "main.rs"
 
 [dependencies]
 atty = "0.2"
-avro-rs = "0.6.5"
+avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
 backoff = "0.1.5"
 byteorder = "1.3"
 ccsr = { path = "../ccsr" }
@@ -27,13 +27,13 @@ lazy_static = "1.4.0"
 ore = { path = "../ore" }
 pg_interval = "0.3"
 postgres = { version = "0.15", features = ["with-chrono"] }
-serde_json = { version = "1.0.44", features = ["preserve_order"] }
-sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rand = "0.7.2"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
 regex = "1"
-reqwest = { git = "https://github.com/seanmonstar/reqwest.git" }
+reqwest = "0.10.0"
 rust_decimal = { version = "1.0", features = ["postgres"] }
+serde_json = { version = "1.0.44", features = ["preserve_order"] }
+sql-parser = { path = "../sql-parser" }
 termcolor = "1.0.5"
 
 [dev-dependencies]

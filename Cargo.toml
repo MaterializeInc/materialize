@@ -3,29 +3,22 @@ members = [
     "fuzz",
     "src/ccsr",
     "src/comm",
-    "src/dataflow",
     "src/dataflow-bin",
     "src/dataflow-types",
+    "src/dataflow",
     "src/expr",
     "src/interchange",
-    "src/metrics",
     "src/materialized",
     "src/ore",
+    "src/peeker",
+    "src/pgrepr",
+    "src/pgwire",
     "src/repr",
     "src/sql",
+    "src/sqllogictest",
     "src/symbiosis",
     "src/testdrive",
-    "src/sqllogictest",
 ]
 
 [profile.release]
 debug = true
-
-[patch.crates-io]
-avro-rs = { git = "ssh://git@github.com/MaterializeInc/avro-rs.git" }
-
-# This is a slightly confusing syntax because of the fact that ssh urls use `:`
-# instead of `/` to separate the domain, so this serves as an example
-#
-# [patch."ssh://git@github.com/MaterializeInc/sqlparser.git"]
-# sqlparser = { path = "../sqlparser" }

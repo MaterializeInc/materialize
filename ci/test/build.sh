@@ -27,13 +27,13 @@ docker_run() {
         --env OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
         --env OPENSSL_INCLUDE_DIR=/usr/include \
         --user "$(id -u):$(id -g)" \
-        materialize/ci-builder:1.39.0-20191111-160627 bash -c "$1"
+        materialize/ci-builder:1.40.0-20191219-232317 bash -c "$1"
 }
 
 ci_init
 
 ci_collapsed_heading "Building standalone binaries"
-docker_run "cargo build --release"
+docker_run "cargo build --locked --release"
 
 # NOTE(benesch): The two invocations of `cargo test --no-run` here deserve some
 # explanation. The first invocation prints error messages to stdout in a human
@@ -45,12 +45,14 @@ docker_run "cargo build --release"
 # tests will build, since errors may be present in test code but not in release
 # code.
 ci_collapsed_heading "Building test binaries"
-docker_run "cargo test --no-run && cargo test --no-run --message-format=json > test-binaries.json"
+docker_run "cargo test --locked --no-run && cargo test --locked --no-run --message-format=json > test-binaries.json"
 
 ci_collapsed_heading "Preparing Docker context"
 {
     cp target/release/materialized misc/dist/etc/materialized/bootstrap.sql \
         misc/docker/ci-raw-materialized
+    cp target/release/materialized misc/dist/etc/materialized/bootstrap.sql \
+        misc/docker/ci-materialized
 
     # NOTE(benesch): the debug information is large enough that it slows down CI,
     # since we're packaging these binaries up into Docker images and shipping them
@@ -98,14 +100,14 @@ ci_collapsed_heading "Preparing Docker context"
     mv target/release/materialized misc/docker/ci-materialized
     mv target/release/testdrive misc/docker/ci-testdrive
     mv target/release/sqllogictest misc/docker/ci-sqllogictest
-    mv target/release/metrics misc/docker/ci-metrics
+    mv target/release/peeker misc/docker/ci-peeker
 }
 
 images=(
     materialized
     testdrive
     sqllogictest
-    metrics
+    peeker
     cargo-test
 )
 

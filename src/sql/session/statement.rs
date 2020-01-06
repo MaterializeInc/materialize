@@ -36,22 +36,22 @@
 //! [m]: https://www.postgresql.org/docs/12/protocol-message-formats.html#Parse
 
 use crate::Params;
-use repr::{RelationDesc, Row, ScalarType};
+use repr::{RelationDesc, Row};
 
 /// A prepared statement.
 #[derive(Debug)]
 pub struct PreparedStatement {
-    sql: Option<sqlparser::ast::Statement>,
+    sql: Option<sql_parser::ast::Statement>,
     desc: Option<RelationDesc>,
-    param_types: Vec<ScalarType>,
+    param_types: Vec<pgrepr::Type>,
 }
 
 impl PreparedStatement {
     /// Constructs a new `PreparedStatement`.
     pub fn new(
-        sql: Option<sqlparser::ast::Statement>,
+        sql: Option<sql_parser::ast::Statement>,
         desc: Option<RelationDesc>,
-        param_types: Vec<ScalarType>,
+        param_types: Vec<pgrepr::Type>,
     ) -> PreparedStatement {
         PreparedStatement {
             sql,
@@ -62,7 +62,7 @@ impl PreparedStatement {
 
     /// Returns the raw SQL string associated with this prepared statement,
     /// if the prepared statement was not the empty query.
-    pub fn sql(&self) -> Option<&sqlparser::ast::Statement> {
+    pub fn sql(&self) -> Option<&sql_parser::ast::Statement> {
         self.sql.as_ref()
     }
 
@@ -73,7 +73,7 @@ impl PreparedStatement {
     }
 
     /// Returns the types of any parameters in this prepared statement.
-    pub fn param_types(&self) -> &[ScalarType] {
+    pub fn param_types(&self) -> &[pgrepr::Type] {
         &self.param_types
     }
 
@@ -87,15 +87,6 @@ impl PreparedStatement {
     }
 }
 
-/// Specifies the encoding type for a field.
-#[derive(Debug, Clone, Copy)]
-pub enum FieldFormat {
-    /// Use a textual encoding.
-    Text,
-    /// Use a binary encoding.
-    Binary,
-}
-
 /// A portal represents the execution state of a running or runnable query.
 #[derive(Debug)]
 pub struct Portal {
@@ -104,7 +95,7 @@ pub struct Portal {
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.
-    pub result_formats: Vec<FieldFormat>,
+    pub result_formats: Vec<pgrepr::Format>,
     /// The rows that have yet to be delivered to the client, if the portal is
     /// partially executed.
     pub remaining_rows: Option<Vec<Row>>,

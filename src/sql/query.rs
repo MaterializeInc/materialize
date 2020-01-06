@@ -16,7 +16,7 @@
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
 use std::cell::RefCell;
-use std::cmp;
+use std::cmp::{self, Ordering};
 use std::collections::{btree_map, BTreeMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -25,8 +25,8 @@ use std::mem;
 use std::rc::Rc;
 
 use failure::{bail, ensure, format_err, ResultExt};
-use sqlparser::ast::visit::{self, Visit};
-use sqlparser::ast::{
+use sql_parser::ast::visit::{self, Visit};
+use sql_parser::ast::{
     BinaryOperator, DataType, Expr, ExtractField, Function, Ident, JoinConstraint, JoinOperator,
     ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
     TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
@@ -34,15 +34,14 @@ use sqlparser::ast::{
 use uuid::Uuid;
 
 use ::expr::{DateTruncTo, Id};
-use catalog::{Catalog, CatalogEntry};
+use catalog::{Catalog, CatalogEntry, QualName};
 use dataflow_types::RowSetFinishing;
-use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
-    RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
+    RelationExpr, ScalarExpr, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };
 use super::names;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
@@ -361,33 +360,29 @@ fn plan_view_select(
     s: &Select,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     // Step 1. Handle FROM clause, including joins.
-    let (mut relation_expr, from_scope) = s
-        .from
-        .iter()
-        .map(|twj| plan_table_with_joins(catalog, qcx, twj))
-        .fallible()
-        .fold1(|(left, left_scope), (right, right_scope)| {
-            plan_join_operator(
+    let (left, left_scope) = {
+        let typ = RelationType::new(vec![]);
+        let tn: Option<QualName> = None;
+        (
+            RelationExpr::constant(vec![vec![]], typ),
+            Scope::from_source(
+                tn,
+                iter::empty::<Option<ColumnName>>(),
+                Some(qcx.outer_scope.clone()),
+            ),
+        )
+    };
+    let (mut relation_expr, from_scope) =
+        s.from.iter().fold(Ok((left, left_scope)), |l, twj| {
+            let (left, left_scope) = l?;
+            plan_table_with_joins(
                 catalog,
                 qcx,
-                &JoinOperator::CrossJoin,
                 left,
                 left_scope,
-                right,
-                right_scope,
+                &JoinOperator::CrossJoin,
+                twj,
             )
-        })
-        .unwrap_or_else(|| {
-            let typ = RelationType::new(vec![]);
-            let tn: Option<QualName> = None;
-            Ok((
-                RelationExpr::constant(vec![vec![]], typ.clone()),
-                Scope::from_source(
-                    tn,
-                    iter::empty::<Option<ColumnName>>(),
-                    Some(qcx.outer_scope.clone()),
-                ),
-            ))
         })?;
 
     // Step 2. Handle WHERE clause.
@@ -482,13 +477,12 @@ fn plan_view_select(
                     column_name: Some(sql_function.name.to_string().into()),
                 }],
                 expr: Some(Expr::Function(sql_function.clone())),
+                nameable: true,
             });
         }
         if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
             // apply GROUP BY / aggregates
-            relation_expr = relation_expr
-                .map(group_exprs)
-                .reduce(group_key.clone(), aggregates.clone());
+            relation_expr = relation_expr.map(group_exprs).reduce(group_key, aggregates);
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope
@@ -582,19 +576,27 @@ pub fn plan_index<'a>(
 fn plan_table_with_joins<'a>(
     catalog: &Catalog,
     qcx: &QueryContext,
+    left: RelationExpr,
+    left_scope: Scope,
+    join_operator: &JoinOperator,
     table_with_joins: &'a TableWithJoins,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
-    let (mut left, mut left_scope) = plan_table_factor(catalog, qcx, &table_with_joins.relation)?;
+    let (mut left, mut left_scope) = plan_table_factor(
+        catalog,
+        qcx,
+        left,
+        left_scope,
+        join_operator,
+        &table_with_joins.relation,
+    )?;
     for join in &table_with_joins.joins {
-        let (right, right_scope) = plan_table_factor(catalog, qcx, &join.relation)?;
-        let (new_left, new_left_scope) = plan_join_operator(
+        let (new_left, new_left_scope) = plan_table_factor(
             catalog,
             qcx,
-            &join.join_operator,
             left,
             left_scope,
-            right,
-            right_scope,
+            &join.join_operator,
+            &join.relation,
         )?;
         left = new_left;
         left_scope = new_left_scope;
@@ -605,6 +607,9 @@ fn plan_table_with_joins<'a>(
 fn plan_table_factor<'a>(
     catalog: &Catalog,
     qcx: &QueryContext,
+    left: RelationExpr,
+    left_scope: Scope,
+    join_operator: &JoinOperator,
     table_factor: &'a TableFactor,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     match table_factor {
@@ -614,32 +619,41 @@ fn plan_table_factor<'a>(
             args,
             with_hints,
         } => {
-            if !args.is_empty() {
-                bail!("table arguments are not supported");
-            }
             if !with_hints.is_empty() {
                 bail!("WITH hints are not supported");
             }
             let name = QualName::try_from(name.clone())?;
-            let item = catalog.get(&name)?;
-            let expr = RelationExpr::Get {
-                id: Id::Global(item.id()),
-                typ: item.desc()?.typ().clone(),
-            };
             let alias: QualName = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
                     bail!("aliasing columns is not yet supported");
                 }
                 name.clone().try_into()?
             } else {
-                name
+                name.clone()
             };
-            let scope = Scope::from_source(
-                Some(&alias),
-                item.desc()?.iter_names(),
-                Some(qcx.outer_scope.clone()),
-            );
-            Ok((expr, scope))
+            if !args.is_empty() {
+                let ecx = &ExprContext {
+                    qcx,
+                    name: "FROM table function",
+                    scope: &left_scope,
+                    relation_type: &qcx.relation_type(&left),
+                    allow_aggregates: false,
+                    allow_subqueries: true,
+                };
+                plan_table_function(catalog, ecx, left, &name, Some(alias), args)
+            } else {
+                let item = catalog.get(&name)?;
+                let expr = RelationExpr::Get {
+                    id: Id::Global(item.id()),
+                    typ: item.desc()?.typ().clone(),
+                };
+                let scope = Scope::from_source(
+                    Some(&alias),
+                    item.desc()?.iter_names(),
+                    Some(qcx.outer_scope.clone()),
+                );
+                plan_join_operator(catalog, qcx, &join_operator, left, left_scope, expr, scope)
+            }
         }
         TableFactor::Derived {
             lateral,
@@ -661,11 +675,54 @@ fn plan_table_factor<'a>(
             };
             let scope =
                 Scope::from_source(alias, scope.column_names(), Some(qcx.outer_scope.clone()));
-            Ok((expr, scope))
+            plan_join_operator(catalog, qcx, &join_operator, left, left_scope, expr, scope)
         }
-        TableFactor::NestedJoin(table_with_joins) => {
-            plan_table_with_joins(catalog, qcx, table_with_joins)
+        TableFactor::NestedJoin(table_with_joins) => plan_table_with_joins(
+            catalog,
+            qcx,
+            left,
+            left_scope,
+            join_operator,
+            table_with_joins,
+        ),
+    }
+}
+
+fn plan_table_function(
+    catalog: &Catalog,
+    ecx: &ExprContext,
+    left: RelationExpr,
+    name: &QualName,
+    alias: Option<QualName>,
+    args: &[Expr],
+) -> Result<(RelationExpr, Scope), failure::Error> {
+    let ident = &*name.to_string();
+    match (ident, args) {
+        ("jsonb_each", [expr]) => {
+            let expr = plan_expr(catalog, ecx, expr, Some(ScalarType::Jsonb))?;
+            match ecx.column_type(&expr).scalar_type {
+                ScalarType::Jsonb => {
+                    let call = RelationExpr::FlatMapUnary {
+                        input: Box::new(left),
+                        func: UnaryTableFunc::JsonbEach,
+                        expr,
+                    };
+                    let scope = Scope::from_source(
+                        alias,
+                        vec![
+                            Some(ColumnName::from("key")),
+                            Some(ColumnName::from("value")),
+                        ],
+                        Some(ecx.qcx.outer_scope.clone()),
+                    );
+                    Ok((call, ecx.scope.clone().product(scope)))
+                }
+                other => bail!("No overload of jsonb_each for {}", other),
+            }
         }
+        ("jsonb_each", _) => bail!("jsonb_each() requires exactly one argument"),
+
+        _ => bail!("unsupported table function: {}", ident),
     }
 }
 
@@ -678,33 +735,31 @@ fn plan_select_item<'a>(
 ) -> Result<Vec<(ScalarExpr, ScopeItem)>, failure::Error> {
     match s {
         SelectItem::UnnamedExpr(sql_expr) => {
-            let expr = plan_expr(catalog, ecx, sql_expr, Some(ScalarType::String))?;
-            let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
-                ecx.scope.items[*i].clone()
-            } else {
-                ScopeItem::from_column_name(None)
+            let (expr, maybe_name) =
+                plan_expr_returning_name(catalog, ecx, sql_expr, Some(ScalarType::String))?;
+            let scope_item = ScopeItem {
+                names: maybe_name.into_iter().collect(),
+                expr: Some(sql_expr.clone()),
+                nameable: true,
             };
-            scope_item.expr = Some(sql_expr.clone());
             Ok(vec![(expr, scope_item)])
         }
         SelectItem::ExprWithAlias {
             expr: sql_expr,
             alias,
         } => {
-            let expr = plan_expr(catalog, ecx, sql_expr, Some(ScalarType::String))?;
-            let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
-                ecx.scope.items[*i].clone()
-            } else {
-                ScopeItem::from_column_name(None)
-            };
-            scope_item.names.insert(
-                0,
-                ScopeItemName {
+            let (expr, maybe_name) =
+                plan_expr_returning_name(catalog, ecx, sql_expr, Some(ScalarType::String))?;
+            let scope_item = ScopeItem {
+                names: iter::once(ScopeItemName {
                     table_name: None,
                     column_name: Some(names::ident_to_col_name(alias.clone())),
-                },
-            );
-            scope_item.expr = Some(sql_expr.clone());
+                })
+                .chain(maybe_name.into_iter())
+                .collect(),
+                expr: Some(sql_expr.clone()),
+                nameable: true,
+            };
             Ok(vec![(expr, scope_item)])
         }
         SelectItem::Wildcard => select_all_scope
@@ -848,8 +903,8 @@ fn plan_join_constraint<'a>(
                     //
                     // Note that this is a MySQL-ism; PostgreSQL does not do
                     // this sort of equivalence detection for ON constraints.
-                    let right_names =
-                        std::mem::replace(&mut product_scope.items[r].names, Vec::new());
+                    product_scope.items[r].nameable = false;
+                    let right_names = product_scope.items[r].names.clone();
                     product_scope.items[l].names.extend(right_names);
                 }
             }
@@ -857,7 +912,7 @@ fn plan_join_constraint<'a>(
                 left: Box::new(left),
                 right: Box::new(right),
                 on,
-                kind: kind.clone(),
+                kind,
             };
             (joined, product_scope)
         }
@@ -871,7 +926,7 @@ fn plan_join_constraint<'a>(
             left_scope,
             right,
             right_scope,
-            kind.clone(),
+            kind,
         )?,
         JoinConstraint::Natural => {
             let mut column_names = vec![];
@@ -894,7 +949,7 @@ fn plan_join_constraint<'a>(
                 left_scope,
                 right,
                 right_scope,
-                kind.clone(),
+                kind,
             )?
         }
     };
@@ -917,8 +972,8 @@ fn plan_using_constraint(
     let mut new_items = vec![];
     let mut dropped_columns = HashSet::new();
     for column_name in column_names {
-        let (l, l_item) = left_scope.resolve_column(column_name)?;
-        let (r, r_item) = right_scope.resolve_column(column_name)?;
+        let (l, _) = left_scope.resolve_column(column_name)?;
+        let (r, _) = right_scope.resolve_column(column_name)?;
         let l = match l {
             ColumnRef::Inner(l) => l,
             ColumnRef::Outer(_) => bail!(
@@ -945,9 +1000,13 @@ fn plan_using_constraint(
                 ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r)),
             ],
         });
-        let mut names = l_item.names.clone();
-        names.extend(r_item.names.clone());
-        new_items.push(ScopeItem { names, expr: None });
+        let mut names = left_scope.items[l].names.clone();
+        names.extend(right_scope.items[r].names.clone());
+        new_items.push(ScopeItem {
+            names,
+            expr: None,
+            nameable: true,
+        });
         dropped_columns.insert(l);
         dropped_columns.insert(left_scope.len() + r);
     }
@@ -999,24 +1058,34 @@ fn plan_expr<'a>(
     e: &'a Expr,
     type_hint: Option<ScalarType>,
 ) -> Result<ScalarExpr, failure::Error> {
-    if let Some((i, _)) = ecx.scope.resolve_expr(e) {
+    let (expr, _scope_item) = plan_expr_returning_name(catalog, ecx, e, type_hint)?;
+    Ok(expr)
+}
+
+fn plan_expr_returning_name<'a>(
+    catalog: &Catalog,
+    ecx: &'a ExprContext,
+    e: &Expr,
+    type_hint: Option<ScalarType>,
+) -> Result<(ScalarExpr, Option<ScopeItemName>), failure::Error> {
+    if let Some((i, name)) = ecx.scope.resolve_expr(e) {
         // surprise - we already calculated this expr before
-        Ok(ScalarExpr::Column(i))
+        Ok((ScalarExpr::Column(i), name.cloned()))
     } else {
-        match e {
+        Ok(match e {
             Expr::Identifier(name) => {
-                let (i, _) = ecx
+                let (i, name) = ecx
                     .scope
                     .resolve_column(&names::ident_to_col_name(name.clone()))?;
-                Ok(ScalarExpr::Column(i))
+                (ScalarExpr::Column(i), Some(name.clone()))
             }
             Expr::CompoundIdentifier(names) => {
                 if names.len() == 2 {
-                    let (i, _) = ecx.scope.resolve_table_column(
+                    let (i, name) = ecx.scope.resolve_table_column(
                         &(&names[0]).try_into()?,
                         &names::ident_to_col_name(names[1].clone()),
                     )?;
-                    Ok(ScalarExpr::Column(i))
+                    (ScalarExpr::Column(i), Some(name.clone()))
                 } else {
                     bail!(
                         "compound identifier {} with more than two identifiers is not supported",
@@ -1024,7 +1093,7 @@ fn plan_expr<'a>(
                     );
                 }
             }
-            Expr::Value(val) => plan_literal(catalog, val),
+            Expr::Value(val) => (plan_literal(catalog, val)?, None),
             Expr::Wildcard { .. } | Expr::QualifiedWildcard(_) => {
                 bail!("wildcard in invalid position")
             }
@@ -1045,40 +1114,54 @@ fn plan_expr<'a>(
                         }
                     }
                 }
-                Ok(ScalarExpr::Parameter(*n))
+                (ScalarExpr::Parameter(*n), None)
             }
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            Expr::IsNull(expr) => plan_is_null_expr(catalog, ecx, expr, false),
-            Expr::IsNotNull(expr) => plan_is_null_expr(catalog, ecx, expr, true),
-            Expr::UnaryOp { op, expr } => plan_unary_op(catalog, ecx, op, expr),
-            Expr::BinaryOp { op, left, right } => plan_binary_op(catalog, ecx, op, left, right),
+            Expr::IsNull(expr) => (plan_is_null_expr(catalog, ecx, expr, false)?, None),
+            Expr::IsNotNull(expr) => (plan_is_null_expr(catalog, ecx, expr, true)?, None),
+            Expr::UnaryOp { op, expr } => (plan_unary_op(catalog, ecx, op, expr)?, None),
+            Expr::BinaryOp { op, left, right } => {
+                (plan_binary_op(catalog, ecx, op, left, right)?, None)
+            }
             Expr::Between {
                 expr,
                 low,
                 high,
                 negated,
-            } => plan_between(catalog, ecx, expr, low, high, *negated),
+            } => (plan_between(catalog, ecx, expr, low, high, *negated)?, None),
             Expr::InList {
                 expr,
                 list,
                 negated,
-            } => plan_in_list(catalog, ecx, expr, list, *negated),
+            } => (plan_in_list(catalog, ecx, expr, list, *negated)?, None),
             Expr::Case {
                 operand,
                 conditions,
                 results,
                 else_result,
-            } => plan_case(catalog, ecx, operand, conditions, results, else_result),
-            Expr::Nested(expr) => plan_expr(catalog, ecx, expr, type_hint),
-            Expr::Cast { expr, data_type } => plan_cast(catalog, ecx, expr, data_type),
-            Expr::Function(func) => plan_function(catalog, ecx, func),
+            } => (
+                plan_case(catalog, ecx, operand, conditions, results, else_result)?,
+                None,
+            ),
+            Expr::Nested(expr) => (plan_expr(catalog, ecx, expr, type_hint)?, None),
+            Expr::Cast { expr, data_type } => (plan_cast(catalog, ecx, expr, data_type)?, None),
+            Expr::Function(func) => {
+                let expr = plan_function(catalog, ecx, func)?;
+                let name = ScopeItemName {
+                    table_name: None,
+                    column_name: Some(names::ident_to_col_name(
+                        func.name.0.last().unwrap().clone(),
+                    )),
+                };
+                (expr, Some(name))
+            }
             Expr::Exists(query) => {
                 if !ecx.allow_subqueries {
                     bail!("{} does not allow subqueries", ecx.name)
                 }
                 let qcx = ecx.derived_query_context();
                 let (expr, _scope) = plan_subquery(catalog, &qcx, query)?;
-                Ok(expr.exists())
+                (expr.exists(), None)
             }
             Expr::Subquery(query) => {
                 if !ecx.allow_subqueries {
@@ -1093,17 +1176,21 @@ fn plan_expr<'a>(
                         column_types.len()
                     );
                 }
-                Ok(expr.select())
+                (expr.select(), None)
             }
             Expr::Any {
                 left,
                 op,
                 right,
                 some: _,
-            } => plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::Any),
-            Expr::All { left, op, right } => {
-                plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::All)
-            }
+            } => (
+                plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::Any)?,
+                None,
+            ),
+            Expr::All { left, op, right } => (
+                plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::All)?,
+                None,
+            ),
             Expr::InSubquery {
                 expr,
                 subquery,
@@ -1116,11 +1203,17 @@ fn plan_expr<'a>(
                 if *negated {
                     // `<expr> NOT IN (<subquery>)` is equivalent to
                     // `<expr> <> ALL (<subquery>)`.
-                    plan_any_or_all(catalog, ecx, expr, &NotEq, subquery, AggregateFunc::All)
+                    (
+                        plan_any_or_all(catalog, ecx, expr, &NotEq, subquery, AggregateFunc::All)?,
+                        None,
+                    )
                 } else {
                     // `<expr> IN (<subquery>)` is equivalent to
                     // `<expr> = ANY (<subquery>)`.
-                    plan_any_or_all(catalog, ecx, expr, &Eq, subquery, AggregateFunc::Any)
+                    (
+                        plan_any_or_all(catalog, ecx, expr, &Eq, subquery, AggregateFunc::Any)?,
+                        None,
+                    )
                 }
             }
             Expr::Extract { field, expr } => {
@@ -1190,10 +1283,10 @@ fn plan_expr<'a>(
                         other
                     ),
                 };
-                Ok(expr.call_unary(func))
+                (expr.call_unary(func), None)
             }
             Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
-        }
+        })
     }
 }
 
@@ -1297,6 +1390,7 @@ fn plan_any_or_all<'a>(
             column_name: Some(ColumnName::from(right_name.clone())),
         }],
         expr: None,
+        nameable: true,
     });
     let any_ecx = ExprContext {
         qcx: &qcx,
@@ -1497,6 +1591,33 @@ fn plan_function<'a>(
                     ),
                     _ => unreachable!(),
                 })
+            }
+
+            "make_timestamp" => {
+                if sql_func.args.len() != 6 {
+                    bail!(
+                        "make_timestamp expects six arguments, got {}",
+                        sql_func.args.len()
+                    );
+                }
+
+                let mut exprs = Vec::new();
+                for arg in &sql_func.args[..5] {
+                    let expr = plan_expr(catalog, ecx, arg, Some(ScalarType::Int64))?;
+                    let expr = promote_int_int64(ecx, "make_timestamp", expr)?;
+                    exprs.push(expr);
+                }
+                {
+                    let expr =
+                        plan_expr(catalog, ecx, &sql_func.args[5], Some(ScalarType::Float64))?;
+                    let expr = promote_decimal_float64(ecx, "make_timestamp", expr)?;
+                    exprs.push(expr);
+                }
+                let expr = ScalarExpr::CallVariadic {
+                    func: VariadicFunc::MakeTimestamp,
+                    exprs,
+                };
+                Ok(expr)
             }
 
             "mod" => {
@@ -1704,39 +1825,44 @@ fn plan_function<'a>(
                 plan_cast_internal(ecx, "internal.avg_promotion", expr, output_type)
             }
 
-            // Currently only implement this specific case from Metabase:
-            // to_char(current_timestamp(), 'YYYY-MM-DD HH24:MI:SS.MS TZ')
             "to_char" => {
                 if sql_func.args.len() != 2 {
                     bail!("to_char requires exactly two arguments");
                 }
 
-                // &sql_func.args[0] should be current_timestamp()/now()
-                let timestamp_func = plan_expr(
+                let ts_expr = plan_expr(
                     catalog,
                     ecx,
                     &sql_func.args[0],
                     Some(ScalarType::TimestampTz),
                 )?;
-                let typ = ecx.column_type(&timestamp_func);
-                if typ.scalar_type != ScalarType::TimestampTz && typ.scalar_type != ScalarType::Null
-                {
-                    bail!("to_char() currently only implemented for timestamps");
+                let ts_type = ecx.column_type(&ts_expr);
+                match ts_type.scalar_type {
+                    ScalarType::Timestamp | ScalarType::TimestampTz | ScalarType::Null => (),
+                    other => bail!("to_char requires a timestamp or timestamptz as its first argument, but got: {}", other)
                 }
 
-                let format_string =
+                let fmt_expr =
                     plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::String))?;
-                let typ = ecx.column_type(&format_string);
-                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null {
-                    bail!("to_char() requires a format string as the second parameter");
+                let fmt_typ = ecx.column_type(&fmt_expr);
+                if fmt_typ.scalar_type != ScalarType::String
+                    && fmt_typ.scalar_type != ScalarType::Null
+                {
+                    bail!(
+                        "to_char requires a string as its second arugment, but got: {}",
+                        fmt_typ.scalar_type
+                    );
                 }
 
-                let expr = ScalarExpr::CallBinary {
-                    func: BinaryFunc::ToChar,
-                    expr1: Box::new(timestamp_func),
-                    expr2: Box::new(format_string),
-                };
-                Ok(expr)
+                Ok(ScalarExpr::CallBinary {
+                    func: if ts_type.scalar_type == ScalarType::Timestamp {
+                        BinaryFunc::ToCharTimestamp
+                    } else {
+                        BinaryFunc::ToCharTimestampTz
+                    },
+                    expr1: Box::new(ts_expr),
+                    expr2: Box::new(fmt_expr),
+                })
             }
 
             "date_trunc" => {
@@ -1853,20 +1979,7 @@ fn plan_binary_op<'a>(
         Or => plan_boolean_op(catalog, ecx, BooleanOp::Or, left, right),
 
         Plus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Plus, left, right),
-        Minus => {
-            // TODO(jamii) We can't just dispatch on type here because our type inference is kind of hacky
-            // but backtracking doesn't quite work either because parameter types are set in a mutable global map during planning.
-            // This calls for a bidirectional type inference - https://github.com/MaterializeInc/materialize/issues/1274
-            let old_param_types = ecx.qcx.param_types.borrow().clone();
-            let plan = plan_json_op(catalog, ecx, JsonOp::Delete, left, right);
-            match plan {
-                Ok(plan) => Ok(plan),
-                Err(_) => {
-                    *ecx.qcx.param_types.borrow_mut() = old_param_types;
-                    plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right)
-                }
-            }
-        }
+        Minus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right),
         Multiply => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Multiply, left, right),
         Divide => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Divide, left, right),
         Modulus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Modulo, left, right),
@@ -1966,33 +2079,32 @@ fn plan_arithmetic_op<'a>(
             let mut ltype = ecx.column_type(&lexpr);
             let mut rtype = ecx.column_type(&rexpr);
 
-            let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Decimal(_, _), Decimal(_, _)) => true,
-                _ => false,
+            // When both inputs are already decimals, we skip coalescing, which
+            // could result in a rescale if the decimals have different
+            // precisions, because we tightly control the rescale when planning
+            // the arithmetic operation (below). E.g., decimal multiplication
+            // does not need to rescale its inputs, even when the inputs have
+            // different scales.
+            //
+            // Similarly, if either input is a timelike or JSON, we skip
+            // coalescing. Timelike values have well-defined operations with
+            // intervals, and JSON values have well-defined operations with
+            // strings and integers, so attempting to homogeneous the types will
+            // cause us to miss out on the overload.
+            let coalesce = match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Decimal(_, _), Decimal(_, _))
+                | (Date, _)
+                | (Timestamp, _)
+                | (TimestampTz, _)
+                | (_, Date)
+                | (_, Timestamp)
+                | (_, TimestampTz)
+                | (Jsonb, _)
+                | (_, Jsonb) => false,
+                _ => true,
             };
-            let timelike_and_interval = match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Date, Interval)
-                | (Timestamp, Interval)
-                | (TimestampTz, Interval)
-                | (Interval, Date)
-                | (Interval, Timestamp)
-                | (Interval, TimestampTz) => true,
-                _ => false,
-            };
-            if both_decimals || timelike_and_interval {
-                // When both inputs are already decimals, we skip coalescing,
-                // which could result in a rescale if the decimals have
-                // different precisions, because we tightly control the rescale
-                // when planning the arithmetic operation (below). E.g., decimal
-                // multiplication does not need to rescale its inputs, even when
-                // the inputs have different scales.
-                //
-                // Similarly, if the inputs are a timelike and an interval, we
-                // skip coalescing, because adding and subtracting intervals and
-                // timelikes is well defined.
-            } else {
-                // Otherwise, try to find a common type that can represent both
-                // inputs.
+            if coalesce {
+                // Try to find a common type that can represent both inputs.
                 let best_target_type =
                     best_target_type(vec![ltype.scalar_type.clone(), rtype.scalar_type.clone()])
                         .unwrap();
@@ -2024,8 +2136,8 @@ fn plan_arithmetic_op<'a>(
         // One of the inputs is a parameter of unknown type, but the other is
         // not.
         (swap @ false, true) | (swap @ true, false) => {
-            // Knowing the type of one input is sufficiently constraining to
-            // allow us to infer the type of the unknown input.
+            // Knowing the type of one input is often sufficiently constraining
+            // to allow us to infer the type of the unknown input.
 
             // First, adjust so the known input is on the left.
             let (left, right) = if swap { (right, left) } else { (left, right) };
@@ -2035,9 +2147,12 @@ fn plan_arithmetic_op<'a>(
             let ltype = ecx.column_type(&lexpr);
 
             // Infer the unknown type. Dates and timestamps want an interval for
-            // arithmetic. Everything else wants its own type.
+            // arithmetic. JSON wants an int *or* a string for the removal
+            // (minus) operator, but according to Postgres we can just pick
+            // string. Everything else wants its own type.
             let type_hint = match ltype.scalar_type.clone() {
                 Date | Timestamp | TimestampTz => Interval,
+                Jsonb => String,
                 other => other,
             };
             let rexpr = plan_expr(catalog, ecx, right, Some(type_hint))?;
@@ -2139,8 +2254,18 @@ fn plan_arithmetic_op<'a>(
             (Int64, Int64) => SubInt64,
             (Float32, Float32) => SubFloat32,
             (Float64, Float64) => SubFloat64,
+            (Timestamp, Timestamp) => SubTimestamp,
+            (TimestampTz, TimestampTz) => SubTimestampTz,
             (Timestamp, Interval) => SubTimestampInterval,
             (TimestampTz, Interval) => SubTimestampTzInterval,
+            (Jsonb, Int32) => {
+                rexpr = rexpr.call_unary(UnaryFunc::CastInt32ToInt64);
+                JsonbDeleteInt64
+            }
+            (Jsonb, Int64) => JsonbDeleteInt64,
+            (Jsonb, String) => JsonbDeleteString,
+            // TODO(jamii) there should be corresponding overloads for
+            // Array(Int64) and Array(String)
             _ => bail!(
                 "no overload for {} - {}",
                 ltype.scalar_type,
@@ -2321,15 +2446,6 @@ fn plan_json_op(
             .call_unary(UnaryFunc::CastStringToJsonb)
             .call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
         (ContainedInJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
-
-        (Delete, Jsonb, Int32) => lexpr.call_binary(
-            rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
-            BinaryFunc::JsonbDeleteInt64,
-        ),
-        (Delete, Jsonb, Int64) => lexpr.call_binary(rexpr, BinaryFunc::JsonbDeleteInt64),
-        (Delete, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbDeleteString),
-        // TODO(jamii) there should be corresponding overloads for Array(Int64) and Array(String)
-        (Delete, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         // TODO(jamii) these require sql arrays
         (ContainsAnyFields, _, _) => bail!("Unsupported json operator: {}", op),
@@ -2639,7 +2755,6 @@ enum JsonOp {
     DeletePath,
     ContainsPath,
     ApplyPathPredicate,
-    Delete,
 }
 
 impl fmt::Display for JsonOp {
@@ -2659,7 +2774,6 @@ impl fmt::Display for JsonOp {
             DeletePath => f.write_str("#-"),
             ContainsPath => f.write_str("@?"),
             ApplyPathPredicate => f.write_str("@@"),
-            Delete => f.write_str("-"),
         }
     }
 }
@@ -2847,19 +2961,38 @@ where
     })
 }
 
+fn promote_decimal_float64<'a, S>(
+    ecx: &ExprContext<'a>,
+    name: S,
+    expr: ScalarExpr,
+) -> Result<ScalarExpr, failure::Error>
+where
+    S: fmt::Display + Copy,
+{
+    Ok(match ecx.column_type(&expr).scalar_type {
+        ScalarType::Null | ScalarType::Float64 => expr,
+        ScalarType::Float32 | ScalarType::Decimal(_, _) => {
+            plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
+        }
+        other => bail!("{} has non-decimal type {:?}", name, other,),
+    })
+}
+
 fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
-    if s2 > s1 {
-        let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
-        let factor = 10_i128.pow(u32::from(s2 - s1));
-        let factor = ScalarExpr::literal(Datum::from(factor), typ);
-        expr.call_binary(factor, BinaryFunc::MulDecimal)
-    } else if s1 > s2 {
-        let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
-        let factor = 10_i128.pow(u32::from(s1 - s2));
-        let factor = ScalarExpr::literal(Datum::from(factor), typ);
-        expr.call_binary(factor, BinaryFunc::DivDecimal)
-    } else {
-        expr
+    match s1.cmp(&s2) {
+        Ordering::Less => {
+            let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
+            let factor = 10_i128.pow(u32::from(s2 - s1));
+            let factor = ScalarExpr::literal(Datum::from(factor), typ);
+            expr.call_binary(factor, BinaryFunc::MulDecimal)
+        }
+        Ordering::Equal => expr,
+        Ordering::Greater => {
+            let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
+            let factor = 10_i128.pow(u32::from(s1 - s2));
+            let factor = ScalarExpr::literal(Datum::from(factor), typ);
+            expr.call_binary(factor, BinaryFunc::DivDecimal)
+        }
     }
 }
 

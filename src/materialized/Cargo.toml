@@ -6,30 +6,31 @@ edition = "2018"
 publish = false
 default-run = "materialized"
 
+[lib]
+path = "lib.rs"
+
 [[bin]]
 name = "materialized"
 path = "bin/materialized.rs"
 
-[lib]
-path = "lib.rs"
-
 [dependencies]
 backtrace = { version = "0.3.40", features = ["coresymbolication"] }
 comm = { path = "../comm" }
+compile-time-run = "0.2.8"
 coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.6"
 futures = "0.3"
 getopts = "0.2"
-hyper = "0.13.0"
+hyper = "0.13.1"
 jemallocator = { version = "0.3.0", features = ["profiling"] }
 lazy_static = "1.4.0"
-log = "0.4"
+log = "0.4.8"
 ore = { path = "../ore" }
 parse_duration = "2.0.1"
 pgwire = { path = "../pgwire" }
-prometheus = { version = "0.7.0", default-features = false, features = ["process"] }
+prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
 tempfile = "3.1"
 tokio = "0.2"
 
@@ -37,8 +38,6 @@ tokio = "0.2"
 chrono = "0.4"
 fallible-iterator = "0.2.0"
 itertools = "0.8.2"
-postgres = { git = "https://github.com/sfackler/rust-postgres.git", features = ["with-chrono-0_4"] }
+postgres = { version = "0.17", features = ["with-chrono-0_4"] }
 pretty_assertions = "0.6.1"
-
-[build-dependencies]
-duct = "0.13.3"
+tokio-postgres = { version = "0.5", features = ["with-chrono-0_4"] }

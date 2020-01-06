@@ -54,10 +54,7 @@ impl ReduceElision {
                                     Datum::Int64(0),
                                     column_type.clone().nullable(false),
                                 ),
-                                ScalarExpr::literal(
-                                    Datum::Int64(1),
-                                    column_type.clone().nullable(false),
-                                ),
+                                ScalarExpr::literal(Datum::Int64(1), column_type.nullable(false)),
                             )
                         }
                         // CountAll is one no matter what the input.

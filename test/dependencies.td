@@ -125,6 +125,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT X from s;
 
+> CREATE MATERIALIZED VIEW v2a AS SELECT X+1 as X from v2;
+
 > CREATE INDEX i1 ON v2(x);
 
 # Test that indexes cannot be depended upon
@@ -132,97 +134,88 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 ! CREATE MATERIALIZED VIEW v3 as SELECT * FROM i1;
 catalog item 'i1' is an index and so cannot be depended upon
 
-> CREATE INDEX i2 ON s(y);
+> CREATE INDEX i2 ON v2a(x*2);
 
-> SHOW INDEX in s;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-s     i2           y           <null>     false 1
+> SHOW INDEX in v2a;
+View  Key_name              Column_name Expression Null  Seq_in_index
+---------------------------------------------------------------------
+v2a   i2                    <null>      "x * 2"    false 1
+v2a   "\"v2a_PRIMARY_IDX\"" x           <null>     false 1
 
 > SHOW INDEX in v2;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v2    i1           x           <null>     false 1
+View  Key_name             Column_name Expression Null  Seq_in_index
+--------------------------------------------------------------------
+v2    i1                   x           <null>     false 1
+v2    "\"v2_PRIMARY_IDX\"" x           <null>     false 1
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
-> DROP VIEW v2;
+> DROP VIEW v2a;
 
-! DROP VIEW v2;
-catalog item 'v2' does not exist
+! DROP VIEW v2a;
+catalog item 'v2a' does not exist
 
-> SHOW INDEX in s;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-s     i2           y           <null>     false 1
-
-! DROP INDEX i1;
-catalog item 'i1' does not exist
-
-# Test that dependent indexes do not prevent source deletion when restrict is specified
-> DROP SOURCE s;
-
-! DROP SOURCE s;
-catalog item 's' does not exist
+> SHOW INDEX in v2;
+View  Key_name             Column_name Expression Null  Seq_in_index
+--------------------------------------------------------------------
+v2    i1                   x           <null>     false 1
+v2    "\"v2_PRIMARY_IDX\"" x           <null>     false 1
 
 ! DROP INDEX i2;
 catalog item 'i2' does not exist
 
-> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE MATERIALIZED VIEW v4 AS SELECT x, y from s;
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
-{"before": null, "after": {"x": 1, "y": "mouse"}}
-{"before": null, "after": {"x": 2, "y": "keyboard"}}
-{"before": null, "after": {"x": 3, "y": "monitor"}}
-{"before": null, "after": {"x": 1, "y": "keyboard"}}
+> CREATE MATERIALIZED VIEW v4a AS SELECT y from v4;
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
-{"before": null, "after": null}
+> CREATE INDEX i3 ON v4a(y);
 
-> CREATE MATERIALIZED VIEW v4 AS SELECT y from s;
+> SHOW INDEX in v4a;
+View  Key_name              Column_name Expression Null  Seq_in_index
+---------------------------------------------------------------------
+v4a   i3                    y           <null>     false 1
+v4a   "\"v4a_PRIMARY_IDX\"" y           <null>     false 1
 
-> CREATE INDEX i3 ON v4(y);
+> CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEX in v4;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v4    i3           y           <null>     false 1
-
-> CREATE INDEX i4 ON s(x);
-
-> SHOW INDEX in s;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-s     i4           x           <null>     false 1
+View  Key_name            Column_name Expression Null  Seq_in_index
+---------------------------------------------------------------------
+v4    i4                  x           <null>     false 1
+v4   "\"v4_PRIMARY_IDX\"" x           <null>     false 1
+v4   "\"v4_PRIMARY_IDX\"" y           <null>     false 2
 
 # Test cascade deletes associated indexes as well
-> DROP VIEW v4 CASCADE;
+> DROP VIEW v4a CASCADE;
 
-! DROP VIEW v4;
-catalog item 'v4' does not exist
+! DROP VIEW v4a;
+catalog item 'v4a' does not exist
 
 ! DROP INDEX i3;
 catalog item 'i3' does not exist
 
-> SHOW INDEX in s;
-View  Key_name     Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-s     i4           x           <null>     false 1
+> SHOW INDEX in v4;
+View  Key_name            Column_name Expression Null  Seq_in_index
+-------------------------------------------------------------------
+v4     i4                 x           <null>     false 1
+v4   "\"v4_PRIMARY_IDX\"" x           <null>     false 1
+v4   "\"v4_PRIMARY_IDX\"" y           <null>     false 2
 
-> CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from s;
+> CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEX in v5;
-View  Key_name     Column_name Expression Null  Seq_in_index
+View  Key_name            Column_name Expression Null  Seq_in_index
 ------------------------------------------------------------
-v5    i5           substr      <null>     true 1
+v5    i5                  substr      <null>     true 1
+v5   "\"v5_PRIMARY_IDX\"" substr      <null>     true 1
 
 # Test cascade deletes all indexes associated with cascaded views
-> DROP SOURCE s CASCADE;
+> DROP VIEW v4 CASCADE;
 
-! DROP SOURCE s;
-catalog item 's' does not exist
+! DROP VIEW v4;
+catalog item 'v4' does not exist
 
 ! DROP INDEX i5;
 catalog item 'i5' does not exist
@@ -232,3 +225,8 @@ catalog item 'v5' does not exist
 
 ! DROP INDEX i4;
 catalog item 'i4' does not exist
+
+#cleanup
+> DROP VIEW v2;
+
+> DROP SOURCE s;

@@ -10,22 +10,19 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
-use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
-use ordered_float::OrderedFloat;
 use tokio::io;
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::message::{
-    BackendMessage, EncryptionType, FieldFormat, FrontendMessage, TransactionStatus,
-    VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL,
+    BackendMessage, EncryptionType, FrontendMessage, TransactionStatus, VERSION_CANCEL,
+    VERSION_GSSENC, VERSION_SSL,
 };
 use ore::netio;
-use repr::{Datum, ScalarType};
 
 #[derive(Debug)]
 enum CodecError {
@@ -97,11 +94,6 @@ impl Encoder for Codec {
             return Ok(());
         }
 
-        // TODO(benesch): do we need to be smarter about avoiding allocations?
-        // At the very least, we won't need a separate buffer when BytesMut
-        // automatically grows its capacity (carllerche/bytes#170).
-        let mut buf = Vec::new();
-
         // Write type byte.
         let byte = match msg {
             BackendMessage::EncryptionResponse(_) => unreachable!(),
@@ -120,95 +112,95 @@ impl Encoder for Codec {
             BackendMessage::BindComplete => b'2',
             BackendMessage::CloseComplete => b'3',
             BackendMessage::ErrorResponse { .. } => b'E',
-            BackendMessage::CopyOutResponse => b'H',
+            BackendMessage::CopyOutResponse { .. } => b'H',
             BackendMessage::CopyData(_) => b'd',
+            BackendMessage::CopyDone => b'c',
         };
-        buf.put_u8(byte);
+        dst.put_u8(byte);
 
         // Write message length placeholder. The true length is filled in later.
-        let start_len = buf.len();
-        buf.put_u32(0);
+        let start_len = dst.len();
+        dst.put_u32(0);
 
         // Write message contents.
         match msg {
             BackendMessage::EncryptionResponse(_) => unreachable!(),
-            // psql doesn't actually care about the number of columns.
-            // It should be saved in the message if we ever need to care about it; until then,
-            // 0 is fine.
-            BackendMessage::CopyOutResponse /* (n_cols) */ => {
-                buf.put_u8(0); // textual format
-                buf.put_i16(0); // n_cols
-                /*
-                for _ in 0..n_cols {
-                    buf.put_i16(0); // textual format for this column
+            BackendMessage::CopyOutResponse {
+                overall_format,
+                column_formats,
+            } => {
+                dst.put_i8(overall_format as i8);
+                dst.put_i16(column_formats.len() as i16);
+                for format in column_formats {
+                    dst.put_i16(format as i16);
                 }
-                */
             }
-            BackendMessage::CopyData(mut data) => {
-                buf.append(&mut data);
+            BackendMessage::CopyData(data) => {
+                dst.put_slice(&data);
             }
+            BackendMessage::CopyDone => (),
             BackendMessage::AuthenticationOk => {
-                buf.put_u32(0);
+                dst.put_u32(0);
             }
             BackendMessage::RowDescription(fields) => {
-                buf.put_u16(fields.len() as u16);
+                dst.put_u16(fields.len() as u16);
                 for f in &fields {
-                    buf.put_string(&f.name.to_string());
-                    buf.put_u32(f.table_id);
-                    buf.put_u16(f.column_id);
-                    buf.put_u32(f.type_oid);
-                    buf.put_i16(f.type_len);
-                    buf.put_i32(f.type_mod);
+                    dst.put_string(&f.name.to_string());
+                    dst.put_u32(f.table_id);
+                    dst.put_u16(f.column_id);
+                    dst.put_u32(f.type_oid);
+                    dst.put_i16(f.type_len);
+                    dst.put_i32(f.type_mod);
                     // TODO: make the format correct
-                    buf.put_u16(f.format as u16);
+                    dst.put_u16(f.format as u16);
                 }
             }
             BackendMessage::DataRow(fields, formats) => {
-                buf.put_u16(fields.len() as u16);
+                dst.put_u16(fields.len() as u16);
                 for (f, ff) in fields.iter().zip(formats.iter()) {
                     if let Some(f) = f {
-                        let s: Cow<[u8]> = match ff {
-                            FieldFormat::Text => f.to_text(),
-                            FieldFormat::Binary => f.to_binary().map_err(|e| {
-                                log::error!("binary err: {}", e);
-                                unsupported_err(e)
-                            })?,
-                        };
-                        buf.put_u32(s.len() as u32);
-                        buf.put(&*s);
+                        let base = dst.len();
+                        dst.put_u32(0);
+                        f.encode(*ff, dst);
+                        let len = dst.len() - base - 4;
+                        let len = (len as u32).to_be_bytes();
+                        dst[base..base + 4].copy_from_slice(&len);
                     } else {
-                        buf.put_i32(-1);
+                        dst.put_i32(-1);
                     }
                 }
             }
             BackendMessage::CommandComplete { tag } => {
-                buf.put_string(&tag);
+                dst.put_string(&tag);
             }
             BackendMessage::ParseComplete => (),
             BackendMessage::BindComplete => (),
             BackendMessage::CloseComplete => (),
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery(status) => {
-                buf.put_u8(match status {
+                dst.put_u8(match status {
                     TransactionStatus::Idle => b'I',
                     TransactionStatus::InTransaction => b'T',
                     TransactionStatus::Failed => b'E',
                 });
             }
             BackendMessage::ParameterStatus(name, value) => {
-                buf.put_string(name);
-                buf.put_string(&value);
+                dst.put_string(name);
+                dst.put_string(&value);
             }
             BackendMessage::PortalSuspended => (),
             BackendMessage::NoData => (),
-            BackendMessage::BackendKeyData { conn_id, secret_key } => {
-                buf.put_u32(conn_id);
-                buf.put_u32(secret_key);
+            BackendMessage::BackendKeyData {
+                conn_id,
+                secret_key,
+            } => {
+                dst.put_u32(conn_id);
+                dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
-                buf.put_u16(params.len() as u16);
+                dst.put_u16(params.len() as u16);
                 for param in params {
-                    buf.put_u32(param.type_oid);
+                    dst.put_u32(param.oid());
                 }
             }
             BackendMessage::ErrorResponse {
@@ -217,25 +209,24 @@ impl Encoder for Codec {
                 message,
                 detail,
             } => {
-                buf.put_u8(b'S');
-                buf.put_string(severity.string());
-                buf.put_u8(b'C');
-                buf.put_string(code);
-                buf.put_u8(b'M');
-                buf.put_string(&message);
+                dst.put_u8(b'S');
+                dst.put_string(severity.string());
+                dst.put_u8(b'C');
+                dst.put_string(code);
+                dst.put_u8(b'M');
+                dst.put_string(&message);
                 if let Some(ref detail) = detail {
-                    buf.put_u8(b'D');
-                    buf.put_string(detail);
+                    dst.put_u8(b'D');
+                    dst.put_string(detail);
                 }
-                buf.put_u8(b'\0');
+                dst.put_u8(b'\0');
             }
         }
 
         // Overwrite length placeholder with true length.
-        let len = buf.len() - start_len;
-        NetworkEndian::write_u32(&mut buf[start_len..start_len + 4], len as u32);
+        let len = dst.len() - start_len;
+        NetworkEndian::write_u32(&mut dst[start_len..start_len + 4], len as u32);
 
-        dst.extend(buf);
         Ok(())
     }
 }
@@ -431,61 +422,38 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
-    // Actions depending on the number of format codes provided:
-    //     0 => use text for all parameters, if any exist
-    //     1 => use the specified format code for all parameters
-    //    >1 => use separate format code for each parameter
-    let parameter_format_code_count = buf.read_i16()?;
-    let mut parameter_format_codes = Vec::with_capacity(parameter_format_code_count as usize);
-    if parameter_format_code_count == 0 {
-        parameter_format_codes.push(FieldFormat::Text);
-    } else {
-        for _ in 0..parameter_format_code_count {
-            parameter_format_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
-        }
+    let mut param_formats = Vec::new();
+    for _ in 0..buf.read_i16()? {
+        let fmt = pgrepr::Format::try_from(buf.read_i16()?).map_err(input_err)?;
+        param_formats.push(fmt);
     }
 
-    let parameter_count = buf.read_i16()?;
-    // If we have fewer format codes than parameters,
-    // we're using the same format code for all parameters.
-    // Add parameter number of that format code to
-    // FrontendMessage::Bind to provide a cleaner interface.
-    if parameter_format_code_count < parameter_count {
-        for _ in 0..parameter_count - parameter_format_code_count {
-            parameter_format_codes.push(parameter_format_codes[0]);
-        }
-    }
-
-    let mut parameters = Vec::new();
-    for _ in 0..parameter_count {
-        let param_value_length = buf.read_i32()?;
-        if param_value_length == -1 {
-            // Only happens if the value is Null.
-            parameters.push(None);
+    let mut raw_params = Vec::new();
+    for _ in 0..buf.read_i16()? {
+        let len = buf.read_i32()?;
+        if len == -1 {
+            raw_params.push(None); // NULL
         } else {
-            let mut value: Vec<u8> = Vec::new();
-            for _ in 0..param_value_length {
+            // TODO(benesch): this should use bytes::Bytes to avoid the copy.
+            let mut value = Vec::new();
+            for _ in 0..len {
                 value.push(buf.read_byte()?);
             }
-            parameters.push(Some(value));
+            raw_params.push(Some(value));
         }
     }
 
-    // Actions depending on the number of result format codes provided:
-    //     0 => no result columns or all should use text
-    //     1 => use the specified format code for all results
-    //    >1 => use separate format code for each result
-    let result_formats_count = buf.read_i16()?;
-    let mut result_formats = Vec::with_capacity(result_formats_count as usize);
-    for _ in 0..result_formats_count {
-        result_formats.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
+    let mut result_formats = Vec::new();
+    for _ in 0..buf.read_i16()? {
+        let fmt = pgrepr::Format::try_from(buf.read_i16()?).map_err(input_err)?;
+        result_formats.push(fmt);
     }
 
-    let raw_parameter_bytes = RawParameterBytes::new(parameters, parameter_format_codes);
     Ok(FrontendMessage::Bind {
         portal_name,
         statement_name,
-        raw_parameter_bytes,
+        param_formats,
+        raw_params,
         result_formats,
     })
 }
@@ -594,109 +562,6 @@ impl<'a> Cursor<'a> {
     fn advance(&mut self, n: usize) {
         self.buf = &self.buf[n..]
     }
-}
-
-/// Stores raw bytes passed from Postgres to
-/// bind to prepared statements.
-#[derive(Debug)]
-pub struct RawParameterBytes {
-    parameters: Vec<Option<Vec<u8>>>,
-    parameter_format_codes: Vec<FieldFormat>,
-}
-
-impl RawParameterBytes {
-    pub fn new(
-        parameters: Vec<Option<Vec<u8>>>,
-        parameter_format_codes: Vec<FieldFormat>,
-    ) -> RawParameterBytes {
-        RawParameterBytes {
-            parameters,
-            parameter_format_codes,
-        }
-    }
-
-    pub fn decode_parameters<'a>(
-        &'a self,
-        typs: &[ScalarType],
-    ) -> Result<Vec<(Datum<'a>, ScalarType)>, failure::Error> {
-        let mut parameters = Vec::new();
-        for (i, parameter) in self.parameters.iter().enumerate() {
-            let datum = match parameter {
-                Some(bytes) => match self.parameter_format_codes[i] {
-                    FieldFormat::Binary => {
-                        RawParameterBytes::generate_datum_from_bytes(&bytes, &typs[i])?
-                    }
-                    FieldFormat::Text => {
-                        RawParameterBytes::generate_datum_from_text(&bytes, &typs[i])?
-                    }
-                },
-                None => Datum::Null,
-            };
-            parameters.push((datum, typs[i].clone()));
-        }
-        Ok(parameters)
-    }
-
-    fn generate_datum_from_bytes<'a>(
-        bytes: &'a [u8],
-        typ: &ScalarType,
-    ) -> Result<Datum<'a>, failure::Error> {
-        Ok(match typ {
-            ScalarType::Null => Datum::Null,
-            ScalarType::Bool => match bytes[0] {
-                // Rust bools are 1 byte in size.
-                0 => Datum::False,
-                _ => Datum::True,
-            },
-            ScalarType::Int32 => Datum::Int32(NetworkEndian::read_i32(&bytes)),
-            ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(&bytes)),
-            ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(&bytes).into()),
-            ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(&bytes).into()),
-            ScalarType::Bytes => Datum::Bytes(&bytes),
-            ScalarType::String => Datum::String(str::from_utf8(bytes)?),
-            _ => {
-                // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
-                failure::bail!(
-                    "Generating datum not implemented for ScalarType: {:#?}",
-                    typ
-                )
-            }
-        })
-    }
-
-    fn generate_datum_from_text<'a>(
-        bytes: &'a [u8],
-        typ: &ScalarType,
-    ) -> Result<Datum<'a>, failure::Error> {
-        let as_str = str::from_utf8(bytes)?;
-        Ok(match typ {
-            ScalarType::Null => Datum::Null,
-            ScalarType::Bool => match &*as_str {
-                "0" => Datum::False,
-                _ => Datum::True, // Note: anything non-zero is true!
-            },
-            ScalarType::Int32 => Datum::Int32(as_str.parse::<i32>()?),
-            ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>()?),
-            ScalarType::Float32 => Datum::Float32(OrderedFloat::from(as_str.parse::<f32>()?)),
-            ScalarType::Float64 => Datum::Float64(OrderedFloat::from(as_str.parse::<f64>()?)),
-            ScalarType::Bytes => Datum::Bytes(as_str.as_bytes()),
-            ScalarType::String => Datum::String(as_str),
-            _ => {
-                // todo(jldlaughlin): implement Decimal, Date, Time, Timestamp, Interval
-                failure::bail!(
-                    "Generating datum from text not implemented for ScalarType: {:#?} {:#?}",
-                    typ,
-                    as_str
-                )
-            }
-        })
-    }
-}
-
-/// Constructs an error indicating that, while the pgwire instructions were
-/// valid, we don't currently support that functionality.
-fn unsupported_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, source.into())
 }
 
 /// Constructs an error indicating that the client has violated the pgwire

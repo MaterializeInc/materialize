@@ -3,21 +3,22 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::sync::Mutex;
+use std::time::Duration;
+
+use lazy_static::lazy_static;
 use log::error;
+use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{ClientConfig, ClientContext};
 use rdkafka::{Message, Timestamp as KafkaTimestamp};
-use std::sync::Mutex;
-use std::time::Duration;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
 
-use super::util::source;
-use super::{SharedCapability, SourceStatus};
 use dataflow_types::{KafkaSourceConnector, Timestamp};
 
-use lazy_static::lazy_static;
-use prometheus::IntCounter;
+use super::util::source;
+use super::{SourceStatus, SourceToken};
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
@@ -32,7 +33,7 @@ pub fn kafka<G>(
     name: String,
     connector: KafkaSourceConnector,
     read_kafka: bool,
-) -> (Stream<G, Vec<u8>>, Option<SharedCapability>)
+) -> (Stream<G, Vec<u8>>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -94,10 +95,10 @@ where
                                 KafkaTimestamp::CreateTime(ms)
                                 | KafkaTimestamp::LogAppendTime(ms) => ms as u64,
                             };
+                            let cur = *cap.time();
                             if ms >= *cap.time() {
                                 cap.downgrade(&ms)
                             } else {
-                                let cur = *cap.time();
                                 error!(
                                     "{}: fast-forwarding out-of-order Kafka timestamp {}ms ({} -> {})",
                                     name,
@@ -121,13 +122,13 @@ where
                         // configured to unpark our thread when a new message
                         // arrives.
                         activator.activate();
-                        return SourceStatus::ScheduleAgain;
+                        return SourceStatus::Alive;
                     }
                 }
             }
             // Ensure that we poll kafka more often than the eviction timeout
             activator.activate_after(Duration::from_secs(60));
-            SourceStatus::ScheduleAgain
+            SourceStatus::Alive
         }
     });
 

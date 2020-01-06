@@ -19,19 +19,6 @@ use std::ops::Deref;
 
 /// Extension methods for [`std::option::Option`].
 pub trait OptionExt<T> {
-    /// Converts from `Option<T>` (or `&Option<T>`) to `Option<&T::Target>`.
-    ///
-    /// Leaves the original `Option` in-place, creating a new one containing a
-    /// reference to the inner type's `Deref::Target` type.
-    ///
-    /// This method is awaiting stabilization upstream ([#50264]). The `mz_`
-    /// prefix exists to avoid a warning about the upcoming stable function.
-    ///
-    /// [#50264]: https://github.com/rust-lang/rust/issues/50264
-    fn mz_as_deref(&self) -> Option<&T::Target>
-    where
-        T: Deref;
-
     /// Converts from `Option<&T>` to `Option<T::Owned>` when `T` implements
     /// [`ToOwned`].
     ///
@@ -46,13 +33,6 @@ pub trait OptionExt<T> {
 }
 
 impl<T> OptionExt<T> for Option<T> {
-    fn mz_as_deref(&self) -> Option<&T::Target>
-    where
-        T: Deref,
-    {
-        self.as_ref().map(Deref::deref)
-    }
-
     fn owned(&self) -> Option<<<T as Deref>::Target as ToOwned>::Owned>
     where
         T: Deref,

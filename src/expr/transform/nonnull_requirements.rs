@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{EvalEnv, Id, RelationExpr};
+use crate::{EvalEnv, Id, RelationExpr, UnaryTableFunc};
 
 /// Drive non-null requirements to `RelationExpr::Constant` collections.
 ///
@@ -51,7 +51,7 @@ impl NonNullRequirements {
                 columns.iter().all(|c| datums[*c] != repr::Datum::Null)
             }),
             RelationExpr::Get { id, .. } => {
-                gets.entry(*id).or_insert(Vec::new()).push(columns.clone());
+                gets.entry(*id).or_insert(Vec::new()).push(columns);
             }
             RelationExpr::Let { id, value, body } => {
                 // Let harvests any non-null requirements from its body,
@@ -89,6 +89,15 @@ impl NonNullRequirements {
                     }
                 }
                 self.action(input, new_columns, gets);
+            }
+            RelationExpr::FlatMapUnary { input, func, expr } => {
+                match func {
+                    // outputs zero rows if input is null
+                    UnaryTableFunc::JsonbEach => {
+                        expr.non_null_requirements(&mut columns);
+                    }
+                }
+                self.action(input, columns, gets);
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {

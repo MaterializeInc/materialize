@@ -18,14 +18,16 @@
 //! * Table aliases such as `foo as quux` replace the old table name.
 //! * Functions create unnamed columns, which can be named with columns aliases `(bar + 1) as more_bar`
 
-//! Additionally, most databases fold some form of CSE into name resolution so that eg `SELECT sum(x) FROM foo GROUP BY sum(x)` would be treated something like `SELECT "sum(x)" FROM foo GROUP BY sum(x) AS "sum(x)"` rather than failing to resolve `x`. We handle this by including the underlying `sqlparser::ast::Expr` in cases where this is possible.
+//! Additionally, most databases fold some form of CSE into name resolution so that eg `SELECT sum(x) FROM foo GROUP BY sum(x)` would be treated something like `SELECT "sum(x)" FROM foo GROUP BY sum(x) AS "sum(x)"` rather than failing to resolve `x`. We handle this by including the underlying `sql_parser::ast::Expr` in cases where this is possible.
 
 //! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
 
 use failure::bail;
 
+use catalog::QualName;
+use repr::ColumnName;
+
 use super::expr::ColumnRef;
-use repr::{ColumnName, QualName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItemName {
@@ -38,7 +40,13 @@ pub struct ScopeItem {
     // The canonical name should appear first in the list (e.g., the name
     // assigned by an alias.)
     pub names: Vec<ScopeItemName>,
-    pub expr: Option<sqlparser::ast::Expr>,
+    pub expr: Option<sql_parser::ast::Expr>,
+    // Whether this item is actually resolveable by its name. Non-nameable scope
+    // items are used e.g. in the scope created by an inner join, so that the
+    // duplicated key columns from the right relation do not cause ambiguous
+    // column names. Omitting the name entirely is not an option, since the name
+    // is used to label the column in the result set.
+    pub nameable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +82,7 @@ impl ScopeItem {
                 column_name,
             }],
             expr: None,
+            nameable: true,
         }
     }
 }
@@ -100,24 +109,27 @@ impl Scope {
         }
     }
 
-    pub fn from_source<I, N>(
-        table_name: Option<impl Into<QualName>>,
+    pub fn from_source<T, I, N>(
+        table_name: Option<T>,
         column_names: I,
         outer_scope: Option<Scope>,
     ) -> Self
     where
-        I: Iterator<Item = Option<N>>,
+        T: Into<QualName>,
+        I: IntoIterator<Item = Option<N>>,
         N: Into<ColumnName>,
     {
         let mut scope = Scope::empty(outer_scope);
         let table_name = table_name.map(|n| n.into());
         scope.items = column_names
+            .into_iter()
             .map(|column_name| ScopeItem {
                 names: vec![ScopeItemName {
                     table_name: table_name.clone(),
                     column_name: column_name.map(|n| n.into()),
                 }],
                 expr: None,
+                nameable: true,
             })
             .collect();
         scope
@@ -157,7 +169,7 @@ impl Scope {
         &'a self,
         matches: Matches,
         name_in_error: &str,
-    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error>
+    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error>
     where
         Matches: Fn(&ScopeItemName) -> bool,
     {
@@ -169,17 +181,19 @@ impl Scope {
             .chain(self.iter_outer_items().rev())
             .map(|(pos, item, level)| item.names.iter().map(move |name| (pos, item, level, name)))
             .flatten()
-            .filter(|(_pos, _item, _level, name)| (matches)(name));
+            .filter(|(_pos, item, _level, name)| (matches)(name) && item.nameable);
         match results.next() {
             None => bail!("column \"{}\" does not exist", name_in_error),
-            Some((pos, item, level, _name)) => {
+            Some((pos, _item, level, name)) => {
                 if results
-                    .find(|(pos2, _item, level2, _name)| pos != *pos2 && level == *level2)
+                    .find(|(pos2, item, level2, _name)| {
+                        pos != *pos2 && level == *level2 && item.nameable
+                    })
                     .is_none()
                 {
                     match level {
-                        ScopeLevel::Inner => Ok((ColumnRef::Inner(pos), item)),
-                        ScopeLevel::Outer(_) => Ok((ColumnRef::Outer(pos), item)),
+                        ScopeLevel::Inner => Ok((ColumnRef::Inner(pos), name)),
+                        ScopeLevel::Outer(_) => Ok((ColumnRef::Outer(pos), name)),
                     }
                 } else {
                     bail!("Column name {} is ambiguous", name_in_error)
@@ -191,7 +205,7 @@ impl Scope {
     pub fn resolve_column<'a>(
         &'a self,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
+    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
         self.resolve(
             |item: &ScopeItemName| item.column_name.as_ref() == Some(column_name),
             column_name.as_str(),
@@ -202,7 +216,7 @@ impl Scope {
         &'a self,
         table_name: &QualName,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
+    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
         self.resolve(
             |item: &ScopeItemName| {
                 item.table_name.as_ref() == Some(table_name)
@@ -216,13 +230,13 @@ impl Scope {
     /// Failing to find one is not an error, so this just returns Option
     pub fn resolve_expr<'a>(
         &'a self,
-        expr: &sqlparser::ast::Expr,
-    ) -> Option<(ColumnRef, &'a ScopeItem)> {
+        expr: &sql_parser::ast::Expr,
+    ) -> Option<(ColumnRef, Option<&'a ScopeItemName>)> {
         self.items
             .iter()
             .enumerate()
             .find(|(_, item)| item.expr.as_ref() == Some(expr))
-            .map(|(i, item)| (ColumnRef::Inner(i), item))
+            .map(|(i, item)| (ColumnRef::Inner(i), item.names.first()))
     }
 
     pub fn product(self, right: Self) -> Self {

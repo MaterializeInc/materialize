@@ -7,11 +7,11 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::ready;
 use futures::sink::SinkExt;
-use futures::stream::StreamExt;
+use futures::stream::{Fuse, Stream, StreamExt};
 use log::error;
 use notify::{RawEvent, RecursiveMode, Watcher};
 use timely::dataflow::Scope;
@@ -24,7 +24,7 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 use dataflow_types::Timestamp;
 
 use crate::source::util::source;
-use crate::source::{SharedCapability, SourceStatus};
+use crate::source::{SourceStatus, SourceToken};
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
@@ -39,7 +39,7 @@ pub enum FileReadStyle {
 /// This involves silently swallowing EOFs,
 /// and waiting on a Notify handle for more data to be written.
 struct ForeverTailedAsyncFile {
-    rx: std::sync::mpsc::Receiver<RawEvent>,
+    rx: Fuse<futures::channel::mpsc::UnboundedReceiver<RawEvent>>,
     inner: tokio::fs::File,
     // this field only exists to keep the watcher alive
     _w: notify::RecommendedWatcher,
@@ -56,6 +56,14 @@ impl ForeverTailedAsyncFile {
             RawEvent { op: Err(err), .. } => Err(io::Error::new(io::ErrorKind::Other, err)),
         }
     }
+
+    fn rx_pin(&mut self) -> Pin<&mut Fuse<futures::channel::mpsc::UnboundedReceiver<RawEvent>>> {
+        Pin::new(&mut self.rx)
+    }
+
+    fn inner_pin(&mut self) -> Pin<&mut tokio::fs::File> {
+        Pin::new(&mut self.inner)
+    }
 }
 
 impl AsyncRead for ForeverTailedAsyncFile {
@@ -66,15 +74,15 @@ impl AsyncRead for ForeverTailedAsyncFile {
     ) -> Poll<Result<usize, io::Error>> {
         loop {
             // First drain the buffer of pending events from notify.
-            while let Ok(event) = self.rx.try_recv() {
+            while let Poll::Ready(Some(event)) = self.rx_pin().poll_next(cx) {
                 Self::check_notify_event(event)?;
             }
             // After draining all the events, try reading the file. If we
             // run out of data, sleep until `notify` wakes us up again.
-            match ready!(Pin::new(&mut self.inner).poll_read(cx, buf))? {
-                0 => match task::block_in_place(|| self.rx.recv()) {
-                    Ok(event) => Self::check_notify_event(event)?,
-                    Err(_) => {
+            match ready!(self.inner_pin().poll_read(cx, buf))? {
+                0 => match ready!(self.rx_pin().poll_next(cx)) {
+                    Some(event) => Self::check_notify_event(event)?,
+                    None => {
                         error!("notify hung up while tailing file");
                         return Poll::Ready(Ok(0));
                     }
@@ -87,7 +95,7 @@ impl AsyncRead for ForeverTailedAsyncFile {
 
 async fn send_lines<R>(
     reader: R,
-    mut tx: futures::channel::mpsc::UnboundedSender<String>,
+    mut tx: futures::channel::mpsc::Sender<String>,
     activator: Arc<Mutex<SyncActivator>>,
 ) where
     R: AsyncRead + Unpin,
@@ -97,11 +105,14 @@ async fn send_lines<R>(
         let line = match line {
             Ok(line) => line,
             Err(err) => {
-                error!("csv source: error while reading file: {}", err);
+                error!("file source: error while reading file: {}", err);
                 return;
             }
         };
-        tx.send(line).await.expect("csv line receiver hung up");
+        if tx.send(line).await.is_err() {
+            // The receiver went away, probably due to `DROP SOURCE`
+            break;
+        }
         activator
             .lock()
             .expect("activator lock poisoned")
@@ -112,14 +123,14 @@ async fn send_lines<R>(
 
 async fn read_file_task(
     path: PathBuf,
-    tx: futures::channel::mpsc::UnboundedSender<String>,
+    tx: futures::channel::mpsc::Sender<String>,
     activator: Arc<Mutex<SyncActivator>>,
     read_style: FileReadStyle,
 ) {
     let file = match File::open(&path).await {
         Ok(file) => file,
         Err(err) => {
-            error!("csv source: unable to open file: {}", err);
+            error!("file source: unable to open file: {}", err);
             return;
         }
     };
@@ -131,16 +142,24 @@ async fn read_file_task(
             let mut w = match notify::raw_watcher(notice_tx) {
                 Ok(w) => w,
                 Err(err) => {
-                    error!("csv source: failed to create notify watcher: {}", err);
+                    error!("file source: failed to create notify watcher: {}", err);
                     return;
                 }
             };
             if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
-                error!("csv source: failed to add watch: {}", err);
+                error!("file source: failed to add watch: {}", err);
                 return;
             }
+            let (async_tx, async_rx) = futures::channel::mpsc::unbounded();
+            task::spawn_blocking(move || {
+                for msg in notice_rx {
+                    if async_tx.unbounded_send(msg).is_err() {
+                        break;
+                    }
+                }
+            });
             let file = ForeverTailedAsyncFile {
-                rx: notice_rx,
+                rx: async_rx.fuse(),
                 inner: file,
                 _w: w,
             };
@@ -155,47 +174,87 @@ pub fn file<G>(
     path: PathBuf,
     executor: &tokio::runtime::Handle,
     read_style: FileReadStyle,
-) -> (
-    timely::dataflow::Stream<G, Vec<u8>>,
-    Option<SharedCapability>,
-)
+) -> (timely::dataflow::Stream<G, Vec<u8>>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
+    const MAX_LINES_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
     let (stream, capability) = source(region, &name, move |info| {
-        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let activator = region.activator_for(&info.address[..]);
+        let (tx, mut rx) = futures::channel::mpsc::channel(MAX_LINES_PER_INVOCATION);
         if read_file {
             let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
             executor.spawn(read_file_task(path, tx, activator, read_style));
         }
         move |cap, output| {
-            while let Ok(line) = rx.try_next() {
-                match line {
-                    Some(line) => {
-                        let ms = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .expect("System time seems to be before 1970.")
-                            .as_millis() as u64;
-                        if ms >= *cap.time() {
-                            cap.downgrade(&ms)
-                        } else {
-                            let cur = *cap.time();
-                            error!(
-                                "{}: fast-forwarding out-of-order Unix timestamp {}ms ({} -> {})",
-                                n2,
-                                cur - ms,
-                                ms,
-                                cur,
-                            );
-                        };
-                        output.session(cap).give(line.into_bytes());
+            // We need to make sure we always downgrade the capability.
+            // Otherwise, the system will be stuck forever waiting for the timestamp
+            // associated with the last-read batch of lines to close.
+            //
+            // To do this, we normally downgrade to one millisecond past the current time.
+            // However, if we were *already* 1ms past the current time, we don't want to
+            // downgrade again, because if we keep repeating that logic,
+            // we could get arbitrarily far ahead of the real system time. So, in that
+            // special case, don't downgrade, but ask to be woken up again in 1ms
+            // so we can downgrade then.
+            //
+            // If we were even further past the current time than that, then the system
+            // clock has gone backwards; this is possible, especially if the user
+            // manually changes his or her system clock, but for now just match Kafka behavior by
+            // logging an error and shipping data at the capability timestamp.
+            //
+            // Example flow:
+            // * Line read at 8, we ship it and downgrade to 9
+            // * Line read at 15, we ship it and downgrade to 16
+            // * Line read at 15, we ship it (at 16, since we can't go backwards) and reschedule for 1ms in the future
+            // We wake up and see that it is 16. Regardless of whether we have lines to read, we will downgrade to 17.
+            let cap_time = *cap.time();
+            let sys_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("System time seems to be before 1970.")
+                .as_millis() as u64;
+            // If nothing else causes us to wake up, do so after a specified amount of time.
+            let mut next_activation_duration = HEARTBEAT;
+            let next_time = if cap_time > sys_time {
+                if cap_time != sys_time + 1 {
+                    error!(
+                        "{}: fast-forwarding out-of-order Unix timestamp {}ms ({} -> {})",
+                        n2,
+                        cap_time - sys_time,
+                        sys_time,
+                        cap_time,
+                    );
+                }
+                next_activation_duration = Duration::from_millis(cap_time - sys_time);
+                cap_time
+            } else {
+                cap.downgrade(&sys_time);
+                sys_time + 1
+            };
+
+            let mut lines_read = 0;
+
+            let mut session = output.session(cap);
+            while lines_read < MAX_LINES_PER_INVOCATION {
+                if let Ok(line) = rx.try_next() {
+                    match line {
+                        Some(line) => session.give(line.into_bytes()),
+                        None => return SourceStatus::Done,
                     }
-                    None => return SourceStatus::Done,
+                    lines_read += 1;
+                } else {
+                    break;
                 }
             }
-            SourceStatus::ScheduleAgain
+            if lines_read == MAX_LINES_PER_INVOCATION {
+                next_activation_duration = Default::default();
+            }
+            cap.downgrade(&next_time);
+            activator.activate_after(next_activation_duration);
+            SourceStatus::Alive
         }
     });
 

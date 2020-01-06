@@ -6,9 +6,7 @@
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::time::Duration;
-
-use postgres::{Client, Config as PgConfig, NoTls};
+use std::time::{Duration, Instant};
 
 pub type TestResult = Result<(), Box<dyn Error>>;
 
@@ -30,8 +28,8 @@ impl Config {
     }
 }
 
-pub fn start_server(config: Config) -> Result<(materialized::Server, Client), Box<dyn Error>> {
-    let server = materialized::serve(materialized::Config {
+pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
+    let server = Server(materialized::serve(materialized::Config {
         logging_granularity: Some(Duration::from_millis(10)),
         threads: 1,
         process: 0,
@@ -40,12 +38,37 @@ pub fn start_server(config: Config) -> Result<(materialized::Server, Client), Bo
         data_directory: config.data_directory,
         symbiosis_url: None,
         gather_metrics: false,
-    })?;
-    let local_addr = server.local_addr();
-    let client = PgConfig::new()
-        .host(&local_addr.ip().to_string())
-        .port(local_addr.port())
-        .user("root")
-        .connect(NoTls)?;
+        start_time: Instant::now(),
+    })?);
+    let client = server.connect()?;
     Ok((server, client))
+}
+
+pub struct Server(materialized::Server);
+
+impl Server {
+    pub fn connect(&self) -> Result<postgres::Client, Box<dyn Error>> {
+        let local_addr = self.0.local_addr();
+        Ok(postgres::Config::new()
+            .host(&local_addr.ip().to_string())
+            .port(local_addr.port())
+            .user("root")
+            .connect(postgres::NoTls)?)
+    }
+
+    pub async fn connect_async(&self) -> Result<tokio_postgres::Client, Box<dyn Error>> {
+        let local_addr = self.0.local_addr();
+        let (client, conn) = tokio_postgres::Config::new()
+            .host(&local_addr.ip().to_string())
+            .port(local_addr.port())
+            .user("root")
+            .connect(tokio_postgres::NoTls)
+            .await?;
+        tokio::spawn(async move {
+            if let Err(err) = conn.await {
+                panic!("connection error: {}", err);
+            }
+        });
+        Ok(client)
+    }
 }

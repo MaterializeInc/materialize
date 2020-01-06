@@ -19,7 +19,8 @@ use timely::communication::allocator::generic::GenericBuilder;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
-use timely::dataflow::operators::unordered_input::{ActivateCapability, UnorderedHandle};
+use timely::dataflow::operators::unordered_input::UnorderedHandle;
+use timely::dataflow::operators::ActivateCapability;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
@@ -33,11 +34,12 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
+    compare_columns, DataflowDesc, Diff, Index, IndexDesc, PeekResponse, RowSetFinishing,
+    Timestamp, Update,
 };
 use expr::{EvalEnv, GlobalId};
 use ore::future::channel::mpsc::ReceiverExt;
-use repr::{Datum, Row, RowPacker, RowUnpacker};
+use repr::{Datum, Row, RowArena};
 
 use super::render;
 use crate::arrangement::{
@@ -87,11 +89,11 @@ pub enum SequencedCommand {
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
     /// Drop the views bound to these names.
-    DropViews(Vec<GlobalId>),
+    DropViews(Vec<GlobalId>, Vec<Vec<GlobalId>>),
     /// Drop the sinks bound to these names.
     DropSinks(Vec<GlobalId>),
     /// Drop the indexes bound to these names.
-    DropIndexes(Vec<(GlobalId, Vec<expr::ScalarExpr>)>),
+    DropIndexes(Vec<IndexDesc>),
     /// Peek at a materialized view.
     Peek {
         id: GlobalId,
@@ -105,10 +107,19 @@ pub enum SequencedCommand {
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek { conn_id: u32 },
-    /// Insert `updates` into the local input named `name`.
-    Insert { id: GlobalId, updates: Vec<Update> },
-    /// Advance the timestamp for the local input named `name`.
-    AdvanceTime { id: GlobalId, to: Timestamp },
+    /// Create a local input named `id`
+    CreateLocalInput {
+        name: String,
+        index_id: GlobalId,
+        index: Index,
+        advance_to: Timestamp,
+    },
+    /// Insert `updates` into the local input named `id`.
+    Insert {
+        id: GlobalId,
+        updates: Vec<Update>,
+        advance_to: Timestamp,
+    },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which
@@ -302,7 +313,7 @@ where
                     move |time, data| m_logger.publish_batch(time, data),
                 );
 
-            // Install traces as maintained views.
+            // Install traces as maintained indexes
             for (log, (key, trace)) in t_traces {
                 self.traces
                     .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
@@ -419,19 +430,13 @@ where
         match cmd {
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        for (view_id, _view) in dataflow.views.iter() {
-                            if self.traces.traces.contains_key(&view_id) {
-                                panic!("View already installed: {}", view_id);
-                            }
-                            logger.log(MaterializedEvent::Dataflow(*view_id, true));
+                    for (id, index_desc, _) in dataflow.index_exports.iter() {
+                        self.reported_frontiers
+                            .entry(index_desc.on_id)
+                            .or_insert_with(|| Antichain::from_elem(0));
+                        if let Some(logger) = self.materialized_logger.as_mut() {
+                            logger.log(MaterializedEvent::Dataflow(*id, true));
                         }
-                    }
-                    for (view_id, _view) in dataflow.views.iter() {
-                        let prior = self
-                            .reported_frontiers
-                            .insert(*view_id, Antichain::from_elem(0));
-                        assert!(prior == None);
                     }
 
                     render::build_dataflow(
@@ -439,7 +444,6 @@ where
                         &mut self.traces,
                         self.inner,
                         &mut self.sink_tokens,
-                        &mut self.local_inputs,
                         &mut self.materialized_logger,
                         &self.executor,
                     );
@@ -452,16 +456,18 @@ where
                 }
             }
 
-            SequencedCommand::DropViews(ids) => {
-                for id in ids {
-                    if self.traces.del_collection_traces(id).is_some() {
+            SequencedCommand::DropViews(view_ids, index_ids) => {
+                for (view_id, index_id_set) in view_ids.iter().zip(index_ids.iter()) {
+                    if self.traces.del_collection_traces(*view_id).is_some() {
                         if let Some(logger) = self.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(id, false));
+                            for index_id in index_id_set {
+                                logger.log(MaterializedEvent::Dataflow(*index_id, false));
+                            }
                         }
+                        self.reported_frontiers
+                            .remove(view_id)
+                            .expect("Dropped view with no frontier");
                     }
-                    self.reported_frontiers
-                        .remove(&id)
-                        .expect("Dropped view with no frontier");
                 }
             }
 
@@ -471,9 +477,9 @@ where
                 }
             }
 
-            SequencedCommand::DropIndexes(trace_keys) => {
-                for (id, keys) in trace_keys {
-                    self.traces.del_user_trace(id, &keys);
+            SequencedCommand::DropIndexes(index_descs) => {
+                for index_desc in index_descs {
+                    self.traces.del_trace(&index_desc);
                 }
             }
 
@@ -540,7 +546,33 @@ where
                 })
             }
 
-            SequencedCommand::Insert { id, updates } => {
+            SequencedCommand::CreateLocalInput {
+                name,
+                index_id,
+                index,
+                advance_to,
+            } => {
+                let view_id = index.desc.on_id;
+                render::build_local_input(
+                    &mut self.traces,
+                    self.inner,
+                    &mut self.local_inputs,
+                    index_id,
+                    &name,
+                    index,
+                );
+                self.reported_frontiers
+                    .insert(view_id, Antichain::from_elem(0));
+                if let Some(input) = self.local_inputs.get_mut(&view_id) {
+                    input.capability.downgrade(&advance_to);
+                }
+            }
+
+            SequencedCommand::Insert {
+                id,
+                updates,
+                advance_to,
+            } => {
                 if let Some(input) = self.local_inputs.get_mut(&id) {
                     let mut session = input.handle.session(input.capability.clone());
                     for update in updates {
@@ -548,11 +580,8 @@ where
                         session.give((update.row, update.timestamp, update.diff));
                     }
                 }
-            }
-
-            SequencedCommand::AdvanceTime { id, to } => {
-                if let Some(input) = self.local_inputs.get_mut(&id) {
-                    input.capability.downgrade(&to);
+                for (_, local_input) in self.local_inputs.iter_mut() {
+                    local_input.capability.downgrade(&advance_to);
                 }
             }
 
@@ -667,27 +696,33 @@ impl PendingPeek {
 
     /// Collects data for a known-complete peek.
     fn collect_finished_data(&mut self) -> Vec<Row> {
-        let (mut cur, storage) = self.trace.cursor();
+        let (mut cursor, storage) = self.trace.cursor();
         let mut results = Vec::new();
-        let mut unpacker = RowUnpacker::new();
-        let mut left_unpacker = RowUnpacker::new();
-        let mut right_unpacker = RowUnpacker::new();
-        let mut temp_storage = RowPacker::new();
-        while let Some(_key) = cur.get_key(&storage) {
-            while let Some(row) = cur.get_val(&storage) {
-                let datums = unpacker.unpack(row);
+
+        // We can limit the record enumeration if i. there is a limit set,
+        // and ii. if the specified ordering is empty (specifies no order).
+        let limit = if self.finishing.order_by.is_empty() {
+            self.finishing.limit.map(|l| l + self.finishing.offset)
+        } else {
+            None
+        };
+
+        while cursor.key_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
+            while cursor.val_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
+                let row = cursor.val(&storage);
+                let datums = row.unpack();
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
-                let temp_storage = &mut temp_storage.arena();
                 if self.filter.iter().all(|predicate| {
-                    predicate.eval(&datums, &self.eval_env, temp_storage) == Datum::True
+                    let temp_storage = RowArena::new();
+                    predicate.eval(&datums, &self.eval_env, &temp_storage) == Datum::True
                 }) {
                     // Differential dataflow represents collections with binary counts,
                     // but our output representation is unary (as many rows as reported
                     // by the count). We should determine this count, and especially if
                     // it is non-zero, before producing any output data.
                     let mut copies = 0;
-                    cur.map_times(&storage, |time, diff| {
+                    cursor.map_times(&storage, |time, diff| {
                         use timely::order::PartialOrder;
                         if time.less_equal(&self.timestamp) {
                             copies += diff;
@@ -706,9 +741,9 @@ impl PendingPeek {
                         results.push(row);
                     }
                 }
-                cur.step_val(&storage);
+                cursor.step_val(&storage);
             }
-            cur.step_key(&storage)
+            cursor.step_key(&storage)
         }
 
         // If we have extracted a projection, we should re-write the order_by columns.
@@ -722,14 +757,18 @@ impl PendingPeek {
         if let Some(limit) = self.finishing.limit {
             let offset_plus_limit = limit + self.finishing.offset;
             if results.len() > offset_plus_limit {
-                pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
-                    compare_columns(
-                        &self.finishing.order_by,
-                        &left_unpacker.unpack(left.iter()),
-                        &right_unpacker.unpack(right.iter()),
-                        || left.cmp(right),
-                    )
-                });
+                // The `results` should be sorted by `Row`, which means we only
+                // need to re-order `results` when there is a non-empty order_by.
+                if !self.finishing.order_by.is_empty() {
+                    pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
+                        compare_columns(
+                            &self.finishing.order_by,
+                            &left.unpack(),
+                            &right.unpack(),
+                            || left.cmp(right),
+                        )
+                    });
+                }
                 results.truncate(offset_plus_limit);
             }
         }
@@ -738,11 +777,9 @@ impl PendingPeek {
             results
                 .iter()
                 .map({
-                    let mut unpacker = RowUnpacker::new();
-                    let mut packer = RowPacker::new();
                     move |row| {
-                        let datums = unpacker.unpack(*row);
-                        packer.pack(columns.iter().map(|i| datums[*i]))
+                        let datums = row.unpack();
+                        Row::pack(columns.iter().map(|i| datums[*i]))
                     }
                 })
                 .collect()

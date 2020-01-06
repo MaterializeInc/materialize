@@ -11,24 +11,23 @@ use std::time::Instant;
 use byteorder::{ByteOrder, NetworkEndian};
 use failure::bail;
 use futures::sink::SinkExt;
-use futures::stream;
+use futures::stream::{self, TryStreamExt};
+use itertools::izip;
 use lazy_static::lazy_static;
 use log::{debug, trace};
-use prometheus::{histogram_opts, register_histogram_vec};
+use prometheus::register_histogram_vec;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
 use coord::ExecuteResponse;
-use dataflow_types::PeekResponse;
-use ore::future::OreTryStreamExt;
-use repr::{RelationDesc, Row};
+use dataflow_types::{PeekResponse, Update};
+use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::Session;
 
-use crate::codec::{Codec, RawParameterBytes};
+use crate::codec::Codec;
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::{
-    self, BackendMessage, EncryptionType, FieldFormat, FrontendMessage, ParameterDescription,
-    Severity, VERSIONS, VERSION_3,
+    self, BackendMessage, EncryptionType, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
 
@@ -57,7 +56,8 @@ lazy_static! {
         "mz_command_durations",
         "how long individual commands took",
         &["command", "status"],
-        ore::stats::HISTOGRAM_BUCKETS.to_vec()
+        ore::stats::HISTOGRAM_BUCKETS.to_vec(),
+        expose_decumulated => true
     )
     .unwrap();
 }
@@ -144,54 +144,67 @@ where
     }
 
     async fn advance_startup(&mut self, session: Session) -> Result<State, comm::Error> {
-        match self.try_recv().await? {
-            FrontendMessage::Startup { version } => self.startup(session, version).await,
-            FrontendMessage::CancelRequest {
+        match self.recv().await? {
+            Some(FrontendMessage::Startup { version }) => self.startup(session, version).await,
+            Some(FrontendMessage::CancelRequest {
                 conn_id,
                 secret_key,
-            } => self.cancel_request(conn_id, secret_key).await,
-            FrontendMessage::GssEncRequest | FrontendMessage::SslRequest => {
+            }) => self.cancel_request(conn_id, secret_key).await,
+            Some(FrontendMessage::GssEncRequest) | Some(FrontendMessage::SslRequest) => {
                 self.encryption_request(session).await
             }
+            None => Ok(State::Done),
             _ => self.fatal("08P01", "invalid startup message flow").await,
         }
     }
 
     async fn advance_ready(&mut self, session: Session) -> Result<State, comm::Error> {
-        let message = self.try_recv().await?;
+        let message = self.recv().await?;
         let timer = Instant::now();
-        let name = message.name();
+        let name = match &message {
+            Some(message) => message.name(),
+            None => "eof",
+        };
 
         let next_state = match message {
-            FrontendMessage::Query { sql } => self.query(session, sql).await?,
-            FrontendMessage::Parse { name, sql, .. } => self.parse(session, name, sql).await?,
-            FrontendMessage::Bind {
+            Some(FrontendMessage::Query { sql }) => self.query(session, sql).await?,
+            Some(FrontendMessage::Parse { name, sql, .. }) => {
+                self.parse(session, name, sql).await?
+            }
+            Some(FrontendMessage::Bind {
                 portal_name,
                 statement_name,
-                raw_parameter_bytes,
+                param_formats,
+                raw_params,
                 result_formats,
-            } => {
+            }) => {
                 self.bind(
                     session,
                     portal_name,
                     statement_name,
-                    raw_parameter_bytes,
+                    param_formats,
+                    raw_params,
                     result_formats,
                 )
                 .await?
             }
-            FrontendMessage::Execute {
+            Some(FrontendMessage::Execute {
                 portal_name,
                 max_rows,
-            } => self.execute(session, portal_name, max_rows).await?,
-            FrontendMessage::DescribeStatement { name } => {
+            }) => self.execute(session, portal_name, max_rows).await?,
+            Some(FrontendMessage::DescribeStatement { name }) => {
                 self.describe_statement(session, name).await?
             }
-            FrontendMessage::DescribePortal { name } => self.describe_portal(session, name).await?,
-            FrontendMessage::CloseStatement { name } => self.close_statement(session, name).await?,
-            FrontendMessage::ClosePortal { name } => self.close_portal(session, name).await?,
-            FrontendMessage::Sync => self.sync(session).await?,
-            FrontendMessage::Terminate => State::Done,
+            Some(FrontendMessage::DescribePortal { name }) => {
+                self.describe_portal(session, name).await?
+            }
+            Some(FrontendMessage::CloseStatement { name }) => {
+                self.close_statement(session, name).await?
+            }
+            Some(FrontendMessage::ClosePortal { name }) => self.close_portal(session, name).await?,
+            Some(FrontendMessage::Sync) => self.sync(session).await?,
+            Some(FrontendMessage::Terminate) => State::Done,
+            None => State::Done,
             _ => self.fatal("08P01", "invalid ready message flow").await?,
         };
 
@@ -210,8 +223,9 @@ where
     }
 
     async fn advance_drain(&mut self, session: Session) -> Result<State, comm::Error> {
-        match self.try_recv().await? {
-            FrontendMessage::Sync => self.sync(session).await,
+        match self.recv().await? {
+            Some(FrontendMessage::Sync) => self.sync(session).await,
+            None => Ok(State::Done),
             _ => Ok(State::Drain(session)),
         }
     }
@@ -292,11 +306,16 @@ where
             };
 
             let stmt = session.get_prepared_statement(&stmt_name).unwrap();
+            if !stmt.param_types().is_empty() {
+                return self
+                    .error(session, "42P02", "there is no parameter $1")
+                    .await;
+            }
             let row_desc = stmt.desc().cloned();
 
             // Bind.
             let params = vec![];
-            let result_formats = vec![FieldFormat::Text; stmt.result_width()];
+            let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
             session
                 .set_portal(
                     portal_name.clone(),
@@ -382,8 +401,9 @@ where
         mut session: Session,
         portal_name: String,
         statement_name: String,
-        raw_parameter_bytes: RawParameterBytes,
-        result_formats: Vec<FieldFormat>,
+        param_formats: Vec<pgrepr::Format>,
+        raw_params: Vec<Option<Vec<u8>>>,
+        result_formats: Vec<pgrepr::Format>,
     ) -> Result<State, comm::Error> {
         let stmt = match session.get_prepared_statement(&statement_name) {
             Some(stmt) => stmt,
@@ -393,28 +413,41 @@ where
                     .await;
             }
         };
+
         let param_types = stmt.param_types();
-        let params = match raw_parameter_bytes.decode_parameters(param_types) {
-            Ok(params) => params,
-            Err(err) => return self.error(session, "08P01", err.to_string()).await,
+        let param_formats = match pad_formats(param_formats, raw_params.len()) {
+            Ok(param_formats) => param_formats,
+            Err(msg) => return self.error(session, "08P01", msg).await,
         };
-        let fmts = match (
-            result_formats.len(),
+        let buf = RowArena::new();
+        let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
+        for (raw_param, typ, format) in izip!(raw_params, param_types, param_formats) {
+            match raw_param {
+                None => params.push(pgrepr::null_datum(*typ)),
+                Some(bytes) => match pgrepr::Value::decode(format, *typ, &bytes) {
+                    Ok(param) => params.push(param.into_datum(&buf)),
+                    Err(err) => {
+                        let msg = format!("unable to decode parameter: {}", err);
+                        return self.error(session, "22023", msg).await;
+                    }
+                },
+            }
+        }
+
+        let result_formats = match pad_formats(
+            result_formats,
             stmt.desc()
                 .map(|desc| desc.typ().column_types.len())
                 .unwrap_or(0),
         ) {
-            (0, e) => vec![FieldFormat::Text; e],
-            (1, e) => iter::repeat(result_formats[0]).take(e).collect(),
-            (a, e) if a == e => result_formats,
-            (a, e) => {
-                let msg = format!("expected {} field format specifiers, but got {}", e, a);
-                return self.error(session, "08P01", msg).await;
-            }
+            Ok(result_formats) => result_formats,
+            Err(msg) => return self.error(session, "08P01", msg).await,
         };
+
         session
-            .set_portal(portal_name, statement_name, params, fmts)
+            .set_portal(portal_name, statement_name, params, result_formats)
             .unwrap();
+
         self.send(BackendMessage::BindComplete).await?;
         Ok(State::Ready(session))
     }
@@ -480,10 +513,7 @@ where
             Some(stmt) => {
                 self.conn
                     .send(BackendMessage::ParameterDescription(
-                        stmt.param_types()
-                            .iter()
-                            .map(ParameterDescription::from)
-                            .collect(),
+                        stmt.param_types().to_vec(),
                     ))
                     .await?
             }
@@ -603,7 +633,7 @@ where
             }
             ExecuteResponse::SendRows(rx) => {
                 let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::send_rows");
+                    row_desc.expect("missing row description for ExecuteResponse::SendRows");
                 match rx.await? {
                     PeekResponse::Canceled => {
                         self.error(session, "57014", "canceling statement due to user request")
@@ -632,7 +662,11 @@ where
             ExecuteResponse::StartTransaction => command_complete!("BEGIN"),
             ExecuteResponse::Commit => command_complete!("COMMIT TRANSACTION"),
             ExecuteResponse::Rollback => command_complete!("ROLLBACK TRANSACTION"),
-            ExecuteResponse::Tailing { .. } => unimplemented!(),
+            ExecuteResponse::Tailing { rx } => {
+                let row_desc =
+                    row_desc.expect("missing row description for ExecuteResponse::Tailing");
+                self.stream_rows(session, row_desc, rx).await
+            }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
         }
     }
@@ -648,8 +682,7 @@ where
         let portal = session
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
-        let formats: Arc<Vec<FieldFormat>> =
-            Arc::new(portal.result_formats.iter().map(Into::into).collect());
+        let formats: Arc<Vec<pgrepr::Format>> = Arc::new(portal.result_formats.clone());
 
         self.send_all(
             if max_rows > 0 && (max_rows as usize) < rows.len() {
@@ -659,7 +692,7 @@ where
             }
             .map(move |row| {
                 BackendMessage::DataRow(
-                    message::field_values_from_row(row, row_desc.typ()),
+                    pgrepr::values_from_row(row, row_desc.typ()),
                     formats.clone(),
                 )
             }),
@@ -679,9 +712,44 @@ where
         Ok(State::Ready(session))
     }
 
-    async fn try_recv(&mut self) -> Result<FrontendMessage, comm::Error> {
-        let message = self.conn.try_recv().await?;
-        trace!("cid={} recv={:?}", self.conn_id, message);
+    async fn stream_rows(
+        &mut self,
+        session: Session,
+        row_desc: RelationDesc,
+        mut rx: comm::mpsc::Receiver<Vec<Update>>,
+    ) -> Result<State, comm::Error> {
+        let typ = row_desc.typ();
+        let column_formats = iter::repeat(pgrepr::Format::Text)
+            .take(typ.column_types.len())
+            .collect();
+        self.send(BackendMessage::CopyOutResponse {
+            overall_format: pgrepr::Format::Text,
+            column_formats,
+        })
+        .await?;
+
+        let mut count = 0;
+        while let Some(updates) = rx.try_next().await? {
+            count += updates.len();
+            let messages = updates
+                .into_iter()
+                .map(|update| BackendMessage::CopyData(message::encode_update(update, typ)));
+            self.send_all(messages).await?;
+        }
+
+        let tag = format!("COPY {}", count);
+        self.send(BackendMessage::CopyDone).await?;
+        self.send(BackendMessage::CommandComplete { tag }).await?;
+
+        self.sync(session).await
+    }
+
+    async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {
+        let message = self.conn.try_next().await?;
+        match &message {
+            Some(message) => trace!("cid={} recv={:?}", self.conn_id, message),
+            None => trace!("cid={} recv=<eof>", self.conn_id),
+        }
         Ok(message)
     }
 
@@ -742,5 +810,17 @@ where
             })
             .await?;
         Ok(State::Done)
+    }
+}
+
+fn pad_formats(formats: Vec<pgrepr::Format>, n: usize) -> Result<Vec<pgrepr::Format>, String> {
+    match (formats.len(), n) {
+        (0, e) => Ok(vec![pgrepr::Format::Text; e]),
+        (1, e) => Ok(iter::repeat(formats[0]).take(e).collect()),
+        (a, e) if a == e => Ok(formats),
+        (a, e) => Err(format!(
+            "expected {} field format specifiers, but got {}",
+            e, a
+        )),
     }
 }

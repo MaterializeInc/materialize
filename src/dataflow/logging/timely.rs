@@ -10,7 +10,7 @@ use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
-use repr::{Datum, RowPacker, RowUnpacker};
+use repr::{Datum, Row};
 use std::collections::HashMap;
 use std::time::Duration;
 use timely::communication::Allocate;
@@ -58,8 +58,6 @@ pub fn construct<A: Allocate>(
             let mut channels_data = HashMap::new();
             let mut parks_data = HashMap::new();
 
-            let mut packer = RowPacker::new();
-
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
@@ -86,7 +84,7 @@ pub fn construct<A: Allocate>(
                                 operates_data.insert((event.id, worker), event.clone());
 
                                 operates_session.give((
-                                    packer.pack(&[
+                                    Row::pack(&[
                                         Datum::Int64(event.id as i64),
                                         Datum::Int64(worker as i64),
                                         Datum::String(&event.name),
@@ -97,7 +95,7 @@ pub fn construct<A: Allocate>(
 
                                 for (addr_slot, addr_value) in event.addr.iter().enumerate() {
                                     addresses_session.give((
-                                        packer.pack(&[
+                                        Row::pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
                                             Datum::Int64(addr_slot as i64),
@@ -118,7 +116,7 @@ pub fn construct<A: Allocate>(
 
                                 // Present channel description.
                                 channels_session.give((
-                                    packer.pack(&[
+                                    Row::pack(&[
                                         Datum::Int64(event.id as i64),
                                         Datum::Int64(worker as i64),
                                         Datum::Int64(event.source.0 as i64),
@@ -133,7 +131,7 @@ pub fn construct<A: Allocate>(
                                 // Enumerate the address of the scope containing the channel.
                                 for (addr_slot, addr_value) in event.scope_addr.iter().enumerate() {
                                     addresses_session.give((
-                                        packer.pack(&[
+                                        Row::pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
                                             Datum::Int64(addr_slot as i64),
@@ -150,7 +148,7 @@ pub fn construct<A: Allocate>(
                                 // operator announcement.
                                 if let Some(event) = operates_data.remove(&(event.id, worker)) {
                                     operates_session.give((
-                                        packer.pack(&[
+                                        Row::pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
                                             Datum::String(&event.name),
@@ -161,7 +159,7 @@ pub fn construct<A: Allocate>(
 
                                     for (addr_slot, addr_value) in event.addr.iter().enumerate() {
                                         addresses_session.give((
-                                            packer.pack(&[
+                                            Row::pack(&[
                                                 Datum::Int64(event.id as i64),
                                                 Datum::Int64(worker as i64),
                                                 Datum::Int64(addr_slot as i64),
@@ -181,7 +179,7 @@ pub fn construct<A: Allocate>(
                                             for event in events {
                                                 // Retract channel description.
                                                 channels_session.give((
-                                                    packer.pack(&[
+                                                    Row::pack(&[
                                                         Datum::Int64(event.id as i64),
                                                         Datum::Int64(worker as i64),
                                                         Datum::Int64(event.source.0 as i64),
@@ -198,7 +196,7 @@ pub fn construct<A: Allocate>(
                                                     event.scope_addr.iter().enumerate()
                                                 {
                                                     addresses_session.give((
-                                                        packer.pack(&[
+                                                        Row::pack(&[
                                                             Datum::Int64(event.id as i64),
                                                             Datum::Int64(worker as i64),
                                                             Datum::Int64(addr_slot as i64),
@@ -278,7 +276,7 @@ pub fn construct<A: Allocate>(
                                         let time_ms = (time_ns / 1_000_000) as Timestamp;
                                         let time_ms =
                                             ((time_ms / granularity_ms) + 1) * granularity_ms;
-                                        session.give((key.1, time_ms, elapsed_ns));
+                                        session.give(((key.1, worker), time_ms, elapsed_ns));
                                     }
                                 }
                             }
@@ -293,8 +291,13 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map({
-                let mut packer = RowPacker::new();
-                move |(op, cnt)| packer.pack(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)])
+                move |((id, worker), cnt)| {
+                    Row::pack(&[
+                        Datum::Int64(id as i64),
+                        Datum::Int64(worker as i64),
+                        Datum::Int64(cnt as i64),
+                    ])
+                }
             });
 
         let histogram = duration
@@ -302,10 +305,10 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map({
-                let mut packer = RowPacker::new();
-                move |((op, pow), cnt)| {
-                    packer.pack(&[
-                        Datum::Int64(op as i64),
+                move |(((id, worker), pow), cnt)| {
+                    Row::pack(&[
+                        Datum::Int64(id as i64),
+                        Datum::Int64(worker as i64),
                         Datum::Int64(pow as i64),
                         Datum::Int64(cnt as i64),
                     ])
@@ -331,9 +334,8 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map({
-                let mut packer = RowPacker::new();
                 move |((w, d, r), c)| {
-                    packer.pack(&[
+                    Row::pack(&[
                         Datum::Int64(w as i64),
                         Datum::Int64(d as i64),
                         r.map(|r| Datum::Int64(r as i64)).unwrap_or(Datum::Null),
@@ -361,12 +363,9 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut unpacker = RowUnpacker::new();
-                        let mut packer = RowPacker::new();
                         move |row| {
-                            let datums = unpacker.unpack(&row);
-                            let key_row = packer.pack(key.iter().map(|k| datums[*k]));
-                            drop(datums);
+                            let datums = row.unpack();
+                            let key_row = Row::pack(key.iter().map(|k| datums[*k]));
                             (key_row, row)
                         }
                     })

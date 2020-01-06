@@ -89,6 +89,27 @@ impl ProjectionLifting {
                         .project(new_outputs);
                 }
             }
+            RelationExpr::FlatMapUnary { input, func, expr } => {
+                self.action(input, gets);
+                if let RelationExpr::Project {
+                    input: inner,
+                    outputs,
+                } = &mut **input
+                {
+                    // Retain projected columns and scalar columns.
+                    let mut new_outputs = outputs.clone();
+                    let inner_arity = inner.arity();
+                    new_outputs.extend(inner_arity..(inner_arity + func.output_arity()));
+
+                    // Rewrite scalar expression using inner columns.
+                    expr.permute(&new_outputs);
+
+                    *relation = inner
+                        .take_dangerous()
+                        .flat_map_unary(func.clone(), expr.clone())
+                        .project(new_outputs);
+                }
+            }
             RelationExpr::Filter { input, predicates } => {
                 self.action(input, gets);
                 if let RelationExpr::Project {
@@ -234,7 +255,7 @@ impl ProjectionLifting {
                     },
                 ) = (&mut **left, &mut **right)
                 {
-                    if output1 == output2 && input1.arity() == input2.arity() {
+                    if output1 == output2 && input1.typ() == input2.typ() {
                         let outputs = output1.clone();
                         **left = input1.take_dangerous();
                         **right = input2.take_dangerous();

@@ -31,22 +31,18 @@ use chrono::Utc;
 use failure::{bail, format_err};
 use postgres::params::{ConnectParams, IntoConnectParams};
 use rust_decimal::Decimal;
-use sqlparser::ast::ColumnOption;
-use sqlparser::ast::{DataType, ObjectType, Statement};
+use sql_parser::ast::ColumnOption;
+use sql_parser::ast::{DataType, ObjectType, Statement};
 
-use catalog::Catalog;
+use catalog::{Catalog, QualName};
 use ore::option::OptionExt;
 use repr::decimal::Significand;
-use repr::{
-    ColumnType, Datum, Interval, PackableRow, QualName, RelationDesc, RelationType, Row, RowPacker,
-    ScalarType,
-};
+use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 
 pub struct Postgres {
     conn: Connection,
     table_types: HashMap<QualName, (Vec<DataType>, RelationDesc)>,
-    packer: RowPacker,
 }
 
 impl Postgres {
@@ -66,11 +62,11 @@ impl Postgres {
                     .password()
                     .owned()
                     .or_else(|| env::var("PGPASSWORD").ok());
-                new_params.user(user.name(), password.mz_as_deref());
+                new_params.user(user.name(), password.as_deref());
             } else {
                 let name = env::var("PGUSER").unwrap_or_else(|_| whoami::username());
                 let password = env::var("PGPASSWORD").ok();
-                new_params.user(&name, password.mz_as_deref());
+                new_params.user(&name, password.as_deref());
             }
 
             if let Some(database) = params
@@ -110,7 +106,6 @@ END $$;
         Ok(Self {
             conn,
             table_types: HashMap::new(),
-            packer: RowPacker::new(),
         })
     }
 
@@ -157,7 +152,7 @@ END $$;
                     .map(|c| Some(sql::names::ident_to_col_name(c.name.clone())));
 
                 for constraint in constraints {
-                    use sqlparser::ast::TableConstraint;
+                    use sql_parser::ast::TableConstraint;
                     if let TableConstraint::Unique {
                         name: _,
                         columns: cols,
@@ -297,12 +292,12 @@ END $$;
         let mut rows = vec![];
         let postgres_rows = self.conn.query(&*query, &[])?;
         for postgres_row in postgres_rows.iter() {
-            // NOTE We can't use RowPacker::pack here because PostgresRow::get_opt insists on allocating data for strings,
+            // NOTE We can't use Row::pack here because PostgresRow::get_opt insists on allocating data for strings,
             // which has to live somewhere while the iterator is running.
-            let mut row = self.packer.packable();
+            let mut row = RowPacker::new();
             for c in 0..postgres_row.len() {
-                push_column(
-                    &mut row,
+                row = push_column(
+                    row,
                     &postgres_row,
                     c,
                     &sql_types[c],
@@ -316,12 +311,12 @@ END $$;
 }
 
 fn push_column(
-    row: &mut PackableRow,
+    mut row: RowPacker,
     postgres_row: &PostgresRow,
     i: usize,
     sql_type: &DataType,
     nullable: bool,
-) -> Result<(), failure::Error> {
+) -> Result<RowPacker, failure::Error> {
     // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
     // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
     match sql_type {
@@ -335,11 +330,11 @@ fn push_column(
         }
         DataType::Char(_) | DataType::Varchar(_) | DataType::Text => {
             let string = get_column_inner::<String>(postgres_row, i, nullable)?;
-            row.push(string.mz_as_deref().into());
+            row.push(string.as_deref().into());
         }
         DataType::Custom(name) if QualName::name_equals(name.clone(), "string") => {
             let string = get_column_inner::<String>(postgres_row, i, nullable)?;
-            row.push(string.mz_as_deref().into());
+            row.push(string.as_deref().into());
         }
         DataType::SmallInt => {
             let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(|i| i32::from(i));
@@ -441,14 +436,12 @@ fn push_column(
         }
         DataType::Bytea => {
             let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
-            row.push(bytes.mz_as_deref().into());
+            row.push(bytes.as_deref().into());
         }
         DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => {
             let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
             if let Some(serde) = serde {
-                let mut temp_storage = RowPacker::new();
-                let datum = expr::serde_to_datum(&mut temp_storage.arena(), serde).unwrap();
-                row.push(datum)
+                row = expr::serde_into_row(row, serde)?;
             } else {
                 row.push(Datum::Null)
             }
@@ -458,7 +451,7 @@ fn push_column(
             sql_type
         ),
     }
-    Ok(())
+    Ok(row)
 }
 
 fn get_column_inner<T>(

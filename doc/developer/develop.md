@@ -8,10 +8,8 @@ version.
 As far as external components go, Materialize has hard dependencies on [Apache
 ZooKeeper] and [Apache Kafka]. It also has an optional dependency on the
 [Confluent Schema Registry]. Conveniently, the [Confluent Platform] bundles these
-three components into a single download.
-
-Due to some change in the scope of the Confluent Platform project, you also need
-to install the [Confluent CLI] independently.
+three components into a single download, and the [Confluent CLI] allows easy
+management of the services for local development.
 
 [Rust]: https://www.rust-lang.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
@@ -98,21 +96,6 @@ cargo run --bin materialized
 Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
-
-Note that we currently depend on a private GitHub repository,
-[MaterializeInc/sqlparser], and Cargo doesn't handle this particularly well. In
-particular, you'll need to have an SSH agent running with credentials that
-allow access to the MaterializeInc GitHub organization.
-
-If you don't already have an SSH agent running, this will get you unblocked:
-
-```shell
-eval $(ssh-agent)  # Start SSH agent and export SSH_AUTH_SOCK variable.
-ssh-add            # Add default key (~/.ssh/id_rsa) to SSH agent.
-```
-
-You'll likely want to do something more clever so that an SSH agent is
-automatically started upon login, but we leave it to you to sort that out.
 
 [MaterializeInc/sqlparser]: https://github.com/MaterializeInc/sqlparser.git
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line

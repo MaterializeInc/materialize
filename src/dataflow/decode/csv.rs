@@ -3,13 +3,15 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use dataflow_types::{Diff, Timestamp};
 use differential_dataflow::Hashable;
 use log::error;
-use repr::{Datum, Row};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
+
+use super::EVENTS_COUNTER;
+use dataflow_types::{Diff, Timestamp};
+use repr::{Datum, Row};
 
 pub fn csv<G>(stream: &Stream<G, Vec<u8>>, n_cols: usize) -> Stream<G, (Row, Timestamp, Diff)>
 where
@@ -34,6 +36,7 @@ where
                         for result in csv_reader.records() {
                             let record = result.unwrap();
                             if record.len() != n_cols {
+                                EVENTS_COUNTER.csv.error.inc();
                                 error!(
                                     "CSV error: expected {} columns, got {}. Ignoring row.",
                                     n_cols,
@@ -41,6 +44,7 @@ where
                                 );
                                 continue;
                             }
+                            EVENTS_COUNTER.csv.success.inc();
                             session.give((
                                 Row::pack(record.iter().map(|s| Datum::String(s))),
                                 *cap.time(),

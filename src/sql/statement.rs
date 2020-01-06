@@ -13,23 +13,22 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use failure::{bail, ResultExt};
-use sqlparser::ast::{
+use sql_parser::ast::{
     Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
     Stage, Statement, Value,
 };
 use url::Url;
 
-use catalog::{Catalog, CatalogItem, RemoveMode};
+use catalog::{Catalog, CatalogItem, QualName, RemoveMode};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
-    IndexDesc, KafkaSinkConnector, KafkaSourceConnector, KeySql, PeekWhen, RowSetFinishing, Sink,
+    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, Sink,
     SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
-use interchange::avro;
-use ore::option::OptionExt;
+use interchange::{avro, protobuf};
 use relationexpr::{EvalEnv, Id};
-use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
@@ -49,8 +48,7 @@ pub fn describe_statement(
         | Statement::SetVariable { .. }
         | Statement::StartTransaction { .. }
         | Statement::Rollback { .. }
-        | Statement::Commit { .. }
-        | Statement::Tail { .. } => (None, vec![]),
+        | Statement::Commit { .. } => (None, vec![]),
 
         Statement::CreateSources { .. } => (
             Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
@@ -148,7 +146,7 @@ pub fn describe_statement(
             }
         }
 
-        Statement::Peek { name, .. } => {
+        Statement::Peek { name, .. } | Statement::Tail { name, .. } => {
             let sql_object = catalog.get(&name.try_into()?)?;
             (Some(sql_object.desc()?.clone()), vec![])
         }
@@ -272,7 +270,11 @@ fn handle_show_variable(
 
 fn handle_tail(catalog: &Catalog, from: &QualName) -> Result<Plan, failure::Error> {
     let entry = catalog.get(&from)?;
-    Ok(Plan::Tail(entry.clone()))
+    if let CatalogItem::View(_) = entry.item() {
+        Ok(Plan::Tail(entry.clone()))
+    } else {
+        bail!("'{}' is not a view", from);
+    }
 }
 
 fn handle_start_transaction() -> Result<Plan, failure::Error> {
@@ -321,10 +323,8 @@ fn handle_show_indexes(
         bail!("SHOW INDEXES ... WHERE is not supported");
     }
     let from_entry = catalog.get(from_name)?;
-    if !object_type_matches(ObjectType::Source, from_entry.item())
-        && !object_type_matches(ObjectType::View, from_entry.item())
-    {
-        bail!("{} is not a source or view", from_name);
+    if !object_type_matches(ObjectType::View, from_entry.item()) {
+        bail!("{} is not a view", from_name);
     }
     let rows = catalog
         .iter()
@@ -333,7 +333,7 @@ fn handle_show_indexes(
                 && entry.uses() == vec![from_entry.id()]
         })
         .flat_map(|entry| match entry.item() {
-            CatalogItem::Index(dataflow_types::Index { desc: _, raw_keys }) => {
+            CatalogItem::Index(dataflow_types::Index { raw_keys, .. }) => {
                 let mut row_subset = Vec::new();
                 for (seq_in_index, key_sql) in raw_keys.iter().enumerate() {
                     let (col_name, func) = if key_sql.is_column_name {
@@ -383,7 +383,7 @@ fn handle_show_columns(
         .map(|(name, typ)| {
             let name = name.map(|n| n.to_string());
             Row::pack(&[
-                Datum::String(name.mz_as_deref().unwrap_or("?")),
+                Datum::String(name.as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
                 Datum::String(&postgres_type_name(&typ.scalar_type)),
             ])
@@ -414,26 +414,20 @@ fn handle_show_create_source(
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
-    let source_url = if let CatalogItem::Source(Source { connector, .. }) =
-        catalog.get(&name)?.item()
-    {
-        match connector {
-            SourceConnector::Local => String::from("local://"),
-            SourceConnector::External {
-                connector: ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }),
-                ..
-            } => format!("kafka://{}/{}", addr, topic),
-            SourceConnector::External {
-                connector: ExternalSourceConnector::File(c),
-                ..
-            } => {
-                // TODO https://github.com/MaterializeInc/materialize/issues/1093
-                format!("file://{}", c.path.to_string_lossy())
+    let source_url =
+        if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
+            match &connector.connector {
+                ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
+                    format!("kafka://{}/{}", addr, topic)
+                }
+                ExternalSourceConnector::File(c) => {
+                    // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                    format!("file://{}", c.path.to_string_lossy())
+                }
             }
-        }
-    } else {
-        bail!("{} is not a source", name);
-    };
+        } else {
+            bail!("{} is not a source", name);
+        };
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name.to_string()),
         Datum::String(&source_url),
@@ -502,14 +496,37 @@ fn handle_create_dataflow(
         } => {
             let name: QualName = (&*name).try_into()?;
             let source_url = parse_source_url(url)?;
+            let mut format = KafkaSchemaFormat::Avro;
+            let mut message_name = None;
             match source_url {
                 SourceUrl::Kafka(KafkaUrl { addr, topic }) => {
                     if !with_options.is_empty() {
-                        bail!("WITH options on Kafka sources are not yet supported");
+                        for with_op in with_options {
+                            match with_op.name.value.as_str() {
+                                "format" => {
+                                    format = match &with_op.value {
+                                        Value::SingleQuotedString(s) => match s.as_ref() {
+                                            "protobuf-descriptor" => KafkaSchemaFormat::Protobuf,
+                                            "avro" => KafkaSchemaFormat::Avro,
+                                            _ => bail!("Unrecognized source format: {}", s),
+                                        },
+                                        _ => bail!("Source format must be a string"),
+                                    }
+                                }
+                                "message_name" => {
+                                    message_name = Some(match &with_op.value {
+                                        Value::SingleQuotedString(s) => s.to_string(),
+                                        _ => bail!("Message name has to be a string"),
+                                    });
+                                }
+                                _ => bail!("Unrecognized WITH option {}", with_op.name.value),
+                            }
+                        }
                     }
                     if let Some(topic) = topic {
                         if let Some(schema) = schema {
-                            let source = build_kafka_source(schema, addr, topic)?;
+                            let source =
+                                build_kafka_source(schema, addr, topic, format, message_name)?;
                             Ok(Plan::CreateSource(name, source))
                         } else {
                             bail!("Kafka sources require a schema.");
@@ -525,6 +542,7 @@ fn handle_create_dataflow(
                     let mut format = None;
                     let mut n_cols: Option<usize> = None;
                     let mut tail = false;
+                    let mut regex_str = None;
                     for with_op in with_options {
                         match with_op.name.value.as_str() {
                             "columns" => {
@@ -548,38 +566,87 @@ fn handle_create_dataflow(
                                     _ => bail!("`tail` must be a boolean."),
                                 }
                             }
+                            "regex" => {
+                                regex_str = Some(match &with_op.value {
+                                    Value::SingleQuotedString(s) => s,
+                                    _ => bail!("regex must be a string"),
+                                })
+                            }
                             _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
                         }
                     }
 
+                    if regex_str.is_some() && format.is_some() {
+                        bail!("Can't specify both `format` and `regex`.")
+                    }
+
                     let format = match format {
                         Some(f) => f,
-                        None => bail!("File source requires a `format` WITH option."),
+                        None => match regex_str {
+                            Some(s) => SourceFileFormat::Regex(s.clone()),
+                            None => {
+                                bail!("File source requires a `format` or `regex` WITH option.")
+                            }
+                        },
                     };
-                    match format {
+                    let name = name.try_into()?;
+                    let (encoding, desc) = match format {
                         SourceFileFormat::Csv => {
                             let n_cols = match n_cols {
                                 Some(n) => n,
                                 None => bail!("Csv source requires a `columns` WITH option."),
                             };
-                            let name = name.try_into()?;
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)
                                 .collect();
                             let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
-                            let source = Source {
-                                connector: SourceConnector::External {
-                                    connector: ExternalSourceConnector::File(FileSourceConnector {
-                                        path: path.clone().try_into()?,
-                                        tail,
-                                    }),
-                                    encoding: DataEncoding::Csv(CsvEncoding { n_cols }),
-                                },
-                                desc: RelationDesc::new(RelationType::new(cols), names),
-                            };
-                            Ok(Plan::CreateSource(name, source))
+                            (
+                                DataEncoding::Csv(CsvEncoding { n_cols }),
+                                RelationDesc::new(RelationType::new(cols), names),
+                            )
                         }
-                    }
+                        SourceFileFormat::Regex(s) => {
+                            let regex = match regex::Regex::new(&s) {
+                                Ok(r) => r,
+                                Err(e) => bail!("Error compiling regex: {}", e),
+                            };
+                            let unnamed_idx = &mut 0;
+                            let names: Vec<_> = regex
+                                .capture_names()
+                                // The first capture is the entire matched string.
+                                // This will often not be useful, so skip it.
+                                // If people want it they can just surround their
+                                // entire regex in an explicit capture group.
+                                .skip(1)
+                                .map(|ocn| {
+                                    ocn.map(String::from).unwrap_or_else(|| {
+                                        *unnamed_idx += 1;
+                                        format!("unnamed{}", unnamed_idx)
+                                    })
+                                })
+                                .map(|x| Some(x))
+                                .collect();
+                            let n_cols = names.len();
+                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
+                                .take(n_cols)
+                                .collect();
+                            (
+                                DataEncoding::Regex { regex },
+                                RelationDesc::new(RelationType::new(cols), names),
+                            )
+                        }
+                    };
+                    let source = Source {
+                        connector: SourceConnector {
+                            connector: ExternalSourceConnector::File(FileSourceConnector {
+                                path: path.try_into()?,
+                                tail,
+                            }),
+                            encoding,
+                        },
+                        desc,
+                    };
+                    Ok(Plan::CreateSource(name, source))
                 }
             }
         }
@@ -595,7 +662,7 @@ fn handle_create_dataflow(
             // TODO(brennan): This shouldn't be synchronous either (see CreateSource above),
             // but for now we just want it working for demo purposes...
             let schema_registry_url: Url = schema_registry.parse()?;
-            let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
+            let ccsr_client = ccsr::Client::new(schema_registry_url);
             let mut subjects = ccsr_client.list_subjects()?;
             if let Some(value) = like {
                 let like_regex = build_like_regex_from_string(value)?;
@@ -629,7 +696,7 @@ fn handle_create_dataflow(
                 .map(|(topic_name, sql_name)| {
                     Ok((
                         sql_name,
-                        build_kafka_source(
+                        build_kafka_avro_source(
                             &SourceSchema::Registry(schema_registry.to_owned()),
                             addr,
                             topic_name.to_owned(),
@@ -703,38 +770,23 @@ fn handle_create_dataflow(
         } => {
             let on_name = on_name.try_into()?;
             let (catalog_entry, keys) = query::plan_index(catalog, &on_name, key_parts)?;
+            if !object_type_matches(ObjectType::View, catalog_entry.item()) {
+                bail!("{} is not a view", on_name);
+            }
             let name = QualName::new_normalized(iter::once(name.clone()))?;
             let keys = keys
                 .into_iter()
                 .map(|x| x.lower_uncorrelated())
                 .collect::<Vec<_>>();
-            let on_relation_type = catalog_entry.desc()?.typ();
-            let nullables = keys
-                .iter()
-                .map(|key| key.typ(on_relation_type).nullable)
-                .collect::<Vec<_>>();
-            let raw_keys = key_parts
-                .iter()
-                .zip(keys.iter().zip(nullables))
-                .map(|(key_part, (key, nullable))| KeySql {
-                    raw_sql: key_part.to_string(),
-                    is_column_name: match key {
-                        relationexpr::ScalarExpr::Column(_i) => true,
-                        _ => false,
-                    },
-                    nullable,
-                })
-                .collect();
-            let index = Index {
-                desc: IndexDesc {
-                    on_id: catalog_entry.id(),
-                    relation_type: on_relation_type.clone(),
+            Ok(Plan::CreateIndex(
+                name,
+                Index::new(
+                    catalog_entry.id(),
                     keys,
-                    eval_env: EvalEnv::default(),
-                },
-                raw_keys,
-            };
-            Ok(Plan::CreateIndex(name, index))
+                    key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+                    catalog_entry.desc()?,
+                ),
+            ))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
@@ -784,6 +836,9 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
 fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Plan, failure::Error> {
     let name = name.try_into()?;
     let catalog_entry = catalog.get(&name)?.clone();
+    if !object_type_matches(ObjectType::View, catalog_entry.item()) {
+        bail!("{} is not a view", name);
+    }
     let typ = catalog_entry.desc()?.typ();
     Ok(Plan::Peek {
         source: relationexpr::RelationExpr::Get {
@@ -807,6 +862,7 @@ fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Pla
             project: (0..typ.column_types.len()).collect(),
         },
         eval_env: EvalEnv::default(),
+        materialize: false,
     })
 }
 
@@ -822,6 +878,7 @@ pub fn handle_select(
         when: PeekWhen::Immediately,
         finishing,
         eval_env: EvalEnv::default(),
+        materialize: true,
     })
 }
 
@@ -862,11 +919,33 @@ fn build_kafka_source(
     schema: &SourceSchema,
     kafka_addr: SocketAddr,
     topic: String,
+    format: KafkaSchemaFormat,
+    message_name: Option<String>,
+) -> Result<Source, failure::Error> {
+    match (format, message_name) {
+        (KafkaSchemaFormat::Avro, None) => build_kafka_avro_source(schema, kafka_addr, topic),
+        (KafkaSchemaFormat::Protobuf, Some(m)) => {
+            build_kafka_protobuf_source(schema, kafka_addr, topic, m)
+        }
+        (KafkaSchemaFormat::Avro, Some(s)) => bail!(
+            "Invalid parameter message name {} provided for Avro source",
+            s
+        ),
+        (KafkaSchemaFormat::Protobuf, None) => {
+            bail!("Missing message name parameter for a Protobuf source")
+        }
+    }
+}
+
+fn build_kafka_avro_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    topic: String,
 ) -> Result<Source, failure::Error> {
     let (key_schema, value_schema, schema_registry_url) = match schema {
         // TODO(jldlaughlin): we need a way to pass in primary key information
         // when building a source from a string
-        SourceSchema::Raw(schema) => (None, schema.to_owned(), None),
+        SourceSchema::RawOrPath(schema) => (None, schema.to_owned(), None),
 
         SourceSchema::Registry(url) => {
             // TODO(benesch): we need to fetch this schema asynchronously to
@@ -897,7 +976,7 @@ fn build_kafka_source(
     }
 
     Ok(Source {
-        connector: SourceConnector::External {
+        connector: SourceConnector {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,
@@ -911,8 +990,41 @@ fn build_kafka_source(
     })
 }
 
+fn build_kafka_protobuf_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    topic: String,
+    message_name: String,
+) -> Result<Source, failure::Error> {
+    let schema = match schema {
+        SourceSchema::RawOrPath(s) => s.to_owned(),
+        _ => bail!("Invalid schema type. Schema must be a path to a file"),
+    };
+
+    let desc = protobuf::validate_proto_schema(&message_name, &schema)?;
+    Ok(Source {
+        connector: SourceConnector {
+            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                addr: kafka_addr,
+                topic,
+            }),
+            encoding: DataEncoding::Protobuf(ProtobufEncoding {
+                descriptor_file: schema,
+                message_name,
+            }),
+        },
+        desc,
+    })
+}
+
+enum KafkaSchemaFormat {
+    Avro,
+    Protobuf,
+}
+
 enum SourceFileFormat {
     Csv,
+    Regex(String),
 }
 
 struct KafkaUrl {

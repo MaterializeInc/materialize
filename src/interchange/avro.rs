@@ -316,7 +316,6 @@ pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     fast_row_schema: Option<Schema>,
-    packer: RowPacker,
 }
 
 impl fmt::Debug for Decoder {
@@ -367,7 +366,6 @@ impl Decoder {
             reader_schema,
             writer_schemas,
             fast_row_schema,
-            packer: RowPacker::new(),
         }
     }
 
@@ -434,15 +432,14 @@ impl Decoder {
             }
         };
 
-        fn extract_row(v: Value, packer: &mut RowPacker) -> Result<Option<Row>, failure::Error> {
+        fn extract_row(v: Value) -> Result<Option<Row>, failure::Error> {
             let v = match v {
                 Value::Union(v) => *v,
                 _ => bail!("unsupported avro value: {:?}", v),
             };
             match v {
                 Value::Record(fields) => {
-                    // NOTE We can't use RowPacker::pack here because of the Result from value_to_datum
-                    let mut row = packer.packable();
+                    let mut row = RowPacker::new();
                     for (_, col) in fields.iter() {
                         row.push(value_to_datum(col)?);
                     }
@@ -458,23 +455,17 @@ impl Decoder {
         if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
             // The record is laid out such that we can extract the `before` and
             // `after` fields without decoding the entire record.
-            before = extract_row(
-                avro_rs::from_avro_datum(&schema, &mut bytes, None)?,
-                &mut self.packer,
-            )?;
-            after = extract_row(
-                avro_rs::from_avro_datum(&schema, &mut bytes, None)?,
-                &mut self.packer,
-            )?;
+            before = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
+            after = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
         } else {
             let val = avro_rs::from_avro_datum(writer_schema, &mut bytes, reader_schema)?;
             match val {
                 Value::Record(fields) => {
                     for (name, val) in fields {
                         if name == "before" {
-                            before = extract_row(val, &mut self.packer)?;
+                            before = extract_row(val)?;
                         } else if name == "after" {
-                            after = extract_row(val, &mut self.packer)?;
+                            after = extract_row(val)?;
                         } else {
                             // Intentionally ignore other fields.
                         }

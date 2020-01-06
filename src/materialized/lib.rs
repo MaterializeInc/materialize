@@ -17,8 +17,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use compile_time_run::run_command_str;
 use failure::format_err;
 use futures::channel::mpsc::{self, UnboundedSender};
 use futures::future::TryFutureExt;
@@ -33,7 +34,6 @@ use dataflow_types::logging::LoggingConfig;
 use ore::future::OreTryFutureExt;
 use ore::netio;
 use ore::netio::{SniffedStream, SniffingStream};
-use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
@@ -43,7 +43,11 @@ mod http;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The SHA identifying the Git commit at which the crate was built.
-pub const BUILD_SHA: &str = env!("MZ_GIT_SHA");
+pub const BUILD_SHA: &str = run_command_str!("git", "rev-parse", "--verify", "HEAD");
+
+/// The time in UTC at which the crate was built as an ISO 8601-compliant
+/// string.
+pub const BUILD_TIME: &str = run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ");
 
 /// Returns a human-readable version string.
 pub fn version() -> String {
@@ -73,6 +77,8 @@ pub struct Config {
     /// Whether to collect metrics. If enabled, metrics can be collected by
     /// e.g. Prometheus via the `/metrics` HTTP endpoint.
     pub gather_metrics: bool,
+    /// When the server came up
+    pub start_time: Instant,
 }
 
 impl Config {
@@ -88,6 +94,7 @@ async fn handle_connection(
     switchboard: Switchboard<SniffedStream<TcpStream>>,
     cmd_tx: UnboundedSender<coord::Command>,
     gather_metrics: bool,
+    start_time: Instant,
 ) {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
     // is a delicate business. Read too many bytes and you'll stall out
@@ -109,13 +116,14 @@ async fn handle_connection(
     let res = if pgwire::match_handshake(buf) {
         pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).await
     } else if http::match_handshake(buf) {
-        http::handle_connection(ss.into_sniffed(), gather_metrics).await
+        http::handle_connection(ss.into_sniffed(), gather_metrics, start_time).await
     } else if comm::protocol::match_handshake(buf) {
         switchboard
             .handle_connection(ss.into_sniffed())
             .err_into()
             .await
     } else {
+        log::warn!("unknown protocol connection!");
         ss.into_sniffed()
             .write_all(b"unknown protocol\n")
             .discard()
@@ -165,6 +173,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     runtime.spawn({
         let switchboard = switchboard.clone();
         let cmd_tx = Arc::downgrade(&cmd_tx);
+        let start_time = config.start_time.clone();
         async move {
             let mut incoming = listener.incoming();
             while let Some(conn) = incoming.next().await {
@@ -194,6 +203,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                             switchboard.clone(),
                             (*cmd_tx).clone(),
                             gather_metrics,
+                            start_time,
                         ));
                         continue;
                     }
@@ -226,10 +236,10 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
             num_timely_workers,
-            symbiosis_url: config.symbiosis_url.mz_as_deref(),
+            symbiosis_url: config.symbiosis_url.as_deref(),
             logging: logging_config.as_ref(),
             bootstrap_sql: config.bootstrap_sql,
-            data_directory: config.data_directory.mz_as_deref(),
+            data_directory: config.data_directory.as_deref(),
             executor: &executor,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
@@ -244,7 +254,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         config.process,
         switchboard,
         executor,
-        logging_config.clone(),
+        logging_config,
     )
     .map_err(|s| format_err!("{}", s))?;
 

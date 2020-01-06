@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::cmp;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::fmt::Write;
 use std::str::FromStr;
@@ -16,11 +16,15 @@ use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
-pub use crate::like::build_like_regex_from_string;
-use crate::EvalEnv;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
-use repr::{ColumnType, Datum, Interval, RowArena, ScalarType};
+use repr::{ColumnType, Datum, Interval, RowArena, RowPacker, ScalarType};
+
+use self::format::DateTimeFormat;
+pub use crate::like::build_like_regex_from_string;
+use crate::EvalEnv;
+
+mod format;
 
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum NullaryFunc {
@@ -29,7 +33,7 @@ pub enum NullaryFunc {
 }
 
 impl NullaryFunc {
-    pub fn func(self) -> for<'a> fn(&EvalEnv, &mut RowArena<'a>) -> Datum<'a> {
+    pub fn func(self) -> for<'a> fn(&EvalEnv, &'a RowArena) -> Datum<'a> {
         match self {
             NullaryFunc::MzLogicalTimestamp => mz_logical_time,
             NullaryFunc::Now => now,
@@ -53,18 +57,18 @@ impl fmt::Display for NullaryFunc {
     }
 }
 
-pub fn mz_logical_time<'a>(env: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mz_logical_time<'a>(env: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(
         env.logical_time
             .expect("mz_logical_time missing logical time") as i128,
     )
 }
 
-pub fn now<'a>(env: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn now<'a>(env: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(env.wall_time.expect("now missing wall time in env"))
 }
 
-pub fn and<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn and<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     match (a, b) {
         (Datum::False, _) => Datum::False,
         (_, Datum::False) => Datum::False,
@@ -75,7 +79,7 @@ pub fn and<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) ->
     }
 }
 
-pub fn or<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn or<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     match (a, b) {
         (Datum::True, _) => Datum::True,
         (_, Datum::True) => Datum::True,
@@ -86,68 +90,68 @@ pub fn or<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> 
     }
 }
 
-pub fn not<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn not<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(!a.unwrap_bool())
 }
 
-pub fn abs_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn abs_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int32().abs())
 }
 
-pub fn abs_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn abs_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int64().abs())
 }
 
-pub fn abs_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn abs_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float32().abs())
 }
 
-pub fn abs_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn abs_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float64().abs())
 }
 
-pub fn cast_bool_to_string<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_bool_to_string<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     match a.unwrap_bool() {
         true => Datum::from("true"),
         false => Datum::from("false"),
     }
 }
 
-pub fn cast_int32_to_bool<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int32_to_bool<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int32() != 0)
 }
 
 pub fn cast_int32_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_int32().to_string()))
 }
 
-pub fn cast_int32_to_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int32_to_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int32() as f32)
 }
 
-pub fn cast_int32_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int32_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_int32()))
 }
 
-pub fn cast_int32_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int32_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(i64::from(a.unwrap_int32()))
 }
 
-pub fn cast_int32_to_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int32_to_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(i128::from(a.unwrap_int32()))
 }
 
-pub fn cast_int64_to_bool<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int64_to_bool<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int64() != 0)
 }
 
-pub fn cast_int64_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int64_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // TODO(benesch): we need to do something better than panicking if the
     // datum doesn't fit in an int32, but what? Poison the whole dataflow?
     // The SQL standard says this an error, but runtime errors are complicated
@@ -155,16 +159,16 @@ pub fn cast_int64_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) 
     Datum::from(i32::try_from(a.unwrap_int64()).unwrap())
 }
 
-pub fn cast_int64_to_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int64_to_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(i128::from(a.unwrap_int64()))
 }
 
-pub fn cast_int64_to_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int64_to_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f32)
 }
 
-pub fn cast_int64_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_int64_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f64)
 }
@@ -172,18 +176,18 @@ pub fn cast_int64_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>
 pub fn cast_int64_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_int64().to_string()))
 }
 
-pub fn cast_float32_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_float32_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float32() as i64)
 }
 
-pub fn cast_float32_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_float32_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_float32()))
 }
@@ -192,7 +196,7 @@ pub fn cast_float32_to_decimal<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    _: &mut RowArena<'a>,
+    _: &'a RowArena,
 ) -> Datum<'a> {
     let f = a.unwrap_float32();
     let scale = b.unwrap_int32();
@@ -212,12 +216,12 @@ pub fn cast_float32_to_decimal<'a>(
 pub fn cast_float32_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_float32().to_string()))
 }
 
-pub fn cast_float64_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_float64_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float64() as i64)
@@ -227,7 +231,7 @@ pub fn cast_float64_to_decimal<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    _: &mut RowArena<'a>,
+    _: &'a RowArena,
 ) -> Datum<'a> {
     let f = a.unwrap_float64();
     let scale = b.unwrap_int32();
@@ -247,33 +251,25 @@ pub fn cast_float64_to_decimal<'a>(
 pub fn cast_float64_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_float64().to_string()))
 }
 
-pub fn cast_decimal_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_decimal_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as i32)
 }
 
-pub fn cast_decimal_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_decimal_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as i64)
 }
 
-pub fn cast_significand_to_float32<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn cast_significand_to_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f32)
 }
 
-pub fn cast_significand_to_float64<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn cast_significand_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f64)
 }
@@ -282,14 +278,14 @@ pub fn cast_decimal_to_string<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     // TODO(benesch): a better way to pass the scale into the dataflow layer.
     let scale = b.unwrap_int32() as u8;
     Datum::String(temp_storage.push_string(a.unwrap_decimal().with_scale(scale).to_string()))
 }
 
-pub fn cast_string_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_string_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let val: Result<f64, _> = a.unwrap_str().to_lowercase().parse();
     Datum::from(val.ok())
 }
@@ -297,66 +293,54 @@ pub fn cast_string_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a
 pub fn cast_string_to_bytes<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::Bytes(&temp_storage.push_bytes(a.unwrap_str().as_bytes().to_vec()))
 }
 
-pub fn cast_date_to_timestamp<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_date_to_timestamp<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
 }
 
-pub fn cast_date_to_timestamptz<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_date_to_timestamptz<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(
         a.unwrap_date().and_hms(0, 0, 0),
         Utc,
     ))
 }
 
-pub fn cast_date_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn cast_date_to_string<'a>(a: Datum<'a>, _: &EvalEnv, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_date().to_string()))
 }
 
-pub fn cast_timestamp_to_date<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_timestamp_to_date<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::Date(a.unwrap_timestamp().date())
 }
 
-pub fn cast_timestamp_to_timestamptz<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(a.unwrap_timestamp(), Utc))
 }
 
 pub fn cast_timestamp_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_timestamp().to_string()))
 }
 
-pub fn cast_timestamptz_to_date<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn cast_timestamptz_to_date<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::Date(a.unwrap_timestamptz().naive_utc().date())
 }
 
-pub fn cast_timestamptz_to_timestamp<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn cast_timestamptz_to_timestamp<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_timestamptz().naive_utc())
 }
 
 pub fn cast_timestamptz_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_timestamptz().to_string()))
 }
@@ -364,7 +348,7 @@ pub fn cast_timestamptz_to_string<'a>(
 pub fn cast_interval_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_interval().to_string()))
 }
@@ -372,7 +356,7 @@ pub fn cast_interval_to_string<'a>(
 pub fn cast_bytes_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     let bytes = a.unwrap_bytes();
     let mut out = String::from("\\x");
@@ -383,44 +367,50 @@ pub fn cast_bytes_to_string<'a>(
     Datum::String(temp_storage.push_string(out))
 }
 
-pub fn serde_to_datum<'a>(
-    temp_storage: &mut RowArena<'a>,
+pub fn serde_into_row(
+    mut packer: RowPacker,
     serde: serde_json::Value,
-) -> Result<Datum<'a>, failure::Error> {
+) -> Result<RowPacker, failure::Error> {
     use serde_json::Value;
-    Ok(match serde {
-        Value::Null => Datum::JsonNull,
+    match serde {
+        Value::Null => packer.push(Datum::JsonNull),
         Value::Bool(b) => {
             if b {
-                Datum::True
+                packer.push(Datum::True)
             } else {
-                Datum::False
+                packer.push(Datum::False)
             }
         }
         Value::Number(n) => {
             if let Some(f) = n.as_f64() {
-                Datum::Float64(OrderedFloat(f))
+                packer.push(Datum::Float64(OrderedFloat(f)))
             } else {
                 bail!("{} is out of range for json number", n)
             }
         }
-        Value::String(s) => Datum::String(temp_storage.push_string(s)),
+        Value::String(s) => packer.push(Datum::String(&s)),
         Value::Array(array) => {
-            let elems = array
-                .into_iter()
-                .map(|elem| serde_to_datum(temp_storage, elem))
-                .collect::<Result<Vec<_>, _>>()?;
-            Datum::List(temp_storage.push_list(elems))
+            let start = unsafe { packer.start_list() };
+            for elem in array {
+                // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
+                packer = serde_into_row(packer, elem)?;
+            }
+            unsafe { packer.finish_list(start) };
         }
         Value::Object(object) => {
-            let mut pairs = object
-                .into_iter()
-                .map(|(key, val)| Ok((key, serde_to_datum(temp_storage, val)?)))
-                .collect::<Result<Vec<_>, failure::Error>>()?;
-            pairs.sort();
-            Datum::Dict(temp_storage.push_dict(pairs))
+            let start = unsafe { packer.start_dict() };
+            let mut pairs = object.into_iter().collect::<Vec<_>>();
+            // dict keys must be in ascending order
+            pairs.sort_by(|(k1, _), (k2, _)| k1.cmp(&k2));
+            for (key, val) in pairs {
+                packer.push(Datum::String(&key));
+                // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
+                packer = serde_into_row(packer, val)?;
+            }
+            unsafe { packer.finish_dict(start) };
         }
-    })
+    }
+    Ok(packer)
 }
 
 #[allow(clippy::float_cmp)]
@@ -460,13 +450,13 @@ pub fn datum_to_serde(datum: Datum) -> serde_json::Value {
 pub fn cast_string_to_jsonb<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     match serde_json::from_str(a.unwrap_str()) {
         Err(_) => Datum::Null,
-        Ok(json) => match serde_to_datum(temp_storage, json) {
+        Ok(json) => match serde_into_row(RowPacker::new(), json) {
             Err(_) => Datum::Null,
-            Ok(datum) => datum,
+            Ok(packer) => temp_storage.push_row(packer.finish()).unpack_first(),
         },
     }
 }
@@ -475,7 +465,7 @@ pub fn cast_string_to_jsonb<'a>(
 pub fn cast_jsonb_to_string<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     Datum::String(temp_storage.push_string(datum_to_serde(a).to_string()))
 }
@@ -483,7 +473,7 @@ pub fn cast_jsonb_to_string<'a>(
 pub fn cast_jsonb_to_string_unless_string<'a>(
     a: Datum<'a>,
     eval_env: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     match a {
         Datum::JsonNull => Datum::Null,
@@ -492,19 +482,19 @@ pub fn cast_jsonb_to_string_unless_string<'a>(
     }
 }
 
-pub fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int32() + b.unwrap_int32())
 }
 
-pub fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int64() + b.unwrap_int64())
 }
 
-pub fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float32() + b.unwrap_float32())
 }
 
-pub fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float64() + b.unwrap_float64())
 }
 
@@ -512,7 +502,7 @@ pub fn add_timestamp_interval<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    _: &mut RowArena<'a>,
+    _: &'a RowArena,
 ) -> Datum<'a> {
     let dt = a.unwrap_timestamp();
     Datum::Timestamp(match b {
@@ -529,7 +519,7 @@ pub fn add_timestamptz_interval<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    _: &mut RowArena<'a>,
+    _: &'a RowArena,
 ) -> Datum<'a> {
     let dt = a.unwrap_timestamptz().naive_utc();
 
@@ -545,19 +535,19 @@ pub fn add_timestamptz_interval<'a>(
     Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
 }
 
-pub fn ceil_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn ceil_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float32().ceil())
 }
 
-pub fn ceil_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn ceil_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float64().ceil())
 }
 
-pub fn floor_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn floor_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float32().floor())
 }
 
-pub fn floor_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn floor_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float64().floor())
 }
 
@@ -565,7 +555,7 @@ pub fn sub_timestamp_interval<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     env: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     let inverse = match b {
         Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
@@ -588,7 +578,7 @@ pub fn sub_timestamptz_interval<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     env: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     let inverse = match b {
         Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
@@ -608,8 +598,6 @@ pub fn sub_timestamptz_interval<'a>(
 }
 
 fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
-    use std::convert::TryInto;
-
     if months == 0 {
         return dt;
     }
@@ -658,53 +646,61 @@ fn add_timestamp_duration(
     }
 }
 
-pub fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
-pub fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int32() - b.unwrap_int32())
 }
 
-pub fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int64() - b.unwrap_int64())
 }
 
-pub fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float32() - b.unwrap_float32())
 }
 
-pub fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float64() - b.unwrap_float64())
 }
 
-pub fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
 }
 
-pub fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+    Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
+}
+
+pub fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
+}
+
+pub fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int32() * b.unwrap_int32())
 }
 
-pub fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int64() * b.unwrap_int64())
 }
 
-pub fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float32() * b.unwrap_float32())
 }
 
-pub fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_float64() * b.unwrap_float64())
 }
 
-pub fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
 // TODO(jamii) we don't currently have any way of reporting errors from functions, so for now we just adopt sqlite's approach 1/0 = null
 
-pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_int32();
     if b == 0 {
         Datum::Null
@@ -713,7 +709,7 @@ pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'
     }
 }
 
-pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_int64();
     if b == 0 {
         Datum::Null
@@ -722,7 +718,7 @@ pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'
     }
 }
 
-pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_float32();
     if b == 0.0 {
         Datum::Null
@@ -731,7 +727,7 @@ pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena
     }
 }
 
-pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_float64();
     if b == 0.0 {
         Datum::Null
@@ -740,7 +736,7 @@ pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena
     }
 }
 
-pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_decimal();
     if b == 0 {
         Datum::Null
@@ -749,29 +745,19 @@ pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena
     }
 }
 
-pub fn ceil_decimal<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn ceil_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let decimal = a.unwrap_decimal();
     let scale = b.unwrap_int32() as u8;
     Datum::from(decimal.with_scale(scale).ceil().significand())
 }
 
-pub fn floor_decimal<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn floor_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let decimal = a.unwrap_decimal();
     let scale = b.unwrap_int32() as u8;
     Datum::from(decimal.with_scale(scale).floor().significand())
 }
 
-pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_int32();
     if b == 0 {
         Datum::Null
@@ -780,7 +766,7 @@ pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'
     }
 }
 
-pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_int64();
     if b == 0 {
         Datum::Null
@@ -789,7 +775,7 @@ pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'
     }
 }
 
-pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_float32();
     if b == 0.0 {
         Datum::Null
@@ -798,7 +784,7 @@ pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena
     }
 }
 
-pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_float64();
     if b == 0.0 {
         Datum::Null
@@ -807,7 +793,7 @@ pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena
     }
 }
 
-pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let b = b.unwrap_decimal();
     if b == 0 {
         Datum::Null
@@ -816,27 +802,27 @@ pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena
     }
 }
 
-pub fn neg_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn neg_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(-a.unwrap_int32())
 }
 
-pub fn neg_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn neg_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(-a.unwrap_int64())
 }
 
-pub fn neg_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn neg_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(-a.unwrap_float32())
 }
 
-pub fn neg_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn neg_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(-a.unwrap_float64())
 }
 
-pub fn neg_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn neg_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(-a.unwrap_decimal())
 }
 
-pub fn sqrt_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn sqrt_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let x = a.unwrap_float32();
     if x < 0.0 {
         return Datum::Null;
@@ -844,7 +830,7 @@ pub fn sqrt_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datu
     Datum::from(x.sqrt())
 }
 
-pub fn sqrt_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn sqrt_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let x = a.unwrap_float64();
     if x < 0.0 {
         return Datum::Null;
@@ -852,36 +838,51 @@ pub fn sqrt_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datu
     Datum::from(x.sqrt())
 }
 
-pub fn eq<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn eq<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a == b)
 }
 
-pub fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a != b)
 }
 
-pub fn lt<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn lt<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a < b)
 }
 
-pub fn lte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn lte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a <= b)
 }
 
-pub fn gt<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn gt<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a > b)
 }
 
-pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a >= b)
 }
 
-pub fn jsonb_get_int64<'a>(
+pub fn to_char_timestamp<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    _: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
+    let fmt = DateTimeFormat::compile(b.unwrap_str());
+    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamp())))
+}
+
+pub fn to_char_timestamptz<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let fmt = DateTimeFormat::compile(b.unwrap_str());
+    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamptz())))
+}
+
+pub fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
         Datum::List(list) => {
@@ -905,12 +906,7 @@ pub fn jsonb_get_int64<'a>(
     }
 }
 
-pub fn jsonb_get_string<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn jsonb_get_string<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let k = b.unwrap_str();
     match a {
         Datum::Dict(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
@@ -925,7 +921,7 @@ pub fn jsonb_contains_string<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    _: &mut RowArena<'a>,
+    _: &'a RowArena,
 ) -> Datum<'a> {
     let k = b.unwrap_str();
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
@@ -942,7 +938,7 @@ pub fn jsonb_contains_jsonb<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    _: &mut RowArena<'a>,
+    _: &'a RowArena,
 ) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
     fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
@@ -975,7 +971,7 @@ pub fn jsonb_concat<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     match (a, b) {
         (Datum::Dict(dict_a), Datum::Dict(dict_b)) => {
@@ -983,19 +979,19 @@ pub fn jsonb_concat<'a>(
             // stable sort, so if keys collide dedup prefers dict_b
             pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
             pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
-            Datum::Dict(temp_storage.push_dict(pairs))
+            temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }
         (Datum::List(list_a), Datum::List(list_b)) => {
             let elems = list_a.iter().chain(list_b.iter());
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         (Datum::List(list_a), b) => {
             let elems = list_a.iter().chain(Some(b).into_iter());
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         (a, Datum::List(list_b)) => {
             let elems = Some(a).into_iter().chain(list_b.iter());
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         _ => Datum::Null,
     }
@@ -1005,7 +1001,7 @@ pub fn jsonb_delete_int64<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
@@ -1021,7 +1017,7 @@ pub fn jsonb_delete_int64<'a>(
                 .enumerate()
                 .filter(|(i2, _e)| i != *i2)
                 .map(|(_, e)| e);
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         _ => Datum::Null,
     }
@@ -1031,44 +1027,23 @@ pub fn jsonb_delete_string<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     match a {
         Datum::List(list) => {
             let elems = list.iter().filter(|e| b != *e);
-            Datum::List(temp_storage.push_list(elems))
+            temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         Datum::Dict(dict) => {
             let k = b.unwrap_str();
             let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
-            Datum::Dict(temp_storage.push_dict(pairs))
+            temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }
         _ => Datum::Null,
     }
 }
 
-pub fn to_char<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
-) -> Datum<'a> {
-    let datetime = a.unwrap_timestamptz();
-    let format_string = b.unwrap_str();
-    // PostgreSQL parses this weird format string, hand-interpret for now
-    // to unblock Metabase progress. Will have to revisit formatting strings and
-    // other versions of to_char() in the future.
-    if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
-        let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
-        Datum::String(
-            temp_storage.push_string(datetime.format(interpreted_format_string).to_string()),
-        )
-    } else {
-        Datum::Null
-    }
-}
-
-pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let haystack = a.unwrap_str();
     match build_like_regex_from_string(b.unwrap_str()) {
         Ok(needle) => Datum::from(needle.is_match(haystack)),
@@ -1085,105 +1060,93 @@ pub fn match_cached_regex<'a>(a: Datum<'a>, needle: &Regex) -> Datum<'a> {
     Datum::from(needle.is_match(haystack))
 }
 
-pub fn ascii<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn ascii<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     match a.unwrap_str().chars().next() {
         None => Datum::Int32(0),
         Some(v) => Datum::Int32(v as i32),
     }
 }
 
-pub fn extract_interval_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_interval_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_interval().years())
 }
 
-pub fn extract_interval_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_interval_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_interval().months())
 }
 
-pub fn extract_interval_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_interval_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_interval().days())
 }
 
-pub fn extract_interval_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_interval_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_interval().hours())
 }
 
-pub fn extract_interval_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_interval_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_interval().minutes())
 }
 
-pub fn extract_interval_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_interval_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_interval().seconds())
 }
 
-pub fn extract_timestamp_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamp_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().year()))
 }
 
-pub fn extract_timestamptz_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().year()))
 }
 
-pub fn extract_timestamp_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamp_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from((f64::from(a.unwrap_timestamp().month()) / 3.0).ceil())
 }
 
-pub fn extract_timestamptz_quarter<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn extract_timestamptz_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from((f64::from(a.unwrap_timestamptz().month()) / 3.0).ceil())
 }
 
-pub fn extract_timestamp_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamp_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().month()))
 }
 
-pub fn extract_timestamptz_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().month()))
 }
 
-pub fn extract_timestamp_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamp_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().day()))
 }
 
-pub fn extract_timestamptz_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().day()))
 }
 
-pub fn extract_timestamp_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamp_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().hour()))
 }
 
-pub fn extract_timestamptz_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().hour()))
 }
 
-pub fn extract_timestamp_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamp_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().minute()))
 }
 
-pub fn extract_timestamptz_minute<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn extract_timestamptz_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().minute()))
 }
 
-pub fn extract_timestamp_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamp_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
     Datum::from(s + ns)
 }
 
-pub fn extract_timestamptz_second<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn extract_timestamptz_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
@@ -1194,7 +1157,7 @@ pub fn extract_timestamptz_second<'a>(
 ///
 /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
 /// 1 about half of the time
-pub fn extract_timestamp_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamp_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     Datum::from(f64::from(a.iso_week().week()))
 }
@@ -1203,55 +1166,35 @@ pub fn extract_timestamp_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a
 ///
 /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
 /// 1 about half of the time
-pub fn extract_timestamptz_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn extract_timestamptz_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     Datum::from(f64::from(a.iso_week().week()))
 }
 
-pub fn extract_timestamp_dayofyear<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn extract_timestamp_dayofyear<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     Datum::from(f64::from(a.ordinal()))
 }
 
-pub fn extract_timestamptz_dayofyear<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn extract_timestamptz_dayofyear<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     Datum::from(f64::from(a.ordinal()))
 }
 
 /// extract day of week with monday = 1 sunday = 0
-pub fn extract_timestamp_dayofweek<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn extract_timestamp_dayofweek<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     Datum::from(a.weekday().num_days_from_sunday() as f64)
 }
 
 /// extract day of week with monday = 1 sunday = 0
-pub fn extract_timestamptz_dayofweek<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn extract_timestamptz_dayofweek<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     Datum::from(a.weekday().num_days_from_sunday() as f64)
 }
 
 /// extract day of week with monday = 1 sunday = 7
-pub fn extract_timestamp_isodayofweek<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn extract_timestamp_isodayofweek<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     Datum::from(a.weekday().number_from_monday() as f64)
 }
@@ -1260,7 +1203,7 @@ pub fn extract_timestamp_isodayofweek<'a>(
 pub fn extract_timestamptz_isodayofweek<'a>(
     a: Datum<'a>,
     _: &EvalEnv,
-    _: &mut RowArena<'a>,
+    _: &'a RowArena,
 ) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     Datum::from(a.weekday().number_from_monday() as f64)
@@ -1270,7 +1213,7 @@ pub fn date_trunc<'a>(
     a: Datum<'a>,
     b: Datum<'a>,
     env: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
+    temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     match a.unwrap_str().parse::<DateTruncTo>() {
         Ok(DateTruncTo::Micros) => date_trunc_microseconds(b, env, temp_storage),
@@ -1291,7 +1234,7 @@ pub fn date_trunc<'a>(
     }
 }
 
-fn date_trunc_microseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_microseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let time = NaiveTime::from_hms_micro(
         source_timestamp.hour(),
@@ -1302,7 +1245,7 @@ fn date_trunc_microseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) 
     Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
 }
 
-fn date_trunc_milliseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_milliseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let time = NaiveTime::from_hms_milli(
         source_timestamp.hour(),
@@ -1313,7 +1256,7 @@ fn date_trunc_milliseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) 
     Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
 }
 
-fn date_trunc_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -1325,7 +1268,7 @@ fn date_trunc_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Dat
     ))
 }
 
-fn date_trunc_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -1333,7 +1276,7 @@ fn date_trunc_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Dat
     ))
 }
 
-fn date_trunc_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -1341,7 +1284,7 @@ fn date_trunc_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum
     ))
 }
 
-fn date_trunc_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -1349,7 +1292,7 @@ fn date_trunc_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<
     ))
 }
 
-fn date_trunc_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let num_days_from_monday = source_timestamp.date().weekday().num_days_from_monday();
     Datum::Timestamp(NaiveDateTime::new(
@@ -1362,7 +1305,7 @@ fn date_trunc_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum
     ))
 }
 
-fn date_trunc_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(source_timestamp.year(), source_timestamp.month(), 1),
@@ -1370,7 +1313,7 @@ fn date_trunc_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datu
     ))
 }
 
-fn date_trunc_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let month = source_timestamp.month();
     let quarter = if month <= 3 {
@@ -1389,7 +1332,7 @@ fn date_trunc_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Da
     ))
 }
 
-fn date_trunc_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(source_timestamp.year(), 1, 1),
@@ -1397,7 +1340,7 @@ fn date_trunc_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum
     ))
 }
 
-fn date_trunc_decade<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_decade<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(
@@ -1409,7 +1352,7 @@ fn date_trunc_decade<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Dat
     ))
 }
 
-fn date_trunc_century<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_century<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     // Expects the first year of the century, meaning 2001 instead of 2000.
     let century = source_timestamp.year() - ((source_timestamp.year() % 100) - 1);
@@ -1419,7 +1362,7 @@ fn date_trunc_century<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Da
     ))
 }
 
-fn date_trunc_millennium<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+fn date_trunc_millennium<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     // Expects the first year of the millennium, meaning 2001 instead of 2000.
     let millennium = source_timestamp.year() - ((source_timestamp.year() % 1000) - 1);
@@ -1444,6 +1387,8 @@ pub enum BinaryFunc {
     SubInt64,
     SubFloat32,
     SubFloat64,
+    SubTimestamp,
+    SubTimestampTz,
     SubTimestampInterval,
     SubTimestampTzInterval,
     SubDecimal,
@@ -1471,7 +1416,8 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     MatchRegex,
-    ToChar,
+    ToCharTimestamp,
+    ToCharTimestampTz,
     DateTrunc,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
@@ -1539,9 +1485,7 @@ impl FromStr for DateTruncTo {
 }
 
 impl BinaryFunc {
-    pub fn func(
-        self,
-    ) -> for<'a> fn(Datum<'a>, Datum<'a>, &EvalEnv, &mut RowArena<'a>) -> Datum<'a> {
+    pub fn func(self) -> for<'a> fn(Datum<'a>, Datum<'a>, &EvalEnv, &'a RowArena) -> Datum<'a> {
         match self {
             BinaryFunc::And => and,
             BinaryFunc::Or => or,
@@ -1556,6 +1500,8 @@ impl BinaryFunc {
             BinaryFunc::SubInt64 => sub_int64,
             BinaryFunc::SubFloat32 => sub_float32,
             BinaryFunc::SubFloat64 => sub_float64,
+            BinaryFunc::SubTimestamp => sub_timestamp,
+            BinaryFunc::SubTimestampTz => sub_timestamptz,
             BinaryFunc::SubTimestampInterval => sub_timestamp_interval,
             BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval,
             BinaryFunc::SubDecimal => sub_decimal,
@@ -1583,7 +1529,8 @@ impl BinaryFunc {
             BinaryFunc::Gt => gt,
             BinaryFunc::Gte => gte,
             BinaryFunc::MatchRegex => match_regex,
-            BinaryFunc::ToChar => to_char,
+            BinaryFunc::ToCharTimestamp => to_char_timestamp,
+            BinaryFunc::ToCharTimestampTz => to_char_timestamptz,
             BinaryFunc::DateTrunc => date_trunc,
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
@@ -1616,7 +1563,9 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Bool).nullable(true)
             }
 
-            ToChar => ColumnType::new(ScalarType::String).nullable(false),
+            ToCharTimestamp | ToCharTimestampTz => {
+                ColumnType::new(ScalarType::String).nullable(false)
+            }
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
@@ -1632,6 +1581,10 @@ impl BinaryFunc {
 
             AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable || is_div_mod)
+            }
+
+            SubTimestamp | SubTimestampTz => {
+                ColumnType::new(ScalarType::Interval).nullable(in_nullable)
             }
 
             // TODO(benesch): we correctly compute types for decimal scale, but
@@ -1729,6 +1682,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::SubInt64 => f.write_str("-"),
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
+            BinaryFunc::SubTimestamp => f.write_str("-"),
+            BinaryFunc::SubTimestampTz => f.write_str("-"),
             BinaryFunc::SubTimestampInterval => f.write_str("-"),
             BinaryFunc::SubTimestampTzInterval => f.write_str("-"),
             BinaryFunc::SubDecimal => f.write_str("-"),
@@ -1756,7 +1711,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
             BinaryFunc::MatchRegex => f.write_str("~"),
-            BinaryFunc::ToChar => f.write_str("to_char"),
+            BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
+            BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
@@ -1772,7 +1728,7 @@ impl fmt::Display for BinaryFunc {
     }
 }
 
-pub fn is_null<'a>(a: Datum<'a>, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn is_null<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a == Datum::Null)
 }
 
@@ -1866,7 +1822,7 @@ pub enum UnaryFunc {
 }
 
 impl UnaryFunc {
-    pub fn func(self) -> for<'a> fn(Datum<'a>, &EvalEnv, &mut RowArena<'a>) -> Datum<'a> {
+    pub fn func(self) -> for<'a> fn(Datum<'a>, &EvalEnv, &'a RowArena) -> Datum<'a> {
         match self {
             UnaryFunc::Not => not,
             UnaryFunc::IsNull => is_null,
@@ -2200,7 +2156,7 @@ impl fmt::Display for UnaryFunc {
     }
 }
 
-pub fn coalesce<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn coalesce<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     datums
         .iter()
         .find(|d| !d.is_null())
@@ -2208,7 +2164,7 @@ pub fn coalesce<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &mut RowArena<'a>) -> 
         .unwrap_or(Datum::Null)
 }
 
-pub fn substr<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn substr<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let string: &'a str = datums[0].unwrap_str();
     let mut chars = string.chars();
 
@@ -2236,7 +2192,7 @@ pub fn substr<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &mut RowArena<'a>) -> Da
     }
 }
 
-pub fn length<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn length<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let string = datums[0].unwrap_str();
 
     if datums.len() == 2 {
@@ -2271,11 +2227,7 @@ pub fn length<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &mut RowArena<'a>) -> Da
     }
 }
 
-pub fn replace<'a>(
-    datums: &[Datum<'a>],
-    _: &EvalEnv,
-    temp_storage: &mut RowArena<'a>,
-) -> Datum<'a> {
+pub fn replace<'a>(datums: &[Datum<'a>], _: &EvalEnv, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(
         temp_storage.push_string(
             datums[0]
@@ -2285,18 +2237,55 @@ pub fn replace<'a>(
     )
 }
 
+pub fn make_timestamp<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+    let year: i32 = match datums[0].unwrap_int64().try_into() {
+        Ok(year) => year,
+        Err(_) => return Datum::Null,
+    };
+    let month: u32 = match datums[1].unwrap_int64().try_into() {
+        Ok(month) => month,
+        Err(_) => return Datum::Null,
+    };
+    let day: u32 = match datums[2].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let hour: u32 = match datums[3].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let minute: u32 = match datums[4].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let second_float = datums[5].unwrap_float64();
+    let second = second_float as u32;
+    let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
+    let date = match NaiveDate::from_ymd_opt(year, month, day) {
+        Some(date) => date,
+        None => return Datum::Null,
+    };
+    let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
+        Some(timestamp) => timestamp,
+        None => return Datum::Null,
+    };
+    Datum::Timestamp(timestamp)
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
+    MakeTimestamp,
     Substr,
     Length,
     Replace,
 }
 
 impl VariadicFunc {
-    pub fn func(self) -> for<'a> fn(&[Datum<'a>], &EvalEnv, &mut RowArena<'a>) -> Datum<'a> {
+    pub fn func(self) -> for<'a> fn(&[Datum<'a>], &EvalEnv, &'a RowArena) -> Datum<'a> {
         match self {
             VariadicFunc::Coalesce => coalesce,
+            VariadicFunc::MakeTimestamp => make_timestamp,
             VariadicFunc::Substr => substr,
             VariadicFunc::Length => length,
             VariadicFunc::Replace => replace,
@@ -2315,6 +2304,7 @@ impl VariadicFunc {
                 }
                 ColumnType::new(ScalarType::Null)
             }
+            MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             Length => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
@@ -2334,6 +2324,7 @@ impl fmt::Display for VariadicFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
+            VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::Length => f.write_str("length"),
             VariadicFunc::Replace => f.write_str("replace"),

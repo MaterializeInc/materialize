@@ -11,9 +11,11 @@ use std::str::FromStr;
 
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use sqlparser::ast::{Ident, ObjectName};
+use sql_parser::ast::{Ident, ObjectName};
 
-use crate::errors::{Error as ReprError, Result};
+pub type Result<T> = std::result::Result<T, Error>;
+
+pub type Error = failure::Error;
 
 /// A generalized name that may be qualified
 ///
@@ -29,8 +31,8 @@ use crate::errors::{Error as ReprError, Result};
 ///
 /// ```
 /// use std::convert::TryFrom;
-/// use sqlparser::ast::{Ident, ObjectName};
-/// use repr::QualName;
+/// use sql_parser::ast::{Ident, ObjectName};
+/// use catalog::QualName;
 ///
 /// let with = Ident::with_quote('"', "one");
 /// let without = Ident::new("two");
@@ -55,8 +57,8 @@ impl QualName {
     /// # Example
     ///
     /// ```
-    /// use repr::QualName;
-    /// use sqlparser::ast::Ident;
+    /// use catalog::QualName;
+    /// use sql_parser::ast::Ident;
     ///
     /// let (one, two) = (Ident::new("HoWdY"), Ident::with_quote('"', "wOwZeR"));
     /// assert_eq!(
@@ -91,7 +93,7 @@ impl QualName {
     /// Create a new QualName from a list of other qualnames, in order
     ///
     /// ```
-    /// # use repr::QualName;
+    /// # use catalog::QualName;
     /// let qn1: QualName = "one.two".parse().unwrap();
     /// let qn2: QualName = "three".parse().unwrap();
     /// let both: QualName = "one.two.three".parse().unwrap();
@@ -135,8 +137,8 @@ impl QualName {
     /// # Example
     ///
     /// ```
-    /// use repr::QualName;
-    /// use sqlparser::ast::{ObjectName, Ident};
+    /// use catalog::QualName;
+    /// use sql_parser::ast::{ObjectName, Ident};
     ///
     /// let one = Ident::new("one");
     /// assert!(QualName::name_equals(ObjectName(vec![one.clone()]), "one"));
@@ -155,7 +157,7 @@ impl QualName {
     /// # Example
     ///
     /// ```
-    /// use repr::QualName;
+    /// use catalog::QualName;
     /// let qn: QualName = "one.two".parse().unwrap();
     /// let qn2 = qn.with_trailing_string("-YOU_BRED_RAPTORS?");
     /// assert_eq!(qn.to_string(), "one.two");
@@ -199,7 +201,7 @@ impl From<&QualName> for QualName {
 }
 
 impl TryFrom<ObjectName> for QualName {
-    type Error = ReprError;
+    type Error = Error;
 
     fn try_from(other: ObjectName) -> Result<QualName> {
         QualName::new_normalized(other.0)
@@ -207,7 +209,7 @@ impl TryFrom<ObjectName> for QualName {
 }
 
 impl TryFrom<&ObjectName> for QualName {
-    type Error = ReprError;
+    type Error = Error;
 
     fn try_from(other: &ObjectName) -> Result<QualName> {
         QualName::new_normalized(other.0.iter().cloned())
@@ -215,7 +217,7 @@ impl TryFrom<&ObjectName> for QualName {
 }
 
 impl TryFrom<&mut ObjectName> for QualName {
-    type Error = ReprError;
+    type Error = Error;
 
     fn try_from(other: &mut ObjectName) -> Result<QualName> {
         QualName::new_normalized(other.0.iter().cloned())
@@ -223,14 +225,14 @@ impl TryFrom<&mut ObjectName> for QualName {
 }
 
 impl TryFrom<Ident> for QualName {
-    type Error = ReprError;
+    type Error = Error;
     fn try_from(other: Ident) -> Result<QualName> {
         QualName::new_normalized(vec![other])
     }
 }
 
 impl TryFrom<&Ident> for QualName {
-    type Error = ReprError;
+    type Error = Error;
     /// TODO: a version that takes a borrowed ident
     fn try_from(other: &Ident) -> Result<QualName> {
         QualName::new_normalized(vec![other.clone()])
@@ -238,7 +240,7 @@ impl TryFrom<&Ident> for QualName {
 }
 
 impl TryFrom<&str> for QualName {
-    type Error = ReprError;
+    type Error = Error;
     /// An alias for [`FromStr`] for use in a generic context
     fn try_from(s: &str) -> Result<QualName> {
         s.parse()
@@ -246,7 +248,7 @@ impl TryFrom<&str> for QualName {
 }
 
 impl TryFrom<QualName> for Ident {
-    type Error = ReprError;
+    type Error = Error;
     fn try_from(other: QualName) -> Result<Ident> {
         if other.0.len() == 1 {
             let ident = other.0.into_iter().next().unwrap();
@@ -288,7 +290,7 @@ impl PartialEq<str> for QualName {
     /// # Examples
     ///
     /// ```
-    /// # use repr::QualName;
+    /// # use catalog::QualName;
     /// let qn: &QualName = &"one.TWO".parse().unwrap();
     ///
     /// assert_eq!(qn, "one.\"two\"");
@@ -376,7 +378,7 @@ impl PartialEq for Identifier {
 }
 
 impl TryFrom<Ident> for Identifier {
-    type Error = ReprError;
+    type Error = Error;
 
     /// Construct a valid identifier
     ///
@@ -520,7 +522,7 @@ mod test {
             assert_eq!(
                 out,
                 Identifier {
-                    value: value.to_string(),
+                    value: (*value).to_owned(),
                     quoted: *quoted
                 }
             )

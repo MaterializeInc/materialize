@@ -12,14 +12,14 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, RowArena, ScalarType};
+use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::EvalEnv;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
-pub fn max_int32<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_int32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -31,7 +31,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_int64<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_int64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -43,7 +43,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_float32<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_float32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -55,7 +55,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_float64<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_float64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -67,7 +67,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_decimal<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_decimal<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -79,7 +79,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_bool<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_bool<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -91,7 +91,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_string<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_string<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -105,7 +105,7 @@ where
     }
 }
 
-pub fn max_date<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_date<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -117,7 +117,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_timestamp<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_timestamp<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -129,7 +129,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_timestamptz<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_timestamptz<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -141,14 +141,14 @@ where
     Datum::from(x)
 }
 
-pub fn max_null<'a, I>(_datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn max_null<'a, I>(_datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn min_int32<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_int32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -160,7 +160,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_int64<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_int64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -172,7 +172,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_float32<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_float32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -184,7 +184,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_float64<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_float64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -196,7 +196,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_decimal<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_decimal<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -208,7 +208,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_bool<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_bool<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -220,7 +220,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_string<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_string<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -234,7 +234,7 @@ where
     }
 }
 
-pub fn min_date<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_date<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -246,7 +246,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_timestamp<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_timestamp<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -258,7 +258,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_timestamptz<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_timestamptz<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -270,14 +270,14 @@ where
     Datum::from(x)
 }
 
-pub fn min_null<'a, I>(_datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn min_null<'a, I>(_datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn sum_int32<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn sum_int32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -290,7 +290,7 @@ where
     }
 }
 
-pub fn sum_int64<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn sum_int64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -303,7 +303,7 @@ where
     }
 }
 
-pub fn sum_float32<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn sum_float32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -316,7 +316,7 @@ where
     }
 }
 
-pub fn sum_float64<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn sum_float64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -329,7 +329,7 @@ where
     }
 }
 
-pub fn sum_decimal<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn sum_decimal<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -342,14 +342,14 @@ where
     }
 }
 
-pub fn sum_null<'a, I>(_datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn sum_null<'a, I>(_datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn count<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn count<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -357,7 +357,7 @@ where
     Datum::from(x)
 }
 
-pub fn count_all<'a, I>(datums: I, _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a>
+pub fn count_all<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -365,7 +365,7 @@ where
     Datum::from(x)
 }
 
-pub fn any<'a, I>(datums: I, env: &EvalEnv, temp_storage: &mut RowArena<'a>) -> Datum<'a>
+pub fn any<'a, I>(datums: I, env: &EvalEnv, temp_storage: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -374,7 +374,7 @@ where
     })
 }
 
-pub fn all<'a, I>(datums: I, env: &EvalEnv, temp_storage: &mut RowArena<'a>) -> Datum<'a>
+pub fn all<'a, I>(datums: I, env: &EvalEnv, temp_storage: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -420,7 +420,7 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    pub fn func<'a, I>(self) -> fn(I, &EvalEnv, &mut RowArena<'a>) -> Datum<'a>
+    pub fn func<'a, I>(self) -> fn(I, &EvalEnv, &'a RowArena) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
     {
@@ -491,6 +491,16 @@ impl AggregateFunc {
     }
 }
 
+fn jsonb_each<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Vec<Row> {
+    match a {
+        Datum::Dict(dict) => dict
+            .iter()
+            .map(|(k, v)| Row::pack(&[Datum::String(k), v]))
+            .collect(),
+        _ => vec![],
+    }
+}
+
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -526,6 +536,44 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::CountAll => f.write_str("countall"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum UnaryTableFunc {
+    JsonbEach,
+}
+
+impl UnaryTableFunc {
+    pub fn func(self) -> for<'a> fn(Datum<'a>, &EvalEnv, &'a RowArena) -> Vec<Row> {
+        match self {
+            UnaryTableFunc::JsonbEach => jsonb_each,
+        }
+    }
+
+    pub fn output_type(self, _input_type: &ColumnType) -> RelationType {
+        match self {
+            UnaryTableFunc::JsonbEach => RelationType::new(vec![
+                // key
+                ColumnType::new(ScalarType::Jsonb),
+                // value
+                ColumnType::new(ScalarType::Jsonb),
+            ]),
+        }
+    }
+
+    pub fn output_arity(self) -> usize {
+        match self {
+            UnaryTableFunc::JsonbEach => 2,
+        }
+    }
+}
+
+impl fmt::Display for UnaryTableFunc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            UnaryTableFunc::JsonbEach => f.write_str("jsonb_each"),
         }
     }
 }

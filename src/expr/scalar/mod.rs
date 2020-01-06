@@ -9,7 +9,7 @@ use std::mem;
 use chrono::{DateTime, Utc};
 use pretty::{DocAllocator, DocBuilder};
 use repr::regex::Regex;
-use repr::{ColumnType, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 use serde::{Deserialize, Serialize};
 
 use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
@@ -180,9 +180,9 @@ impl ScalarExpr {
         });
     }
 
-    pub fn support(&mut self) -> HashSet<usize> {
+    pub fn support(&self) -> HashSet<usize> {
         let mut support = HashSet::new();
-        self.visit_mut(&mut |e| {
+        self.visit(&mut |e| {
             if let ScalarExpr::Column(i) = e {
                 support.insert(*i);
             }
@@ -247,9 +247,9 @@ impl ScalarExpr {
     pub fn reduce(&mut self, env: &EvalEnv) {
         let null = || ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null));
         let empty = RelationType::new(vec![]);
-        let mut temp_storage = RowPacker::new();
-        let mut eval = move |e: &ScalarExpr| {
-            ScalarExpr::literal(e.eval(&[], env, &mut temp_storage.arena()), e.typ(&empty))
+        let temp_storage = &RowArena::new();
+        let eval = move |e: &ScalarExpr| {
+            ScalarExpr::literal(e.eval(&[], env, temp_storage), e.typ(&empty))
         };
         self.visit_mut(&mut |e| match e {
             ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => (),
@@ -266,8 +266,6 @@ impl ScalarExpr {
                     *e = eval(e);
                 } else if *func == BinaryFunc::MatchRegex && expr2.is_literal() {
                     // we can at least precompile the regex
-                    let mut temp_storage = RowPacker::new();
-                    let temp_storage = &mut temp_storage.arena();
                     *e = match expr2.eval(&[], env, temp_storage) {
                         Datum::Null => null(),
                         Datum::String(string) => {
@@ -282,9 +280,7 @@ impl ScalarExpr {
                         _ => unreachable!(),
                     };
                 } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
-                    let mut temp_storage = RowPacker::new();
-                    let temp_storage = &mut temp_storage.arena();
-                    *e = match expr1.eval(&[], env, temp_storage) {
+                    *e = match expr1.eval(&[], env, &temp_storage) {
                         Datum::Null => null(),
                         Datum::String(s) => match s.parse::<DateTruncTo>() {
                             Ok(to) => ScalarExpr::CallUnary {
@@ -318,9 +314,7 @@ impl ScalarExpr {
             }
             ScalarExpr::If { cond, then, els } => {
                 if cond.is_literal() {
-                    let mut temp_storage = RowPacker::new();
-                    let temp_storage = &mut temp_storage.arena();
-                    match cond.eval(&[], env, temp_storage) {
+                    match cond.eval(&[], env, &temp_storage) {
                         Datum::True if then.is_literal() => *e = eval(then),
                         Datum::False | Datum::Null if els.is_literal() => *e = eval(els),
                         Datum::True | Datum::False | Datum::Null => (),
@@ -345,30 +339,24 @@ impl ScalarExpr {
             ScalarExpr::Literal(..) => {}
             ScalarExpr::CallNullary(_) => (),
             ScalarExpr::CallUnary { func, expr } => {
-                if func != &UnaryFunc::IsNull {
+                if func.propagates_nulls() {
                     expr.non_null_requirements(columns);
                 }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                if func != &BinaryFunc::Or {
+                if func.propagates_nulls() {
                     expr1.non_null_requirements(columns);
                     expr2.non_null_requirements(columns);
                 }
             }
             ScalarExpr::CallVariadic { func, exprs } => {
-                if func != &VariadicFunc::Coalesce {
+                if func.propagates_nulls() {
                     for expr in exprs {
                         expr.non_null_requirements(columns);
                     }
                 }
             }
-            ScalarExpr::If {
-                cond,
-                then: _,
-                els: _,
-            } => {
-                cond.non_null_requirements(columns);
-            }
+            ScalarExpr::If { .. } => (),
             ScalarExpr::MatchCachedRegex { expr, .. } => {
                 expr.non_null_requirements(columns);
             }
@@ -408,7 +396,7 @@ impl ScalarExpr {
         &'a self,
         datums: &[Datum<'a>],
         env: &EvalEnv,
-        temp_storage: &mut RowArena<'a>,
+        temp_storage: &'a RowArena,
     ) -> Datum<'a> {
         match self {
             ScalarExpr::Column(index) => datums[*index].clone(),
@@ -539,7 +527,7 @@ mod tests {
     use super::*;
 
     impl ScalarExpr {
-        fn into_doc(&self) -> RcDoc {
+        fn doc(&self) -> RcDoc {
             self.to_doc(&pretty::RcAllocator).into_doc()
         }
     }
@@ -551,19 +539,16 @@ mod tests {
         let int64_lit = |n| ScalarExpr::literal(Datum::Int64(n), col_type(Int64));
 
         let plus_expr = int64_lit(1).call_binary(int64_lit(2), BinaryFunc::AddInt64);
-        assert_eq!(plus_expr.into_doc().pretty(72).to_string(), "1 + 2");
+        assert_eq!(plus_expr.doc().pretty(72).to_string(), "1 + 2");
 
         let regex_expr = ScalarExpr::literal(Datum::String("foo"), col_type(String)).call_binary(
             ScalarExpr::literal(Datum::String("f?oo"), col_type(String)),
             BinaryFunc::MatchRegex,
         );
-        assert_eq!(
-            regex_expr.into_doc().pretty(72).to_string(),
-            r#""foo" ~ "f?oo""#
-        );
+        assert_eq!(regex_expr.doc().pretty(72).to_string(), r#""foo" ~ "f?oo""#);
 
         let neg_expr = int64_lit(1).call_unary(UnaryFunc::NegInt64);
-        assert_eq!(neg_expr.into_doc().pretty(72).to_string(), "-1");
+        assert_eq!(neg_expr.doc().pretty(72).to_string(), "-1");
 
         let bool_expr = ScalarExpr::literal(Datum::True, col_type(Bool))
             .call_binary(
@@ -571,10 +556,7 @@ mod tests {
                 BinaryFunc::And,
             )
             .call_unary(UnaryFunc::Not);
-        assert_eq!(
-            bool_expr.into_doc().pretty(72).to_string(),
-            "!(true && false)"
-        );
+        assert_eq!(bool_expr.doc().pretty(72).to_string(), "!(true && false)");
 
         let cond_expr = ScalarExpr::if_then_else(
             ScalarExpr::literal(Datum::True, col_type(Bool)),
@@ -582,7 +564,7 @@ mod tests {
             plus_expr.clone(),
         );
         assert_eq!(
-            cond_expr.into_doc().pretty(72).to_string(),
+            cond_expr.doc().pretty(72).to_string(),
             "if true then -1 else 1 + 2"
         );
 
@@ -591,7 +573,7 @@ mod tests {
             exprs: vec![ScalarExpr::Column(7), plus_expr, neg_expr.clone()],
         };
         assert_eq!(
-            variadic_expr.into_doc().pretty(72).to_string(),
+            variadic_expr.doc().pretty(72).to_string(),
             "coalesce(#7, 1 + 2, -1)"
         );
 
@@ -604,18 +586,18 @@ mod tests {
         .call_unary(UnaryFunc::Not)
         .call_binary(bool_expr, BinaryFunc::Or);
         assert_eq!(
-            mega_expr.into_doc().pretty(72).to_string(),
+            mega_expr.doc().pretty(72).to_string(),
             "!isnull(coalesce(if true then -1 else 1 + 2) % -1) || !(true && false)"
         );
-        println!("{}", mega_expr.into_doc().pretty(64).to_string());
+        println!("{}", mega_expr.doc().pretty(64).to_string());
         assert_eq!(
-            mega_expr.into_doc().pretty(64).to_string(),
+            mega_expr.doc().pretty(64).to_string(),
             "!isnull(coalesce(if true then -1 else 1 + 2) % -1)
 ||
 !(true && false)"
         );
         assert_eq!(
-            mega_expr.into_doc().pretty(16).to_string(),
+            mega_expr.doc().pretty(16).to_string(),
             "!isnull(
   coalesce(
     if

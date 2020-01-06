@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 
 IMAGES=(
     materialize/materialized:latest
-    materialize/metrics:latest
+    materialize/peeker:latest
     materialize/chbenchmark:latest
 )
 
@@ -36,7 +36,7 @@ main() {
             elif [[ $1 = :load: ]]; then
                 bring_up_source_data
                 bring_up_introspection
-                dc_up metrics
+                dc_up peeker
                 load_test
             else
                 dc_up "$@"
@@ -200,6 +200,7 @@ restart() {
 
 # Forcibly remove Docker state. Use when there are inexplicable Docker issues.
 nuke_docker() {
+    shut_down
     runv docker system prune -af
     runv docker volume prune -f
 }
@@ -208,12 +209,11 @@ nuke_docker() {
 load_test() {
     runv docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
     runv docker-compose run -d chbench run \
-        --mz-sources --mz-views=q01,q03,q06,q07,q08,q09,q12,q14,q17,q19 \
+        --mz-sources --mz-views=q01,q02,q06,q08,q09,q12,q14,q17,q19 \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
         --peek-conns=5 --flush-every=30 \
-        --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
-        --min-delay=0.05 --max-delay=0.1 -l /dev/stdout \
-        --config-file-path=/etc/chbenchmark/mz-default.cfg
+        --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
+        -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg
 }
 
 # Generate changes for the demo

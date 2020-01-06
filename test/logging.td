@@ -26,8 +26,8 @@
 > SELECT count(*) FROM count_arrangement;
 1
 
-> CREATE VIEW count_dataflows AS SELECT count(*) FROM mz_views;
-> SELECT count(*) FROM count_dataflows;
+> CREATE VIEW count_materializations AS SELECT count(*) FROM mz_materializations;
+> SELECT count(*) FROM count_materializations;
 1
 
 > CREATE VIEW count_frontiers AS SELECT count(*) FROM mz_view_frontiers;

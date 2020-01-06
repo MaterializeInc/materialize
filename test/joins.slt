@@ -48,3 +48,19 @@ SELECT l.la, l.lb, r.ra, r.rb FROM l RIGHT JOIN r ON l.la = r.ra
 NULL  NULL  4  r4
 1     l1    1  r1
 3     l3    3  r3
+
+
+# Test that columns detected to be equivalent retain the names that the user
+# asks for. Protects against regression of #1217.
+query II colnames rowsort
+SELECT ra, r.ra FROM l JOIN r ON l.la = r.ra LIMIT 0
+----
+ra  ra
+
+
+# Test that columns detected to be equivalent retain the names that the user
+# asks for. Protects against regression of #1217.
+query ITIT colnames rowsort
+SELECT * FROM l JOIN r ON l.la = r.ra LIMIT 0
+----
+la  lb  ra  rb

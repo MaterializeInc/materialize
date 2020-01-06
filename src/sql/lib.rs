@@ -10,13 +10,12 @@
 use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
 use ::expr::GlobalId;
-use catalog::{Catalog, CatalogEntry};
-use repr::{QualName, RelationDesc, Row, ScalarType};
-use sqlparser::dialect::PostgreSqlDialect;
-use sqlparser::parser::Parser as SqlParser;
+use catalog::{Catalog, CatalogEntry, QualName};
+use repr::{RelationDesc, Row, ScalarType};
+use sql_parser::parser::Parser as SqlParser;
 
-pub use session::{FieldFormat, PreparedStatement, Session, TransactionStatus};
-pub use sqlparser::ast::{ObjectType, Statement};
+pub use session::{PreparedStatement, Session, TransactionStatus};
+pub use sql_parser::ast::{ObjectType, Statement};
 
 pub mod names;
 
@@ -66,6 +65,7 @@ pub enum Plan {
         when: PeekWhen,
         finishing: RowSetFinishing,
         eval_env: ::expr::EvalEnv,
+        materialize: bool,
     },
     Tail(CatalogEntry),
     SendRows(Vec<Row>),
@@ -94,7 +94,7 @@ pub struct Params {
 
 /// Parses a raw SQL string into a [`Statement`].
 pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
-    Ok(SqlParser::parse_sql(&PostgreSqlDialect {}, sql)?)
+    Ok(SqlParser::parse_sql(sql)?)
 }
 
 /// Produces a [`Plan`] from a [`Statement`].
@@ -115,6 +115,8 @@ pub fn plan(
 pub fn describe(
     catalog: &Catalog,
     stmt: Statement,
-) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
-    statement::describe_statement(catalog, stmt)
+) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {
+    let (desc, types) = statement::describe_statement(catalog, stmt)?;
+    let types = types.into_iter().map(pgrepr::Type::from).collect();
+    Ok((desc, types))
 }

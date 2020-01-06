@@ -253,7 +253,7 @@ impl Unbind {
                     {
                         unbind_all(&mut value, env);
 
-                        let local = env.bind_local(id, *value.clone());
+                        let local = env.bind_local(id, *value);
                         *expr = *body;
                         unbind_all(expr, local.env);
                     } else {
@@ -589,9 +589,9 @@ mod tests {
     fn test_deduplicate() {
         let expr1 = n(1).negate().union(n(2));
         let expr2 = n(3).negate().union(n(4));
-        let expr3 = expr1.clone().union(expr2.clone());
+        let expr3 = expr1.union(expr2.clone());
         let expr4 = expr3.clone().union(n(5).distinct()).threshold();
-        let expr5 = expr3.clone().distinct().union(expr2.clone());
+        let expr5 = expr3.distinct().union(expr2);
         let mut expr = expr4.union(expr5);
 
         trace("IN deduplicate", &expr);

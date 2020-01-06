@@ -1,0 +1,12 @@
+[package]
+name = "sql-parser"
+description = "The lexer and parser for Materialize's SQL dialect."
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+log = "0.4.5"
+
+[dev-dependencies]
+matches = "0.1"
+simple_logger = "1.0.1"
