@@ -9,8 +9,10 @@ use std::fmt;
 
 use avro_rs::schema::{Schema, SchemaFingerprint};
 use avro_rs::types::Value;
-use byteorder::{BigEndian, ByteOrder};
+use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use failure::{bail, Error};
+use serde_json::json;
+
 use sha2::Sha256;
 use url::Url;
 
@@ -474,6 +476,106 @@ impl Decoder {
             }
         }
         Ok(DiffPair { before, after })
+    }
+}
+
+pub fn encode_schema(desc: &RelationDesc) -> Result<serde_json::Value, Error> {
+    let mut fields = Vec::new();
+    for (name, typ) in desc.iter() {
+        let field_name = match name {
+            Some(name) => name.as_str(),
+            None => bail!("All Kafka sink columns must have a name."),
+        };
+
+        let mut field_types = Vec::new();
+        if typ.nullable {
+            field_types.push("null");
+        }
+        match typ.scalar_type {
+            ScalarType::Null => field_types.push("null"),
+            ScalarType::Bool => field_types.push("boolean"),
+            ScalarType::Int32 => field_types.push("int"),
+            ScalarType::Int64 => field_types.push("long"),
+            ScalarType::Float32 => field_types.push("float"),
+            ScalarType::Float64 => field_types.push("double"),
+            ScalarType::Decimal(_, _) => field_types.push("decimal"),
+            ScalarType::Date => field_types.push("date"),
+            //            ScalarType::Timestamp => ,
+            //            ScalarType::TimestampTz => ,
+            ScalarType::Interval => field_types.push("duration"),
+            ScalarType::Bytes => field_types.push("bytes"),
+            ScalarType::String => field_types.push("string"),
+            //            ScalarType::Jsonb => ,
+            _ => bail!(
+                "Do not support schemas with field type: {:#?}",
+                typ.scalar_type
+            ),
+        }
+
+        let field = json!({
+            "name": field_name,
+            "type": field_types,
+        });
+        fields.push(field);
+    }
+
+    Ok(json!({
+        "type": "record",
+        "name": "envelope",
+        "fields": fields,
+    }))
+}
+
+/// Manages encoding of Avro-encoded bytes.
+pub struct Encoder {
+    writer_schema: Schema,
+}
+
+impl fmt::Debug for Encoder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Encoder")
+            .field("writer_schema", &self.writer_schema)
+            .finish()
+    }
+}
+
+impl Encoder {
+    pub fn new(raw_schema: &str) -> Self {
+        let writer_schema = parse_schema(raw_schema).unwrap();
+        Encoder { writer_schema }
+    }
+
+    /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
+    /// See function implementation for Confluent-specific details.
+    pub fn encode(&self, schema_id: i32, row: &Row) -> Vec<u8> {
+        // The first byte is a magic byte (0) that indicates the Confluent
+        // serialization format version, and the next four bytes are a
+        // 32-bit schema ID.
+        //
+        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+        let mut buf = Vec::new();
+        buf.write_u8(0).unwrap();
+        buf.write_i32::<NetworkEndian>(schema_id).unwrap();
+        buf.extend(self.row_to_avro(row));
+
+        buf
+    }
+
+    fn row_to_avro(&self, row: &Row) -> Vec<u8> {
+        let datums = row.unpack();
+
+        // TODO: encode all datums
+        let datum = datums[0];
+        let value = avro_rs::types::Value::Record(vec![(
+            String::from("quote"),
+            avro_rs::types::Value::Union(Box::new(avro_rs::types::Value::String(
+                datum.unwrap_str().to_owned(),
+            ))),
+        )]);
+
+        avro_rs::to_avro_datum(&self.writer_schema, value)
+            .map_err(|e| e.to_string())
+            .expect("Converting Row to avro failed")
     }
 }
 

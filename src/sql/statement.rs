@@ -712,21 +712,47 @@ fn handle_create_dataflow(
             url,
             with_options,
         } => {
-            if !with_options.is_empty() {
-                bail!("WITH options are not yet supported");
+            if with_options.is_empty() {
+                bail!("Sink requires a `schema_registry_url` WITH option.")
+            } else if with_options.len() > 1 {
+                bail!("WITH options other than `schema_registry_url` are not yet supported")
             }
+
+            let with_op = &with_options[0];
+            let schema_registry_url = match with_op.name.value.as_str() {
+                "schema_registry_url" => match &with_op.value {
+                    Value::SingleQuotedString(s) => s,
+                    _ => bail!(
+                        "Schema registry URL must be a string, e.g. 'kafka://localhost/{schema}'."
+                    ),
+                },
+                _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
+            };
+
             let name = name.try_into()?;
             let from = from.try_into()?;
             let catalog_entry = catalog.get(&from)?;
             let (addr, topic) = parse_kafka_topic_url(url)?;
+
+            let relation_desc = catalog_entry.desc()?.clone();
+            let schema = interchange::avro::encode_schema(&relation_desc)?;
+
+            // Send new schema to registry, get back the schema id for the sink
+            let url: Url = schema_registry_url.clone().parse().unwrap();
+            let ccsr_client = ccsr::Client::new(url);
+            let schema_id = ccsr_client
+                .publish_schema(&topic, &schema.to_string())
+                .unwrap();
+
             let sink = Sink {
-                from: (catalog_entry.id(), catalog_entry.desc()?.clone()),
+                from: (catalog_entry.id(), relation_desc),
                 connector: SinkConnector::Kafka(KafkaSinkConnector {
                     addr,
                     topic,
-                    schema_id: 0,
+                    schema_id,
                 }),
             };
+
             Ok(Plan::CreateSink(name, sink))
         }
         Statement::CreateIndex {

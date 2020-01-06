@@ -249,7 +249,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     .expect("No arrangements");
 
                 match sink.connector {
-                    SinkConnector::Kafka(c) => sink::kafka(&collection.inner, sink_id, c),
+                    SinkConnector::Kafka(c) => {
+                        sink::kafka(&collection.inner, sink_id, c, sink.from.1)
+                    }
                     SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
                 }
                 dataflow_drops.insert(sink_id, Box::new(tokens));

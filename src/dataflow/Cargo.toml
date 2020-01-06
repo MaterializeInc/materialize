@@ -10,6 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 bincode = "1.2.1"
+ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 csv = "1.1.1"
 dataflow-types = { path = "../dataflow-types" }
