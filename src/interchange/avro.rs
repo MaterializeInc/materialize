@@ -2,7 +2,6 @@
 //
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
-use serde_json::json;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -12,6 +11,8 @@ use avro_rs::schema::{Schema, SchemaFingerprint};
 use avro_rs::types::Value;
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use failure::{bail, Error};
+use serde_json::json;
+
 use sha2::Sha256;
 use url::Url;
 
