@@ -1950,7 +1950,7 @@ impl UnaryFunc {
     ///
     /// This is most often the case for methods that promote to types that
     /// can contain all the precision of the input type.
-    pub fn preserves_uniqueness(self) -> bool {
+    pub fn preserves_uniqueness(&self) -> bool {
         match self {
             UnaryFunc::Not
             | UnaryFunc::NegInt32
