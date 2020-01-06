@@ -19,7 +19,7 @@ use crate::EvalEnv;
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
-pub fn max_int32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -31,7 +31,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_int64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_int64<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -43,7 +43,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_float32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_float32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -55,7 +55,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_float64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_float64<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -67,7 +67,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_decimal<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_decimal<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -79,7 +79,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_bool<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_bool<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -91,7 +91,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_string<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_string<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -105,7 +105,7 @@ where
     }
 }
 
-pub fn max_date<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_date<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -117,7 +117,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_timestamp<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -129,7 +129,7 @@ where
     Datum::from(x)
 }
 
-pub fn max_timestamptz<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_timestamptz<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -141,14 +141,14 @@ where
     Datum::from(x)
 }
 
-pub fn max_null<'a, I>(_datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn max_null<'a, I>(_datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn min_int32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -160,7 +160,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_int64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_int64<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -172,7 +172,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_float32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_float32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -184,7 +184,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_float64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_float64<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -196,7 +196,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_decimal<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_decimal<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -208,7 +208,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_bool<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_bool<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -220,7 +220,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_string<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_string<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -234,7 +234,7 @@ where
     }
 }
 
-pub fn min_date<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_date<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -246,7 +246,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_timestamp<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -258,7 +258,7 @@ where
     Datum::from(x)
 }
 
-pub fn min_timestamptz<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_timestamptz<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -270,14 +270,14 @@ where
     Datum::from(x)
 }
 
-pub fn min_null<'a, I>(_datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn min_null<'a, I>(_datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn sum_int32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn sum_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -290,7 +290,7 @@ where
     }
 }
 
-pub fn sum_int64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn sum_int64<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -303,7 +303,7 @@ where
     }
 }
 
-pub fn sum_float32<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn sum_float32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -316,7 +316,7 @@ where
     }
 }
 
-pub fn sum_float64<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn sum_float64<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -329,7 +329,7 @@ where
     }
 }
 
-pub fn sum_decimal<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn sum_decimal<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -342,14 +342,14 @@ where
     }
 }
 
-pub fn sum_null<'a, I>(_datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn sum_null<'a, I>(_datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn count<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn count<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -357,7 +357,7 @@ where
     Datum::from(x)
 }
 
-pub fn count_all<'a, I>(datums: I, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
+fn count_all<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -365,25 +365,25 @@ where
     Datum::from(x)
 }
 
-pub fn any<'a, I>(datums: I, env: &EvalEnv, temp_storage: &'a RowArena) -> Datum<'a>
+fn any<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    datums.into_iter().fold(Datum::False, |a, b| {
-        crate::scalar::func::or(a, b, env, temp_storage)
-    })
+    datums
+        .into_iter()
+        .fold(Datum::False, |a, b| crate::scalar::func::or(a, b))
 }
 
-pub fn all<'a, I>(datums: I, env: &EvalEnv, temp_storage: &'a RowArena) -> Datum<'a>
+fn all<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    datums.into_iter().fold(Datum::True, |a, b| {
-        crate::scalar::func::and(a, b, env, temp_storage)
-    })
+    datums
+        .into_iter()
+        .fold(Datum::True, |a, b| crate::scalar::func::and(a, b))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AggregateFunc {
     MaxInt32,
     MaxInt64,
@@ -420,47 +420,52 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    pub fn func<'a, I>(self) -> fn(I, &EvalEnv, &'a RowArena) -> Datum<'a>
+    pub fn eval<'a, I>(
+        &self,
+        datums: I,
+        _env: &'a EvalEnv,
+        _temp_storage: &'a RowArena,
+    ) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
     {
         match self {
-            AggregateFunc::MaxInt32 => max_int32,
-            AggregateFunc::MaxInt64 => max_int64,
-            AggregateFunc::MaxFloat32 => max_float32,
-            AggregateFunc::MaxFloat64 => max_float64,
-            AggregateFunc::MaxDecimal => max_decimal,
-            AggregateFunc::MaxBool => max_bool,
-            AggregateFunc::MaxString => max_string,
-            AggregateFunc::MaxDate => max_date,
-            AggregateFunc::MaxTimestamp => max_timestamp,
-            AggregateFunc::MaxTimestampTz => max_timestamptz,
-            AggregateFunc::MaxNull => max_null,
-            AggregateFunc::MinInt32 => min_int32,
-            AggregateFunc::MinInt64 => min_int64,
-            AggregateFunc::MinFloat32 => min_float32,
-            AggregateFunc::MinFloat64 => min_float64,
-            AggregateFunc::MinDecimal => min_decimal,
-            AggregateFunc::MinBool => min_bool,
-            AggregateFunc::MinString => min_string,
-            AggregateFunc::MinDate => min_date,
-            AggregateFunc::MinTimestamp => min_timestamp,
-            AggregateFunc::MinTimestampTz => min_timestamptz,
-            AggregateFunc::MinNull => min_null,
-            AggregateFunc::SumInt32 => sum_int32,
-            AggregateFunc::SumInt64 => sum_int64,
-            AggregateFunc::SumFloat32 => sum_float32,
-            AggregateFunc::SumFloat64 => sum_float64,
-            AggregateFunc::SumDecimal => sum_decimal,
-            AggregateFunc::SumNull => sum_null,
-            AggregateFunc::Count => count,
-            AggregateFunc::CountAll => count_all,
-            AggregateFunc::Any => any,
-            AggregateFunc::All => all,
+            AggregateFunc::MaxInt32 => max_int32(datums),
+            AggregateFunc::MaxInt64 => max_int64(datums),
+            AggregateFunc::MaxFloat32 => max_float32(datums),
+            AggregateFunc::MaxFloat64 => max_float64(datums),
+            AggregateFunc::MaxDecimal => max_decimal(datums),
+            AggregateFunc::MaxBool => max_bool(datums),
+            AggregateFunc::MaxString => max_string(datums),
+            AggregateFunc::MaxDate => max_date(datums),
+            AggregateFunc::MaxTimestamp => max_timestamp(datums),
+            AggregateFunc::MaxTimestampTz => max_timestamptz(datums),
+            AggregateFunc::MaxNull => max_null(datums),
+            AggregateFunc::MinInt32 => min_int32(datums),
+            AggregateFunc::MinInt64 => min_int64(datums),
+            AggregateFunc::MinFloat32 => min_float32(datums),
+            AggregateFunc::MinFloat64 => min_float64(datums),
+            AggregateFunc::MinDecimal => min_decimal(datums),
+            AggregateFunc::MinBool => min_bool(datums),
+            AggregateFunc::MinString => min_string(datums),
+            AggregateFunc::MinDate => min_date(datums),
+            AggregateFunc::MinTimestamp => min_timestamp(datums),
+            AggregateFunc::MinTimestampTz => min_timestamptz(datums),
+            AggregateFunc::MinNull => min_null(datums),
+            AggregateFunc::SumInt32 => sum_int32(datums),
+            AggregateFunc::SumInt64 => sum_int64(datums),
+            AggregateFunc::SumFloat32 => sum_float32(datums),
+            AggregateFunc::SumFloat64 => sum_float64(datums),
+            AggregateFunc::SumDecimal => sum_decimal(datums),
+            AggregateFunc::SumNull => sum_null(datums),
+            AggregateFunc::Count => count(datums),
+            AggregateFunc::CountAll => count_all(datums),
+            AggregateFunc::Any => any(datums),
+            AggregateFunc::All => all(datums),
         }
     }
 
-    pub fn default(self) -> Datum<'static> {
+    pub fn default(&self) -> Datum<'static> {
         match self {
             AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
             AggregateFunc::Any => Datum::False,
@@ -474,7 +479,7 @@ impl AggregateFunc {
     /// The output column type also contains nullability information, which
     /// is (without further information) true for aggregations that are not
     /// counts.
-    pub fn output_type(self, input_type: ColumnType) -> ColumnType {
+    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
         let scalar_type = match self {
             AggregateFunc::Count => ScalarType::Int64,
             AggregateFunc::CountAll => ScalarType::Int64,
@@ -491,7 +496,7 @@ impl AggregateFunc {
     }
 }
 
-fn jsonb_each<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Vec<Row> {
+fn jsonb_each<'a>(a: Datum<'a>) -> Vec<Row> {
     match a {
         Datum::Dict(dict) => dict
             .iter()
@@ -540,19 +545,24 @@ impl fmt::Display for AggregateFunc {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UnaryTableFunc {
     JsonbEach,
 }
 
 impl UnaryTableFunc {
-    pub fn func(self) -> for<'a> fn(Datum<'a>, &EvalEnv, &'a RowArena) -> Vec<Row> {
+    pub fn eval<'a>(
+        &'a self,
+        datum: Datum<'a>,
+        _env: &'a EvalEnv,
+        _temp_storage: &'a RowArena,
+    ) -> Vec<Row> {
         match self {
-            UnaryTableFunc::JsonbEach => jsonb_each,
+            UnaryTableFunc::JsonbEach => jsonb_each(datum),
         }
     }
 
-    pub fn output_type(self, _input_type: &ColumnType) -> RelationType {
+    pub fn output_type(&self, _input_type: &ColumnType) -> RelationType {
         match self {
             UnaryTableFunc::JsonbEach => RelationType::new(vec![
                 // key
@@ -563,7 +573,7 @@ impl UnaryTableFunc {
         }
     }
 
-    pub fn output_arity(self) -> usize {
+    pub fn output_arity(&self) -> usize {
         match self {
             UnaryTableFunc::JsonbEach => 2,
         }

@@ -367,11 +367,8 @@ where
                     let collection = self.collection(input).unwrap().flat_map(move |input_row| {
                         let datums = input_row.unpack();
                         let temp_storage = RowArena::new();
-                        let output_rows = (func.func())(
-                            expr.eval(&datums, &env, &temp_storage),
-                            &env,
-                            &temp_storage,
-                        );
+                        let output_rows =
+                            func.eval(expr.eval(&datums, &env, &temp_storage), &env, &temp_storage);
                         output_rows
                             .into_iter()
                             .map(|output_row| {
@@ -896,7 +893,7 @@ where
 
                                 for (agg, abl) in aggregates.iter().zip(abelian.iter()) {
                                     if *abl {
-                                        let value = match agg.func {
+                                        let value = match &agg.func {
                                             AggregateFunc::SumInt32 => {
                                                 let total = sums[abelian_pos] as i32;
                                                 let non_nulls = sums[abelian_pos + 1] as i32;
@@ -978,7 +975,7 @@ where
                                                 })
                                                 .collect::<HashSet<_>>();
                                             let temp_storage = RowArena::new();
-                                            result.push((agg.func.func())(iter, &env, &temp_storage));
+                                            result.push(agg.func.eval(iter, &env, &temp_storage));
                                         } else {
                                             let iter = source.iter().flat_map(|(v, w)| {
                                                 // let eval = agg.expr.eval(v);
@@ -986,7 +983,7 @@ where
                                                     .take(std::cmp::max(w[0], 0) as usize)
                                             });
                                             let temp_storage = RowArena::new();
-                                            result.push((agg.func.func())(iter, &env, &temp_storage));
+                                            result.push(agg.func.eval(iter, &env, &temp_storage));
                                         }
                                         non_abelian_pos += 1;
                                     }

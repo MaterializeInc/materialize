@@ -26,21 +26,21 @@ use crate::EvalEnv;
 
 mod format;
 
-#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum NullaryFunc {
     MzLogicalTimestamp,
     Now,
 }
 
 impl NullaryFunc {
-    pub fn func(self) -> for<'a> fn(&EvalEnv, &'a RowArena) -> Datum<'a> {
+    pub fn eval<'a>(&'a self, env: &'a EvalEnv, _temp_storage: &'a RowArena) -> Datum<'a> {
         match self {
-            NullaryFunc::MzLogicalTimestamp => mz_logical_time,
-            NullaryFunc::Now => now,
+            NullaryFunc::MzLogicalTimestamp => mz_logical_time(env),
+            NullaryFunc::Now => now(env),
         }
     }
 
-    pub fn output_type(self) -> ColumnType {
+    pub fn output_type(&self) -> ColumnType {
         match self {
             NullaryFunc::MzLogicalTimestamp => ColumnType::new(ScalarType::Decimal(38, 0)),
             NullaryFunc::Now => ColumnType::new(ScalarType::TimestampTz),
@@ -57,18 +57,18 @@ impl fmt::Display for NullaryFunc {
     }
 }
 
-pub fn mz_logical_time<'a>(env: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mz_logical_time(env: &EvalEnv) -> Datum<'static> {
     Datum::from(
         env.logical_time
             .expect("mz_logical_time missing logical time") as i128,
     )
 }
 
-pub fn now<'a>(env: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn now(env: &EvalEnv) -> Datum<'static> {
     Datum::from(env.wall_time.expect("now missing wall time in env"))
 }
 
-pub fn and<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+pub fn and<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     match (a, b) {
         (Datum::False, _) => Datum::False,
         (_, Datum::False) => Datum::False,
@@ -79,7 +79,7 @@ pub fn and<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datu
     }
 }
 
-pub fn or<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+pub fn or<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     match (a, b) {
         (Datum::True, _) => Datum::True,
         (_, Datum::True) => Datum::True,
@@ -90,68 +90,64 @@ pub fn or<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum
     }
 }
 
-pub fn not<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn not<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(!a.unwrap_bool())
 }
 
-pub fn abs_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn abs_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32().abs())
 }
 
-pub fn abs_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64().abs())
 }
 
-pub fn abs_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().abs())
 }
 
-pub fn abs_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().abs())
 }
 
-pub fn cast_bool_to_string<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_bool() {
         true => Datum::from("true"),
         false => Datum::from("false"),
     }
 }
 
-pub fn cast_int32_to_bool<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int32_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() != 0)
 }
 
-pub fn cast_int32_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_int32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_int32().to_string()))
 }
 
-pub fn cast_int32_to_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int32() as f32)
 }
 
-pub fn cast_int32_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_int32()))
 }
 
-pub fn cast_int32_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(i64::from(a.unwrap_int32()))
 }
 
-pub fn cast_int32_to_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int32_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(i128::from(a.unwrap_int32()))
 }
 
-pub fn cast_int64_to_bool<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int64_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() != 0)
 }
 
-pub fn cast_int64_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): we need to do something better than panicking if the
     // datum doesn't fit in an int32, but what? Poison the whole dataflow?
     // The SQL standard says this an error, but runtime errors are complicated
@@ -159,45 +155,36 @@ pub fn cast_int64_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Da
     Datum::from(i32::try_from(a.unwrap_int64()).unwrap())
 }
 
-pub fn cast_int64_to_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int64_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(i128::from(a.unwrap_int64()))
 }
 
-pub fn cast_int64_to_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int64_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f32)
 }
 
-pub fn cast_int64_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_int64_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f64)
 }
 
-pub fn cast_int64_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_int64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_int64().to_string()))
 }
 
-pub fn cast_float32_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float32() as i64)
 }
 
-pub fn cast_float32_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_float32()))
 }
 
-pub fn cast_float32_to_decimal<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &'a RowArena,
-) -> Datum<'a> {
+fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let f = a.unwrap_float32();
     let scale = b.unwrap_int32();
 
@@ -213,26 +200,17 @@ pub fn cast_float32_to_decimal<'a>(
     Datum::from((f * 10_f32.powi(scale)) as i128)
 }
 
-pub fn cast_float32_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_float32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_float32().to_string()))
 }
 
-pub fn cast_float64_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float64() as i64)
 }
 
-pub fn cast_float64_to_decimal<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &'a RowArena,
-) -> Datum<'a> {
+fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let f = a.unwrap_float64();
     let scale = b.unwrap_int32();
 
@@ -248,116 +226,85 @@ pub fn cast_float64_to_decimal<'a>(
     Datum::from((f * 10_f64.powi(scale)) as i128)
 }
 
-pub fn cast_float64_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_float64().to_string()))
 }
 
-pub fn cast_decimal_to_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_decimal_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as i32)
 }
 
-pub fn cast_decimal_to_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_decimal_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as i64)
 }
 
-pub fn cast_significand_to_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_significand_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f32)
 }
 
-pub fn cast_significand_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_significand_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f64)
 }
 
-pub fn cast_decimal_to_string<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    // TODO(benesch): a better way to pass the scale into the dataflow layer.
-    let scale = b.unwrap_int32() as u8;
+fn cast_decimal_to_string<'a>(a: Datum<'a>, scale: u8, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_decimal().with_scale(scale).to_string()))
 }
 
-pub fn cast_string_to_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     let val: Result<f64, _> = a.unwrap_str().to_lowercase().parse();
     Datum::from(val.ok())
 }
 
-pub fn cast_string_to_bytes<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_string_to_bytes<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::Bytes(&temp_storage.push_bytes(a.unwrap_str().as_bytes().to_vec()))
 }
 
-pub fn cast_date_to_timestamp<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
 }
 
-pub fn cast_date_to_timestamptz<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_date_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(
         a.unwrap_date().and_hms(0, 0, 0),
         Utc,
     ))
 }
 
-pub fn cast_date_to_string<'a>(a: Datum<'a>, _: &EvalEnv, temp_storage: &'a RowArena) -> Datum<'a> {
+fn cast_date_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_date().to_string()))
 }
 
-pub fn cast_timestamp_to_date<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_timestamp_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Date(a.unwrap_timestamp().date())
 }
 
-pub fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(a.unwrap_timestamp(), Utc))
 }
 
-pub fn cast_timestamp_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_timestamp_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_timestamp().to_string()))
 }
 
-pub fn cast_timestamptz_to_date<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_timestamptz_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Date(a.unwrap_timestamptz().naive_utc().date())
 }
 
-pub fn cast_timestamptz_to_timestamp<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn cast_timestamptz_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_timestamptz().naive_utc())
 }
 
-pub fn cast_timestamptz_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_timestamptz_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_timestamptz().to_string()))
 }
 
-pub fn cast_interval_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(a.unwrap_interval().to_string()))
 }
 
-pub fn cast_bytes_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let bytes = a.unwrap_bytes();
     let mut out = String::from("\\x");
     out.reserve(bytes.len() * 2);
@@ -447,11 +394,7 @@ pub fn datum_to_serde(datum: Datum) -> serde_json::Value {
 }
 
 // TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
-pub fn cast_string_to_jsonb<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match serde_json::from_str(a.unwrap_str()) {
         Err(_) => Datum::Null,
         Ok(json) => match serde_into_row(RowPacker::new(), json) {
@@ -462,48 +405,35 @@ pub fn cast_string_to_jsonb<'a>(
 }
 
 // TODO(jamii) it would be much more efficient to skip the intermediate serde_json::Value
-pub fn cast_jsonb_to_string<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_jsonb_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(temp_storage.push_string(datum_to_serde(a).to_string()))
 }
 
-pub fn cast_jsonb_to_string_unless_string<'a>(
-    a: Datum<'a>,
-    eval_env: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn cast_jsonb_to_string_unless_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match a {
         Datum::JsonNull => Datum::Null,
         Datum::String(_) => a,
-        _ => cast_jsonb_to_string(a, eval_env, temp_storage),
+        _ => cast_jsonb_to_string(a, temp_storage),
     }
 }
 
-pub fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() + b.unwrap_int32())
 }
 
-pub fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() + b.unwrap_int64())
 }
 
-pub fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32() + b.unwrap_float32())
 }
 
-pub fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64() + b.unwrap_float64())
 }
 
-pub fn add_timestamp_interval<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &'a RowArena,
-) -> Datum<'a> {
+fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let dt = a.unwrap_timestamp();
     Datum::Timestamp(match b {
         Datum::Interval(Interval::Months(months)) => add_timestamp_months(dt, months),
@@ -515,12 +445,7 @@ pub fn add_timestamp_interval<'a>(
     })
 }
 
-pub fn add_timestamptz_interval<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &'a RowArena,
-) -> Datum<'a> {
+fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let dt = a.unwrap_timestamptz().naive_utc();
 
     let new_ndt = match b {
@@ -535,51 +460,33 @@ pub fn add_timestamptz_interval<'a>(
     Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
 }
 
-pub fn ceil_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn ceil_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().ceil())
 }
 
-pub fn ceil_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn ceil_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().ceil())
 }
 
-pub fn floor_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn ceil_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
+    let decimal = a.unwrap_decimal();
+    Datum::from(decimal.with_scale(scale).ceil().significand())
+}
+
+fn floor_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().floor())
 }
 
-pub fn floor_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn floor_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().floor())
 }
 
-pub fn sub_timestamp_interval<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    env: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    let inverse = match b {
-        Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
-        Datum::Interval(Interval::Duration {
-            is_positive,
-            duration,
-        }) => Datum::Interval(Interval::Duration {
-            is_positive: !is_positive,
-            duration,
-        }),
-        _ => panic!(
-            "Tried to do timestamptz subtraction with non-interval: {:?}",
-            b
-        ),
-    };
-    add_timestamp_interval(a, inverse, env, temp_storage)
+fn floor_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
+    let decimal = a.unwrap_decimal();
+    Datum::from(decimal.with_scale(scale).floor().significand())
 }
 
-pub fn sub_timestamptz_interval<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    env: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let inverse = match b {
         Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
         Datum::Interval(Interval::Duration {
@@ -594,7 +501,25 @@ pub fn sub_timestamptz_interval<'a>(
             b
         ),
     };
-    add_timestamptz_interval(a, inverse, env, temp_storage)
+    add_timestamp_interval(a, inverse)
+}
+
+fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let inverse = match b {
+        Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
+        Datum::Interval(Interval::Duration {
+            is_positive,
+            duration,
+        }) => Datum::Interval(Interval::Duration {
+            is_positive: !is_positive,
+            duration,
+        }),
+        _ => panic!(
+            "Tried to do timestamptz subtraction with non-interval: {:?}",
+            b
+        ),
+    };
+    add_timestamptz_interval(a, inverse)
 }
 
 fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
@@ -646,61 +571,61 @@ fn add_timestamp_duration(
     }
 }
 
-pub fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
-pub fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() - b.unwrap_int32())
 }
 
-pub fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() - b.unwrap_int64())
 }
 
-pub fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32() - b.unwrap_float32())
 }
 
-pub fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64() - b.unwrap_float64())
 }
 
-pub fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
 }
 
-pub fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
 }
 
-pub fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
 }
 
-pub fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() * b.unwrap_int32())
 }
 
-pub fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() * b.unwrap_int64())
 }
 
-pub fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32() * b.unwrap_float32())
 }
 
-pub fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64() * b.unwrap_float64())
 }
 
-pub fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
 // TODO(jamii) we don't currently have any way of reporting errors from functions, so for now we just adopt sqlite's approach 1/0 = null
 
-pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int32();
     if b == 0 {
         Datum::Null
@@ -709,7 +634,7 @@ pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -
     }
 }
 
-pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int64();
     if b == 0 {
         Datum::Null
@@ -718,7 +643,7 @@ pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -
     }
 }
 
-pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_float32();
     if b == 0.0 {
         Datum::Null
@@ -727,7 +652,7 @@ pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
     }
 }
 
-pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_float64();
     if b == 0.0 {
         Datum::Null
@@ -736,7 +661,7 @@ pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
     }
 }
 
-pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_decimal();
     if b == 0 {
         Datum::Null
@@ -745,19 +670,7 @@ pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
     }
 }
 
-pub fn ceil_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
-    let decimal = a.unwrap_decimal();
-    let scale = b.unwrap_int32() as u8;
-    Datum::from(decimal.with_scale(scale).ceil().significand())
-}
-
-pub fn floor_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
-    let decimal = a.unwrap_decimal();
-    let scale = b.unwrap_int32() as u8;
-    Datum::from(decimal.with_scale(scale).floor().significand())
-}
-
-pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int32();
     if b == 0 {
         Datum::Null
@@ -766,7 +679,7 @@ pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -
     }
 }
 
-pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int64();
     if b == 0 {
         Datum::Null
@@ -775,7 +688,7 @@ pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -
     }
 }
 
-pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_float32();
     if b == 0.0 {
         Datum::Null
@@ -784,7 +697,7 @@ pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
     }
 }
 
-pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_float64();
     if b == 0.0 {
         Datum::Null
@@ -793,7 +706,7 @@ pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
     }
 }
 
-pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_decimal();
     if b == 0 {
         Datum::Null
@@ -802,27 +715,27 @@ pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
     }
 }
 
-pub fn neg_int32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn neg_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_int32())
 }
 
-pub fn neg_int64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn neg_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_int64())
 }
 
-pub fn neg_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn neg_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_float32())
 }
 
-pub fn neg_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn neg_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_float64())
 }
 
-pub fn neg_decimal<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn neg_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_decimal())
 }
 
-pub fn sqrt_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sqrt_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     let x = a.unwrap_float32();
     if x < 0.0 {
         return Datum::Null;
@@ -830,7 +743,7 @@ pub fn sqrt_float32<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
     Datum::from(x.sqrt())
 }
 
-pub fn sqrt_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn sqrt_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     let x = a.unwrap_float64();
     if x < 0.0 {
         return Datum::Null;
@@ -838,51 +751,41 @@ pub fn sqrt_float64<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
     Datum::from(x.sqrt())
 }
 
-pub fn eq<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
 
-pub fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a != b)
 }
 
-pub fn lt<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn lt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a < b)
 }
 
-pub fn lte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn lte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a <= b)
 }
 
-pub fn gt<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn gt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a > b)
 }
 
-pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a >= b)
 }
 
-pub fn to_char_timestamp<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn to_char_timestamp<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let fmt = DateTimeFormat::compile(b.unwrap_str());
     Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamp())))
 }
 
-pub fn to_char_timestamptz<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn to_char_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let fmt = DateTimeFormat::compile(b.unwrap_str());
     Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamptz())))
 }
 
-pub fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
         Datum::List(list) => {
@@ -906,7 +809,7 @@ pub fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowAr
     }
 }
 
-pub fn jsonb_get_string<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn jsonb_get_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let k = b.unwrap_str();
     match a {
         Datum::Dict(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
@@ -917,12 +820,7 @@ pub fn jsonb_get_string<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowA
     }
 }
 
-pub fn jsonb_contains_string<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &'a RowArena,
-) -> Datum<'a> {
+fn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let k = b.unwrap_str();
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
     match a {
@@ -934,12 +832,7 @@ pub fn jsonb_contains_string<'a>(
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
-pub fn jsonb_contains_jsonb<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    _: &'a RowArena,
-) -> Datum<'a> {
+fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
     fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
         match (a, b) {
@@ -967,12 +860,7 @@ pub fn jsonb_contains_jsonb<'a>(
     contains(a, b, true).into()
 }
 
-pub fn jsonb_concat<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match (a, b) {
         (Datum::Dict(dict_a), Datum::Dict(dict_b)) => {
             let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
@@ -997,12 +885,7 @@ pub fn jsonb_concat<'a>(
     }
 }
 
-pub fn jsonb_delete_int64<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn jsonb_delete_int64<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
         Datum::List(list) => {
@@ -1023,12 +906,7 @@ pub fn jsonb_delete_int64<'a>(
     }
 }
 
-pub fn jsonb_delete_string<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match a {
         Datum::List(list) => {
             let elems = list.iter().filter(|e| b != *e);
@@ -1043,7 +921,7 @@ pub fn jsonb_delete_string<'a>(
     }
 }
 
-pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let haystack = a.unwrap_str();
     match build_like_regex_from_string(b.unwrap_str()) {
         Ok(needle) => Datum::from(needle.is_match(haystack)),
@@ -1055,98 +933,98 @@ pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
     }
 }
 
-pub fn match_cached_regex<'a>(a: Datum<'a>, needle: &Regex) -> Datum<'a> {
+fn match_cached_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
     let haystack = a.unwrap_str();
     Datum::from(needle.is_match(haystack))
 }
 
-pub fn ascii<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
     match a.unwrap_str().chars().next() {
         None => Datum::Int32(0),
         Some(v) => Datum::Int32(v as i32),
     }
 }
 
-pub fn extract_interval_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_interval_year<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().years())
 }
 
-pub fn extract_interval_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_interval_month<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().months())
 }
 
-pub fn extract_interval_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_interval_day<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().days())
 }
 
-pub fn extract_interval_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_interval_hour<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().hours())
 }
 
-pub fn extract_interval_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_interval_minute<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().minutes())
 }
 
-pub fn extract_interval_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_interval_second<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().seconds())
 }
 
-pub fn extract_timestamp_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_year<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().year()))
 }
 
-pub fn extract_timestamptz_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_year<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().year()))
 }
 
-pub fn extract_timestamp_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from((f64::from(a.unwrap_timestamp().month()) / 3.0).ceil())
 }
 
-pub fn extract_timestamptz_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from((f64::from(a.unwrap_timestamptz().month()) / 3.0).ceil())
 }
 
-pub fn extract_timestamp_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_month<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().month()))
 }
 
-pub fn extract_timestamptz_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_month<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().month()))
 }
 
-pub fn extract_timestamp_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_day<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().day()))
 }
 
-pub fn extract_timestamptz_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_day<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().day()))
 }
 
-pub fn extract_timestamp_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_hour<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().hour()))
 }
 
-pub fn extract_timestamptz_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_hour<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().hour()))
 }
 
-pub fn extract_timestamp_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_minute<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().minute()))
 }
 
-pub fn extract_timestamptz_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_minute<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamptz().minute()))
 }
 
-pub fn extract_timestamp_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_second<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
     Datum::from(s + ns)
 }
 
-pub fn extract_timestamptz_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
@@ -1157,7 +1035,7 @@ pub fn extract_timestamptz_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena
 ///
 /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
 /// 1 about half of the time
-pub fn extract_timestamp_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_week<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     Datum::from(f64::from(a.iso_week().week()))
 }
@@ -1166,75 +1044,66 @@ pub fn extract_timestamp_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) ->
 ///
 /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
 /// 1 about half of the time
-pub fn extract_timestamptz_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_week<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     Datum::from(f64::from(a.iso_week().week()))
 }
 
-pub fn extract_timestamp_dayofyear<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_dayofyear<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     Datum::from(f64::from(a.ordinal()))
 }
 
-pub fn extract_timestamptz_dayofyear<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_dayofyear<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     Datum::from(f64::from(a.ordinal()))
 }
 
 /// extract day of week with monday = 1 sunday = 0
-pub fn extract_timestamp_dayofweek<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_dayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     Datum::from(a.weekday().num_days_from_sunday() as f64)
 }
 
 /// extract day of week with monday = 1 sunday = 0
-pub fn extract_timestamptz_dayofweek<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamptz_dayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     Datum::from(a.weekday().num_days_from_sunday() as f64)
 }
 
 /// extract day of week with monday = 1 sunday = 7
-pub fn extract_timestamp_isodayofweek<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn extract_timestamp_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamp();
     Datum::from(a.weekday().number_from_monday() as f64)
 }
 
 /// extract day of week with monday = 1 sunday = 7
-pub fn extract_timestamptz_isodayofweek<'a>(
-    a: Datum<'a>,
-    _: &EvalEnv,
-    _: &'a RowArena,
-) -> Datum<'a> {
+fn extract_timestamptz_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     let a = a.unwrap_timestamptz();
     Datum::from(a.weekday().number_from_monday() as f64)
 }
 
-pub fn date_trunc<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    env: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
+fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     match a.unwrap_str().parse::<DateTruncTo>() {
-        Ok(DateTruncTo::Micros) => date_trunc_microseconds(b, env, temp_storage),
-        Ok(DateTruncTo::Millis) => date_trunc_milliseconds(b, env, temp_storage),
-        Ok(DateTruncTo::Second) => date_trunc_second(b, env, temp_storage),
-        Ok(DateTruncTo::Minute) => date_trunc_minute(b, env, temp_storage),
-        Ok(DateTruncTo::Hour) => date_trunc_hour(b, env, temp_storage),
-        Ok(DateTruncTo::Day) => date_trunc_day(b, env, temp_storage),
-        Ok(DateTruncTo::Week) => date_trunc_week(b, env, temp_storage),
-        Ok(DateTruncTo::Month) => date_trunc_month(b, env, temp_storage),
-        Ok(DateTruncTo::Quarter) => date_trunc_quarter(b, env, temp_storage),
-        Ok(DateTruncTo::Year) => date_trunc_year(b, env, temp_storage),
-        Ok(DateTruncTo::Decade) => date_trunc_decade(b, env, temp_storage),
-        Ok(DateTruncTo::Century) => date_trunc_century(b, env, temp_storage),
-        Ok(DateTruncTo::Millennium) => date_trunc_millennium(b, env, temp_storage),
+        Ok(DateTruncTo::Micros) => date_trunc_microseconds(b),
+        Ok(DateTruncTo::Millis) => date_trunc_milliseconds(b),
+        Ok(DateTruncTo::Second) => date_trunc_second(b),
+        Ok(DateTruncTo::Minute) => date_trunc_minute(b),
+        Ok(DateTruncTo::Hour) => date_trunc_hour(b),
+        Ok(DateTruncTo::Day) => date_trunc_day(b),
+        Ok(DateTruncTo::Week) => date_trunc_week(b),
+        Ok(DateTruncTo::Month) => date_trunc_month(b),
+        Ok(DateTruncTo::Quarter) => date_trunc_quarter(b),
+        Ok(DateTruncTo::Year) => date_trunc_year(b),
+        Ok(DateTruncTo::Decade) => date_trunc_decade(b),
+        Ok(DateTruncTo::Century) => date_trunc_century(b),
+        Ok(DateTruncTo::Millennium) => date_trunc_millennium(b),
         // TODO: return an error when we support that.
         _ => Datum::Null,
     }
 }
 
-fn date_trunc_microseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let time = NaiveTime::from_hms_micro(
         source_timestamp.hour(),
@@ -1245,7 +1114,7 @@ fn date_trunc_microseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Da
     Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
 }
 
-fn date_trunc_milliseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_milliseconds<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let time = NaiveTime::from_hms_milli(
         source_timestamp.hour(),
@@ -1256,7 +1125,7 @@ fn date_trunc_milliseconds<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Da
     Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
 }
 
-fn date_trunc_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_second<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -1268,7 +1137,7 @@ fn date_trunc_second<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a
     ))
 }
 
-fn date_trunc_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_minute<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -1276,7 +1145,7 @@ fn date_trunc_minute<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a
     ))
 }
 
-fn date_trunc_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_hour<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -1284,7 +1153,7 @@ fn date_trunc_hour<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> 
     ))
 }
 
-fn date_trunc_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_day<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         source_timestamp.date(),
@@ -1292,7 +1161,7 @@ fn date_trunc_day<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     ))
 }
 
-fn date_trunc_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_week<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let num_days_from_monday = source_timestamp.date().weekday().num_days_from_monday();
     Datum::Timestamp(NaiveDateTime::new(
@@ -1305,7 +1174,7 @@ fn date_trunc_week<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> 
     ))
 }
 
-fn date_trunc_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_month<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(source_timestamp.year(), source_timestamp.month(), 1),
@@ -1313,7 +1182,7 @@ fn date_trunc_month<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a>
     ))
 }
 
-fn date_trunc_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     let month = source_timestamp.month();
     let quarter = if month <= 3 {
@@ -1332,7 +1201,7 @@ fn date_trunc_quarter<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'
     ))
 }
 
-fn date_trunc_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_year<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(source_timestamp.year(), 1, 1),
@@ -1340,7 +1209,7 @@ fn date_trunc_year<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> 
     ))
 }
 
-fn date_trunc_decade<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_decade<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     Datum::Timestamp(NaiveDateTime::new(
         NaiveDate::from_ymd(
@@ -1352,7 +1221,7 @@ fn date_trunc_decade<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a
     ))
 }
 
-fn date_trunc_century<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_century<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     // Expects the first year of the century, meaning 2001 instead of 2000.
     let century = source_timestamp.year() - ((source_timestamp.year() % 100) - 1);
@@ -1362,7 +1231,7 @@ fn date_trunc_century<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'
     ))
 }
 
-fn date_trunc_millennium<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
     let source_timestamp = a.unwrap_timestamp();
     // Expects the first year of the millennium, meaning 2001 instead of 2000.
     let millennium = source_timestamp.year() - ((source_timestamp.year() % 1000) - 1);
@@ -1372,7 +1241,7 @@ fn date_trunc_millennium<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datu
     ))
 }
 
-#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
     Or,
@@ -1402,8 +1271,6 @@ pub enum BinaryFunc {
     DivFloat32,
     DivFloat64,
     DivDecimal,
-    CeilDecimal,
-    FloorDecimal,
     ModInt32,
     ModInt64,
     ModFloat32,
@@ -1421,7 +1288,6 @@ pub enum BinaryFunc {
     DateTrunc,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
-    CastDecimalToString,
     JsonbGetInt64,
     JsonbGetString,
     JsonbContainsString,
@@ -1485,67 +1351,70 @@ impl FromStr for DateTruncTo {
 }
 
 impl BinaryFunc {
-    pub fn func(self) -> for<'a> fn(Datum<'a>, Datum<'a>, &EvalEnv, &'a RowArena) -> Datum<'a> {
+    pub fn eval<'a>(
+        &'a self,
+        a: Datum<'a>,
+        b: Datum<'a>,
+        _env: &'a EvalEnv,
+        temp_storage: &'a RowArena,
+    ) -> Datum<'a> {
         match self {
-            BinaryFunc::And => and,
-            BinaryFunc::Or => or,
-            BinaryFunc::AddInt32 => add_int32,
-            BinaryFunc::AddInt64 => add_int64,
-            BinaryFunc::AddFloat32 => add_float32,
-            BinaryFunc::AddFloat64 => add_float64,
-            BinaryFunc::AddTimestampInterval => add_timestamp_interval,
-            BinaryFunc::AddTimestampTzInterval => add_timestamptz_interval,
-            BinaryFunc::AddDecimal => add_decimal,
-            BinaryFunc::SubInt32 => sub_int32,
-            BinaryFunc::SubInt64 => sub_int64,
-            BinaryFunc::SubFloat32 => sub_float32,
-            BinaryFunc::SubFloat64 => sub_float64,
-            BinaryFunc::SubTimestamp => sub_timestamp,
-            BinaryFunc::SubTimestampTz => sub_timestamptz,
-            BinaryFunc::SubTimestampInterval => sub_timestamp_interval,
-            BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval,
-            BinaryFunc::SubDecimal => sub_decimal,
-            BinaryFunc::MulInt32 => mul_int32,
-            BinaryFunc::MulInt64 => mul_int64,
-            BinaryFunc::MulFloat32 => mul_float32,
-            BinaryFunc::MulFloat64 => mul_float64,
-            BinaryFunc::MulDecimal => mul_decimal,
-            BinaryFunc::DivInt32 => div_int32,
-            BinaryFunc::DivInt64 => div_int64,
-            BinaryFunc::DivFloat32 => div_float32,
-            BinaryFunc::DivFloat64 => div_float64,
-            BinaryFunc::DivDecimal => div_decimal,
-            BinaryFunc::CeilDecimal => ceil_decimal,
-            BinaryFunc::FloorDecimal => floor_decimal,
-            BinaryFunc::ModInt32 => mod_int32,
-            BinaryFunc::ModInt64 => mod_int64,
-            BinaryFunc::ModFloat32 => mod_float32,
-            BinaryFunc::ModFloat64 => mod_float64,
-            BinaryFunc::ModDecimal => mod_decimal,
-            BinaryFunc::Eq => eq,
-            BinaryFunc::NotEq => not_eq,
-            BinaryFunc::Lt => lt,
-            BinaryFunc::Lte => lte,
-            BinaryFunc::Gt => gt,
-            BinaryFunc::Gte => gte,
-            BinaryFunc::MatchRegex => match_regex,
-            BinaryFunc::ToCharTimestamp => to_char_timestamp,
-            BinaryFunc::ToCharTimestampTz => to_char_timestamptz,
-            BinaryFunc::DateTrunc => date_trunc,
-            BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
-            BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
-            BinaryFunc::CastDecimalToString => cast_decimal_to_string,
-            BinaryFunc::JsonbGetInt64 => jsonb_get_int64,
-            BinaryFunc::JsonbGetString => jsonb_get_string,
-            BinaryFunc::JsonbContainsString => jsonb_contains_string,
-            BinaryFunc::JsonbConcat => jsonb_concat,
-            BinaryFunc::JsonbContainsJsonb => jsonb_contains_jsonb,
-            BinaryFunc::JsonbDeleteInt64 => jsonb_delete_int64,
-            BinaryFunc::JsonbDeleteString => jsonb_delete_string,
+            BinaryFunc::And => and(a, b),
+            BinaryFunc::Or => or(a, b),
+            BinaryFunc::AddInt32 => add_int32(a, b),
+            BinaryFunc::AddInt64 => add_int64(a, b),
+            BinaryFunc::AddFloat32 => add_float32(a, b),
+            BinaryFunc::AddFloat64 => add_float64(a, b),
+            BinaryFunc::AddTimestampInterval => add_timestamp_interval(a, b),
+            BinaryFunc::AddTimestampTzInterval => add_timestamptz_interval(a, b),
+            BinaryFunc::AddDecimal => add_decimal(a, b),
+            BinaryFunc::SubInt32 => sub_int32(a, b),
+            BinaryFunc::SubInt64 => sub_int64(a, b),
+            BinaryFunc::SubFloat32 => sub_float32(a, b),
+            BinaryFunc::SubFloat64 => sub_float64(a, b),
+            BinaryFunc::SubTimestamp => sub_timestamp(a, b),
+            BinaryFunc::SubTimestampTz => sub_timestamptz(a, b),
+            BinaryFunc::SubTimestampInterval => sub_timestamp_interval(a, b),
+            BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval(a, b),
+            BinaryFunc::SubDecimal => sub_decimal(a, b),
+            BinaryFunc::MulInt32 => mul_int32(a, b),
+            BinaryFunc::MulInt64 => mul_int64(a, b),
+            BinaryFunc::MulFloat32 => mul_float32(a, b),
+            BinaryFunc::MulFloat64 => mul_float64(a, b),
+            BinaryFunc::MulDecimal => mul_decimal(a, b),
+            BinaryFunc::DivInt32 => div_int32(a, b),
+            BinaryFunc::DivInt64 => div_int64(a, b),
+            BinaryFunc::DivFloat32 => div_float32(a, b),
+            BinaryFunc::DivFloat64 => div_float64(a, b),
+            BinaryFunc::DivDecimal => div_decimal(a, b),
+            BinaryFunc::ModInt32 => mod_int32(a, b),
+            BinaryFunc::ModInt64 => mod_int64(a, b),
+            BinaryFunc::ModFloat32 => mod_float32(a, b),
+            BinaryFunc::ModFloat64 => mod_float64(a, b),
+            BinaryFunc::ModDecimal => mod_decimal(a, b),
+            BinaryFunc::Eq => eq(a, b),
+            BinaryFunc::NotEq => not_eq(a, b),
+            BinaryFunc::Lt => lt(a, b),
+            BinaryFunc::Lte => lte(a, b),
+            BinaryFunc::Gt => gt(a, b),
+            BinaryFunc::Gte => gte(a, b),
+            BinaryFunc::MatchRegex => match_regex(a, b),
+            BinaryFunc::ToCharTimestamp => to_char_timestamp(a, b, temp_storage),
+            BinaryFunc::ToCharTimestampTz => to_char_timestamptz(a, b, temp_storage),
+            BinaryFunc::DateTrunc => date_trunc(a, b),
+            BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal(a, b),
+            BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal(a, b),
+            BinaryFunc::JsonbGetInt64 => jsonb_get_int64(a, b),
+            BinaryFunc::JsonbGetString => jsonb_get_string(a, b),
+            BinaryFunc::JsonbContainsString => jsonb_contains_string(a, b),
+            BinaryFunc::JsonbConcat => jsonb_concat(a, b, temp_storage),
+            BinaryFunc::JsonbContainsJsonb => jsonb_contains_jsonb(a, b),
+            BinaryFunc::JsonbDeleteInt64 => jsonb_delete_int64(a, b, temp_storage),
+            BinaryFunc::JsonbDeleteString => jsonb_delete_string(a, b, temp_storage),
         }
     }
 
-    pub fn output_type(self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
+    pub fn output_type(&self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
         let is_div_mod = match self {
@@ -1624,13 +1493,7 @@ impl BinaryFunc {
                 let s = s1 - s2;
                 ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
             }
-            FloorDecimal | CeilDecimal => match input1_type.scalar_type {
-                ScalarType::Null => ColumnType::new(ScalarType::Null),
-                ScalarType::Decimal(prec, scale) => {
-                    ColumnType::new(ScalarType::Decimal(prec, scale)).nullable(input1_type.nullable)
-                }
-                _ => unreachable!("Got invalid type as first argument of floor/ceil decimal"),
-            },
+
             CastFloat32ToDecimal | CastFloat64ToDecimal => match input2_type.scalar_type {
                 ScalarType::Null => ColumnType::new(ScalarType::Null),
                 ScalarType::Decimal(_, s) => {
@@ -1638,7 +1501,6 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             },
-            CastDecimalToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
             AddTimestampInterval
             | SubTimestampInterval
@@ -1658,7 +1520,7 @@ impl BinaryFunc {
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
-    pub fn propagates_nulls(self) -> bool {
+    pub fn propagates_nulls(&self) -> bool {
         match self {
             BinaryFunc::And | BinaryFunc::Or => false,
             _ => true,
@@ -1702,8 +1564,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ModFloat32 => f.write_str("%"),
             BinaryFunc::ModFloat64 => f.write_str("%"),
             BinaryFunc::ModDecimal => f.write_str("%"),
-            BinaryFunc::CeilDecimal => f.write_str("ceildec"),
-            BinaryFunc::FloorDecimal => f.write_str("floordec"),
             BinaryFunc::Eq => f.write_str("="),
             BinaryFunc::NotEq => f.write_str("!="),
             BinaryFunc::Lt => f.write_str("<"),
@@ -1716,7 +1576,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
-            BinaryFunc::CastDecimalToString => f.write_str("dectostr"),
             BinaryFunc::JsonbGetInt64 => f.write_str("b->i64"),
             BinaryFunc::JsonbGetString => f.write_str("b->str"),
             BinaryFunc::JsonbContainsString => f.write_str("b?"),
@@ -1728,11 +1587,11 @@ impl fmt::Display for BinaryFunc {
     }
 }
 
-pub fn is_null<'a>(a: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn is_null<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a == Datum::Null)
 }
 
-#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UnaryFunc {
     Not,
     IsNull,
@@ -1767,6 +1626,7 @@ pub enum UnaryFunc {
     CastFloat64ToString,
     CastDecimalToInt32,
     CastDecimalToInt64,
+    CastDecimalToString(u8),
     CastSignificandToFloat32,
     CastSignificandToFloat64,
     CastStringToBytes,
@@ -1787,9 +1647,12 @@ pub enum UnaryFunc {
     CastJsonbToStringUnlessString,
     CeilFloat32,
     CeilFloat64,
+    CeilDecimal(u8),
     FloorFloat32,
     FloorFloat64,
+    FloorDecimal(u8),
     Ascii,
+    MatchRegex(Regex),
     ExtractIntervalYear,
     ExtractIntervalMonth,
     ExtractIntervalDay,
@@ -1822,112 +1685,125 @@ pub enum UnaryFunc {
 }
 
 impl UnaryFunc {
-    pub fn func(self) -> for<'a> fn(Datum<'a>, &EvalEnv, &'a RowArena) -> Datum<'a> {
+    pub fn eval<'a>(
+        &'a self,
+        a: Datum<'a>,
+        _env: &'a EvalEnv,
+        temp_storage: &'a RowArena,
+    ) -> Datum<'a> {
         match self {
-            UnaryFunc::Not => not,
-            UnaryFunc::IsNull => is_null,
-            UnaryFunc::NegInt32 => neg_int32,
-            UnaryFunc::NegInt64 => neg_int64,
-            UnaryFunc::NegFloat32 => neg_float32,
-            UnaryFunc::NegFloat64 => neg_float64,
-            UnaryFunc::NegDecimal => neg_decimal,
-            UnaryFunc::AbsInt32 => abs_int32,
-            UnaryFunc::AbsInt64 => abs_int64,
-            UnaryFunc::AbsFloat32 => abs_float32,
-            UnaryFunc::AbsFloat64 => abs_float64,
-            UnaryFunc::CastBoolToString => cast_bool_to_string,
-            UnaryFunc::CastInt32ToBool => cast_int32_to_bool,
-            UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32,
-            UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64,
-            UnaryFunc::CastInt32ToInt64 => cast_int32_to_int64,
-            UnaryFunc::CastInt32ToDecimal => cast_int32_to_decimal,
-            UnaryFunc::CastInt32ToString => cast_int32_to_string,
-            UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
-            UnaryFunc::CastInt64ToBool => cast_int64_to_bool,
-            UnaryFunc::CastInt64ToDecimal => cast_int64_to_decimal,
-            UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32,
-            UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64,
-            UnaryFunc::CastInt64ToString => cast_int64_to_string,
-            UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64,
-            UnaryFunc::CastFloat32ToFloat64 => cast_float32_to_float64,
-            UnaryFunc::CastFloat32ToString => cast_float32_to_string,
-            UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64,
-            UnaryFunc::CastFloat64ToString => cast_float64_to_string,
-            UnaryFunc::CastDecimalToInt32 => cast_decimal_to_int32,
-            UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64,
-            UnaryFunc::CastSignificandToFloat32 => cast_significand_to_float32,
-            UnaryFunc::CastSignificandToFloat64 => cast_significand_to_float64,
-            UnaryFunc::CastStringToFloat64 => cast_string_to_float64,
-            UnaryFunc::CastStringToBytes => cast_string_to_bytes,
-            UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
-            UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz,
-            UnaryFunc::CastDateToString => cast_date_to_string,
-            UnaryFunc::CastTimestampToDate => cast_timestamp_to_date,
-            UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz,
-            UnaryFunc::CastTimestampToString => cast_timestamp_to_string,
-            UnaryFunc::CastTimestampTzToDate => cast_timestamptz_to_date,
-            UnaryFunc::CastTimestampTzToTimestamp => cast_timestamptz_to_timestamp,
-            UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string,
-            UnaryFunc::CastIntervalToString => cast_interval_to_string,
-            UnaryFunc::CastBytesToString => cast_bytes_to_string,
-            UnaryFunc::CastStringToJsonb => cast_string_to_jsonb,
-            UnaryFunc::CastJsonbToString => cast_jsonb_to_string,
-            UnaryFunc::CastJsonbToStringUnlessString => cast_jsonb_to_string_unless_string,
-            UnaryFunc::CeilFloat32 => ceil_float32,
-            UnaryFunc::CeilFloat64 => ceil_float64,
-            UnaryFunc::FloorFloat32 => floor_float32,
-            UnaryFunc::FloorFloat64 => floor_float64,
-            UnaryFunc::SqrtFloat32 => sqrt_float32,
-            UnaryFunc::SqrtFloat64 => sqrt_float64,
-            UnaryFunc::Ascii => ascii,
-            UnaryFunc::ExtractIntervalYear => extract_interval_year,
-            UnaryFunc::ExtractIntervalMonth => extract_interval_month,
-            UnaryFunc::ExtractIntervalDay => extract_interval_day,
-            UnaryFunc::ExtractIntervalHour => extract_interval_hour,
-            UnaryFunc::ExtractIntervalMinute => extract_interval_minute,
-            UnaryFunc::ExtractIntervalSecond => extract_interval_second,
-            UnaryFunc::ExtractTimestampYear => extract_timestamp_year,
-            UnaryFunc::ExtractTimestampQuarter => extract_timestamp_quarter,
-            UnaryFunc::ExtractTimestampMonth => extract_timestamp_month,
-            UnaryFunc::ExtractTimestampDay => extract_timestamp_day,
-            UnaryFunc::ExtractTimestampHour => extract_timestamp_hour,
-            UnaryFunc::ExtractTimestampMinute => extract_timestamp_minute,
-            UnaryFunc::ExtractTimestampSecond => extract_timestamp_second,
-            UnaryFunc::ExtractTimestampWeek => extract_timestamp_week,
-            UnaryFunc::ExtractTimestampDayOfYear => extract_timestamp_dayofyear,
-            UnaryFunc::ExtractTimestampDayOfWeek => extract_timestamp_dayofweek,
-            UnaryFunc::ExtractTimestampIsoDayOfWeek => extract_timestamp_isodayofweek,
-            UnaryFunc::ExtractTimestampTzYear => extract_timestamptz_year,
-            UnaryFunc::ExtractTimestampTzQuarter => extract_timestamptz_quarter,
-            UnaryFunc::ExtractTimestampTzMonth => extract_timestamptz_month,
-            UnaryFunc::ExtractTimestampTzDay => extract_timestamptz_day,
-            UnaryFunc::ExtractTimestampTzHour => extract_timestamptz_hour,
-            UnaryFunc::ExtractTimestampTzMinute => extract_timestamptz_minute,
-            UnaryFunc::ExtractTimestampTzSecond => extract_timestamptz_second,
-            UnaryFunc::ExtractTimestampTzWeek => extract_timestamptz_week,
-            UnaryFunc::ExtractTimestampTzDayOfYear => extract_timestamptz_dayofyear,
-            UnaryFunc::ExtractTimestampTzDayOfWeek => extract_timestamptz_dayofweek,
-            UnaryFunc::ExtractTimestampTzIsoDayOfWeek => extract_timestamptz_isodayofweek,
+            UnaryFunc::Not => not(a),
+            UnaryFunc::IsNull => is_null(a),
+            UnaryFunc::NegInt32 => neg_int32(a),
+            UnaryFunc::NegInt64 => neg_int64(a),
+            UnaryFunc::NegFloat32 => neg_float32(a),
+            UnaryFunc::NegFloat64 => neg_float64(a),
+            UnaryFunc::NegDecimal => neg_decimal(a),
+            UnaryFunc::AbsInt32 => abs_int32(a),
+            UnaryFunc::AbsInt64 => abs_int64(a),
+            UnaryFunc::AbsFloat32 => abs_float32(a),
+            UnaryFunc::AbsFloat64 => abs_float64(a),
+            UnaryFunc::CastBoolToString => cast_bool_to_string(a),
+            UnaryFunc::CastInt32ToBool => cast_int32_to_bool(a),
+            UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32(a),
+            UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64(a),
+            UnaryFunc::CastInt32ToInt64 => cast_int32_to_int64(a),
+            UnaryFunc::CastInt32ToDecimal => cast_int32_to_decimal(a),
+            UnaryFunc::CastInt32ToString => cast_int32_to_string(a, temp_storage),
+            UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32(a),
+            UnaryFunc::CastInt64ToBool => cast_int64_to_bool(a),
+            UnaryFunc::CastInt64ToDecimal => cast_int64_to_decimal(a),
+            UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32(a),
+            UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64(a),
+            UnaryFunc::CastInt64ToString => cast_int64_to_string(a, temp_storage),
+            UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64(a),
+            UnaryFunc::CastFloat32ToFloat64 => cast_float32_to_float64(a),
+            UnaryFunc::CastFloat32ToString => cast_float32_to_string(a, temp_storage),
+            UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64(a),
+            UnaryFunc::CastFloat64ToString => cast_float64_to_string(a, temp_storage),
+            UnaryFunc::CastDecimalToInt32 => cast_decimal_to_int32(a),
+            UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64(a),
+            UnaryFunc::CastSignificandToFloat32 => cast_significand_to_float32(a),
+            UnaryFunc::CastSignificandToFloat64 => cast_significand_to_float64(a),
+            UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
+            UnaryFunc::CastStringToBytes => cast_string_to_bytes(a, temp_storage),
+            UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp(a),
+            UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz(a),
+            UnaryFunc::CastDateToString => cast_date_to_string(a, temp_storage),
+            UnaryFunc::CastDecimalToString(scale) => {
+                cast_decimal_to_string(a, *scale, temp_storage)
+            }
+            UnaryFunc::CastTimestampToDate => cast_timestamp_to_date(a),
+            UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz(a),
+            UnaryFunc::CastTimestampToString => cast_timestamp_to_string(a, temp_storage),
+            UnaryFunc::CastTimestampTzToDate => cast_timestamptz_to_date(a),
+            UnaryFunc::CastTimestampTzToTimestamp => cast_timestamptz_to_timestamp(a),
+            UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string(a, temp_storage),
+            UnaryFunc::CastIntervalToString => cast_interval_to_string(a, temp_storage),
+            UnaryFunc::CastBytesToString => cast_bytes_to_string(a, temp_storage),
+            UnaryFunc::CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
+            UnaryFunc::CastJsonbToString => cast_jsonb_to_string(a, temp_storage),
+            UnaryFunc::CastJsonbToStringUnlessString => {
+                cast_jsonb_to_string_unless_string(a, temp_storage)
+            }
+            UnaryFunc::CeilFloat32 => ceil_float32(a),
+            UnaryFunc::CeilFloat64 => ceil_float64(a),
+            UnaryFunc::CeilDecimal(scale) => ceil_decimal(a, *scale),
+            UnaryFunc::FloorFloat32 => floor_float32(a),
+            UnaryFunc::FloorFloat64 => floor_float64(a),
+            UnaryFunc::FloorDecimal(scale) => floor_decimal(a, *scale),
+            UnaryFunc::SqrtFloat32 => sqrt_float32(a),
+            UnaryFunc::SqrtFloat64 => sqrt_float64(a),
+            UnaryFunc::Ascii => ascii(a),
+            UnaryFunc::MatchRegex(regex) => match_cached_regex(a, &regex),
+            UnaryFunc::ExtractIntervalYear => extract_interval_year(a),
+            UnaryFunc::ExtractIntervalMonth => extract_interval_month(a),
+            UnaryFunc::ExtractIntervalDay => extract_interval_day(a),
+            UnaryFunc::ExtractIntervalHour => extract_interval_hour(a),
+            UnaryFunc::ExtractIntervalMinute => extract_interval_minute(a),
+            UnaryFunc::ExtractIntervalSecond => extract_interval_second(a),
+            UnaryFunc::ExtractTimestampYear => extract_timestamp_year(a),
+            UnaryFunc::ExtractTimestampQuarter => extract_timestamp_quarter(a),
+            UnaryFunc::ExtractTimestampMonth => extract_timestamp_month(a),
+            UnaryFunc::ExtractTimestampDay => extract_timestamp_day(a),
+            UnaryFunc::ExtractTimestampHour => extract_timestamp_hour(a),
+            UnaryFunc::ExtractTimestampMinute => extract_timestamp_minute(a),
+            UnaryFunc::ExtractTimestampSecond => extract_timestamp_second(a),
+            UnaryFunc::ExtractTimestampWeek => extract_timestamp_week(a),
+            UnaryFunc::ExtractTimestampDayOfYear => extract_timestamp_dayofyear(a),
+            UnaryFunc::ExtractTimestampDayOfWeek => extract_timestamp_dayofweek(a),
+            UnaryFunc::ExtractTimestampIsoDayOfWeek => extract_timestamp_isodayofweek(a),
+            UnaryFunc::ExtractTimestampTzYear => extract_timestamptz_year(a),
+            UnaryFunc::ExtractTimestampTzQuarter => extract_timestamptz_quarter(a),
+            UnaryFunc::ExtractTimestampTzMonth => extract_timestamptz_month(a),
+            UnaryFunc::ExtractTimestampTzDay => extract_timestamptz_day(a),
+            UnaryFunc::ExtractTimestampTzHour => extract_timestamptz_hour(a),
+            UnaryFunc::ExtractTimestampTzMinute => extract_timestamptz_minute(a),
+            UnaryFunc::ExtractTimestampTzSecond => extract_timestamptz_second(a),
+            UnaryFunc::ExtractTimestampTzWeek => extract_timestamptz_week(a),
+            UnaryFunc::ExtractTimestampTzDayOfYear => extract_timestamptz_dayofyear(a),
+            UnaryFunc::ExtractTimestampTzDayOfWeek => extract_timestamptz_dayofweek(a),
+            UnaryFunc::ExtractTimestampTzIsoDayOfWeek => extract_timestamptz_isodayofweek(a),
             UnaryFunc::DateTrunc(to) => match to {
-                DateTruncTo::Micros => date_trunc_microseconds,
-                DateTruncTo::Millis => date_trunc_milliseconds,
-                DateTruncTo::Second => date_trunc_second,
-                DateTruncTo::Minute => date_trunc_minute,
-                DateTruncTo::Hour => date_trunc_hour,
-                DateTruncTo::Day => date_trunc_day,
-                DateTruncTo::Week => date_trunc_week,
-                DateTruncTo::Month => date_trunc_month,
-                DateTruncTo::Quarter => date_trunc_quarter,
-                DateTruncTo::Year => date_trunc_year,
-                DateTruncTo::Decade => date_trunc_decade,
-                DateTruncTo::Century => date_trunc_century,
-                DateTruncTo::Millennium => date_trunc_millennium,
+                DateTruncTo::Micros => date_trunc_microseconds(a),
+                DateTruncTo::Millis => date_trunc_milliseconds(a),
+                DateTruncTo::Second => date_trunc_second(a),
+                DateTruncTo::Minute => date_trunc_minute(a),
+                DateTruncTo::Hour => date_trunc_hour(a),
+                DateTruncTo::Day => date_trunc_day(a),
+                DateTruncTo::Week => date_trunc_week(a),
+                DateTruncTo::Month => date_trunc_month(a),
+                DateTruncTo::Quarter => date_trunc_quarter(a),
+                DateTruncTo::Year => date_trunc_year(a),
+                DateTruncTo::Decade => date_trunc_decade(a),
+                DateTruncTo::Century => date_trunc_century(a),
+                DateTruncTo::Millennium => date_trunc_millennium(a),
             },
         }
     }
 
     /// Reports whether this function has a symbolic string representation.
-    pub fn display_is_symbolic(self) -> bool {
+    pub fn display_is_symbolic(&self) -> bool {
         let out = match self {
             UnaryFunc::Not
             | UnaryFunc::NegInt32
@@ -1943,13 +1819,15 @@ impl UnaryFunc {
         out
     }
 
-    pub fn output_type(self, input_type: ColumnType) -> ColumnType {
+    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
         use UnaryFunc::*;
         let in_nullable = input_type.nullable;
         match self {
             IsNull | CastInt32ToBool | CastInt64ToBool => ColumnType::new(ScalarType::Bool),
 
             Ascii => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
+
+            MatchRegex(_) => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
 
             CastStringToBytes => ColumnType::new(ScalarType::Bytes).nullable(in_nullable),
 
@@ -1958,6 +1836,7 @@ impl UnaryFunc {
             | CastInt64ToString
             | CastFloat32ToString
             | CastFloat64ToString
+            | CastDecimalToString(_)
             | CastDateToString
             | CastTimestampToString
             | CastTimestampTzToString
@@ -2010,6 +1889,13 @@ impl UnaryFunc {
             CeilFloat64 | FloorFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
+            CeilDecimal(scale) | FloorDecimal(scale) => {
+                match input_type.scalar_type {
+                    ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
+                    _ => unreachable!(),
+                }
+                ColumnType::new(input_type.scalar_type).nullable(in_nullable)
+            }
 
             SqrtFloat32 => ColumnType::new(ScalarType::Float32).nullable(true),
             SqrtFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
@@ -2053,7 +1939,7 @@ impl UnaryFunc {
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
-    pub fn propagates_nulls(self) -> bool {
+    pub fn propagates_nulls(&self) -> bool {
         match self {
             UnaryFunc::IsNull => false,
             _ => true,
@@ -2095,6 +1981,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
             UnaryFunc::CastDecimalToInt32 => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
+            UnaryFunc::CastDecimalToString(_) => f.write_str("dectostr"),
             UnaryFunc::CastSignificandToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastSignificandToFloat64 => f.write_str("dectof64"),
             UnaryFunc::CastStringToBytes => f.write_str("strtobytes"),
@@ -2115,11 +2002,14 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastJsonbToStringUnlessString => f.write_str("jsonbtostr?"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
+            UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
             UnaryFunc::FloorFloat64 => f.write_str("floorf64"),
+            UnaryFunc::FloorDecimal(_) => f.write_str("floordec"),
             UnaryFunc::SqrtFloat32 => f.write_str("sqrtf32"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
+            UnaryFunc::MatchRegex(regex) => write!(f, "{} ~", regex.as_str()),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
             UnaryFunc::ExtractIntervalDay => f.write_str("ivextractday"),
@@ -2156,7 +2046,7 @@ impl fmt::Display for UnaryFunc {
     }
 }
 
-pub fn coalesce<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     datums
         .iter()
         .find(|d| !d.is_null())
@@ -2164,7 +2054,7 @@ pub fn coalesce<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum
         .unwrap_or(Datum::Null)
 }
 
-pub fn substr<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let string: &'a str = datums[0].unwrap_str();
     let mut chars = string.chars();
 
@@ -2192,7 +2082,7 @@ pub fn substr<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'
     }
 }
 
-pub fn length<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let string = datums[0].unwrap_str();
 
     if datums.len() == 2 {
@@ -2227,7 +2117,7 @@ pub fn length<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'
     }
 }
 
-pub fn replace<'a>(datums: &[Datum<'a>], _: &EvalEnv, temp_storage: &'a RowArena) -> Datum<'a> {
+fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(
         temp_storage.push_string(
             datums[0]
@@ -2237,7 +2127,7 @@ pub fn replace<'a>(datums: &[Datum<'a>], _: &EvalEnv, temp_storage: &'a RowArena
     )
 }
 
-pub fn make_timestamp<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
         Err(_) => return Datum::Null,
@@ -2272,7 +2162,7 @@ pub fn make_timestamp<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) ->
     Datum::Timestamp(timestamp)
 }
 
-#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
     MakeTimestamp,
@@ -2282,17 +2172,22 @@ pub enum VariadicFunc {
 }
 
 impl VariadicFunc {
-    pub fn func(self) -> for<'a> fn(&[Datum<'a>], &EvalEnv, &'a RowArena) -> Datum<'a> {
+    pub fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        _env: &'a EvalEnv,
+        temp_storage: &'a RowArena,
+    ) -> Datum<'a> {
         match self {
-            VariadicFunc::Coalesce => coalesce,
-            VariadicFunc::MakeTimestamp => make_timestamp,
-            VariadicFunc::Substr => substr,
-            VariadicFunc::Length => length,
-            VariadicFunc::Replace => replace,
+            VariadicFunc::Coalesce => coalesce(datums),
+            VariadicFunc::MakeTimestamp => make_timestamp(datums),
+            VariadicFunc::Substr => substr(datums),
+            VariadicFunc::Length => length(datums),
+            VariadicFunc::Replace => replace(datums, temp_storage),
         }
     }
 
-    pub fn output_type(self, input_types: Vec<ColumnType>) -> ColumnType {
+    pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
         use VariadicFunc::*;
         match self {
             Coalesce => {
@@ -2312,7 +2207,7 @@ impl VariadicFunc {
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
-    pub fn propagates_nulls(self) -> bool {
+    pub fn propagates_nulls(&self) -> bool {
         match self {
             VariadicFunc::Coalesce => false,
             _ => true,
