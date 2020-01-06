@@ -18,11 +18,13 @@ use bytes::{Buf, BufMut, BytesMut};
 use tokio::io;
 use tokio_util::codec::{Decoder, Encoder};
 
+use ore::cast::CastFrom;
+use ore::netio;
+
 use crate::message::{
     BackendMessage, EncryptionType, FrontendMessage, TransactionStatus, VERSION_CANCEL,
     VERSION_GSSENC, VERSION_SSL,
 };
-use ore::netio;
 
 #[derive(Debug)]
 enum CodecError {
@@ -252,7 +254,7 @@ enum DecodeState {
 const MAX_FRAME_SIZE: usize = 8 << 10;
 
 fn parse_frame_len(src: &[u8]) -> Result<usize, io::Error> {
-    let n = cast::usize(NetworkEndian::read_u32(src));
+    let n = usize::cast_from(NetworkEndian::read_u32(src));
     if n > MAX_FRAME_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
