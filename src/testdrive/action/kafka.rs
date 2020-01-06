@@ -164,21 +164,21 @@ impl IngestAction {
             RawSchema::Avro { key_schema, schema } => {
                 let schema_id = if self.publish {
                     let ccsr_subject = format!("{}-value", topic_name);
-                    state
+                    let schema_id = state
                         .ccsr_client
                         .publish_schema(&ccsr_subject, &schema)
-                        .map_err(|e| format!("schema registry error: {}", e))?
+                        .map_err(|e| format!("schema registry error: {}", e))?;
+                    if let Some(key_schema) = key_schema {
+                        let key_subject = format!("{}-key", topic_name);
+                        state
+                            .ccsr_client
+                            .publish_schema(&key_subject, &key_schema)
+                            .map_err(|e| format!("schema registry error: {}", e))?;
+                    }
+                    schema_id
                 } else {
                     1
                 };
-                if let Some(key_schema) = key_schema {
-                    let key_subject = format!("{}-key", topic_name);
-                    state
-                        .ccsr_client
-                        .publish_schema(&key_subject, &key_schema)
-                        .map_err(|e| format!("schema registry error: {}", e))?;
-                }
-
                 let schema = interchange::avro::parse_schema(&schema)
                     .map_err(|e| format!("parsing avro schema: {}", e))?;
                 ParsedSchema::Avro { schema, schema_id }
