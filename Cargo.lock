@@ -83,10 +83,11 @@ dependencies = [
 
 [[package]]
 name = "atty"
-version = "0.2.13"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1803c647a3ec87095e7ae7acfca019e98de5ec9a7d01343f611cf3152ed71a90"
+checksum = "d9b39be18770d11421cdb1b9947a45dd3f37e93092cbf377614828a319d5fee8"
 dependencies = [
+ "hermit-abi",
  "libc",
  "winapi 0.3.7",
 ]
@@ -1203,6 +1204,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20564e78d53d2bb135c343b3f47714a56af2061f1c928fdb541dc7b9fdd94205"
 dependencies = [
  "unicode-segmentation",
+]
+
+[[package]]
+name = "hermit-abi"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eff2656d88f158ce120947499e971d743c05dbcbed62e5bd2f38f1698bbc3772"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
