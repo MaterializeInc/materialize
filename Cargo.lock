@@ -69,6 +69,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cff77d8686867eceff3105329d4698d96c2391c176d5d03adc90c7389162b5b8"
+
+[[package]]
 name = "assert_cmd"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -547,7 +553,7 @@ version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fedcd6772e37f3da2a9af9bf12ebe046c0dfe657992377b4df982a2b54cd37a9"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.4.10",
  "cfg-if",
  "crossbeam-utils",
  "lazy_static",
@@ -2256,10 +2262,11 @@ dependencies = [
 
 [[package]]
 name = "pretty"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6ad86e4e9548d9f207d92e3394acb3bcce392e17da2476987a7588b8c0ca0df"
+checksum = "2644ed738e02455d10d8aaa34d9a044e00bf062ad59748db500eea44bb75a44c"
 dependencies = [
+ "arrayvec 0.5.1",
  "typed-arena",
 ]
 
