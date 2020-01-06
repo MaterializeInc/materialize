@@ -712,7 +712,7 @@ fn handle_create_dataflow(
             url,
             with_options,
         } => {
-            if with_options.len() < 1 {
+            if with_options.is_empty() {
                 bail!("Sink requires a `schema_registry_url` WITH option.")
             } else if with_options.len() > 1 {
                 bail!("WITH options other than `schema_registry_url` are not yet supported")
@@ -739,7 +739,7 @@ fn handle_create_dataflow(
 
             // Send new schema to registry, get back the schema id for the sink
             let url: Url = schema_registry_url.clone().parse().unwrap();
-            let ccsr_client = ccsr::Client::new(url.clone());
+            let ccsr_client = ccsr::Client::new(url);
             let schema_id = ccsr_client
                 .publish_schema(&topic, &schema.to_string())
                 .unwrap();

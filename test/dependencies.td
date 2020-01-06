@@ -103,15 +103,6 @@ catalog item 'test2' does not exist
 ! DROP VIEW test4;
 catalog item 'test4' does not exist
 
-# Test that sinks cannot be depended upon.
-
-> CREATE MATERIALIZED VIEW v1 AS SELECT 1;
-
-> CREATE SINK s1 FROM v1 INTO 'kafka://${testdrive.kafka-addr}/v'
-
-! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
-catalog item 's1' is a sink and so cannot be depended upon
-
 > CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
@@ -122,6 +113,12 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 {"before": null, "after": null}
+
+> CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = 'http://localhost:8081');
+
+# Test that sinks cannot be depended upon.
+! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
+catalog item 's1' is a sink and so cannot be depended upon
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT X from s;
 
@@ -229,4 +226,6 @@ catalog item 'i4' does not exist
 #cleanup
 > DROP VIEW v2;
 
-> DROP SOURCE s;
+# TODO(@jldlaughlin): Implement DROP SINK and add these back
+#> DROP SINK s1;
+#> DROP SOURCE s;
