@@ -73,17 +73,25 @@ impl Action for SqlAction {
             let backoff = Duration::from_millis(100 * 2_u64.pow(i));
             match self.try_redo(&mut state.pgclient, &query) {
                 Ok(()) => {
+                    if i > 0 {
+                        println!();
+                    }
                     println!("rows match; continuing");
                     return Ok(());
                 }
                 Err(err) => {
-                    if i >= max {
-                        return Err(err);
-                    } else {
-                        println!(
-                            "rows didn't match; sleeping {:?} to see if dataflow catches up",
+                    if i == 0 {
+                        print!(
+                            "rows didn't match; sleeping to see if dataflow catches up {:?}",
                             backoff
                         );
+                        io::stdout().flush().unwrap();
+                    } else if i < max {
+                        print!(" {:?}", backoff);
+                        io::stdout().flush().unwrap();
+                    } else {
+                        println!();
+                        return Err(err);
                     }
                 }
             }
