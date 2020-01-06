@@ -189,7 +189,11 @@ impl RelationExpr {
                 );
                 for keys in input_typ.keys {
                     if keys.iter().all(|k| outputs.contains(k)) {
-                        output_typ = output_typ.add_keys(keys);
+                        output_typ = output_typ.add_keys(
+                            keys.iter()
+                                .map(|c| outputs.iter().position(|o| o == c).unwrap())
+                                .collect(),
+                        );
                     }
                 }
                 output_typ
