@@ -718,22 +718,15 @@ fn handle_create_dataflow(
                 bail!("WITH options other than `schema_registry_url` are not yet supported")
             }
 
-            let mut schema_registry_url = None; // value assigned here is never used Clippy...
             let with_op = &with_options[0];
-            match with_op.name.value.as_str() {
-                "schema_registry_url" => {
-                    schema_registry_url = match &with_op.value {
-                        Value::SingleQuotedString(s) => Some(s),
-                        _ => bail!(
+            let schema_registry_url = match with_op.name.value.as_str() {
+                "schema_registry_url" => match &with_op.value {
+                    Value::SingleQuotedString(s) => s,
+                    _ => bail!(
                         "Schema registry URL must be a string, e.g. 'kafka://localhost/{schema}'."
                     ),
-                    }
-                }
+                },
                 _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
-            }
-            let schema_registry_url = match schema_registry_url {
-                Some(url) => url.clone(),
-                None => bail!("Sink requires a `schema_registry_url` WITH option."),
             };
 
             let name = name.try_into()?;
@@ -745,7 +738,7 @@ fn handle_create_dataflow(
             let schema = interchange::avro::encode_schema(&relation_desc)?;
 
             // Send new schema to registry, get back the schema id for the sink
-            let url: Url = schema_registry_url.parse().unwrap();
+            let url: Url = schema_registry_url.clone().parse().unwrap();
             let ccsr_client = ccsr::Client::new(url.clone());
             let schema_id = ccsr_client
                 .publish_schema(&topic, &schema.to_string())
@@ -755,7 +748,6 @@ fn handle_create_dataflow(
                 from: (catalog_entry.id(), relation_desc),
                 connector: SinkConnector::Kafka(KafkaSinkConnector {
                     addr,
-                    schema_registry_url: url,
                     topic,
                     schema_id,
                 }),
