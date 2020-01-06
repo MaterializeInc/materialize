@@ -1535,13 +1535,7 @@ fn plan_function<'a>(
                 Ok(match ecx.column_type(&expr).scalar_type {
                     ScalarType::Float32 => expr.call_unary(UnaryFunc::CeilFloat32),
                     ScalarType::Float64 => expr.call_unary(UnaryFunc::CeilFloat64),
-                    ScalarType::Decimal(_, scale) => expr.call_binary(
-                        ScalarExpr::literal(
-                            Datum::from(scale as i32),
-                            ColumnType::new(ScalarType::Null), // ignored
-                        ),
-                        BinaryFunc::CeilDecimal,
-                    ),
+                    ScalarType::Decimal(_, s) => expr.call_unary(UnaryFunc::CeilDecimal(s)),
                     _ => unreachable!(),
                 })
             }
@@ -1582,13 +1576,7 @@ fn plan_function<'a>(
                 Ok(match ecx.column_type(&expr).scalar_type {
                     ScalarType::Float32 => expr.call_unary(UnaryFunc::FloorFloat32),
                     ScalarType::Float64 => expr.call_unary(UnaryFunc::FloorFloat64),
-                    ScalarType::Decimal(_, scale) => expr.call_binary(
-                        ScalarExpr::literal(
-                            Datum::from(scale as i32),
-                            ColumnType::new(ScalarType::Null), // ignored
-                        ),
-                        BinaryFunc::FloorDecimal,
-                    ),
+                    ScalarType::Decimal(_, s) => expr.call_unary(UnaryFunc::FloorDecimal(s)),
                     _ => unreachable!(),
                 })
             }
@@ -2893,10 +2881,7 @@ where
                 .call_binary(factor, BinaryFunc::DivFloat64)
         }
         (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, s1, s2),
-        (Decimal(_, s), String) => {
-            let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
-            expr.call_binary(s, BinaryFunc::CastDecimalToString)
-        }
+        (Decimal(_, s), String) => expr.call_unary(UnaryFunc::CastDecimalToString(s)),
         (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
         (Date, TimestampTz) => expr.call_unary(CastDateToTimestampTz),
         (Date, String) => expr.call_unary(CastDateToString),

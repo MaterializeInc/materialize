@@ -283,9 +283,5 @@ pub fn optimize(
                 }
             }
         }
-        ScalarExpr::MatchCachedRegex { .. } => DatumKnowledge {
-            value: None,
-            nullable: true,
-        },
     }
 }

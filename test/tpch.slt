@@ -198,7 +198,7 @@ Let {
       [(3, 2), (4, 0)]
     ],
     Filter {
-      predicates: [#5 = 15, #4 ~ ^.*BRASS$],
+      predicates: [^.*BRASS$ ~ #4, #5 = 15],
       Get { part (u5) }
     },
     Get { partsupp (u9) },
@@ -623,7 +623,7 @@ Reduce {
       [(2, 0), (3, 0)],
       [(4, 3), (5, 0)]
     ],
-    Filter { predicates: [#1 ~ ^green$], Get { part (u5) } },
+    Filter { predicates: [^green$ ~ #1], Get { part (u5) } },
     Get { partsupp (u9) },
     Get { lineitem (u15) },
     Get { orders (u13) },
@@ -839,7 +839,7 @@ Let {
     variables: [[(0, 0), (1, 1)]],
     Get { customer (u11) },
     Filter {
-      predicates: [!(#8 ~ ^.*special.*requests.*$)],
+      predicates: [!(^.*special.*requests.*$ ~ #8)],
       Get { orders (u13) }
     }
   }
@@ -899,7 +899,7 @@ Let {
   l0 = Reduce {
     group_key: [],
     aggregates: [
-      sum(if #20 ~ ^PROMO.*$ then #5 * (100dec - #6) else 0dec),
+      sum(if ^PROMO.*$ ~ #20 then #5 * (100dec - #6) else 0dec),
       sum(#5 * (100dec - #6))
     ],
     Join {
@@ -1029,7 +1029,7 @@ Let {
     Get { partsupp (u9) },
     Filter {
       predicates: [
-        !(#4 ~ ^MEDIUM POLISHED.*$),
+        !(^MEDIUM POLISHED.*$ ~ #4),
         (
           (
             (
@@ -1061,7 +1061,7 @@ Let {
       Get { l3 },
       Get { l3 },
       Filter {
-        predicates: [#6 ~ ^.*Customer.*Complaints.*$],
+        predicates: [^.*Customer.*Complaints.*$ ~ #6],
         Get { supplier (u7) }
       }
     }
@@ -1453,7 +1453,7 @@ Let {
       aggregates: [any(true)],
       Join {
         variables: [[(0, 0), (1, 0), (2, 0)]],
-        Filter { predicates: [#1 ~ ^forest.*$], Get { part (u5) } },
+        Filter { predicates: [^forest.*$ ~ #1], Get { part (u5) } },
         Get { l8 },
         Get { l8 }
       }

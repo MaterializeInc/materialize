@@ -85,7 +85,7 @@ impl FoldConstants {
                             let temp_storage = RowArena::new();
                             let row = Row::pack(key.into_iter().chain(
                                 aggregates.iter().enumerate().map(|(i, agg)| {
-                                    (agg.func.func())(
+                                    agg.func.eval(
                                         vals.iter().map(|val| val[i].unpack_first()),
                                         env,
                                         &temp_storage,
@@ -155,7 +155,7 @@ impl FoldConstants {
                         .flat_map(|(input_row, diff)| {
                             let datums = input_row.unpack();
                             let temp_storage = RowArena::new();
-                            let output_rows = (func.func())(
+                            let output_rows = func.eval(
                                 expr.eval(&datums, env, &temp_storage),
                                 env,
                                 &temp_storage,

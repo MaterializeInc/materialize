@@ -273,7 +273,7 @@ Project {
       [(3, 3), (4, 0)],
       [(4, 2), (5, 0)]
     ],
-    Filter { predicates: [#4 ~ ^.*b$], Get { item (u15) } },
+    Filter { predicates: [^.*b$ ~ #4], Get { item (u15) } },
     Filter {
       predicates: [!isnull #1],
       Reduce {
@@ -289,7 +289,7 @@ Project {
           Map { scalars: [i32toi64 #0], Get { supplier (u21) } },
           Get { nation (u19) },
           Filter {
-            predicates: [#1 ~ ^EUROP.*$],
+            predicates: [^EUROP.*$ ~ #1],
             Get { region (u23) }
           }
         }
@@ -298,7 +298,7 @@ Project {
     Filter { predicates: [!isnull #2], Get { stock (u17) } },
     Map { scalars: [i32toi64 #0], Get { supplier (u21) } },
     Get { nation (u19) },
-    Filter { predicates: [#1 ~ ^EUROP.*$], Get { region (u23) } }
+    Filter { predicates: [^EUROP.*$ ~ #1], Get { region (u23) } }
   }
 }
 
@@ -339,7 +339,7 @@ Project {
         predicates: [datetots #4 > 2007-01-02 00:00:00],
         Get { "order" (u11) }
       },
-      Filter { predicates: [#9 ~ ^A.*$], Get { customer (u5) } }
+      Filter { predicates: [^A.*$ ~ #9], Get { customer (u5) } }
     }
   }
 }
@@ -610,7 +610,7 @@ Project {
           [(5, 2), (6, 0)],
           [(7, 3), (8, 0)]
         ],
-        Filter { predicates: [#4 ~ ^.*b$], Get { item (u15) } },
+        Filter { predicates: [^.*b$ ~ #4], Get { item (u15) } },
         Filter {
           predicates: [!isnull #4, #4 < 1000],
           Get { orderline (u13) }
@@ -665,7 +665,7 @@ Reduce {
       [(3, 17), (4, 7)],
       [(4, 3), (5, 0)]
     ],
-    Filter { predicates: [#4 ~ ^.*BB$], Get { item (u15) } },
+    Filter { predicates: [^.*BB$ ~ #4], Get { item (u15) } },
     Get { orderline (u13) },
     Get { "order" (u11) },
     Get { stock (u17) },
@@ -864,7 +864,7 @@ AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 Let {
   l0 = Reduce {
     group_key: [],
-    aggregates: [sum(if #14 ~ ^PR.*$ then #8 else 0dec), sum(#8)],
+    aggregates: [sum(if ^PR.*$ ~ #14 then #8 else 0dec), sum(#8)],
     Join {
       variables: [[(0, 4), (1, 0)]],
       Filter {
@@ -977,7 +977,7 @@ Let {
   l0 = Join {
     variables: [[(0, 0), (1, 0)]],
     Get { stock (u17) },
-    Filter { predicates: [!(#4 ~ ^zz.*$)], Get { item (u15) } }
+    Filter { predicates: [!(^zz.*$ ~ #4)], Get { item (u15) } }
   }
 } in
 Let { l3 = Distinct { group_key: [#17], Get { l0 } } } in
@@ -989,7 +989,7 @@ Let {
       variables: [[(0, 0), (1, 0)]],
       Get { l3 },
       Get { l3 },
-      Filter { predicates: [#6 ~ ^.*bad.*$], Get { supplier (u21) } }
+      Filter { predicates: [^.*bad.*$ ~ #6], Get { supplier (u21) } }
     }
   }
 } in
@@ -1047,7 +1047,7 @@ Let {
             Join {
               variables: [[(0, 4), (1, 0)]],
               Get { orderline (u13) },
-              Filter { predicates: [#4 ~ ^.*b$], Get { item (u15) } }
+              Filter { predicates: [^.*b$ ~ #4], Get { item (u15) } }
             }
           }
         }
@@ -1144,12 +1144,12 @@ Let {
     Filter {
       predicates: [
         (
-          ((#14 ~ ^.*a$) && (((#2 = 1) || (#2 = 2)) || (#2 = 3)))
+          ((^.*a$ ~ #14) && (((#2 = 1) || (#2 = 2)) || (#2 = 3)))
           ||
-          ((#14 ~ ^.*b$) && (((#2 = 1) || (#2 = 2)) || (#2 = 4)))
+          ((^.*b$ ~ #14) && (((#2 = 1) || (#2 = 2)) || (#2 = 4)))
         )
         ||
-        ((#14 ~ ^.*c$) && (((#2 = 1) || (#2 = 5)) || (#2 = 3)))
+        ((^.*c$ ~ #14) && (((#2 = 1) || (#2 = 5)) || (#2 = 3)))
       ],
       Join {
         variables: [[(0, 4), (1, 0)]],
@@ -1237,7 +1237,7 @@ Project {
             },
             Get { l7 },
             Get { l7 },
-            Filter { predicates: [#4 ~ ^co.*$], Get { item (u15) } }
+            Filter { predicates: [^co.*$ ~ #4], Get { item (u15) } }
           }
         }
       }

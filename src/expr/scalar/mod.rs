@@ -48,8 +48,6 @@ pub enum ScalarExpr {
         then: Box<ScalarExpr>,
         els: Box<ScalarExpr>,
     },
-    /// A call to BinaryFunc::MatchRegex for which we have precompiled the regex
-    MatchCachedRegex { expr: Box<ScalarExpr>, regex: Regex },
 }
 
 impl ScalarExpr {
@@ -114,9 +112,6 @@ impl ScalarExpr {
                 f(then);
                 f(els);
             }
-            ScalarExpr::MatchCachedRegex { expr, .. } => {
-                f(expr);
-            }
         }
     }
 
@@ -152,9 +147,6 @@ impl ScalarExpr {
                 f(cond);
                 f(then);
                 f(els);
-            }
-            ScalarExpr::MatchCachedRegex { expr, .. } => {
-                f(expr);
             }
         }
     }
@@ -270,10 +262,9 @@ impl ScalarExpr {
                         Datum::Null => null(),
                         Datum::String(string) => {
                             match func::build_like_regex_from_string(&string) {
-                                Ok(regex) => ScalarExpr::MatchCachedRegex {
-                                    expr: Box::new(expr1.take()),
-                                    regex: Regex(regex),
-                                },
+                                Ok(regex) => {
+                                    expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex)))
+                                }
                                 Err(_) => null(),
                             }
                         }
@@ -322,11 +313,6 @@ impl ScalarExpr {
                     }
                 }
             }
-            ScalarExpr::MatchCachedRegex { expr, .. } => {
-                if expr.is_literal() {
-                    *e = eval(e);
-                }
-            }
         });
     }
 
@@ -357,9 +343,6 @@ impl ScalarExpr {
                 }
             }
             ScalarExpr::If { .. } => (),
-            ScalarExpr::MatchCachedRegex { expr, .. } => {
-                expr.non_null_requirements(columns);
-            }
         }
     }
 
@@ -385,49 +368,45 @@ impl ScalarExpr {
                     else_type.nullable(nullable)
                 }
             }
-            ScalarExpr::MatchCachedRegex { expr, .. } => {
-                let nullable = expr.typ(relation_type).nullable;
-                ColumnType::new(ScalarType::Bool).nullable(nullable)
-            }
         }
     }
 
     pub fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
-        env: &EvalEnv,
+        env: &'a EvalEnv,
         temp_storage: &'a RowArena,
     ) -> Datum<'a> {
         match self {
             ScalarExpr::Column(index) => datums[*index].clone(),
             ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
-            ScalarExpr::CallNullary(func) => (func.func())(env, temp_storage),
+            ScalarExpr::CallNullary(func) => func.eval(env, temp_storage),
             ScalarExpr::CallUnary { func, expr } => {
-                let eval = expr.eval(datums, env, temp_storage);
-                if func.propagates_nulls() && eval.is_null() {
+                let datum = expr.eval(datums, env, temp_storage);
+                if func.propagates_nulls() && datum.is_null() {
                     Datum::Null
                 } else {
-                    (func.func())(eval, env, temp_storage)
+                    func.eval(datum, env, temp_storage)
                 }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let eval1 = expr1.eval(datums, env, temp_storage);
-                let eval2 = expr2.eval(datums, env, temp_storage);
-                if func.propagates_nulls() && (eval1.is_null() || eval2.is_null()) {
+                let a = expr1.eval(datums, env, temp_storage);
+                let b = expr2.eval(datums, env, temp_storage);
+                if func.propagates_nulls() && (a.is_null() || b.is_null()) {
                     Datum::Null
                 } else {
-                    (func.func())(eval1, eval2, env, temp_storage)
+                    func.eval(a, b, env, temp_storage)
                 }
             }
             ScalarExpr::CallVariadic { func, exprs } => {
-                let evals = exprs
+                let datums = exprs
                     .iter()
                     .map(|e| e.eval(datums, env, temp_storage))
                     .collect::<Vec<_>>();
-                if func.propagates_nulls() && evals.iter().any(|e| e.is_null()) {
+                if func.propagates_nulls() && datums.iter().any(|e| e.is_null()) {
                     Datum::Null
                 } else {
-                    (func.func())(&evals, env, temp_storage)
+                    func.eval(&datums, env, temp_storage)
                 }
             }
             ScalarExpr::If { cond, then, els } => match cond.eval(datums, env, temp_storage) {
@@ -435,10 +414,6 @@ impl ScalarExpr {
                 Datum::False | Datum::Null => els.eval(datums, env, temp_storage),
                 d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
             },
-            ScalarExpr::MatchCachedRegex { expr, regex } => {
-                let eval = expr.eval(datums, env, temp_storage);
-                func::match_cached_regex(eval, regex)
-            }
         }
     }
 
@@ -453,10 +428,14 @@ impl ScalarExpr {
         use ScalarExpr::*;
 
         let needs_wrap = |expr: &ScalarExpr| match expr {
-            Column(_) | Literal(_, _) | CallUnary { .. } | CallVariadic { .. } | CallNullary(_) => {
-                false
-            }
-            CallBinary { .. } | If { .. } | MatchCachedRegex { .. } => true,
+            CallUnary { func, .. } => match func {
+                // `UnaryFunc::MatchRegex` renders as a binary function that
+                // matches the embedded regex.
+                UnaryFunc::MatchRegex(_) => true,
+                _ => false,
+            },
+            CallBinary { .. } | If { .. } => true,
+            Column(_) | Literal(_, _) | CallVariadic { .. } | CallNullary(_) => false,
         };
 
         let maybe_wrap = |expr| {
@@ -501,12 +480,6 @@ impl ScalarExpr {
                 .append(alloc.line())
                 .append("else")
                 .append(alloc.line().append(els.to_doc(alloc)).nest(2)),
-            ScalarExpr::MatchCachedRegex { expr, regex } => maybe_wrap(expr)
-                .group()
-                .append(alloc.line())
-                .append(BinaryFunc::MatchRegex.to_string())
-                .append(alloc.line())
-                .append(regex.as_str()),
         }
         .group()
     }

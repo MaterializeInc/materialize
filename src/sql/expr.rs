@@ -296,12 +296,13 @@ impl RelationExpr {
                 let old_arity = input.arity();
                 let expr = expr.applied_to(id_gen, get_outer.arity(), &mut input)?;
                 let new_arity = input.arity();
+                let output_arity = func.output_arity();
                 input = input.flat_map_unary(func, expr);
                 if old_arity != new_arity {
                     // this means we added some columns to handle subqueries, and now we need to get rid of them
                     input = input.project(
                         (0..old_arity)
-                            .chain(new_arity..new_arity + func.output_arity())
+                            .chain(new_arity..new_arity + output_arity)
                             .collect(),
                     );
                 }
