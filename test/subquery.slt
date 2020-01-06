@@ -228,7 +228,7 @@ Let {
     Get { t3 (u41) }
   }
 } in
-Let { l2 = Distinct { group_key: [2], Get { l0 } } } in
+Let { l2 = Distinct { group_key: [#2], Get { l0 } } } in
 Project {
   outputs: [0, 0, 2],
   Map {
@@ -237,7 +237,7 @@ Project {
       variables: [[(0, 2), (1, 0)]],
       Get { l0 },
       Distinct {
-        group_key: [1],
+        group_key: [#1],
         Join {
           variables: [[(0, 0), (1, 0), (2, 0)]],
           Get { t2 (u39) },

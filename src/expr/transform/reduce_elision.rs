@@ -36,11 +36,10 @@ impl ReduceElision {
         } = relation
         {
             let input_type = input.typ();
-            if input_type
-                .keys
-                .iter()
-                .any(|keys| keys.iter().all(|k| group_key.contains(k)))
-            {
+            if input_type.keys.iter().any(|keys| {
+                keys.iter()
+                    .all(|k| group_key.contains(&crate::ScalarExpr::Column(*k)))
+            }) {
                 use crate::{AggregateFunc, ScalarExpr, UnaryFunc};
                 use repr::Datum;
                 let map_scalars = aggregates
@@ -68,22 +67,15 @@ impl ReduceElision {
 
                 let mut result = input.take_dangerous();
 
-                // If we have any scalars to map, append them to the end.
-                if !map_scalars.is_empty() {
-                    result = result.map(map_scalars);
-                }
-
-                // We may require a project.
-                if group_key.len() != input_type.column_types.len()
-                    || group_key.iter().enumerate().any(|(x, y)| x != *y)
-                {
-                    let mut projection = group_key.clone();
-                    projection.extend(
-                        input_type.column_types.len()
-                            ..(input_type.column_types.len() + aggregates.len()),
-                    );
-                    result = result.project(projection);
-                }
+                // Append the group keys, then any `map_scalars`, then project
+                // to put them all in the right order.
+                let mut new_scalars = group_key.clone();
+                new_scalars.extend(map_scalars);
+                result = result.map(new_scalars).project(
+                    (input_type.column_types.len()
+                        ..(input_type.column_types.len() + (group_key.len() + aggregates.len())))
+                        .collect(),
+                );
 
                 *relation = result;
             }

@@ -163,7 +163,7 @@ impl NonNullRequirements {
                     // No obvious requirements on aggregate columns.
                     // A "non-empty" requirement, I guess?
                     if column < group_key.len() {
-                        new_columns.insert(group_key[column]);
+                        group_key[column].non_null_requirements(&mut new_columns);
                     }
                     if column == group_key.len()
                         && aggregates.len() == 1

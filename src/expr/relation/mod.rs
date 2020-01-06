@@ -106,7 +106,7 @@ pub enum RelationExpr {
         /// The source collection.
         input: Box<RelationExpr>,
         /// Column indices used to form groups.
-        group_key: Vec<usize>,
+        group_key: Vec<ScalarExpr>,
         /// Expressions which determine values to append to each row, after the group keys.
         aggregates: Vec<AggregateExpr>,
     },
@@ -260,7 +260,7 @@ impl RelationExpr {
                 let input_typ = input.typ();
                 let mut column_types = group_key
                     .iter()
-                    .map(|&i| input_typ.column_types[i].clone())
+                    .map(|e| e.typ(&input_typ))
                     .collect::<Vec<_>>();
                 for agg in aggregates {
                     column_types.push(agg.typ(&input_typ));
@@ -271,10 +271,18 @@ impl RelationExpr {
                 // those instead, if so.
                 let mut keys = Vec::new();
                 for key in input_typ.keys.iter() {
-                    if key.iter().all(|k| group_key.contains(k)) {
+                    if key
+                        .iter()
+                        .all(|k| group_key.contains(&ScalarExpr::Column(*k)))
+                    {
                         keys.push(
                             key.iter()
-                                .map(|i| group_key.iter().position(|k| k == i).unwrap())
+                                .map(|i| {
+                                    group_key
+                                        .iter()
+                                        .position(|k| k == &ScalarExpr::Column(*i))
+                                        .unwrap()
+                                })
                                 .collect::<Vec<_>>(),
                         );
                     }
@@ -452,7 +460,10 @@ impl RelationExpr {
     pub fn reduce(self, group_key: Vec<usize>, aggregates: Vec<AggregateExpr>) -> Self {
         RelationExpr::Reduce {
             input: Box::new(self),
-            group_key,
+            group_key: group_key
+                .into_iter()
+                .map(|c| ScalarExpr::Column(c))
+                .collect(),
             aggregates,
         }
     }
@@ -807,7 +818,7 @@ impl RelationExpr {
                 let input = input.to_doc(alloc, id_humanizer);
                 let keys = alloc
                     .compact_intersperse(
-                        tighten_outputs(group_key),
+                        group_key.iter().map(|s| s.to_doc(alloc)),
                         alloc.text(",").append(alloc.line()),
                     )
                     .tightly_embrace("group_key: [", "]");
@@ -1317,20 +1328,20 @@ Constant [[665]]"#
 
         let reduce = RelationExpr::Reduce {
             input: Box::new(base()),
-            group_key: vec![1, 2],
+            group_key: vec![ScalarExpr::Column(1), ScalarExpr::Column(2)],
             aggregates: vec![agg0, agg1],
         };
 
         assert_eq!(
             reduce.doc().pretty(84).to_string(),
-            "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
+            "Reduce { group_key: [#1, #2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
         );
 
         assert_eq!(
             reduce.doc().pretty(16).to_string(),
             "Reduce {
   group_key: [
-    1, 2
+    #1, #2
   ],
   aggregates: [
     sum(#0),

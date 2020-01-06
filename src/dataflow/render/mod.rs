@@ -782,10 +782,15 @@ where
                 .map({
                     let env = env.clone();
                     let group_key = group_key.clone();
+                    let temp_storage = RowArena::new();
                     move |row| {
                         let datums = row.unpack();
 
-                        let keys = Row::pack(group_key.iter().map(|i| datums[*i]));
+                        let keys = Row::pack(
+                            group_key
+                                .iter()
+                                .map(|i| i.eval(&datums, &env, &temp_storage)),
+                        );
 
                         let mut vals = RowPacker::new();
                         let mut aggs = vec![1i128];

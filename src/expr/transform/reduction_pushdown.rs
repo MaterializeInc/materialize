@@ -31,24 +31,46 @@ impl ReductionPushdown {
             aggregates,
         } = relation
         {
-            // Map expressions can possibly be absorbed into the Reduce at no cost.
+            // Map expressions can be absorbed into the Reduce at no cost.
             if let RelationExpr::Map {
                 input: inner,
                 scalars,
             } = &mut **input
             {
-                if scalars.iter().all(|e| e.is_literal()) {
-                    let arity = inner.arity();
-                    let keys_check = group_key.iter().all(|k| k < &arity);
-                    let agg_check = aggregates
-                        .iter()
-                        .all(|e| e.expr.support().iter().all(|c| c < &arity));
-                    if keys_check && agg_check {
-                        **input = inner.take_dangerous();
-                    }
+                let arity = inner.arity();
+
+                // Normalize the scalars to not be self-referential.
+                let mut scalars = scalars.clone();
+                for index in 0..scalars.len() {
+                    let (lower, upper) = scalars.split_at_mut(index);
+                    upper[0].visit_mut(&mut |e| {
+                        if let crate::ScalarExpr::Column(c) = e {
+                            if *c >= arity {
+                                *e = lower[*c - arity].clone();
+                            }
+                        }
+                    });
                 }
-            } else if let RelationExpr::Join { .. } = &**input {
-                // println!("ReducePushdown opportunity: {}", relation.pretty());
+                for key in group_key.iter_mut() {
+                    key.visit_mut(&mut |e| {
+                        if let crate::ScalarExpr::Column(c) = e {
+                            if *c >= arity {
+                                *e = scalars[*c - arity].clone();
+                            }
+                        }
+                    });
+                }
+                for agg in aggregates.iter_mut() {
+                    agg.expr.visit_mut(&mut |e| {
+                        if let crate::ScalarExpr::Column(c) = e {
+                            if *c >= arity {
+                                *e = scalars[*c - arity].clone();
+                            }
+                        }
+                    });
+                }
+
+                **input = inner.take_dangerous()
             }
         }
     }

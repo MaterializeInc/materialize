@@ -142,8 +142,8 @@ impl ColumnKnowledge {
             } => {
                 let input_knowledge = ColumnKnowledge::harvest(input, env, knowledge);
                 let mut output = group_key
-                    .iter()
-                    .map(|k| input_knowledge[*k].clone())
+                    .iter_mut()
+                    .map(|k| optimize(k, env, &input_knowledge[..]))
                     .collect::<Vec<_>>();
                 for _aggregate in aggregates {
                     // This could be improved.
