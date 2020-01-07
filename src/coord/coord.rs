@@ -1394,7 +1394,8 @@ where
             0 => (None, None, vec![]),
             1 => {
                 let stmt = stmts.into_element();
-                let (desc, param_types) = match sql::describe(&self.catalog, stmt.clone()) {
+                let (desc, param_types) = match sql::describe(&self.catalog, session, stmt.clone())
+                {
                     Ok((desc, param_types)) => (desc, param_types),
                     // Describing the query failed. If we're running in symbiosis with
                     // Postgres, see if Postgres can handle it. Note that Postgres
