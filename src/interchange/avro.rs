@@ -556,23 +556,90 @@ impl Encoder {
         let mut buf = Vec::new();
         buf.write_u8(0).unwrap();
         buf.write_i32::<NetworkEndian>(schema_id).unwrap();
-        for row in self.row_to_avro(row).unwrap() {
-            buf.extend(row)
-        }
+        buf.extend(self.row_to_avro(row).unwrap());
         buf
     }
 
-    fn row_to_avro(&self, row: &Row) -> Result<Vec<Vec<u8>>, failure::Error> {
-        Ok(match &self.writer_schema {
+    fn row_to_avro(&self, row: &Row) -> Result<Vec<u8>, failure::Error> {
+        avro_rs::to_avro_datum(
+            &self.writer_schema,
+            self.data_to_avro(&self.writer_schema, row.unpack())
+                .unwrap(),
+        )
+    }
+
+    fn data_to_avro(
+        &self,
+        record_schema: &Schema,
+        data: Vec<Datum>,
+    ) -> Result<avro_rs::types::Value, failure::Error> {
+        let value = match record_schema {
+            Schema::Null => avro_rs::types::Value::Null,
+            Schema::Boolean => avro_rs::types::Value::Boolean(data[0].unwrap_bool()),
+            Schema::Int => avro_rs::types::Value::Int(data[0].unwrap_int32()),
+            Schema::Long => avro_rs::types::Value::Long(data[0].unwrap_int64()),
+            Schema::Float => avro_rs::types::Value::Float(data[0].unwrap_float32()),
+            Schema::Double => avro_rs::types::Value::Double(data[0].unwrap_float64()),
+            Schema::Date => avro_rs::types::Value::Date(data[0].unwrap_date()),
+            Schema::TimestampMilli => {
+                avro_rs::types::Value::Long(data[0].unwrap_timestamp().timestamp_millis())
+            }
+            Schema::TimestampMicro => {
+                avro_rs::types::Value::Long(data[0].unwrap_timestamp().timestamp() * 1_000_000)
+            }
+            Schema::Decimal {
+                precision,
+                scale,
+                fixed_size,
+            } => {
+                let mut buf = Vec::new();
+                BigEndian::write_i128(&mut buf, data[0].unwrap_decimal().as_i128());
+                avro_rs::types::Value::Decimal {
+                    unscaled: Vec::from(buf),
+                    precision: precision.clone(),
+                    scale: scale.clone(),
+                }
+            }
+            Schema::Bytes => avro_rs::types::Value::Bytes(Vec::from(data[0].unwrap_bytes())),
+            Schema::String => avro_rs::types::Value::String(data[0].unwrap_str().to_owned()),
+            Schema::Array(array) => {
+                let mut value_array = Vec::new();
+                for d in data[0].unwrap_list().iter() {
+                    value_array.push(self.data_to_avro(&*array, vec![d]).unwrap())
+                }
+                avro_rs::types::Value::Array(value_array)
+            }
+            Schema::Map(map) => {
+                let mut value_map = HashMap::new();
+                for (key, datum) in data[0].unwrap_dict().iter() {
+                    value_map.insert(
+                        String::from(key),
+                        self.data_to_avro(&*map, vec![datum]).unwrap(),
+                    );
+                }
+                avro_rs::types::Value::Map(value_map)
+            }
+            Schema::Union(union) => {
+                // todo: there has to be a better way to write this...
+                let mut value = None;
+                for s in union.variants() {
+                    if let Ok(v) = self.data_to_avro(s, data.clone()) {
+                        value = Some(v)
+                    }
+                }
+                match value {
+                    Some(v) => avro_rs::types::Value::Union(Box::new(v)),
+                    None => bail!("Unable to parse Datum into any Avro schema options."),
+                }
+            }
             Schema::Record {
                 name,
                 doc,
                 fields,
                 lookup,
             } => {
-                let mut avro_datums = Vec::new();
-                let datums = row.unpack();
-                for (rf, datum) in fields.iter().zip(datums) {
+                let mut vals = Vec::new();
+                for (rf, datum) in fields.iter().zip(data) {
                     match rf {
                         avro_rs::schema::RecordField {
                             name,
@@ -582,50 +649,24 @@ impl Encoder {
                             order,
                             position,
                         } => {
-                            avro_datums.push(
-                                avro_rs::to_avro_datum(
-                                    &self.writer_schema,
-                                    avro_rs::types::Value::Record(vec![(
-                                        String::from(name),
-                                        self.datum_to_avro_value(schema, datum).unwrap(),
-                                    )]),
-                                )
-                                .map_err(|e| e.to_string())
-                                .expect("Converting row to Avro failed"),
-                            );
+                            vals.push((
+                                String::from(name),
+                                self.data_to_avro(schema, vec![datum]).unwrap(),
+                            ));
                         }
-                        _ => bail!("Currently only support Avro schemas using RecordFields"),
                     }
                 }
-                avro_datums
+                avro_rs::types::Value::Record(vals)
             }
-            _ => bail!("Currently only support Avro schemas using Records"),
-        })
-    }
-
-    fn datum_to_avro_value(
-        &self,
-        record_schema: &Schema,
-        datum: Datum,
-    ) -> Result<avro_rs::types::Value, failure::Error> {
-        Ok(match record_schema {
-            Schema::String => avro_rs::types::Value::String(datum.unwrap_str().to_owned()),
-            Schema::Union(union) => {
-                let mut value = None;
-                for s in union.variants() {
-                    if let Ok(v) = self.datum_to_avro_value(s, datum) {
-                        value = Some(v)
-                    }
-                }
-                match value {
-                    Some(v) => avro_rs::types::Value::Union(Box::new(v)),
-                    None => bail!("Unable to parse Datum into any Avro schema options."),
-                }
+            Schema::Enum { name, doc, symbols } => {
+                bail!("We don't currently support Avro schemas containing an Enum type")
             }
-            _ => {
-                bail!("Currently only support Union and String");
+            Schema::Fixed { name, size } => {
+                bail!("We don't currently support Avro schemas containing a Fixed type")
             }
-        })
+        };
+        dbg!(&value);
+        Ok(value)
     }
 }
 
