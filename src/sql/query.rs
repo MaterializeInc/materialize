@@ -1937,7 +1937,31 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
-            // TODO(jamii) jsonb_typeof jsonb_strip_nulls jsonb_pretty
+            "jsonb_typeof" | "jsonb_strip_nulls" | "jsonb_pretty" => {
+                if sql_func.args.len() != 1 {
+                    bail!("{}() requires exactly two arguments", ident);
+                }
+                let jsonb = plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::Jsonb))?;
+                let typ = ecx.column_type(&jsonb);
+                if typ.scalar_type != ScalarType::Jsonb {
+                    bail!(
+                        "{}() requires jsonb as it's first argument, but got {}",
+                        ident,
+                        typ.scalar_type
+                    );
+                }
+                let expr = ScalarExpr::CallUnary {
+                    func: match ident {
+                        "jsonb_typeof" => UnaryFunc::JsonbTypeof,
+                        "jsonb_strip_nulls" => UnaryFunc::JsonbStripNulls,
+                        "jsonb_pretty" => UnaryFunc::JsonbPretty,
+                        _ => unreachable!(),
+                    },
+                    expr: Box::new(jsonb),
+                };
+                Ok(expr)
+            }
+
             _ => bail!("unsupported function: {}", ident),
         }
     }

@@ -1241,6 +1241,37 @@ fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
+fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Dict(_) => Datum::String("object"),
+        Datum::List(_) => Datum::String("array"),
+        Datum::Float64(_) => Datum::String("number"),
+        Datum::True | Datum::False => Datum::String("boolean"),
+        Datum::JsonNull => Datum::String("null"),
+        Datum::Null => Datum::Null,
+        _ => panic!("Not jsonb: {:?}", a),
+    }
+}
+
+fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    match a {
+        Datum::Dict(dict) => temp_storage.make_datum(|packer| {
+            packer.push_dict(dict.iter().filter(|(_, v)| match v {
+                Datum::JsonNull => false,
+                _ => true,
+            }))
+        }),
+        _ => Datum::Null,
+    }
+}
+
+fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(
+        // to_string_pretty shouldn't be able to fail on the output of datum_to_serde - see https://docs.serde.rs/serde_json/fn.to_string_pretty.html
+        serde_json::to_string_pretty(&datum_to_serde(a)).unwrap(),
+    ))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
@@ -1682,6 +1713,9 @@ pub enum UnaryFunc {
     ExtractTimestampTzDayOfWeek,
     ExtractTimestampTzIsoDayOfWeek,
     DateTrunc(DateTruncTo),
+    JsonbTypeof,
+    JsonbStripNulls,
+    JsonbPretty,
 }
 
 impl UnaryFunc {
@@ -1799,6 +1833,9 @@ impl UnaryFunc {
                 DateTruncTo::Century => date_trunc_century(a),
                 DateTruncTo::Millennium => date_trunc_millennium(a),
             },
+            UnaryFunc::JsonbTypeof => jsonb_typeof(a),
+            UnaryFunc::JsonbStripNulls => jsonb_strip_nulls(a, temp_storage),
+            UnaryFunc::JsonbPretty => jsonb_pretty(a, temp_storage),
         }
     }
 
@@ -1935,6 +1972,10 @@ impl UnaryFunc {
             }
 
             DateTrunc(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
+
+            JsonbTypeof => ColumnType::new(ScalarType::String).nullable(in_nullable),
+            JsonbStripNulls => ColumnType::new(ScalarType::Jsonb).nullable(true),
+            JsonbPretty => ColumnType::new(ScalarType::String).nullable(in_nullable),
         }
     }
 
@@ -2069,6 +2110,9 @@ impl fmt::Display for UnaryFunc {
                 f.write_str("date_trunc_")?;
                 f.write_str(&format!("{:?}", to).to_lowercase())
             }
+            UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),
+            UnaryFunc::JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
+            UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
         }
     }
 }
