@@ -13,10 +13,12 @@ use self::error::{InputError, ResultExt};
 use self::parser::LineReader;
 
 mod action;
+mod ddl;
 mod error;
 mod parser;
 
 pub use self::action::Config;
+use self::ddl::Ddl;
 pub use self::error::Error;
 
 pub fn run() -> Result<(), Error> {
@@ -99,15 +101,13 @@ fn run_line_reader(config: &Config, line_reader: &mut LineReader) -> Result<(), 
     // connections until after parsing.
     let mut state = action::create_state(config)?;
     let actions = action::build(cmds, &state)?;
-    for a in actions.iter().rev() {
-        a.action
-            .undo(&mut state)
-            .map_err(|e| InputError { msg: e, pos: a.pos })?;
-    }
+    let mut ddl = Ddl::new(&mut state.pgclient())?;
     for a in &actions {
-        a.action
-            .redo(&mut state)
-            .map_err(|e| InputError { msg: e, pos: a.pos })?;
+        a.action.redo(&mut state).map_err(|e| {
+            let _ = ddl.clear_since_new(state.pgclient());
+            InputError { msg: e, pos: a.pos }
+        })?;
     }
+    ddl.clear_since_new(state.pgclient())?;
     Ok(())
 }
