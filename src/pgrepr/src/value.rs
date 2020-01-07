@@ -54,31 +54,34 @@ impl Value {
     /// The conversion happens in the obvious manner, except that `Datum::Null`
     /// is converted to `None` to align with how PostgreSQL handles NULL.
     pub fn from_datum(datum: Datum, typ: &ColumnType) -> Option<Value> {
-        if let ScalarType::Jsonb = &typ.scalar_type {
+        if let Datum::Null = datum {
+            // handle null before json in case json column is nullable
+            None
+        } else if let ScalarType::Jsonb = &typ.scalar_type {
             Some(Value::Jsonb(expr::datum_to_serde(datum).to_string()))
         } else {
-            match datum {
-                Datum::Null => None,
-                Datum::True => Some(Value::Bool(true)),
-                Datum::False => Some(Value::Bool(false)),
-                Datum::Int32(i) => Some(Value::Int4(i)),
-                Datum::Int64(i) => Some(Value::Int8(i)),
-                Datum::Float32(f) => Some(Value::Float4(*f)),
-                Datum::Float64(f) => Some(Value::Float8(*f)),
-                Datum::Date(d) => Some(Value::Date(d)),
-                Datum::Timestamp(ts) => Some(Value::Timestamp(ts)),
-                Datum::TimestampTz(ts) => Some(Value::TimestampTz(ts)),
-                Datum::Interval(iv) => Some(Value::Interval(Interval(iv))),
+            Some(match datum {
+                Datum::Null => unreachable!(),
+                Datum::True => Value::Bool(true),
+                Datum::False => Value::Bool(false),
+                Datum::Int32(i) => Value::Int4(i),
+                Datum::Int64(i) => Value::Int8(i),
+                Datum::Float32(f) => Value::Float4(*f),
+                Datum::Float64(f) => Value::Float8(*f),
+                Datum::Date(d) => Value::Date(d),
+                Datum::Timestamp(ts) => Value::Timestamp(ts),
+                Datum::TimestampTz(ts) => Value::TimestampTz(ts),
+                Datum::Interval(iv) => Value::Interval(Interval(iv)),
                 Datum::Decimal(d) => {
                     let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
-                    Some(Value::Numeric(Numeric(d.with_scale(scale))))
+                    Value::Numeric(Numeric(d.with_scale(scale)))
                 }
-                Datum::Bytes(b) => Some(Value::Bytea(b.to_vec())),
-                Datum::String(s) => Some(Value::Text(s.to_owned())),
+                Datum::Bytes(b) => Value::Bytea(b.to_vec()),
+                Datum::String(s) => Value::Text(s.to_owned()),
                 Datum::JsonNull | Datum::List(_) | Datum::Dict(_) => {
                     panic!("can't serialize {}::{}", datum, typ)
                 }
-            }
+            })
         }
     }
 
