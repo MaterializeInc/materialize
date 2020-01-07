@@ -265,36 +265,39 @@ ORDER BY n_name, su_name, i_id
 ----
 Project {
   outputs: [23, 24, 31, 18, 20, 25, 27, 29],
-  Join {
-    variables: [
-      [(0, 0), (1, 0), (5, 0)],
-      [(0, 2), (5, 1)],
-      [(0, 17), (2, 0)],
-      [(2, 3), (3, 0)],
-      [(3, 2), (4, 0)]
-    ],
-    Filter { predicates: [!isnull #2], Get { stock (u17) } },
-    Filter { predicates: [^.*b$ ~ #4], Get { item (u15) } },
-    Get { supplier (u21) },
-    Get { nation (u19) },
-    Filter { predicates: [^EUROP.*$ ~ #1], Get { region (u23) } },
-    Filter {
-      predicates: [!isnull #1],
-      Reduce {
-        group_key: [#0],
-        aggregates: [min(#2)],
-        Join {
-          variables: [
-            [(0, 17), (1, 0)],
-            [(1, 3), (2, 0)],
-            [(2, 2), (3, 0)]
-          ],
-          Get { stock (u17) },
-          Get { supplier (u21) },
-          Get { nation (u19) },
+  Filter {
+    predicates: [^.*b$ ~ #22, ^EUROP.*$ ~ #35],
+    Join {
+      variables: [
+        [(0, 0), (1, 0), (5, 0)],
+        [(0, 2), (5, 1)],
+        [(0, 17), (2, 0)],
+        [(2, 3), (3, 0)],
+        [(3, 2), (4, 0)]
+      ],
+      Filter { predicates: [!isnull #2], Get { stock (u17) } },
+      ArrangeBy { columns: [#0], Get { item (u15) } },
+      ArrangeBy { columns: [#0], Get { supplier (u21) } },
+      ArrangeBy { columns: [#0], Get { nation (u19) } },
+      ArrangeBy { columns: [#0], Get { region (u23) } },
+      Filter {
+        predicates: [!isnull #1],
+        Reduce {
+          group_key: [#0],
+          aggregates: [min(#2)],
           Filter {
-            predicates: [^EUROP.*$ ~ #1],
-            Get { region (u23) }
+            predicates: [^EUROP.*$ ~ #30],
+            Join {
+              variables: [
+                [(0, 17), (1, 0)],
+                [(1, 3), (2, 0)],
+                [(2, 2), (3, 0)]
+              ],
+              Get { stock (u17) },
+              ArrangeBy { columns: [#0], Get { supplier (u21) } },
+              ArrangeBy { columns: [#0], Get { nation (u19) } },
+              ArrangeBy { columns: [#0], Get { region (u23) } }
+            }
           }
         }
       }
@@ -326,20 +329,20 @@ Project {
   Reduce {
     group_key: [#10, #23, #22, #17],
     aggregates: [sum(#8)],
-    Join {
-      variables: [
-        [(0, 0), (1, 0), (2, 0)],
-        [(0, 1), (1, 1), (2, 1), (3, 1)],
-        [(0, 2), (1, 2), (2, 2), (3, 2)],
-        [(2, 3), (3, 0)]
-      ],
-      Get { orderline (u13) },
-      Get { neworder (u9) },
-      Filter {
-        predicates: [datetots #4 > 2007-01-02 00:00:00],
-        Get { "order" (u11) }
-      },
-      Filter { predicates: [^A.*$ ~ #9], Get { customer (u5) } }
+    Filter {
+      predicates: [datetots #17 > 2007-01-02 00:00:00, ^A.*$ ~ #30],
+      Join {
+        variables: [
+          [(0, 0), (1, 0), (2, 0)],
+          [(2, 3), (3, 0)],
+          [(0, 1), (1, 1), (2, 1), (3, 1)],
+          [(0, 2), (1, 2), (2, 2), (3, 2)]
+        ],
+        Get { orderline (u13) },
+        ArrangeBy { columns: [#0, #1, #2], Get { neworder (u9) } },
+        ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
+        ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } }
+      }
     }
   }
 }
@@ -412,7 +415,7 @@ AND c_w_id = o_w_id
 AND c_d_id = o_d_id
 AND ol_o_id = o_id
 AND ol_w_id = o_w_id
-AND ol_d_id=o_d_id
+AND ol_d_id = o_d_id
 AND ol_w_id = s_w_id
 AND ol_i_id = s_i_id
 AND s_su_suppkey = su_suppkey
@@ -427,27 +430,27 @@ ORDER BY revenue DESC
 Reduce {
   group_key: [#66],
   aggregates: [sum(#8)],
-  Join {
-    variables: [
-      [(0, 0), (1, 0)],
-      [(0, 1), (1, 1), (2, 1)],
-      [(0, 2), (1, 2), (2, 2), (3, 1)],
-      [(0, 4), (3, 0)],
-      [(1, 3), (2, 0)],
-      [(2, 21), (4, 3), (5, 0)],
-      [(3, 17), (4, 0)],
-      [(5, 2), (6, 0)]
-    ],
-    Get { orderline (u13) },
-    Filter {
-      predicates: [datetots #4 >= 2007-01-02 00:00:00],
-      Get { "order" (u11) }
-    },
-    Get { customer (u5) },
-    Get { stock (u17) },
-    Get { supplier (u21) },
-    Get { nation (u19) },
-    Filter { predicates: [#1 = "EUROPE"], Get { region (u23) } }
+  Filter {
+    predicates: [datetots #14 >= 2007-01-02 00:00:00, #70 = "EUROPE"],
+    Join {
+      variables: [
+        [(0, 0), (1, 0)],
+        [(0, 4), (3, 0)],
+        [(1, 3), (2, 0)],
+        [(0, 1), (1, 1), (2, 1)],
+        [(0, 2), (1, 2), (2, 2), (3, 1)],
+        [(2, 21), (4, 3), (5, 0)],
+        [(3, 17), (4, 0)],
+        [(5, 2), (6, 0)]
+      ],
+      Get { orderline (u13) },
+      ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
+      ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } },
+      ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
+      Get { supplier (u21) },
+      ArrangeBy { columns: [#0], Get { nation (u19) } },
+      ArrangeBy { columns: [#0], Get { region (u23) } }
+    }
   }
 }
 
@@ -527,13 +530,13 @@ Reduce {
     Join {
       variables: [
         [(0, 0), (3, 0)],
-        [(0, 1), (3, 1), (4, 1)],
-        [(0, 2), (3, 2), (4, 2)],
         [(0, 4), (1, 0)],
         [(0, 5), (1, 1)],
         [(1, 17), (2, 0)],
         [(2, 3), (5, 0)],
         [(3, 3), (4, 0)],
+        [(0, 1), (3, 1), (4, 1)],
+        [(0, 2), (3, 2), (4, 2)],
         [(4, 21), (6, 0)]
       ],
       Filter {
@@ -543,12 +546,12 @@ Reduce {
         ],
         Get { orderline (u13) }
       },
-      Get { stock (u17) },
-      Get { supplier (u21) },
-      Get { "order" (u11) },
-      Get { customer (u5) },
-      Get { nation (u19) },
-      Get { nation (u19) }
+      ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
+      ArrangeBy { columns: [#0], Get { supplier (u21) } },
+      ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
+      ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } },
+      ArrangeBy { columns: [#0], Get { nation (u19) } },
+      ArrangeBy { columns: [#0], Get { nation (u19) } }
     }
   }
 }
@@ -591,37 +594,39 @@ Project {
         sum(if #75 = "GERMANY" then #8 else 0dec),
         sum(#8)
       ],
-      Join {
-        variables: [
-          [(0, 0), (4, 0)],
-          [(0, 1), (4, 1), (5, 1)],
-          [(0, 2), (4, 2), (5, 2)],
-          [(0, 4), (1, 0), (2, 0)],
-          [(0, 5), (2, 1)],
-          [(2, 17), (3, 0)],
-          [(3, 3), (7, 0)],
-          [(4, 3), (5, 0)],
-          [(5, 21), (6, 0)],
-          [(6, 2), (8, 0)]
+      Filter {
+        predicates: [
+          ^.*b$ ~ #14,
+          datetots #44 <= 2012-01-02 00:00:00,
+          datetots #44 >= 2007-01-02 00:00:00,
+          #79 = "EUROPE"
         ],
-        Filter {
-          predicates: [!isnull #4, #4 < 1000],
-          Get { orderline (u13) }
-        },
-        Filter { predicates: [^.*b$ ~ #4], Get { item (u15) } },
-        Get { stock (u17) },
-        Get { supplier (u21) },
-        Filter {
-          predicates: [
-            datetots #4 <= 2012-01-02 00:00:00,
-            datetots #4 >= 2007-01-02 00:00:00
+        Join {
+          variables: [
+            [(0, 0), (4, 0)],
+            [(0, 4), (1, 0), (2, 0)],
+            [(0, 5), (2, 1)],
+            [(2, 17), (3, 0)],
+            [(3, 3), (7, 0)],
+            [(4, 3), (5, 0)],
+            [(0, 1), (4, 1), (5, 1)],
+            [(0, 2), (4, 2), (5, 2)],
+            [(5, 21), (6, 0)],
+            [(6, 2), (8, 0)]
           ],
-          Get { "order" (u11) }
-        },
-        Get { customer (u5) },
-        Get { nation (u19) },
-        Get { nation (u19) },
-        Filter { predicates: [#1 = "EUROPE"], Get { region (u23) } }
+          Filter {
+            predicates: [!isnull #4, #4 < 1000],
+            Get { orderline (u13) }
+          },
+          ArrangeBy { columns: [#0], Get { item (u15) } },
+          ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
+          ArrangeBy { columns: [#0], Get { supplier (u21) } },
+          ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
+          ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } },
+          ArrangeBy { columns: [#0], Get { nation (u19) } },
+          ArrangeBy { columns: [#0], Get { nation (u19) } },
+          ArrangeBy { columns: [#0], Get { region (u23) } }
+        }
       }
     }
   }
@@ -649,22 +654,25 @@ ORDER BY n_name, l_year DESC
 Reduce {
   group_key: [#49, tsextractyear datetots #44],
   aggregates: [sum(#8)],
-  Join {
-    variables: [
-      [(0, 0), (4, 0)],
-      [(0, 1), (4, 1)],
-      [(0, 2), (4, 2)],
-      [(0, 4), (1, 0), (2, 0)],
-      [(0, 5), (2, 1)],
-      [(2, 17), (3, 0)],
-      [(3, 3), (5, 0)]
-    ],
-    Get { orderline (u13) },
-    Filter { predicates: [^.*BB$ ~ #4], Get { item (u15) } },
-    Get { stock (u17) },
-    Get { supplier (u21) },
-    Get { "order" (u11) },
-    Get { nation (u19) }
+  Filter {
+    predicates: [^.*BB$ ~ #14],
+    Join {
+      variables: [
+        [(0, 0), (4, 0)],
+        [(0, 1), (4, 1)],
+        [(0, 2), (4, 2)],
+        [(0, 4), (1, 0), (2, 0)],
+        [(0, 5), (2, 1)],
+        [(2, 17), (3, 0)],
+        [(3, 3), (5, 0)]
+      ],
+      Get { orderline (u13) },
+      ArrangeBy { columns: [#0], Get { item (u15) } },
+      ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
+      ArrangeBy { columns: [#0], Get { supplier (u21) } },
+      ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
+      ArrangeBy { columns: [#0], Get { nation (u19) } }
+    }
   }
 }
 
@@ -693,21 +701,21 @@ Project {
     aggregates: [sum(#8)],
     Filter {
       predicates: [#14 <= #6],
-      Join {
-        variables: [
-          [(0, 0), (1, 0)],
-          [(0, 1), (1, 1), (2, 1)],
-          [(0, 2), (1, 2), (2, 2)],
-          [(1, 3), (2, 0)],
-          [(2, 21), (3, 0)]
-        ],
-        Get { orderline (u13) },
-        Filter {
-          predicates: [datetots #4 >= 2007-01-02 00:00:00],
-          Get { "order" (u11) }
-        },
-        Get { customer (u5) },
-        Get { nation (u19) }
+      Filter {
+        predicates: [datetots #14 >= 2007-01-02 00:00:00],
+        Join {
+          variables: [
+            [(0, 0), (1, 0)],
+            [(1, 3), (2, 0)],
+            [(0, 1), (1, 1), (2, 1)],
+            [(0, 2), (1, 2), (2, 2)],
+            [(2, 21), (3, 0)]
+          ],
+          Get { orderline (u13) },
+          ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
+          ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } },
+          ArrangeBy { columns: [#0], Get { nation (u19) } }
+        }
       }
     }
   }
@@ -732,11 +740,14 @@ HAVING sum(s_order_cnt) > (
 ORDER BY ordercount DESC
 ----
 Let {
-  l0 = Join {
-    variables: [[(0, 17), (1, 0)], [(1, 3), (2, 0)]],
-    Get { stock (u17) },
-    Get { supplier (u21) },
-    Filter { predicates: [#1 = "GERMANY"], Get { nation (u19) } }
+  l0 = Filter {
+    predicates: [#26 = "GERMANY"],
+    Join {
+      variables: [[(0, 17), (1, 0)], [(1, 3), (2, 0)]],
+      Get { stock (u17) },
+      ArrangeBy { columns: [#0], Get { supplier (u21) } },
+      ArrangeBy { columns: [#0], Get { nation (u19) } }
+    }
   }
 } in
 Project {
@@ -789,7 +800,7 @@ Reduce {
         predicates: [datetots #6 < 2020-01-01 00:00:00],
         Get { orderline (u13) }
       },
-      Get { "order" (u11) }
+      ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } }
     }
   }
 }
@@ -812,9 +823,9 @@ ORDER BY custdist DESC, c_count DESC
 ----
 Let {
   l0 = Join {
-    variables: [[(0, 1), (1, 1)], [(0, 2), (1, 2)], [(0, 3), (1, 0)]],
+    variables: [[(0, 3), (1, 0)], [(0, 1), (1, 1)], [(0, 2), (1, 2)]],
     Filter { predicates: [#5 > 8], Get { "order" (u11) } },
-    Get { customer (u5) }
+    ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } }
   }
 } in
 Reduce {
@@ -868,7 +879,7 @@ Let {
         ],
         Get { orderline (u13) }
       },
-      Get { item (u15) }
+      ArrangeBy { columns: [#0], Get { item (u15) } }
     }
   }
 } in
@@ -933,7 +944,7 @@ Let {
         predicates: [datetots #6 >= 2007-01-02 00:00:00],
         Get { orderline (u13) }
       },
-      Get { stock (u17) }
+      ArrangeBy { columns: [#0, #1], Get { stock (u17) } }
     }
   }
 } in
@@ -968,10 +979,13 @@ GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC
 ----
 Let {
-  l0 = Join {
-    variables: [[(0, 0), (1, 0)]],
-    Get { stock (u17) },
-    Filter { predicates: [!(^zz.*$ ~ #4)], Get { item (u15) } }
+  l0 = Filter {
+    predicates: [!(^zz.*$ ~ #22)],
+    Join {
+      variables: [[(0, 0), (1, 0)]],
+      Get { stock (u17) },
+      ArrangeBy { columns: [#0], Get { item (u15) } }
+    }
   }
 } in
 Let { l3 = Distinct { group_key: [#17], Get { l0 } } } in
@@ -1037,10 +1051,13 @@ Let {
           Reduce {
             group_key: [#10],
             aggregates: [sum(#7), count(#7)],
-            Join {
-              variables: [[(0, 4), (1, 0)]],
-              Get { orderline (u13) },
-              Filter { predicates: [^.*b$ ~ #4], Get { item (u15) } }
+            Filter {
+              predicates: [^.*b$ ~ #14],
+              Join {
+                variables: [[(0, 4), (1, 0)]],
+                Get { orderline (u13) },
+                ArrangeBy { columns: [#0], Get { item (u15) } }
+              }
             }
           }
         }
@@ -1090,13 +1107,13 @@ Project {
       Join {
         variables: [
           [(0, 0), (1, 0)],
+          [(1, 3), (2, 0)],
           [(0, 1), (1, 1), (2, 1)],
-          [(0, 2), (1, 2), (2, 2)],
-          [(1, 3), (2, 0)]
+          [(0, 2), (1, 2), (2, 2)]
         ],
         Get { orderline (u13) },
-        Get { "order" (u11) },
-        Get { customer (u5) }
+        ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
+        ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } }
       }
     }
   }
@@ -1144,15 +1161,15 @@ Let {
         ||
         ((^.*c$ ~ #14) && (((#2 = 1) || (#2 = 5)) || (#2 = 3)))
       ],
-      Join {
-        variables: [[(0, 4), (1, 0)]],
-        Filter {
-          predicates: [#7 <= 10, #7 >= 1],
-          Get { orderline (u13) }
-        },
-        Filter {
-          predicates: [#3 <= 40000000dec, #3 >= 100dec],
-          Get { item (u15) }
+      Filter {
+        predicates: [#13 <= 40000000dec, #13 >= 100dec],
+        Join {
+          variables: [[(0, 4), (1, 0)]],
+          Filter {
+            predicates: [#7 <= 10, #7 >= 1],
+            Get { orderline (u13) }
+          },
+          ArrangeBy { columns: [#0], Get { item (u15) } }
         }
       }
     }
@@ -1189,10 +1206,13 @@ AND n_name = 'GERMANY'
 ORDER BY su_name
 ----
 Let {
-  l0 = Join {
-    variables: [[(0, 3), (1, 0)]],
-    Get { supplier (u21) },
-    Filter { predicates: [#1 = "GERMANY"], Get { nation (u19) } }
+  l0 = Filter {
+    predicates: [#8 = "GERMANY"],
+    Join {
+      variables: [[(0, 3), (1, 0)]],
+      Get { supplier (u21) },
+      ArrangeBy { columns: [#0], Get { nation (u19) } }
+    }
   }
 } in
 Let {
@@ -1219,14 +1239,20 @@ Project {
         Reduce {
           group_key: [#0, #21, #22, #23],
           aggregates: [sum(#18)],
-          Join {
-            variables: [[(0, 21), (1, 0), (2, 0)]],
-            Filter {
-              predicates: [#0 = ((#21 * #22) % 10000)],
-              Get { l3 }
-            },
-            Distinct { group_key: [#21], Get { l3 } },
-            Filter { predicates: [^co.*$ ~ #4], Get { item (u15) } }
+          Filter {
+            predicates: [^co.*$ ~ #44],
+            Map {
+              scalars: [true],
+              Join {
+                variables: [[(0, 21), (1, 0), (2, 0)]],
+                Filter {
+                  predicates: [#0 = ((#21 * #22) % 10000)],
+                  Get { l3 }
+                },
+                Distinct { group_key: [#21], Get { l3 } },
+                ArrangeBy { columns: [#0], Get { item (u15) } }
+              }
+            }
           }
         }
       }
@@ -1264,20 +1290,23 @@ ORDER BY numwait DESC, su_name
 Let {
   l0 = Filter {
     predicates: [#6 > #14],
-    Join {
-      variables: [
-        [(0, 0), (1, 0)],
-        [(0, 1), (1, 1)],
-        [(0, 2), (1, 2), (2, 1)],
-        [(0, 4), (2, 0)],
-        [(2, 17), (3, 0)],
-        [(3, 3), (4, 0)]
-      ],
-      Get { orderline (u13) },
-      Get { "order" (u11) },
-      Get { stock (u17) },
-      Get { supplier (u21) },
-      Filter { predicates: [#1 = "GERMANY"], Get { nation (u19) } }
+    Filter {
+      predicates: [#44 = "GERMANY"],
+      Join {
+        variables: [
+          [(0, 0), (1, 0)],
+          [(0, 1), (1, 1)],
+          [(0, 4), (2, 0)],
+          [(0, 2), (1, 2), (2, 1)],
+          [(2, 17), (3, 0)],
+          [(3, 3), (4, 0)]
+        ],
+        Get { orderline (u13) },
+        ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
+        ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
+        ArrangeBy { columns: [#0], Get { supplier (u21) } },
+        ArrangeBy { columns: [#0], Get { nation (u19) } }
+      }
     }
   }
 } in

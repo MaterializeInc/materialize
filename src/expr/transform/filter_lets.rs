@@ -3,7 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{EvalEnv, Id, LocalId, RelationExpr, ScalarExpr};
+use std::collections::HashMap;
+
+use crate::{EvalEnv, GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
 
 /// Pushes common filter predicates on gets into the let binding.
 ///
@@ -16,7 +18,12 @@ use crate::{EvalEnv, Id, LocalId, RelationExpr, ScalarExpr};
 pub struct FilterLets;
 
 impl super::Transform for FilterLets {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

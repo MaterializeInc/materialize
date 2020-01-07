@@ -62,7 +62,7 @@ use indexmap::IndexMap;
 
 use repr::RelationType;
 
-use crate::{EvalEnv, Id, LocalId, RelationExpr};
+use crate::{EvalEnv, GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
 
 // -----------------------------------------------------------------------------
 
@@ -215,7 +215,12 @@ impl Hoist {
 
 impl super::Transform for Hoist {
     /// Hoist all bindings to the top of a dataflow graph.
-    fn transform(&self, expr: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        expr: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         Hoist::hoist(expr);
     }
 }
@@ -277,7 +282,12 @@ impl Unbind {
 
 impl super::Transform for Unbind {
     /// Perform the unbind optimization.
-    fn transform(&self, expr: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        expr: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         Unbind::unbind(expr);
     }
 }
@@ -452,7 +462,12 @@ impl Deduplicate {
 
 impl super::Transform for Deduplicate {
     /// Deduplicate repeated subgraphs.
-    fn transform(&self, expr: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        expr: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         Deduplicate::deduplicate(expr);
     }
 }

@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{EvalEnv, Id, RelationExpr, UnaryTableFunc};
+use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, UnaryTableFunc};
 
 /// Drive non-null requirements to `RelationExpr::Constant` collections.
 ///
@@ -29,7 +29,12 @@ use crate::{EvalEnv, Id, RelationExpr, UnaryTableFunc};
 pub struct NonNullRequirements;
 
 impl crate::transform::Transform for NonNullRequirements {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

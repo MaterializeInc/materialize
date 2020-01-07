@@ -3,7 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{EvalEnv, RelationExpr};
+use std::collections::HashMap;
+
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 /// Re-order relations in a join to minimize the size of intermediate results.
 /// To minimize intermediate results, ensure each additional relation
@@ -47,7 +49,12 @@ use crate::{EvalEnv, RelationExpr};
 pub struct JoinOrder;
 
 impl super::Transform for JoinOrder {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

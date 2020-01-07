@@ -3,7 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{EvalEnv, RelationExpr, ScalarExpr};
+use std::collections::HashMap;
+
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 /// Extracts simple projections from the scalar expressions in a `Map` operator
 /// into a `Project`, so they can be subjected to other optimizations.
@@ -11,7 +13,12 @@ use crate::{EvalEnv, RelationExpr, ScalarExpr};
 pub struct ProjectionExtraction;
 
 impl super::Transform for ProjectionExtraction {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

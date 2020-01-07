@@ -568,7 +568,7 @@ where
                 // Related: Is there anything that optimizes to a constant expression that originally
                 // contains a global get? Is there anything not containing a global get that cannot be optimized to
                 // a constant expression?
-                self.optimizer.optimize(&mut source, &eval_env);
+                self.optimize(&mut source, &eval_env);
 
                 // If this optimizes to a constant expression, we can immediately return the result.
                 if let RelationExpr::Constant { rows, typ: _ } = source {
@@ -725,7 +725,7 @@ where
 
             Plan::ExplainPlan(mut relation_expr, mut eval_env) => {
                 eval_env.wall_time = Some(chrono::Utc::now());
-                self.optimizer.optimize(&mut relation_expr, &eval_env);
+                self.optimize(&mut relation_expr, &eval_env);
                 let pretty = relation_expr.pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
                 send_immediate_rows(rows)
@@ -843,7 +843,7 @@ where
                             *id,
                         );
                     } else {
-                        self.build_view_collection(id, &view, dataflow);
+                        self.build_view_collection(id, &view, dataflow, false);
                     }
                 }
                 _ => unreachable!(),
@@ -851,14 +851,32 @@ where
         }
     }
 
+    fn optimize(&mut self, expr: &mut RelationExpr, env: &EvalEnv) {
+        let mut indexes = HashMap::new();
+        expr.visit(&mut |e| {
+            if let RelationExpr::Get {
+                id: Id::Global(id),
+                typ: _,
+            } = e
+            {
+                if let Some(view) = self.views.get(id) {
+                    if let Some(materialization_state) = &view.materialization {
+                        indexes.insert(*id, materialization_state.get_all_idx_keys().clone());
+                    }
+                }
+            }
+        });
+        self.optimizer.optimize(expr, &indexes, env);
+    }
+
     fn build_view_collection(
         &mut self,
         view_id: &GlobalId,
         view: &dataflow_types::View,
         dataflow: &mut DataflowDesc,
+        optimized: bool,
     ) {
         let mut view_to_build = view.clone();
-        // Collect names of sources used
         view_to_build.relation_expr.visit(&mut |e| {
             if let RelationExpr::Get {
                 id: Id::Global(id),
@@ -869,10 +887,32 @@ where
                 dataflow.add_dependency(*view_id, *id)
             }
         });
-        self.optimizer
-            .optimize(&mut view_to_build.relation_expr, &view_to_build.eval_env);
-        // TODO (wangandi): Add indexes required by the view according to the optimizer
-        // to dataflow.dependent_indexes
+        // optimize the view RelationExpr. If this is being called from the peek command,
+        // the RelationExpr has already been optimized.
+        if !optimized {
+            self.optimize(&mut view_to_build.relation_expr, &view_to_build.eval_env);
+        }
+        // Collect sources, views, and indexes used.
+        view_to_build.relation_expr.visit(&mut |e| {
+            if let RelationExpr::ArrangeBy { input, keys } = e {
+                if let RelationExpr::Get {
+                    id: Id::Global(on_id),
+                    typ,
+                } = &**input
+                {
+                    let index_desc = IndexDesc {
+                        on_id: *on_id,
+                        keys: keys.to_vec(),
+                    };
+                    dataflow.add_index_import(
+                        self.indexes[&index_desc].1,
+                        index_desc,
+                        typ.clone(),
+                        *view_id,
+                    );
+                }
+            }
+        });
         dataflow.add_view_to_build(*view_id, view_to_build);
     }
 
@@ -903,7 +943,7 @@ where
     ) -> Result<(), failure::Error> {
         self.insert_view(id, &view, None);
         let mut dataflow = DataflowDesc::new(view_name.clone());
-        self.build_view_collection(&id, &view, &mut dataflow);
+        self.build_view_collection(&id, &view, &mut dataflow, true);
         let index_name = QualName::from_str(&view_name)?.with_trailing_string("_PRIMARY_IDX");
         let index = view.auto_generate_primary_idx(id);
         let index_id = if as_of.is_some() {

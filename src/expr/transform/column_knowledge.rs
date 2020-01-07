@@ -8,14 +8,19 @@ use std::collections::HashMap;
 use repr::Datum;
 use repr::{ColumnType, ScalarType};
 
-use crate::{EvalEnv, RelationExpr, ScalarExpr, UnaryFunc};
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
 pub struct ColumnKnowledge;
 
 impl super::Transform for ColumnKnowledge {
-    fn transform(&self, expr: &mut RelationExpr, env: &EvalEnv) {
+    fn transform(
+        &self,
+        expr: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        env: &EvalEnv,
+    ) {
         self.transform(expr, env)
     }
 }

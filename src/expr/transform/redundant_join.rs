@@ -6,15 +6,21 @@
 // If statements seem a bit clearer in this case. Specialized methods
 // that replace simple and common alternatives frustrate developers.
 #![allow(clippy::comparison_chain, clippy::filter_next)]
+use std::collections::HashMap;
 
-use crate::relation::RelationExpr;
 use crate::scalar::EvalEnv;
+use crate::{GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct RedundantJoin;
 
 impl super::Transform for RedundantJoin {
-    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        env: &EvalEnv,
+    ) {
         self.transform(relation, env)
     }
 }

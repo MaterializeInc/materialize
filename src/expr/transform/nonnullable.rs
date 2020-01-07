@@ -3,16 +3,23 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::collections::HashMap;
+
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 use crate::relation::AggregateExpr;
-use crate::{AggregateFunc, EvalEnv, RelationExpr, ScalarExpr, UnaryFunc};
+use crate::{AggregateFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 
 #[derive(Debug)]
 pub struct NonNullable;
 
 impl super::Transform for NonNullable {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }
