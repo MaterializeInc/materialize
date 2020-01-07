@@ -221,11 +221,74 @@ impl FoldConstants {
                     };
                 }
             }
-            RelationExpr::Join { inputs, .. } => {
+            RelationExpr::Join {
+                inputs, variables, ..
+            } => {
                 if inputs.iter().any(|e| e.is_empty()) {
                     relation.take_safely();
-                } else if inputs.is_empty() {
-                    *relation = RelationExpr::constant(vec![vec![]], repr::RelationType::empty());
+                } else if inputs.iter().all(|i| {
+                    if let RelationExpr::Constant { .. } = i {
+                        true
+                    } else {
+                        false
+                    }
+                }) {
+                    // We can fold all constant inputs together, but must apply the constraints to restrict them.
+                    // We start with a single 0-ary row.
+                    let mut old_rows = vec![(Row::pack::<_, Datum>(None), 1)];
+                    for input in inputs.iter() {
+                        if let RelationExpr::Constant { rows, .. } = input {
+                            let mut next_rows = Vec::new();
+                            for (old_row, old_count) in old_rows {
+                                for (new_row, new_count) in rows.iter() {
+                                    let old_datums = old_row.unpack();
+                                    let new_datums = new_row.unpack();
+                                    next_rows.push((
+                                        Row::pack(old_datums.iter().chain(new_datums.iter())),
+                                        old_count * *new_count,
+                                    ));
+                                }
+                            }
+                            old_rows = next_rows;
+                        }
+                    }
+
+                    let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+                    let input_arities = input_types
+                        .iter()
+                        .map(|i| i.column_types.len())
+                        .collect::<Vec<_>>();
+
+                    let mut offset = 0;
+                    let mut prior_arities = Vec::new();
+                    for input in 0..inputs.len() {
+                        prior_arities.push(offset);
+                        offset += input_arities[input];
+                    }
+
+                    let input_relation = input_arities
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+                        .collect::<Vec<_>>();
+
+                    // Now throw away anything that doesn't satisfy the requisite constraints.
+                    old_rows.retain(|(row, _count)| {
+                        let datums = row.unpack();
+                        variables.iter().filter(|v| !v.is_empty()).all(|variable| {
+                            let (rel, col) = variable[0];
+                            let datum = datums[prior_arities[input_relation[rel]] + col];
+                            variable[1..].iter().all(|(rel, col)| {
+                                datum == datums[prior_arities[input_relation[*rel]] + col]
+                            })
+                        })
+                    });
+
+                    let typ = relation.typ();
+                    *relation = RelationExpr::Constant {
+                        rows: old_rows,
+                        typ,
+                    };
                 }
                 // TODO: General constant folding for all constant inputs.
             }
