@@ -88,6 +88,7 @@ impl RedundantJoin {
                     variable.sort();
                     variable.dedup();
                 }
+                variables.retain(|v| v.len() > 1);
                 *demand = None;
             }
             if projection.iter().enumerate().any(|(i, p)| i != *p) {

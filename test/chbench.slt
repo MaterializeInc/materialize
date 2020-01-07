@@ -390,8 +390,7 @@ Reduce {
           variables: [
             [(0, 0), (1, 0)],
             [(0, 1), (1, 1)],
-            [(0, 2), (1, 2)],
-            [(1, 4)]
+            [(0, 2), (1, 2)]
           ],
           Get { orderline (u13) },
           Get { l0 }
@@ -985,7 +984,7 @@ Let {
     group_key: [#0],
     aggregates: [all(#0 != i32toi64 #1)],
     Join {
-      variables: [[(0, 0)]],
+      variables: [],
       Get { l3 },
       Filter { predicates: [^.*bad.*$ ~ #6], Get { supplier (u21) } }
     }
@@ -1202,7 +1201,7 @@ Let {
 } in
 Let {
   l3 = Join {
-    variables: [[(0, 0)], [(1, 4), (2, 0)]],
+    variables: [[(1, 4), (2, 0)]],
     Get { l0 },
     Filter {
       predicates: [datetots #6 > 2010-05-23 12:00:00],
@@ -1312,8 +1311,7 @@ Reduce {
                   variables: [
                     [(0, 0), (1, 0)],
                     [(0, 1), (1, 1)],
-                    [(0, 2), (1, 2)],
-                    [(0, 3)]
+                    [(0, 2), (1, 2)]
                   ],
                   Get { l2 },
                   Get { orderline (u13) }

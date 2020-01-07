@@ -1050,7 +1050,7 @@ Let {
     group_key: [#0],
     aggregates: [all(#0 != #1)],
     Join {
-      variables: [[(0, 0)]],
+      variables: [],
       Get { l3 },
       Filter {
         predicates: [^.*Customer.*Complaints.*$ ~ #6],
@@ -1424,7 +1424,7 @@ Let {
 } in
 Let {
   l4 = Join {
-    variables: [[(0, 0)]],
+    variables: [],
     Distinct { group_key: [#0], Get { l0 } },
     Get { partsupp (u9) }
   }
@@ -1544,7 +1544,7 @@ Let {
         Filter {
           predicates: [#4 != #1],
           Join {
-            variables: [[(0, 0), (1, 0)], [(0, 1)]],
+            variables: [[(0, 0), (1, 0)]],
             Distinct { group_key: [#11, #0], Get { l1 } },
             Get { lineitem (u15) }
           }
@@ -1571,7 +1571,7 @@ Reduce {
               Filter {
                 predicates: [#4 != #1],
                 Join {
-                  variables: [[(0, 0), (1, 0)], [(0, 1)]],
+                  variables: [[(0, 0), (1, 0)]],
                   Get { l5 },
                   Filter {
                     predicates: [#12 > #11],
