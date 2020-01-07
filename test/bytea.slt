@@ -1,0 +1,27 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc
+
+# Tests for the bytea type.
+
+mode cockroach
+
+statement ok
+CREATE TABLE test (ord int, b bytea)
+
+statement ok
+INSERT INTO test VALUES (0, 'hello'), (1, '你好'), (2, NULL), (3, ''), (4, 'nonprintablechar:')
+
+query II rowsort
+SELECT ord, length(b::bytea) FROM test
+----
+0 5
+1 6
+2 NULL
+3 0
+4 18
+
+
+query error length expects only one argument when first argument has type bytea, got 2
+SELECT length('a'::bytea, 'utf-8')
