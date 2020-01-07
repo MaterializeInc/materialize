@@ -6,8 +6,8 @@
 use chrono::NaiveDate;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use rand::Rng;
-
 use repr::{Datum, Row};
+use std::cmp::Ordering;
 
 fn bench_sort_datums(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
@@ -19,6 +19,27 @@ fn bench_sort_row(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
         .map(|row| Row::pack(row))
         .collect::<Vec<_>>();
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
+}
+
+fn bench_sort_iter(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+    let rows = rows
+        .into_iter()
+        .map(|row| Row::pack(row))
+        .collect::<Vec<_>>();
+    b.iter_with_setup(
+        || rows.clone(),
+        |mut rows| {
+            rows.sort_by(move |a, b| {
+                for (a, b) in a.iter().zip(b.iter()) {
+                    match a.cmp(&b) {
+                        Ordering::Equal => (),
+                        non_equal => return non_equal,
+                    }
+                }
+                Ordering::Equal
+            });
+        },
+    )
 }
 
 fn bench_sort_unpack(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
@@ -124,6 +145,7 @@ pub fn bench_sort(c: &mut Criterion) {
         bench_sort_datums(int_rows.clone(), b)
     });
     c.bench_function("sort_row_ints", |b| bench_sort_row(int_rows.clone(), b));
+    c.bench_function("sort_iter_ints", |b| bench_sort_iter(int_rows.clone(), b));
     c.bench_function("sort_unpack_ints", |b| {
         bench_sort_unpack(int_rows.clone(), b)
     });
@@ -135,6 +157,7 @@ pub fn bench_sort(c: &mut Criterion) {
         bench_sort_datums(byte_rows.clone(), b)
     });
     c.bench_function("sort_row_bytes", |b| bench_sort_row(byte_rows.clone(), b));
+    c.bench_function("sort_iter_bytes", |b| bench_sort_iter(byte_rows.clone(), b));
     c.bench_function("sort_unpack_bytes", |b| {
         bench_sort_unpack(byte_rows.clone(), b)
     });
