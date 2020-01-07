@@ -506,6 +506,23 @@ fn jsonb_each<'a>(a: Datum<'a>) -> Vec<Row> {
     }
 }
 
+fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<Row> {
+    match a {
+        Datum::Dict(dict) => dict
+            .iter()
+            .map(|(k, _)| Row::pack(&[Datum::String(k)]))
+            .collect(),
+        _ => vec![],
+    }
+}
+
+fn jsonb_array_elements<'a>(a: Datum<'a>) -> Vec<Row> {
+    match a {
+        Datum::List(list) => list.iter().map(|e| Row::pack(&[e])).collect(),
+        _ => vec![],
+    }
+}
+
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -548,6 +565,8 @@ impl fmt::Display for AggregateFunc {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UnaryTableFunc {
     JsonbEach,
+    JsonbObjectKeys,
+    JsonbArrayElements,
 }
 
 impl UnaryTableFunc {
@@ -559,23 +578,27 @@ impl UnaryTableFunc {
     ) -> Vec<Row> {
         match self {
             UnaryTableFunc::JsonbEach => jsonb_each(datum),
+            UnaryTableFunc::JsonbObjectKeys => jsonb_object_keys(datum),
+            UnaryTableFunc::JsonbArrayElements => jsonb_array_elements(datum),
         }
     }
 
     pub fn output_type(&self, _input_type: &ColumnType) -> RelationType {
-        match self {
-            UnaryTableFunc::JsonbEach => RelationType::new(vec![
-                // key
+        RelationType::new(match self {
+            UnaryTableFunc::JsonbEach => vec![
                 ColumnType::new(ScalarType::Jsonb),
-                // value
                 ColumnType::new(ScalarType::Jsonb),
-            ]),
-        }
+            ],
+            UnaryTableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],
+            UnaryTableFunc::JsonbArrayElements => vec![ColumnType::new(ScalarType::Jsonb)],
+        })
     }
 
     pub fn output_arity(&self) -> usize {
         match self {
             UnaryTableFunc::JsonbEach => 2,
+            UnaryTableFunc::JsonbObjectKeys => 1,
+            UnaryTableFunc::JsonbArrayElements => 1,
         }
     }
 }
@@ -584,6 +607,8 @@ impl fmt::Display for UnaryTableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UnaryTableFunc::JsonbEach => f.write_str("jsonb_each"),
+            UnaryTableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
+            UnaryTableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
         }
     }
 }

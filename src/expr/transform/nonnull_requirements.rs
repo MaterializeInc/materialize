@@ -93,7 +93,9 @@ impl NonNullRequirements {
             RelationExpr::FlatMapUnary { input, func, expr } => {
                 match func {
                     // outputs zero rows if input is null
-                    UnaryTableFunc::JsonbEach => {
+                    UnaryTableFunc::JsonbEach
+                    | UnaryTableFunc::JsonbObjectKeys
+                    | UnaryTableFunc::JsonbArrayElements => {
                         expr.non_null_requirements(&mut columns);
                     }
                 }
