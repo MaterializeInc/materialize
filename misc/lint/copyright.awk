@@ -10,8 +10,9 @@ function done()
     if (!copyright) {
         print "lint: copyright: " FILENAME " is missing copyright header" > "/dev/stderr"
         exit 1
-    } else if (copyright !~ /Copyright 2019 Materialize, Inc./) {
+    } else if (copyright !~ /Copyright 20(19|2[0-9]) Materialize, Inc./) {
         print "lint: copyright: " FILENAME " has malformatted copyright header" > "/dev/stderr"
+        exit 1
     }
     exit 0
 }
