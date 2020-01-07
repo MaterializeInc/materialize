@@ -1937,13 +1937,13 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
-            "jsonb_typeof" | "jsonb_strip_nulls" | "jsonb_pretty" => {
+            "jsonb_array_length" | "jsonb_typeof" | "jsonb_strip_nulls" | "jsonb_pretty" => {
                 if sql_func.args.len() != 1 {
                     bail!("{}() requires exactly two arguments", ident);
                 }
                 let jsonb = plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::Jsonb))?;
                 let typ = ecx.column_type(&jsonb);
-                if typ.scalar_type != ScalarType::Jsonb {
+                if typ.scalar_type != ScalarType::Jsonb && typ.scalar_type != ScalarType::Null {
                     bail!(
                         "{}() requires jsonb as it's first argument, but got {}",
                         ident,
@@ -1952,6 +1952,7 @@ fn plan_function<'a>(
                 }
                 let expr = ScalarExpr::CallUnary {
                     func: match ident {
+                        "jsonb_array_length" => UnaryFunc::JsonbArrayLength,
                         "jsonb_typeof" => UnaryFunc::JsonbTypeof,
                         "jsonb_strip_nulls" => UnaryFunc::JsonbStripNulls,
                         "jsonb_pretty" => UnaryFunc::JsonbPretty,

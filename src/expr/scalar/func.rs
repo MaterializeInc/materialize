@@ -1248,6 +1248,13 @@ fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
+fn jsonb_array_length<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::List(list) => Datum::Int64(list.iter().count() as i64),
+        _ => Datum::Null,
+    }
+}
+
 fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
         Datum::Dict(_) => Datum::String("object"),
@@ -1721,6 +1728,7 @@ pub enum UnaryFunc {
     ExtractTimestampTzDayOfWeek,
     ExtractTimestampTzIsoDayOfWeek,
     DateTrunc(DateTruncTo),
+    JsonbArrayLength,
     JsonbTypeof,
     JsonbStripNulls,
     JsonbPretty,
@@ -1842,6 +1850,7 @@ impl UnaryFunc {
                 DateTruncTo::Century => date_trunc_century(a),
                 DateTruncTo::Millennium => date_trunc_millennium(a),
             },
+            UnaryFunc::JsonbArrayLength => jsonb_array_length(a),
             UnaryFunc::JsonbTypeof => jsonb_typeof(a),
             UnaryFunc::JsonbStripNulls => jsonb_strip_nulls(a, temp_storage),
             UnaryFunc::JsonbPretty => jsonb_pretty(a, temp_storage),
@@ -1984,6 +1993,7 @@ impl UnaryFunc {
 
             DateTrunc(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
 
+            JsonbArrayLength => ColumnType::new(ScalarType::Int64).nullable(true),
             JsonbTypeof => ColumnType::new(ScalarType::String).nullable(in_nullable),
             JsonbStripNulls => ColumnType::new(ScalarType::Jsonb).nullable(true),
             JsonbPretty => ColumnType::new(ScalarType::String).nullable(in_nullable),
@@ -2122,6 +2132,7 @@ impl fmt::Display for UnaryFunc {
                 f.write_str("date_trunc_")?;
                 f.write_str(&format!("{:?}", to).to_lowercase())
             }
+            UnaryFunc::JsonbArrayLength => f.write_str("jsonb_array_length"),
             UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),
             UnaryFunc::JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
             UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
