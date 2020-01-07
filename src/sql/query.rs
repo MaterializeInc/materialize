@@ -1969,14 +1969,57 @@ fn plan_function<'a>(
                 let arg = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
                 // From https://www.postgresql.org/docs/current/functions-json.html
                 // Returns the value as json or jsonb. Arrays and composites are converted (recursively) to arrays and objects; otherwise, if there is a cast from the type to json, the cast function will be used to perform the conversion; otherwise, a scalar value is produced. For any scalar type other than a number, a Boolean, or a null value, the text representation will be used, in such a fashion that it is a valid json or jsonb value.
-                let expr = match ecx.column_type(&arg).scalar_type {
-                    ScalarType::Jsonb => arg,
-                    ScalarType::String
-                    | ScalarType::Float64
-                    | ScalarType::Bool
-                    | ScalarType::Null => arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-                    _ => plan_cast_internal(ecx, "to_jsonb", arg, ScalarType::String)?
-                        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+                let expr = plan_to_jsonb(ecx, "to_jsonb", arg)?;
+                Ok(expr)
+            }
+
+            "jsonb_build_array" => {
+                let args = sql_func
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        Ok(plan_to_jsonb(
+                            ecx,
+                            "jsonb_build_array",
+                            plan_expr(catalog, ecx, arg, None)?,
+                        )?)
+                    })
+                    .collect::<Result<Vec<_>, failure::Error>>()?;
+                let expr = ScalarExpr::CallVariadic {
+                    func: VariadicFunc::JsonbBuildArray,
+                    exprs: args,
+                };
+                Ok(expr)
+            }
+
+            "jsonb_build_object" => {
+                if sql_func.args.len() % 2 != 0 {
+                    bail!("jsonb_build_object() requires an even number of arguments");
+                }
+                let args = sql_func
+                    .args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        Ok(if i % 2 == 0 {
+                            plan_cast_internal(
+                                ecx,
+                                "jsonb_build_object",
+                                plan_expr(catalog, ecx, arg, None)?,
+                                ScalarType::String,
+                            )?
+                        } else {
+                            plan_to_jsonb(
+                                ecx,
+                                "jsonb_build_object",
+                                plan_expr(catalog, ecx, arg, None)?,
+                            )?
+                        })
+                    })
+                    .collect::<Result<Vec<_>, failure::Error>>()?;
+                let expr = ScalarExpr::CallVariadic {
+                    func: VariadicFunc::JsonbBuildObject,
+                    exprs: args,
                 };
                 Ok(expr)
             }
@@ -1984,6 +2027,26 @@ fn plan_function<'a>(
             _ => bail!("unsupported function: {}", ident),
         }
     }
+}
+
+fn plan_to_jsonb(
+    ecx: &ExprContext,
+    name: &str,
+    arg: ScalarExpr,
+) -> Result<ScalarExpr, failure::Error> {
+    let typ = ecx.column_type(&arg).scalar_type;
+    Ok(match typ {
+        ScalarType::Jsonb => arg,
+        ScalarType::String | ScalarType::Float64 | ScalarType::Bool | ScalarType::Null => {
+            arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
+        }
+        ScalarType::Int32 | ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
+            // TODO(jamii) this is awaiting a decision about how to represent numbers in jsonb
+            bail!("Missing overload for {}(::{})", name, typ)
+        }
+        _ => plan_cast_internal(ecx, name, arg, ScalarType::String)?
+            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+    })
 }
 
 fn plan_is_null_expr<'a>(

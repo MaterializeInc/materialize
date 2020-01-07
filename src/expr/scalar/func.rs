@@ -2210,6 +2210,16 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     )
 }
 
+fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| packer.push_list(datums))
+}
+
+fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| {
+        packer.push_dict(datums.chunks(2).map(|kv| (kv[0].unwrap_str(), kv[1])))
+    })
+}
+
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
@@ -2252,6 +2262,8 @@ pub enum VariadicFunc {
     Substr,
     Length,
     Replace,
+    JsonbBuildArray,
+    JsonbBuildObject,
 }
 
 impl VariadicFunc {
@@ -2267,6 +2279,8 @@ impl VariadicFunc {
             VariadicFunc::Substr => substr(datums),
             VariadicFunc::Length => length(datums),
             VariadicFunc::Replace => replace(datums, temp_storage),
+            VariadicFunc::JsonbBuildArray => jsonb_build_array(datums, temp_storage),
+            VariadicFunc::JsonbBuildObject => jsonb_build_object(datums, temp_storage),
         }
     }
 
@@ -2286,13 +2300,18 @@ impl VariadicFunc {
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             Length => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
+            JsonbBuildArray | JsonbBuildObject => {
+                ColumnType::new(ScalarType::Jsonb).nullable(false)
+            }
         }
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
         match self {
-            VariadicFunc::Coalesce => false,
+            VariadicFunc::Coalesce
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject => false,
             _ => true,
         }
     }
@@ -2306,6 +2325,8 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::Length => f.write_str("length"),
             VariadicFunc::Replace => f.write_str("replace"),
+            VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
+            VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
         }
     }
 }
