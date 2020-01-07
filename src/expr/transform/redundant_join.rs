@@ -6,6 +6,10 @@
 use crate::relation::RelationExpr;
 use crate::scalar::EvalEnv;
 
+// If statements seem a bit clearer in this case. Specialized methods
+// that replace simple and common alternatives frustrate developers.
+#![allow(clippy::comparison_chain, clippy::filter_next)]
+
 #[derive(Debug)]
 pub struct RedundantJoin;
 
