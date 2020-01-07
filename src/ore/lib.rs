@@ -11,6 +11,7 @@
 
 #![deny(missing_docs, missing_debug_implementations)]
 
+pub mod cast;
 pub mod collections;
 pub mod future;
 pub mod hash;
