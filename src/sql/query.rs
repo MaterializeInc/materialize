@@ -1962,6 +1962,25 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "to_jsonb" => {
+                if sql_func.args.len() != 1 {
+                    bail!("{}() requires exactly two arguments", ident);
+                }
+                let arg = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
+                // From https://www.postgresql.org/docs/current/functions-json.html
+                // Returns the value as json or jsonb. Arrays and composites are converted (recursively) to arrays and objects; otherwise, if there is a cast from the type to json, the cast function will be used to perform the conversion; otherwise, a scalar value is produced. For any scalar type other than a number, a Boolean, or a null value, the text representation will be used, in such a fashion that it is a valid json or jsonb value.
+                let expr = match ecx.column_type(&arg).scalar_type {
+                    ScalarType::Jsonb => arg,
+                    ScalarType::String
+                    | ScalarType::Float64
+                    | ScalarType::Bool
+                    | ScalarType::Null => arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+                    _ => plan_cast_internal(ecx, "to_jsonb", arg, ScalarType::String)?
+                        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+                };
+                Ok(expr)
+            }
+
             _ => bail!("unsupported function: {}", ident),
         }
     }
