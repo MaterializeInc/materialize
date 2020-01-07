@@ -7,7 +7,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 
-use avro_rs::schema::{Schema, SchemaFingerprint};
+use avro_rs::schema::{RecordField, Schema, SchemaFingerprint, UnionSchema};
 use avro_rs::types::Value;
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use failure::{bail, Error};
@@ -556,26 +556,76 @@ impl Encoder {
         let mut buf = Vec::new();
         buf.write_u8(0).unwrap();
         buf.write_i32::<NetworkEndian>(schema_id).unwrap();
-        buf.extend(self.row_to_avro(row));
-
+        for row in self.row_to_avro(row).unwrap() {
+            buf.extend(row)
+        }
         buf
     }
 
-    fn row_to_avro(&self, row: &Row) -> Vec<u8> {
-        let datums = row.unpack();
+    fn row_to_avro(&self, row: &Row) -> Result<Vec<Vec<u8>>, failure::Error> {
+        Ok(match &self.writer_schema {
+            Schema::Record {
+                name,
+                doc,
+                fields,
+                lookup,
+            } => {
+                let mut avro_datums = Vec::new();
+                let datums = row.unpack();
+                for (rf, datum) in fields.iter().zip(datums) {
+                    match rf {
+                        avro_rs::schema::RecordField {
+                            name,
+                            doc,
+                            default,
+                            schema,
+                            order,
+                            position,
+                        } => {
+                            avro_datums.push(
+                                avro_rs::to_avro_datum(
+                                    &self.writer_schema,
+                                    avro_rs::types::Value::Record(vec![(
+                                        String::from(name),
+                                        self.datum_to_avro_value(schema, datum).unwrap(),
+                                    )]),
+                                )
+                                .map_err(|e| e.to_string())
+                                .expect("Converting row to Avro failed"),
+                            );
+                        }
+                        _ => bail!("Currently only support Avro schemas using RecordFields"),
+                    }
+                }
+                avro_datums
+            }
+            _ => bail!("Currently only support Avro schemas using Records"),
+        })
+    }
 
-        // TODO: encode all datums
-        let datum = datums[0];
-        let value = avro_rs::types::Value::Record(vec![(
-            String::from("quote"),
-            avro_rs::types::Value::Union(Box::new(avro_rs::types::Value::String(
-                datum.unwrap_str().to_owned(),
-            ))),
-        )]);
-
-        avro_rs::to_avro_datum(&self.writer_schema, value)
-            .map_err(|e| e.to_string())
-            .expect("Converting Row to avro failed")
+    fn datum_to_avro_value(
+        &self,
+        record_schema: &Schema,
+        datum: Datum,
+    ) -> Result<avro_rs::types::Value, failure::Error> {
+        Ok(match record_schema {
+            Schema::String => avro_rs::types::Value::String(datum.unwrap_str().to_owned()),
+            Schema::Union(union) => {
+                let mut value = None;
+                for s in union.variants() {
+                    if let Ok(v) = self.datum_to_avro_value(s, datum) {
+                        value = Some(v)
+                    }
+                }
+                match value {
+                    Some(v) => avro_rs::types::Value::Union(Box::new(v)),
+                    None => bail!("Unable to parse Datum into any Avro schema options."),
+                }
+            }
+            _ => {
+                bail!("Currently only support Union and String");
+            }
+        })
     }
 }
 
