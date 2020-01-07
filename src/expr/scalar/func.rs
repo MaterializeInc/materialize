@@ -424,6 +424,20 @@ fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Float64(_) => a,
+        _ => Datum::Null,
+    }
+}
+
+fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::True | Datum::False => a,
+        _ => Datum::Null,
+    }
+}
+
 fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() + b.unwrap_int32())
 }
@@ -1691,6 +1705,8 @@ pub enum UnaryFunc {
     CastJsonbToString,
     CastJsonbToStringUnlessString,
     CastJsonbOrNullToJsonb,
+    CastJsonbToFloat64,
+    CastJsonbToBool,
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -1797,6 +1813,8 @@ impl UnaryFunc {
                 cast_jsonb_to_string_unless_string(a, temp_storage)
             }
             UnaryFunc::CastJsonbOrNullToJsonb => cast_jsonb_or_null_to_jsonb(a),
+            UnaryFunc::CastJsonbToFloat64 => cast_jsonb_to_float64(a),
+            UnaryFunc::CastJsonbToBool => cast_jsonb_to_bool(a),
             UnaryFunc::CeilFloat32 => ceil_float32(a),
             UnaryFunc::CeilFloat64 => ceil_float64(a),
             UnaryFunc::CeilDecimal(scale) => ceil_decimal(a, *scale),
@@ -1938,7 +1956,13 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::String).nullable(true)
             }
 
+            // converts null to jsonb
             CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(false),
+
+            // can return null for other jsonb types
+            CastJsonbToFloat64 | CastJsonbToBool => {
+                ColumnType::new(ScalarType::Jsonb).nullable(true)
+            }
 
             CeilFloat32 | FloorFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
@@ -2090,6 +2114,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
             UnaryFunc::CastJsonbToStringUnlessString => f.write_str("jsonbtostr?"),
             UnaryFunc::CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
+            UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
+            UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
