@@ -105,7 +105,7 @@ tests=(
     test/cockroach/orms.slt
     test/cockroach/pg_catalog.slt
     test/cockroach/pgoidtype.slt
-    test/cockroach/postgres_jsonb.slt
+    # test/cockroach/postgres_jsonb.slt
     # test/cockroach/postgresjoin.slt
     test/cockroach/prepare.slt
     test/cockroach/rename_column.slt

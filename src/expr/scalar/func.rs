@@ -369,18 +369,12 @@ pub fn datum_to_serde(datum: Datum) -> serde_json::Value {
         Datum::False => Value::Bool(false),
         Datum::Float64(f) => {
             let f: f64 = f.into();
-            Value::Number(
-                // Internally we want all json numbers to be floats so we have a consistent binary representation for joins.
-                // But we want serde to print integer-like things as integers, for consistency with postgres.
-                if f == f.trunc() {
-                    (f.trunc() as i64).into()
-                } else if let Some(n) = serde_json::Number::from_f64(f) {
-                    n
-                } else {
-                    // This should only be reachable for NaN/Infinity, which aren't allowed to be cast to Jsonb
-                    panic!("Not a valid json number: {}", f)
-                },
-            )
+            if let Some(n) = serde_json::Number::from_f64(f) {
+                Value::Number(n)
+            } else {
+                // This should only be reachable for NaN/Infinity, which aren't allowed to be cast to Jsonb
+                panic!("Not a valid json number: {}", f)
+            }
         }
         Datum::String(s) => Value::String(s.to_owned()),
         Datum::List(list) => Value::Array(list.iter().map(|e| datum_to_serde(e)).collect()),
@@ -414,6 +408,27 @@ fn cast_jsonb_to_string_unless_string<'a>(a: Datum<'a>, temp_storage: &'a RowAre
         Datum::JsonNull => Datum::Null,
         Datum::String(_) => a,
         _ => cast_jsonb_to_string(a, temp_storage),
+    }
+}
+
+fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Null => Datum::JsonNull,
+        _ => a,
+    }
+}
+
+fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Float64(_) => a,
+        _ => Datum::Null,
+    }
+}
+
+fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::True | Datum::False => a,
+        _ => Datum::Null,
     }
 }
 
@@ -1241,6 +1256,44 @@ fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
+fn jsonb_array_length<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::List(list) => Datum::Int64(list.iter().count() as i64),
+        _ => Datum::Null,
+    }
+}
+
+fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Dict(_) => Datum::String("object"),
+        Datum::List(_) => Datum::String("array"),
+        Datum::Float64(_) => Datum::String("number"),
+        Datum::True | Datum::False => Datum::String("boolean"),
+        Datum::JsonNull => Datum::String("null"),
+        Datum::Null => Datum::Null,
+        _ => panic!("Not jsonb: {:?}", a),
+    }
+}
+
+fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    match a {
+        Datum::Dict(dict) => temp_storage.make_datum(|packer| {
+            packer.push_dict(dict.iter().filter(|(_, v)| match v {
+                Datum::JsonNull => false,
+                _ => true,
+            }))
+        }),
+        _ => Datum::Null,
+    }
+}
+
+fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    Datum::String(temp_storage.push_string(
+        // to_string_pretty shouldn't be able to fail on the output of datum_to_serde - see https://docs.serde.rs/serde_json/fn.to_string_pretty.html
+        serde_json::to_string_pretty(&datum_to_serde(a)).unwrap(),
+    ))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
@@ -1645,6 +1698,9 @@ pub enum UnaryFunc {
     CastStringToJsonb,
     CastJsonbToString,
     CastJsonbToStringUnlessString,
+    CastJsonbOrNullToJsonb,
+    CastJsonbToFloat64,
+    CastJsonbToBool,
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -1682,6 +1738,10 @@ pub enum UnaryFunc {
     ExtractTimestampTzDayOfWeek,
     ExtractTimestampTzIsoDayOfWeek,
     DateTrunc(DateTruncTo),
+    JsonbArrayLength,
+    JsonbTypeof,
+    JsonbStripNulls,
+    JsonbPretty,
 }
 
 impl UnaryFunc {
@@ -1746,6 +1806,9 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToStringUnlessString => {
                 cast_jsonb_to_string_unless_string(a, temp_storage)
             }
+            UnaryFunc::CastJsonbOrNullToJsonb => cast_jsonb_or_null_to_jsonb(a),
+            UnaryFunc::CastJsonbToFloat64 => cast_jsonb_to_float64(a),
+            UnaryFunc::CastJsonbToBool => cast_jsonb_to_bool(a),
             UnaryFunc::CeilFloat32 => ceil_float32(a),
             UnaryFunc::CeilFloat64 => ceil_float64(a),
             UnaryFunc::CeilDecimal(scale) => ceil_decimal(a, *scale),
@@ -1799,6 +1862,10 @@ impl UnaryFunc {
                 DateTruncTo::Century => date_trunc_century(a),
                 DateTruncTo::Millennium => date_trunc_millennium(a),
             },
+            UnaryFunc::JsonbArrayLength => jsonb_array_length(a),
+            UnaryFunc::JsonbTypeof => jsonb_typeof(a),
+            UnaryFunc::JsonbStripNulls => jsonb_strip_nulls(a, temp_storage),
+            UnaryFunc::JsonbPretty => jsonb_pretty(a, temp_storage),
         }
     }
 
@@ -1883,6 +1950,14 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::String).nullable(true)
             }
 
+            // converts null to jsonb
+            CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(false),
+
+            // can return null for other jsonb types
+            CastJsonbToFloat64 | CastJsonbToBool => {
+                ColumnType::new(ScalarType::Jsonb).nullable(true)
+            }
+
             CeilFloat32 | FloorFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
             }
@@ -1935,13 +2010,18 @@ impl UnaryFunc {
             }
 
             DateTrunc(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
+
+            JsonbArrayLength => ColumnType::new(ScalarType::Int64).nullable(true),
+            JsonbTypeof => ColumnType::new(ScalarType::String).nullable(in_nullable),
+            JsonbStripNulls => ColumnType::new(ScalarType::Jsonb).nullable(true),
+            JsonbPretty => ColumnType::new(ScalarType::String).nullable(in_nullable),
         }
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
         match self {
-            UnaryFunc::IsNull => false,
+            UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb => false,
             _ => true,
         }
     }
@@ -2027,6 +2107,9 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
             UnaryFunc::CastJsonbToStringUnlessString => f.write_str("jsonbtostr?"),
+            UnaryFunc::CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
+            UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
+            UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
@@ -2069,6 +2152,10 @@ impl fmt::Display for UnaryFunc {
                 f.write_str("date_trunc_")?;
                 f.write_str(&format!("{:?}", to).to_lowercase())
             }
+            UnaryFunc::JsonbArrayLength => f.write_str("jsonb_array_length"),
+            UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),
+            UnaryFunc::JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
+            UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
         }
     }
 }
@@ -2154,6 +2241,16 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     )
 }
 
+fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| packer.push_list(datums))
+}
+
+fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| {
+        packer.push_dict(datums.chunks(2).map(|kv| (kv[0].unwrap_str(), kv[1])))
+    })
+}
+
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
@@ -2196,6 +2293,8 @@ pub enum VariadicFunc {
     Substr,
     Length,
     Replace,
+    JsonbBuildArray,
+    JsonbBuildObject,
 }
 
 impl VariadicFunc {
@@ -2211,6 +2310,8 @@ impl VariadicFunc {
             VariadicFunc::Substr => substr(datums),
             VariadicFunc::Length => length(datums),
             VariadicFunc::Replace => replace(datums, temp_storage),
+            VariadicFunc::JsonbBuildArray => jsonb_build_array(datums, temp_storage),
+            VariadicFunc::JsonbBuildObject => jsonb_build_object(datums, temp_storage),
         }
     }
 
@@ -2230,13 +2331,18 @@ impl VariadicFunc {
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             Length => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
+            JsonbBuildArray | JsonbBuildObject => {
+                ColumnType::new(ScalarType::Jsonb).nullable(false)
+            }
         }
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
         match self {
-            VariadicFunc::Coalesce => false,
+            VariadicFunc::Coalesce
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject => false,
             _ => true,
         }
     }
@@ -2250,6 +2356,8 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::Length => f.write_str("length"),
             VariadicFunc::Replace => f.write_str("replace"),
+            VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
+            VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
         }
     }
 }
