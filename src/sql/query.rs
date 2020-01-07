@@ -1554,7 +1554,7 @@ fn plan_function<'a>(
                         ScalarType::Bytes => {
                             expr.call_unary(UnaryFunc::CastBytesToString)
                         },
-                        ScalarType::Null | ScalarType::Bool | ScalarType::String => expr,
+                       ScalarType::Null | ScalarType::Bool | ScalarType::String => expr,
                         _ => {
                             bail!(
                                 "concat does not accept arguments of type {:}",
@@ -1562,7 +1562,7 @@ fn plan_function<'a>(
                             );
                         }
                     };
-                   exprs.push(expr);
+                    exprs.push(expr);
                 }
                 let expr = ScalarExpr::CallVariadic {
                     func: VariadicFunc::Concatenate,
