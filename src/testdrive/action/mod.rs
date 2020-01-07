@@ -35,6 +35,12 @@ pub struct State {
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
 }
 
+impl State {
+    pub fn pgclient(&mut self) -> &mut postgres::Client {
+        &mut self.pgclient
+    }
+}
+
 pub struct PosAction {
     pub pos: usize,
     pub action: Box<dyn Action>,

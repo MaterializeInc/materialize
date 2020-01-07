@@ -17,6 +17,9 @@ pub enum Error {
         err: InputError,
         details: Option<InputDetails>,
     },
+    Pg {
+        cause: postgres::Error,
+    },
     General {
         ctx: String,
         cause: Box<dyn StdError>,
@@ -55,6 +58,12 @@ impl Error {
                 stderr.set_color(&color_spec)?;
                 write!(&mut stderr, "{}", details.snippet)?;
                 writeln!(&mut stderr, "{}^", " ".repeat(details.col - 1))
+            }
+            Error::Pg { cause } => {
+                let color_spec = ColorSpec::new();
+                write_error_heading(&mut stderr, &color_spec)?;
+                write!(&mut stderr, "Error executing sql command: {}", cause)?;
+                Ok(())
             }
             Error::Input { details: None, .. } => {
                 panic!("programming error: print_stderr called on InputError with no details")
@@ -123,6 +132,12 @@ impl From<InputError> for Error {
     }
 }
 
+impl From<postgres::Error> for Error {
+    fn from(err: postgres::Error) -> Error {
+        Error::Pg { cause: err }
+    }
+}
+
 fn make_snippet(contents: &str, line_num: usize) -> String {
     let mut buf = String::new();
     writeln!(&mut buf, "     |").unwrap();
@@ -147,6 +162,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::Input { err, .. } => write!(f, "{}", err.msg),
+            Error::Pg { cause } => write!(f, "{}", cause),
             Error::General { cause, .. } => cause.fmt(f),
             Error::Usage { details, .. } => write!(f, "usage error: {}", details),
         }
