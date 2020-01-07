@@ -369,18 +369,12 @@ pub fn datum_to_serde(datum: Datum) -> serde_json::Value {
         Datum::False => Value::Bool(false),
         Datum::Float64(f) => {
             let f: f64 = f.into();
-            Value::Number(
-                // Internally we want all json numbers to be floats so we have a consistent binary representation for joins.
-                // But we want serde to print integer-like things as integers, for consistency with postgres.
-                if f == f.trunc() {
-                    (f.trunc() as i64).into()
-                } else if let Some(n) = serde_json::Number::from_f64(f) {
-                    n
-                } else {
-                    // This should only be reachable for NaN/Infinity, which aren't allowed to be cast to Jsonb
-                    panic!("Not a valid json number: {}", f)
-                },
-            )
+            if let Some(n) = serde_json::Number::from_f64(f) {
+                Value::Number(n)
+            } else {
+                // This should only be reachable for NaN/Infinity, which aren't allowed to be cast to Jsonb
+                panic!("Not a valid json number: {}", f)
+            }
         }
         Datum::String(s) => Value::String(s.to_owned()),
         Datum::List(list) => Value::Array(list.iter().map(|e| datum_to_serde(e)).collect()),
