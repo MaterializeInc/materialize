@@ -1768,27 +1768,43 @@ fn plan_function<'a>(
                 let mut exprs = Vec::new();
                 let expr1 = plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::String))?;
                 let typ1 = ecx.column_type(&expr1);
-                if typ1.scalar_type != ScalarType::String && typ1.scalar_type != ScalarType::Null {
-                    bail!("length first argument has non-string type {:?}", typ1);
-                }
-                exprs.push(expr1);
+                match typ1.scalar_type {
+                    ScalarType::String | ScalarType::Null => {
+                        exprs.push(expr1);
 
-                if sql_func.args.len() == 2 {
-                    let expr2 =
-                        plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::String))?;
-                    let typ2 = ecx.column_type(&expr2);
-                    if typ2.scalar_type != ScalarType::String
-                        && typ2.scalar_type != ScalarType::Null
-                    {
-                        bail!("length second argument has non-string type {:?}", typ1);
+                        if sql_func.args.len() == 2 {
+                            let expr2 = plan_expr(
+                                catalog,
+                                ecx,
+                                &sql_func.args[1],
+                                Some(ScalarType::String),
+                            )?;
+                            let typ2 = ecx.column_type(&expr2);
+                            if typ2.scalar_type != ScalarType::String
+                                && typ2.scalar_type != ScalarType::Null
+                            {
+                                bail!("length second argument has non-string type {:?}", typ1);
+                            }
+                            exprs.push(expr2);
+                        }
+                        let expr = ScalarExpr::CallVariadic {
+                            func: VariadicFunc::LengthString,
+                            exprs,
+                        };
+                        Ok(expr)
                     }
-                    exprs.push(expr2);
+                    ScalarType::Bytes => {
+                        if sql_func.args.len() != 1 {
+                            bail!(
+                                "length expects only one argument when first argument \
+                                 has type bytea, got {:?}",
+                                sql_func.args.len(),
+                            );
+                        }
+                        Ok(expr1.call_unary(UnaryFunc::LengthBytes))
+                    }
+                    _ => bail!("length first argument has non-string type {:?}", typ1),
                 }
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Length,
-                    exprs,
-                };
-                Ok(expr)
             }
 
             // Promotes a numeric type to the smallest fractional type that

@@ -1652,6 +1652,7 @@ pub enum UnaryFunc {
     FloorFloat64,
     FloorDecimal(u8),
     Ascii,
+    LengthBytes,
     MatchRegex(Regex),
     ExtractIntervalYear,
     ExtractIntervalMonth,
@@ -1755,6 +1756,7 @@ impl UnaryFunc {
             UnaryFunc::SqrtFloat32 => sqrt_float32(a),
             UnaryFunc::SqrtFloat64 => sqrt_float64(a),
             UnaryFunc::Ascii => ascii(a),
+            UnaryFunc::LengthBytes => length_bytes(a),
             UnaryFunc::MatchRegex(regex) => match_cached_regex(a, &regex),
             UnaryFunc::ExtractIntervalYear => extract_interval_year(a),
             UnaryFunc::ExtractIntervalMonth => extract_interval_month(a),
@@ -1825,7 +1827,7 @@ impl UnaryFunc {
         match self {
             IsNull | CastInt32ToBool | CastInt64ToBool => ColumnType::new(ScalarType::Bool),
 
-            Ascii => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
+            Ascii | LengthBytes => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
 
             MatchRegex(_) => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
 
@@ -2036,6 +2038,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::SqrtFloat32 => f.write_str("sqrtf32"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
+            UnaryFunc::LengthBytes => f.write_str("lengthbytes"),
             UnaryFunc::MatchRegex(regex) => write!(f, "{} ~", regex.as_str()),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
@@ -2109,7 +2112,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     }
 }
 
-fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+fn length_string<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let string = datums[0].unwrap_str();
 
     if datums.len() == 2 {
@@ -2142,6 +2145,10 @@ fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     } else {
         Datum::from(string.chars().count() as i32)
     }
+}
+
+fn length_bytes<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::Int32(a.unwrap_bytes().len() as i32)
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -2194,7 +2201,7 @@ pub enum VariadicFunc {
     Coalesce,
     MakeTimestamp,
     Substr,
-    Length,
+    LengthString,
     Replace,
 }
 
@@ -2209,7 +2216,7 @@ impl VariadicFunc {
             VariadicFunc::Coalesce => coalesce(datums),
             VariadicFunc::MakeTimestamp => make_timestamp(datums),
             VariadicFunc::Substr => substr(datums),
-            VariadicFunc::Length => length(datums),
+            VariadicFunc::LengthString => length_string(datums),
             VariadicFunc::Replace => replace(datums, temp_storage),
         }
     }
@@ -2228,7 +2235,7 @@ impl VariadicFunc {
             }
             MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             Substr => ColumnType::new(ScalarType::String).nullable(true),
-            Length => ColumnType::new(ScalarType::Int32).nullable(true),
+            LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
         }
     }
@@ -2248,7 +2255,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
             VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::Substr => f.write_str("substr"),
-            VariadicFunc::Length => f.write_str("length"),
+            VariadicFunc::LengthString => f.write_str("lengthstr"),
             VariadicFunc::Replace => f.write_str("replace"),
         }
     }
