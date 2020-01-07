@@ -756,7 +756,7 @@ fn plan_table_function(
                     let scope = Scope::from_source(
                         alias,
                         column_names
-                            .into_iter()
+                            .iter()
                             .map(|name| Some(ColumnName::from(&**name))),
                         Some(ecx.qcx.outer_scope.clone()),
                     );
