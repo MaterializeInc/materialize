@@ -2042,7 +2042,11 @@ fn plan_to_jsonb(
         }
         ScalarType::Int32 | ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
             // TODO(jamii) this is awaiting a decision about how to represent numbers in jsonb
-            bail!("Missing overload for {}(::{})", name, typ)
+            bail!(
+                "{}() doesn't currently support {} arguments, try adding ::float to the argument for now",
+                name,
+                typ
+            )
         }
         _ => plan_cast_internal(ecx, name, arg, ScalarType::String)?
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
