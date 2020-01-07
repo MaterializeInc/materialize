@@ -114,9 +114,10 @@ pub fn plan(
 /// of types will be empty.
 pub fn describe(
     catalog: &Catalog,
+    session: &Session,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {
-    let (desc, types) = statement::describe_statement(catalog, stmt)?;
+    let (desc, types) = statement::describe_statement(catalog, session, stmt)?;
     let types = types.into_iter().map(pgrepr::Type::from).collect();
     Ok((desc, types))
 }

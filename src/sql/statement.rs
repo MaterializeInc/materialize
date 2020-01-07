@@ -37,8 +37,10 @@ use crate::{names, query, Params, Plan};
 
 pub fn describe_statement(
     catalog: &Catalog,
+    session: &Session,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
+    let scx = &StatementContext { catalog, session };
     Ok(match stmt {
         Statement::CreateIndex { .. }
         | Statement::CreateSource { .. }
@@ -147,7 +149,7 @@ pub fn describe_statement(
         }
 
         Statement::Peek { name, .. } | Statement::Tail { name, .. } => {
-            let sql_object = catalog.get(&name.try_into()?)?;
+            let sql_object = scx.catalog.get(&name.try_into()?)?;
             (Some(sql_object.desc()?.clone()), vec![])
         }
 
@@ -157,7 +159,7 @@ pub fn describe_statement(
             // `handle_statement` is called. This will require a complicated
             // dance when bind parameters are implemented, so punting for now.
             let (_relation_expr, desc, _finishing, param_types) =
-                query::plan_root_query(catalog, *query, QueryLifetime::OneShot)?;
+                query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             (Some(desc), param_types)
         }
 
@@ -172,9 +174,10 @@ pub fn handle_statement(
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
+    let scx = &StatementContext { catalog, session };
     match stmt {
-        Statement::Peek { name, immediate } => handle_peek(catalog, name.try_into()?, immediate),
-        Statement::Tail { name } => handle_tail(catalog, &name.try_into()?),
+        Statement::Peek { name, immediate } => handle_peek(scx, name.try_into()?, immediate),
+        Statement::Tail { name } => handle_tail(scx, &name.try_into()?),
         Statement::StartTransaction { .. } => handle_start_transaction(),
         Statement::Commit { .. } => handle_commit_transaction(),
         Statement::Rollback { .. } => handle_rollback_transaction(),
@@ -182,21 +185,21 @@ pub fn handle_statement(
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::CreateSources { .. }
-        | Statement::CreateIndex { .. } => handle_create_dataflow(catalog, stmt, params),
-        Statement::Drop { .. } => handle_drop_dataflow(catalog, stmt),
-        Statement::Query(query) => handle_select(catalog, *query, params),
+        | Statement::CreateIndex { .. } => handle_create_dataflow(scx, stmt, params),
+        Statement::Drop { .. } => handle_drop_dataflow(scx, stmt),
+        Statement::Query(query) => handle_select(scx, *query, params),
         Statement::SetVariable {
             local,
             variable,
             value,
-        } => handle_set_variable(catalog, local, variable, value),
-        Statement::ShowVariable { variable } => handle_show_variable(catalog, session, variable),
+        } => handle_set_variable(scx, local, variable, value),
+        Statement::ShowVariable { variable } => handle_show_variable(scx, variable),
         Statement::ShowObjects {
             object_type: ot,
             filter,
-        } => handle_show_objects(catalog, ot, filter.as_ref()),
+        } => handle_show_objects(scx, ot, filter.as_ref()),
         Statement::ShowIndexes { table_name, filter } => {
-            handle_show_indexes(catalog, &table_name.try_into()?, filter.as_ref())
+            handle_show_indexes(scx, &table_name.try_into()?, filter.as_ref())
         }
         Statement::ShowColumns {
             extended,
@@ -204,26 +207,24 @@ pub fn handle_statement(
             table_name,
             filter,
         } => handle_show_columns(
-            catalog,
+            scx,
             extended,
             full,
             &table_name.try_into()?,
             filter.as_ref(),
         ),
         Statement::ShowCreateView { view_name } => {
-            handle_show_create_view(catalog, view_name.try_into()?)
+            handle_show_create_view(scx, view_name.try_into()?)
         }
-        Statement::ShowCreateSource { source_name } => {
-            handle_show_create_source(catalog, source_name)
-        }
-        Statement::Explain { stage, query } => handle_explain(catalog, stage, *query, params),
+        Statement::ShowCreateSource { source_name } => handle_show_create_source(scx, source_name),
+        Statement::Explain { stage, query } => handle_explain(scx, stage, *query, params),
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
     }
 }
 
 fn handle_set_variable(
-    _: &Catalog,
+    _: &StatementContext,
     local: bool,
     variable: Ident,
     value: SetVariableValue,
@@ -241,14 +242,10 @@ fn handle_set_variable(
     })
 }
 
-fn handle_show_variable(
-    _: &Catalog,
-    session: &Session,
-    variable: Ident,
-) -> Result<Plan, failure::Error> {
+fn handle_show_variable(scx: &StatementContext, variable: Ident) -> Result<Plan, failure::Error> {
     if variable.value == unicase::Ascii::new("ALL") {
         Ok(Plan::SendRows(
-            session
+            scx.session
                 .vars()
                 .iter()
                 .map(|v| {
@@ -261,15 +258,15 @@ fn handle_show_variable(
                 .collect(),
         ))
     } else {
-        let variable = session.get(&variable.value)?;
+        let variable = scx.session.get(&variable.value)?;
         Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
             &variable.value(),
         )])]))
     }
 }
 
-fn handle_tail(catalog: &Catalog, from: &QualName) -> Result<Plan, failure::Error> {
-    let entry = catalog.get(&from)?;
+fn handle_tail(scx: &StatementContext, from: &QualName) -> Result<Plan, failure::Error> {
+    let entry = scx.catalog.get(&from)?;
     if let CatalogItem::View(_) = entry.item() {
         Ok(Plan::Tail(entry.clone()))
     } else {
@@ -290,7 +287,7 @@ fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
 }
 
 fn handle_show_objects(
-    catalog: &Catalog,
+    scx: &StatementContext,
     object_type: ObjectType,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
@@ -302,7 +299,8 @@ fn handle_show_objects(
         None => build_like_regex_from_string(&String::from("%"))?,
     };
 
-    let mut rows: Vec<Row> = catalog
+    let mut rows: Vec<Row> = scx
+        .catalog
         .iter()
         .filter(|entry| {
             object_type_matches(object_type, entry.item())
@@ -315,18 +313,19 @@ fn handle_show_objects(
 }
 
 fn handle_show_indexes(
-    catalog: &Catalog,
+    scx: &StatementContext,
     from_name: &QualName,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
     if filter.is_some() {
         bail!("SHOW INDEXES ... WHERE is not supported");
     }
-    let from_entry = catalog.get(from_name)?;
+    let from_entry = scx.catalog.get(from_name)?;
     if !object_type_matches(ObjectType::View, from_entry.item()) {
         bail!("{} is not a view", from_name);
     }
-    let rows = catalog
+    let rows = scx
+        .catalog
         .iter()
         .filter(|entry| {
             object_type_matches(ObjectType::Index, entry.item())
@@ -360,7 +359,7 @@ fn handle_show_indexes(
 
 /// Create an immediate result that describes all the columns for the given table
 fn handle_show_columns(
-    catalog: &Catalog,
+    scx: &StatementContext,
     extended: bool,
     full: bool,
     table_name: &QualName,
@@ -376,7 +375,8 @@ fn handle_show_columns(
         bail!("SHOW COLUMNS ... { LIKE | WHERE } is not supported");
     }
 
-    let column_descriptions: Vec<_> = catalog
+    let column_descriptions: Vec<_> = scx
+        .catalog
         .get(&table_name.try_into()?)?
         .desc()?
         .iter()
@@ -394,11 +394,11 @@ fn handle_show_columns(
 }
 
 fn handle_show_create_view(
-    catalog: &Catalog,
+    scx: &StatementContext,
     object_name: QualName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
-    let raw_sql = if let CatalogItem::View(view) = catalog.get(&name)?.item() {
+    let raw_sql = if let CatalogItem::View(view) = scx.catalog.get(&name)?.item() {
         &view.raw_sql
     } else {
         bail!("'{}' is not a view", name);
@@ -410,12 +410,12 @@ fn handle_show_create_view(
 }
 
 fn handle_show_create_source(
-    catalog: &Catalog,
+    scx: &StatementContext,
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
     let source_url =
-        if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
+        if let CatalogItem::Source(Source { connector, .. }) = scx.catalog.get(&name)?.item() {
             match &connector.connector {
                 ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
                     format!("kafka://{}/{}", addr, topic)
@@ -435,7 +435,7 @@ fn handle_show_create_source(
 }
 
 fn handle_create_dataflow(
-    catalog: &Catalog,
+    scx: &StatementContext,
     mut stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
@@ -451,7 +451,7 @@ fn handle_create_dataflow(
                 bail!("WITH options are not yet supported");
             }
             let (mut relation_expr, mut desc, finishing) =
-                handle_query(catalog, *query.clone(), params, QueryLifetime::Static)?;
+                handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
             if !finishing.is_trivial() {
                 //TODO: materialize#724 - persist finishing information with the view?
                 relation_expr = relationexpr::RelationExpr::Project {
@@ -683,7 +683,7 @@ fn handle_create_dataflow(
                         None
                     }
                 })
-                .filter(|(_tn, sn)| catalog.try_get(sn).is_none());
+                .filter(|(_tn, sn)| scx.catalog.try_get(sn).is_none());
             let url: Url = url.parse()?;
             let (addr, topic) = parse_kafka_url(&url)?;
             if let Some(s) = topic {
@@ -731,7 +731,7 @@ fn handle_create_dataflow(
 
             let name = name.try_into()?;
             let from = from.try_into()?;
-            let catalog_entry = catalog.get(&from)?;
+            let catalog_entry = scx.catalog.get(&from)?;
             let (addr, topic) = parse_kafka_topic_url(url)?;
 
             let relation_desc = catalog_entry.desc()?.clone();
@@ -761,7 +761,7 @@ fn handle_create_dataflow(
             key_parts,
         } => {
             let on_name = on_name.try_into()?;
-            let (catalog_entry, keys) = query::plan_index(catalog, &on_name, key_parts)?;
+            let (catalog_entry, keys) = query::plan_index(scx, &on_name, key_parts)?;
             if !object_type_matches(ObjectType::View, catalog_entry.item()) {
                 bail!("{} is not a view", on_name);
             }
@@ -784,7 +784,7 @@ fn handle_create_dataflow(
     }
 }
 
-fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, failure::Error> {
+fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     let (object_type, if_exists, names, cascade) = match stmt {
         Statement::Drop {
             object_type,
@@ -796,7 +796,7 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     };
     //let names: Vec<String> = names.iter().map(QualName::try_into).?collect();
     for name in &names {
-        match catalog.get(&name.try_into()?) {
+        match scx.catalog.get(&name.try_into()?) {
             Ok(catalog_entry) => {
                 if !object_type_matches(object_type, catalog_entry.item()) {
                     bail!("{} is not of type {}", name, object_type);
@@ -813,7 +813,8 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     let mode = RemoveMode::from_cascade(cascade);
     let mut to_remove = vec![];
     for name in &names {
-        catalog.plan_remove(&name.try_into()?, mode, &mut to_remove)?;
+        scx.catalog
+            .plan_remove(&name.try_into()?, mode, &mut to_remove)?;
     }
     to_remove.sort();
     to_remove.dedup();
@@ -825,9 +826,13 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     })
 }
 
-fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Plan, failure::Error> {
+fn handle_peek(
+    scx: &StatementContext,
+    name: QualName,
+    immediate: bool,
+) -> Result<Plan, failure::Error> {
     let name = name.try_into()?;
-    let catalog_entry = catalog.get(&name)?.clone();
+    let catalog_entry = scx.catalog.get(&name)?.clone();
     if !object_type_matches(ObjectType::View, catalog_entry.item()) {
         bail!("{} is not a view", name);
     }
@@ -858,13 +863,12 @@ fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Pla
     })
 }
 
-pub fn handle_select(
-    catalog: &Catalog,
+fn handle_select(
+    scx: &StatementContext,
     query: Query,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _, finishing) =
-        handle_query(catalog, query, params, QueryLifetime::OneShot)?;
+    let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
@@ -874,19 +878,19 @@ pub fn handle_select(
     })
 }
 
-pub fn handle_explain(
-    catalog: &Catalog,
+fn handle_explain(
+    scx: &StatementContext,
     stage: Stage,
     query: Query,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let (relation_expr, _desc, _finishing) =
-        handle_query(catalog, query, params, QueryLifetime::OneShot)?;
+        handle_query(scx, query, params, QueryLifetime::OneShot)?;
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
         Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            &relation_expr.pretty_humanized(catalog),
+            &relation_expr.pretty_humanized(scx.catalog),
         )])]))
     } else {
         Ok(Plan::ExplainPlan(relation_expr, EvalEnv::default()))
@@ -896,13 +900,12 @@ pub fn handle_explain(
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
 /// an `::expr::RelationExpr`, which cannot include correlated expressions.
 fn handle_query(
-    catalog: &Catalog,
+    scx: &StatementContext,
     query: Query,
     params: &Params,
     lifetime: QueryLifetime,
 ) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
-    let (mut expr, desc, finishing, _param_types) =
-        query::plan_root_query(catalog, query, lifetime)?;
+    let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
     Ok((expr.decorrelate()?, desc, finishing))
 }
@@ -1151,4 +1154,11 @@ fn postgres_type_name(typ: &ScalarType) -> String {
         ScalarType::String => "text".to_owned(),
         ScalarType::Jsonb => "jsonb".to_owned(),
     }
+}
+
+/// Immutable state that applies to the planning of an entire `Statement`.
+#[derive(Debug)]
+pub struct StatementContext<'a> {
+    pub catalog: &'a Catalog,
+    pub session: &'a Session,
 }
