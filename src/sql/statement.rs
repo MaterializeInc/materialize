@@ -537,7 +537,7 @@ fn handle_create_dataflow(
                 }
                 SourceUrl::Path(path) => {
                     if schema.is_some() {
-                        bail!("csv file sources do not support schemas.");
+                        bail!("file sources do not support schemas.");
                     }
                     let mut format = None;
                     let mut n_cols: Option<usize> = None;
