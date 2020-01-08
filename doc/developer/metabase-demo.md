@@ -3,11 +3,10 @@
 The purpose of this demo is to visualize Materialize queries and
 highlight the ease of connecting to BI (business intelligence) tools.
 
-
 The Metabase demo can be run:
-1. Manually on your laptop
-1. Using Docker
-1. On AWS
+- Manually on your laptop
+- Using Docker
+- On AWS
 
 For now, these instructions only describe how to run the Metabase demo
 with Docker, although many steps are the same between the three.
@@ -25,8 +24,8 @@ $ ./dc.sh up :init:
 $ ./dc.sh up :demo:
 ```
 
-Note: Running :init: loads an initial set of TPC-CH data into Materialize.
-Running :demo: will  load that same data in Materialize again. In the future,
+Note: Running `up :init:` loads an initial set of TPC-CH data into Materialize.
+Running `up :demo:` will  load that same data in Materialize again. In the future,
 we should find a way to load data/initialize tables without creating these duplicates.
 
 Now that the data is loaded into Materialize, we want to create sources
@@ -99,13 +98,13 @@ To do this, you will have to:
 - Create questions (queries) in Metabase
 - Add questions to the dashboard
 
-
 #### Create a new dashboard
+
 From the `/` path, you should be able to create a dashboard by clicking the
 `+` button in the top right hand corner.
 
-
 #### Create questions
+
 From the `/` path, you should be able to create a question by clicking the
 "Ask a Question" button in the top right hand corner, taking you to
 [`/question/new`](localhost:3030/question/new).
@@ -168,7 +167,6 @@ the Metabase interactive SQL editor.
       ```
 
 More queries can be found and added from the appendix.
-
 
 #### Add questions to the dashboard
 
