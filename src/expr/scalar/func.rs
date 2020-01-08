@@ -2387,7 +2387,7 @@ impl VariadicFunc {
         match self {
             VariadicFunc::Coalesce
             | VariadicFunc::Concatenate => false,
-	    | VariadicFunc::JsonbBuildArray
+	        | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject => false,
             _ => true,
         }

@@ -317,11 +317,6 @@ fn parse_concat_function() {
 }
 
 #[test]
-fn parse_concat_symbol() {
-    //TODO(natacha)
-}
-
-#[test]
 fn test_eof_after_as() {
     let res = parse_sql_statements("SELECT foo AS");
     assert_eq!(
