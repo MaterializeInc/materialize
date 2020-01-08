@@ -2926,7 +2926,6 @@ where
             let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
             expr.call_binary(s, BinaryFunc::CastFloat64ToDecimal)
         }
-        (String, Float64) => expr.call_unary(CastStringToFloat64),
         (Float64, String) => expr.call_unary(CastFloat64ToString),
         (Decimal(_, s), Int32) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt32),
         (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
@@ -2954,12 +2953,22 @@ where
         (TimestampTz, Timestamp) => expr.call_unary(CastTimestampTzToTimestamp),
         (TimestampTz, String) => expr.call_unary(CastTimestampTzToString),
         (Interval, String) => expr.call_unary(CastIntervalToString),
-        (String, Bytes) => expr.call_unary(CastStringToBytes),
         (Bytes, String) => expr.call_unary(CastBytesToString),
-        (String, Jsonb) => expr.call_unary(CastStringToJsonb),
         (Jsonb, String) => expr.call_unary(CastJsonbToString),
         (Jsonb, Float64) => expr.call_unary(CastJsonbToFloat64),
         (Jsonb, Bool) => expr.call_unary(CastJsonbToBool),
+        (String, Bool) => expr.call_unary(CastStringToBool),
+        (String, Int32) => expr.call_unary(CastStringToInt32),
+        (String, Int64) => expr.call_unary(CastStringToInt64),
+        (String, Float32) => expr.call_unary(CastStringToFloat32),
+        (String, Float64) => expr.call_unary(CastStringToFloat64),
+        (String, Decimal(_, s)) => expr.call_unary(CastStringToDecimal(s)),
+        (String, Date) => expr.call_unary(CastStringToDate),
+        (String, Timestamp) => expr.call_unary(CastStringToTimestamp),
+        (String, TimestampTz) => expr.call_unary(CastStringToTimestampTz),
+        (String, Interval) => expr.call_unary(CastStringToInterval),
+        (String, Bytes) => expr.call_unary(CastStringToBytes),
+        (String, Jsonb) => expr.call_unary(CastStringToJsonb),
         (Null, _) => {
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }

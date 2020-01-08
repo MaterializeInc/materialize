@@ -5,6 +5,26 @@
 
 mode cockroach
 
+query R
+SELECT '0.2'::decimal(38, 1)
+----
+0.2
+
+query R
+SELECT '-0.2'::decimal(38, 1)
+----
+-0.2
+
+query R
+SELECT '0.2'::decimal(38, 5)
+----
+0.20000
+
+query R
+SELECT '0.2'::decimal(38, 0)
+----
+0
+
 statement ok
 CREATE TABLE basic (
     a decimal(15, 1)

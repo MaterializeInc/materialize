@@ -16,7 +16,9 @@ use self::decimal::Significand;
 use crate::{ColumnType, DatumDict, DatumList};
 
 pub mod decimal;
+pub mod jsonb;
 pub mod regex;
+pub mod strconv;
 
 /// A literal value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]

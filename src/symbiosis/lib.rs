@@ -31,6 +31,7 @@ use tokio_postgres::types::FromSql;
 
 use catalog::{Catalog, QualName};
 use repr::decimal::Significand;
+use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 
@@ -379,7 +380,7 @@ fn push_column(
         DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => {
             let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
             if let Some(serde) = serde {
-                row = expr::serde_into_row(row, serde)?;
+                row = Jsonb::new(serde)?.pack_into(row)
             } else {
                 row.push(Datum::Null)
             }

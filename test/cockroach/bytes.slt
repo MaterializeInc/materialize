@@ -13,151 +13,137 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# not supported yet
-halt
-
 mode cockroach
 
-query T
-SHOW bytea_output
-----
-hex
+# query T
+# SHOW bytea_output
+# ----
+# hex
 
 query T
-SELECT 'non-escaped-string':::BYTES::STRING
+SELECT 'non-escaped-string'::bytea::text
 ----
 \x6e6f6e2d657363617065642d737472696e67
 
-query T
-SELECT '\Xabcd':::BYTES::STRING
-----
-\xabcd
-
-query T
-SELECT b'\x5c\x78':::BYTES
-----
-\x
-
-query T
-SELECT b'\x5c\x78':::BYTES::STRING
-----
-\x5c78
-
-query T
-SELECT b'\x5c\x58':::BYTES::STRING
-----
-\x5c58
-
-query T
-SELECT e'\x5c\x78'::STRING
-----
-\x
-
-query T
-SELECT '\X':::BYTES::STRING
-----
-\x
-
-query T
-SELECT e'a\\134b\nc\'e'::STRING::BYTES::STRING
-----
-\x615c620a632765
+# TODO(benesch): support escape string literals.
+#
+# query T
+# SELECT e'\x5c\x78'::text
+# ----
+# \x
+#
+# query T
+# SELECT e'a\\134b\nc\'e'::text::bytea::text
+# ----
+# \x615c620a632765
 
 
 query T
-SELECT '日本語':::STRING::BYTES::STRING
+SELECT '日本語'::text::bytea::text
 ----
 \xe697a5e69cace8aa9e
 
-statement ok
-SET bytea_output = escape
-
 query T
-SELECT 'non-escaped-string':::BYTES::STRING
+SELECT '\400'::bytea
 ----
-non-escaped-string
+NULL
 
-query T
-SELECT '\Xabcd':::BYTES::STRING
-----
-\253\315
-
-query T
-SELECT b'\x5c\x78':::BYTES
-----
-\x
-
-query T
-SELECT b'\x5c\x78':::BYTES::STRING
-----
-\\x
-
-query T
-SELECT b'\x5c\x58':::BYTES::STRING
-----
-\\X
-
-query T
-SELECT e'\x5c\x78'::STRING
-----
-\x
-
-query T
-SELECT '\X':::BYTES::STRING
-----
-·
-
-query T
-SELECT e'a\\134b\nc\'e'::STRING::BYTES::STRING
-----
-a\\b\012c'e
-
-query T
-SELECT '日本語':::STRING::BYTES::STRING
-----
-\346\227\245\346\234\254\350\252\236
+# TODO(benesch): support bytea_output.
+#
+# statement ok
+# SET bytea_output = escape
+#
+# query T
+# SELECT 'non-escaped-text'::bytea::text
+# ----
+# non-escaped-text
+#
+# query T
+# SELECT '\Xabcd'::bytea::text
+# ----
+# \253\315
+#
+# query T
+# SELECT b'\x5c\x78'::bytea
+# ----
+# \x
+#
+# query T
+# SELECT b'\x5c\x78'::bytea::text
+# ----
+# \\x
+#
+# query T
+# SELECT b'\x5c\x58'::bytea::text
+# ----
+# \\X
+#
+# query T
+# SELECT e'\x5c\x78'::text
+# ----
+# \x
+#
+# query T
+# SELECT '\X'::bytea::text
+# ----
+# ·
+#
+# query T
+# SELECT e'a\\134b\nc\'e'::text::bytea::text
+# ----
+# a\\b\012c'e
+#
+# query T
+# SELECT '日本語'::text::bytea::text
+# ----
+# \346\227\245\346\234\254\350\252\236
 
 subtest Regression_25841
 
-statement ok
-set bytea_output = hex
+# statement ok
+# set bytea_output = hex
 
 query T
-SELECT e'a\\\\b'::STRING::BYTEA
+SELECT 'a\\b'::text::bytea
 ----
 a\b
 
 query I
-SELECT length(e'a\\\\b'::STRING::BYTEA)
+SELECT length('a\\b'::text::bytea)
 ----
 3
 
-query error invalid bytea escape sequence
-SELECT e'a\\bcde'::STRING::BYTEA
-
-query error bytea encoded value ends with incomplete escape sequence
-SELECT e'a\\01'::STRING::BYTEA
+# TODO(benesch): enable when we support returning runtime errors.
+#
+# query error invalid bytea escape sequence
+# SELECT 'a\bcde'::text::bytea
+#
+# query error bytea encoded value ends with incomplete escape sequence
+# SELECT 'a\01'::text::bytea
 
 subtest Regression_27950
 
-statement ok
-set bytea_output = hex
+# statement ok
+# set bytea_output = hex
 
 statement ok
-CREATE TABLE t(b BYTES); INSERT INTO t(b) VALUES ('\xe697a5e69cace8aa9e'::BYTES)
+CREATE TABLE t(b bytea)
+
+statement ok
+INSERT INTO t(b) VALUES ('\xe697a5e69cace8aa9e'::bytea)
 
 query TT
-SELECT b, b::STRING FROM t
+SELECT b, b::text FROM t
 ----
 日本語  \xe697a5e69cace8aa9e
 
-statement ok
-set bytea_output = escape
-
-query TT
-SELECT b, b::STRING FROM t
-----
-日本語  \346\227\245\346\234\254\350\252\236
+# statement ok
+# set bytea_output = escape
+#
+# query TT
+# SELECT b, b::text FROM t
+# ----
+# 日本語  \346\227\245\346\234\254\350\252\236
 
 statement ok
 DROP TABLE t
