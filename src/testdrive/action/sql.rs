@@ -3,7 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::error::Error;
+use std::error::Error as _;
+use std::fmt::Write as _;
+use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
@@ -71,17 +73,25 @@ impl Action for SqlAction {
             let backoff = Duration::from_millis(100 * 2_u64.pow(i));
             match self.try_redo(&mut state.pgclient, &query) {
                 Ok(()) => {
+                    if i > 0 {
+                        println!();
+                    }
                     println!("rows match; continuing");
                     return Ok(());
                 }
                 Err(err) => {
-                    if i >= max {
-                        return Err(err);
-                    } else {
-                        println!(
-                            "rows didn't match; sleeping {:?} to see if dataflow catches up",
+                    if i == 0 {
+                        print!(
+                            "rows didn't match; sleeping to see if dataflow catches up {:?}",
                             backoff
                         );
+                        io::stdout().flush().unwrap();
+                    } else if i < max {
+                        print!(" {:?}", backoff);
+                        io::stdout().flush().unwrap();
+                    } else {
+                        println!();
+                        return Err(err);
                     }
                 }
             }
@@ -101,20 +111,49 @@ impl SqlAction {
     }
 
     fn try_redo(&self, pgclient: &mut postgres::Client, query: &str) -> Result<(), String> {
-        let mut rows: Vec<_> = pgclient
+        let mut actual: Vec<_> = pgclient
             .query(query, &[])
             .map_err(|e| format!("query failed: {}", e))?
             .into_iter()
             .map(decode_row)
             .collect::<Result<_, _>>()?;
-        rows.sort();
-        if rows == self.cmd.expected_rows {
+        actual.sort();
+        if actual == self.cmd.expected_rows {
             Ok(())
         } else {
-            // TODO(benesch): a better diff here would be nice.
+            let (mut left, mut right) = (0, 0);
+            let expected = &self.cmd.expected_rows;
+            let mut buf = String::new();
+            while left < expected.len() && right < actual.len() {
+                // the ea logic below is complex enough without adding the indirection of Ordering::*
+                #[allow(clippy::comparison_chain)]
+                match (expected.get(left), actual.get(right)) {
+                    (Some(e), Some(a)) => {
+                        if e == a {
+                            left += 1;
+                            right += 1;
+                        } else if e > a {
+                            writeln!(buf, "extra row: {:?}", a).unwrap();
+                            right += 1;
+                        } else if e < a {
+                            writeln!(buf, "row missing: {:?}", e).unwrap();
+                            left += 1;
+                        }
+                    }
+                    (None, Some(a)) => {
+                        writeln!(buf, "extra row: {:?}", a).unwrap();
+                        right += 1;
+                    }
+                    (Some(e), None) => {
+                        writeln!(buf, "row missing: {:?}", e).unwrap();
+                        left += 1;
+                    }
+                    (None, None) => unreachable!("blocked by while condition"),
+                }
+            }
             Err(format!(
-                "non-matching rows: expected:\n{:?}\ngot:\n{:?}",
-                self.cmd.expected_rows, rows
+                "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
+                self.cmd.expected_rows, actual, buf
             ))
         }
     }
