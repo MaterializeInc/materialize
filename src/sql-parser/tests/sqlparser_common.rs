@@ -3210,6 +3210,38 @@ fn parse_offset() {
 }
 
 #[test]
+fn parse_offset_no_row() {
+    // Use unverified_query as the Query formatter is set to print ROWS by default
+    let ast = unverified_query("SELECT foo FROM bar OFFSET 2");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+
+    let ast = unverified_query("SELECT foo FROM bar WHERE foo = 4 OFFSET 2");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+
+    let ast = unverified_query("SELECT foo FROM bar ORDER BY baz OFFSET 2 ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    let ast = unverified_query("SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    let ast = unverified_query("SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2 ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    let ast = unverified_query("SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    let ast = unverified_query("SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2 ROWS ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    match ast.body {
+        SetExpr::Select(s) => match only(s.from).relation {
+            TableFactor::Derived { subquery, .. } => {
+                assert_eq!(subquery.offset, Some(Expr::Value(number("2"))));
+            }
+            _ => panic!("Test broke"),
+        },
+        _ => panic!("Test broke"),
+    }
+    let ast = unverified_query("SELECT 'foo' OFFSET 0");
+    assert_eq!(ast.offset, Some(Expr::Value(number("0"))));
+}
+
+#[test]
 fn parse_singular_row_offset() {
     one_statement_parses_to(
         "SELECT foo FROM bar OFFSET 1 ROW",

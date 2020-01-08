@@ -2457,7 +2457,7 @@ impl Parser {
     /// Parse an OFFSET clause
     pub fn parse_offset(&mut self) -> Result<Expr, ParserError> {
         let value = Expr::Value(self.parse_number_value()?);
-        self.expect_one_of_keywords(&["ROW", "ROWS"])?;
+        let _ = self.parse_one_of_keywords(&["ROW", "ROWS"]);
         Ok(value)
     }
 
