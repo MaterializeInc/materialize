@@ -33,13 +33,26 @@ Now that the data is loaded into Materialize, we want to create sources
 with it. Enter a psql shell connected to Materialize:
 
 ```console
-psql -h localhost -p 6875 gssencmode=disable\ sslmode=disable
+psql -h localhost -p 6875
 ```
 
 And create the sources:
 
 ```console
-CREATE SOURCES LIKE 'mysql.tpcch.%' FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';
+$ CREATE SOURCES LIKE 'mysql.tpcch.%'
+  FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';
+mysql_tpcch_customer
+mysql_tpcch_district
+mysql_tpcch_history
+mysql_tpcch_item
+mysql_tpcch_nation
+mysql_tpcch_neworder
+mysql_tpcch_order
+mysql_tpcch_orderline
+mysql_tpcch_region
+mysql_tpcch_stock
+mysql_tpcch_supplier
+mysql_tpcch_warehouse
 ```
 
 ### Connecting Metabase to Materialize
@@ -53,23 +66,22 @@ create a user and connect to a database. Note: Each time you
 restart the Metabase container, you will need to create a
 user and reconnect to Materialize.
 
-To create a user, simply fill in the user information fields.
-This information is not important, although you may be asked to log in
-at another point in the future.
+There are three groups of fields:
+- Your metabase user:
+  + Simply fill in the user information fields.
 
-To connect to Materialize, provide Metabase with the following
-host and port information:
-- Host: materialized (the name of the Materialize Docker service)
-- Port: 6875
-
-All of the other fields Metabase requests to connect to the database
-(such as username and password), are arbitrary for the time being.
+    I recommend using `mz` / `consistent1` in case you get logged out.
+- In order for metabase to connect with Materialize inside our `docker-compose` cluster,
+  use the following host and port information:
+  + Host: `materialized`
+  + Port: `6875`
+- Username, and database are required but not checked (issue #1467) you can just put `mz`
+  for all of them.
 
 Next, you will either agree/disagree to send analytics back to Metabase.
 You will be able to continue through either way.
 
 You should now be able to see the main Metabase dashboard.
-
 
 ### Configuring Metabase
 
