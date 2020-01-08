@@ -4055,7 +4055,6 @@ fn one_statement_parses_to(sql: &str, canonical: &str) -> Statement {
     let mut statements = parse_sql_statements(&sql).unwrap();
     assert_eq!(statements.len(), 1);
 
-
     let only_statement = statements.pop().unwrap();
     if !canonical.is_empty() {
         assert_eq!(canonical, only_statement.to_string())
