@@ -261,7 +261,7 @@ impl<'a> Datum<'a> {
     }
 
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
-        fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
+        fn is_instance_of_scalar(datum: Datum, scalar_type: ScalarType) -> bool {
             if let ScalarType::Jsonb = scalar_type {
                 // json type checking
                 match datum {
@@ -320,7 +320,7 @@ impl<'a> Datum<'a> {
                 return true;
             }
         }
-        is_instance_of_scalar(self, &column_type.scalar_type)
+        is_instance_of_scalar(self, column_type.scalar_type)
     }
 }
 
@@ -519,7 +519,7 @@ impl fmt::Display for Datum<'_> {
 /// an optional default value and nullability, that must also be considered part
 /// of a datum's type.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum ScalarType {
     /// The type of a datum that can only be null.
     ///
@@ -551,14 +551,14 @@ pub enum ScalarType {
 }
 
 impl<'a> ScalarType {
-    pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
+    pub fn unwrap_decimal_parts(self) -> (u8, u8) {
         match self {
-            ScalarType::Decimal(p, s) => (*p, *s),
+            ScalarType::Decimal(p, s) => (p, s),
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
         }
     }
 
-    pub fn dummy_datum(&self) -> Datum<'a> {
+    pub fn dummy_datum(self) -> Datum<'a> {
         match self {
             ScalarType::Null => Datum::Null,
             ScalarType::Bool => Datum::False,
