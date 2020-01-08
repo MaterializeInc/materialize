@@ -16,7 +16,7 @@ use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
-use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
+use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, Interval, RowArena, RowPacker, ScalarType};
 
@@ -2180,7 +2180,8 @@ fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 }
 
 pub fn concatenate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    let result = datums.iter().fold(String::new(), |mut st, d| {
+    let mut st = String::new();
+    for d in datums {
         if !d.is_null() {
             let next_arg = match d {
                 Datum::String(s) => s.to_string(),
@@ -2190,10 +2191,9 @@ pub fn concatenate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datu
                 _ => panic!("Concatenate called on {:?}", d),
             };
             st.push_str(&next_arg);
-        };
-        st
-    });
-    Datum::String(temp_storage.push_string(result))
+        }
+    }
+    Datum::String(temp_storage.push_string(st))
 }
 
 fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
@@ -2385,10 +2385,8 @@ impl VariadicFunc {
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
         match self {
-            VariadicFunc::Coalesce
-            | VariadicFunc::Concatenate => false,
-	        | VariadicFunc::JsonbBuildArray
-            | VariadicFunc::JsonbBuildObject => false,
+            VariadicFunc::Coalesce | VariadicFunc::Concatenate => false,
+            VariadicFunc::JsonbBuildArray | VariadicFunc::JsonbBuildObject => false,
             _ => true,
         }
     }

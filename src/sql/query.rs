@@ -1534,34 +1534,10 @@ fn plan_function<'a>(
                 let mut exprs = Vec::new();
                 for arg in &sql_func.args {
                     let mut expr = plan_expr(ecx, arg, Some(ScalarType::String))?;
-                    let typ = ecx.column_type(&expr);
-                    expr = match typ.scalar_type {
-                        ScalarType::Float32 => {
-                            expr.call_unary(UnaryFunc::CastFloat32ToString)
-                        },
-                        ScalarType::Float64 => {
-                            expr.call_unary(UnaryFunc::CastFloat64ToString)
-                        },
-                        ScalarType::Decimal(_,s) => {
-                            expr.call_unary( UnaryFunc::CastDecimalToString(s))
-                        },
-                        ScalarType::Int32 => {
-                            expr.call_unary(UnaryFunc::CastInt32ToString)
-                        },
-                        ScalarType::Int64 => {
-                            expr.call_unary(UnaryFunc::CastInt64ToString)
-                        },
-                        ScalarType::Bytes => {
-                            expr.call_unary(UnaryFunc::CastBytesToString)
-                        },
-                       ScalarType::Null | ScalarType::Bool | ScalarType::String => expr,
-                        _ => {
-                            bail!(
-                                "concat does not accept arguments of type {:}",
-                                typ.scalar_type
-                            );
-                        }
-                    };
+                    let typ = ecx.column_type(&expr).scalar_type;
+                    if typ != ScalarType::Null && typ != ScalarType::Bool {
+                        expr = plan_cast_internal(ecx, "concat", expr, ScalarType::String)?;
+                    }
                     exprs.push(expr);
                 }
                 let expr = ScalarExpr::CallVariadic {
