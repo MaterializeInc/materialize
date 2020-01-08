@@ -47,7 +47,7 @@ CREATE SOURCES LIKE 'mysql.tpcch.%' FROM 'kafka://kafka:9092' USING SCHEMA REGIS
 Starting up the required Docker containers using `dc.sh` brings up the Metabase
 and Materialize services. Now, we need to connect the two.
 
-To open Metabase, go to `localhost:3030` in your browser.
+To open Metabase, go to <localhost:3030> in your browser.
 You should see Metabase is already running, but needs you to
 create a user and connect to a database. Note: Each time you
 restart the Metabase container, you will need to create a
@@ -76,10 +76,10 @@ You should now be able to see the main Metabase dashboard.
 Once you have connected Metabase to Materialize and you are able to
 see the main dashboard, you will want to sync the Metabase and
 Materialize database schemas. To do that, you should:
-1. Navigate to `admin/databases` in your browser
+1. Navigate to [`/admin/databases`](localhost:3030/admin/databases) in your browser
 2. Click on the database you created
 3. Click "sync database schema now" in the top right
-4. Go back to the `/` path
+4. Go back to the [`/`](localhost:3030/) path
 
 Now that Metabase is connected to Materialize, we can create a demo dashboard.
 To do this, you will have to:
@@ -96,7 +96,7 @@ From the `/` path, you should be able to create a dashboard by clicking the
 #### Create questions
 From the `/` path, you should be able to create a question by clicking the
 "Ask a Question" button in the top right hand corner, taking you to
-`/question/new`.
+[`/question/new`](localhost:3030/question/new).
 
 To demo Materialize, we have been adding two copies of a handful of
 queries to a demo dashboard: one copy without a view and one copy
