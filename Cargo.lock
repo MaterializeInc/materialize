@@ -265,6 +265,7 @@ name = "ccsr"
 version = "0.1.0"
 dependencies = [
  "failure",
+ "futures",
  "hyper",
  "lazy_static",
  "reqwest",
