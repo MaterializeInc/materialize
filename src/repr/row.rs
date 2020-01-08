@@ -531,54 +531,6 @@ impl RowPacker {
         }
     }
 
-    /// Start packing a `DatumList`. Returns the starting offset, which needs to be passed to `finish_list`.
-    ///
-    /// # Safety
-    /// You must finish the list (or throw away self).
-    /// Lists/dicts can be nested, but not overlapped.
-    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
-    pub unsafe fn start_list(&mut self) -> usize {
-        self.data.push(Tag::List as u8);
-        let start = self.data.len();
-        // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
-        start
-    }
-
-    /// Finish packing a `DatumList`
-    ///
-    /// # Safety
-    /// See `start_list`
-    pub unsafe fn finish_list(&mut self, start: usize) {
-        let len = self.data.len() - start - size_of::<usize>();
-        // fix up the len
-        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
-    }
-
-    /// Start packing a `DatumDict`. Returns the starting offset, which needs to be passed to `finish_dict`.
-    ///
-    /// # Safety
-    /// You must finish the dict (or throw away self).
-    /// Lists/dicts can be nested, but not overlapped.
-    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
-    pub unsafe fn start_dict(&mut self) -> usize {
-        self.data.push(Tag::Dict as u8);
-        let start = self.data.len();
-        // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
-        start
-    }
-
-    /// Finish packing a `DatumDict`
-    ///
-    /// # Safety
-    /// See `start_dict`
-    pub unsafe fn finish_dict(&mut self, start: usize) {
-        let len = self.data.len() - start - size_of::<usize>();
-        // fix up the len
-        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
-    }
-
     /// Pack a `DatumList`.
     ///
     /// ```
@@ -592,13 +544,19 @@ impl RowPacker {
     ///
     /// assert_eq!(row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(), vec![Datum::String("age"), Datum::Int64(42)])
     /// ```
-    pub fn push_list_with<F>(&mut self, f: F)
+    pub fn push_list_with<F, R>(&mut self, f: F) -> R
     where
-        F: FnOnce(&mut RowPacker),
+        F: FnOnce(&mut RowPacker) -> R,
     {
-        let start = unsafe { self.start_list() };
-        f(self);
-        unsafe { self.finish_list(start) };
+        self.data.push(Tag::List as u8);
+        let start = self.data.len();
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
+        let res = f(self);
+        let len = self.data.len() - start - size_of::<usize>();
+        // fix up the len
+        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+        res
     }
 
     /// Pack a `DatumDict`.
@@ -625,13 +583,19 @@ impl RowPacker {
     ///
     /// assert_eq!(row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(), vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))])
     /// ```
-    pub fn push_dict_with<F>(&mut self, f: F)
+    pub fn push_dict_with<F, R>(&mut self, f: F) -> R
     where
-        F: FnOnce(&mut RowPacker),
+        F: FnOnce(&mut RowPacker) -> R,
     {
-        let start = unsafe { self.start_dict() };
-        f(self);
-        unsafe { self.finish_dict(start) };
+        self.data.push(Tag::Dict as u8);
+        let start = self.data.len();
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
+        let res = f(self);
+        let len = self.data.len() - start - size_of::<usize>();
+        // fix up the len
+        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+        res
     }
 
     /// Convenience function to push a `DatumList` from an iter of `Datum`s

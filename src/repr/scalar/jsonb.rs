@@ -80,8 +80,8 @@ impl Jsonb {
         &self.inner
     }
 
-    pub fn pack_into(self, packer: RowPacker) -> RowPacker {
-        fn pack(val: serde_json::Value, mut packer: RowPacker) -> RowPacker {
+    pub fn pack_into(self, packer: &mut RowPacker) {
+        fn pack(val: serde_json::Value, packer: &mut RowPacker) {
             use serde_json::Value;
             match val {
                 Value::Null => packer.push(Datum::JsonNull),
@@ -97,36 +97,29 @@ impl Jsonb {
                     packer.push(Datum::Float64(f.into()))
                 }
                 Value::String(s) => packer.push(Datum::String(&s)),
-                Value::Array(array) => {
-                    let start = unsafe { packer.start_list() };
+                Value::Array(array) => packer.push_list_with(|packer| {
                     for elem in array {
-                        // If we panic here the packer might be in an invalid
-                        // state, but we throw the packer away so it's safe.
-                        packer = pack(elem, packer);
+                        pack(elem, packer);
                     }
-                    unsafe { packer.finish_list(start) };
-                }
-                Value::Object(object) => {
-                    let start = unsafe { packer.start_dict() };
+                }),
+                Value::Object(object) => packer.push_dict_with(|packer| {
                     let mut pairs = object.into_iter().collect::<Vec<_>>();
                     // dict keys must be in ascending order
                     pairs.sort_by(|(k1, _), (k2, _)| k1.cmp(&k2));
                     for (key, val) in pairs {
                         packer.push(Datum::String(&key));
-                        // If we panic here the packer might be in an invalid
-                        // state, but we throw the packer away so it's safe.
-                        packer = pack(val, packer);
+                        pack(val, packer);
                     }
-                    unsafe { packer.finish_dict(start) };
-                }
+                }),
             }
-            packer
         }
         pack(self.inner, packer)
     }
 
     pub fn into_row(self) -> Row {
-        self.pack_into(RowPacker::new()).finish()
+        let mut packer = RowPacker::new();
+        self.pack_into(&mut packer);
+        packer.finish()
     }
 }
 

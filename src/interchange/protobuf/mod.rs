@@ -192,7 +192,7 @@ impl Decoder {
         let deserialized_message =
             Value::deserialize(&mut deserializer).expect("Deserializing into rust object");
 
-        fn value_into_row(v: &Value, mut packer: RowPacker) -> Result<RowPacker, failure::Error> {
+        fn value_into_row(v: &Value, packer: &mut RowPacker) -> Result<(), failure::Error> {
             match v {
                 Value::Bool(true) => packer.push(Datum::True),
                 Value::Bool(false) => packer.push(Datum::False),
@@ -204,16 +204,13 @@ impl Decoder {
                 Value::F64(f) => packer.push(Datum::Float64((*f).into())),
                 Value::String(s) => packer.push(Datum::String(s)),
                 Value::Bytes(b) => packer.push(Datum::Bytes(b)),
-                Value::Map(_m) => packer = nested_value_into_row(v, packer)?,
+                Value::Map(_m) => nested_value_into_row(v, packer)?,
                 _ => bail!("Unsupported types from serde_value"),
             }
-            Ok(packer)
+            Ok(())
         };
 
-        fn nested_value_into_row(
-            v: &Value,
-            mut packer: RowPacker,
-        ) -> Result<RowPacker, failure::Error> {
+        fn nested_value_into_row(v: &Value, packer: &mut RowPacker) -> Result<(), failure::Error> {
             match v {
                 Value::Bool(true) => packer.push(Datum::True),
                 Value::Bool(false) => packer.push(Datum::False),
@@ -227,36 +224,33 @@ impl Decoder {
                 Value::Bytes(_) => {
                     bail!("We don't currently support arrays or nested messages with bytes")
                 }
-                Value::Seq(s) => {
-                    let start = unsafe { packer.start_list() };
+                Value::Seq(s) => packer.push_list_with(|packer| {
                     for value in s {
-                        // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
-                        packer = nested_value_into_row(&value, packer)?;
+                        nested_value_into_row(&value, packer)?;
                     }
-                    unsafe { packer.finish_list(start) };
-                }
-                Value::Map(m) => {
-                    let start = unsafe { packer.start_dict() };
+                    Ok::<_, failure::Error>(())
+                })?,
+                Value::Map(m) => packer.push_dict_with(|packer| {
                     for (k, v) in m {
                         // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
                         match (k, v) {
                             (Value::String(s), Value::Option(Some(val))) => {
                                 packer.push(Datum::String(s.as_str()));
-                                packer = nested_value_into_row(&val, packer)?;
+                                nested_value_into_row(&val, packer)?;
                             }
                             (Value::String(_), Value::Option(None)) => (),
                             (Value::String(s), Value::Seq(_seq)) => {
                                 packer.push(Datum::String(s.as_str()));
-                                packer = nested_value_into_row(&v, packer)?;
+                                nested_value_into_row(&v, packer)?;
                             }
                             _ => bail!("Unrecognized value while trying to parse a nested message"),
                         }
                     }
-                    unsafe { packer.finish_dict(start) };
-                }
+                    Ok(())
+                })?,
                 _ => bail!("Unsupported types from serde_value"),
             }
-            Ok(packer)
+            Ok(())
         };
 
         fn default_to_datum(v: &value::Value) -> Result<Datum<'_>, failure::Error> {
@@ -291,13 +285,13 @@ impl Decoder {
                 let value = deserialized_message.get(&key);
 
                 if let Some(Value::Option(Some(value))) = value {
-                    row = value_into_row(&value, row)?;
+                    value_into_row(&value, &mut row)?;
                 } else if let Some(Value::Seq(_inner)) = value {
                     // Note(rkhaitan) This control flow feels extremely weird to me
                     // but the library gives different types in very different
                     // 'packaging / wrapping' of Options so this seemed like the cleanest
                     // thing to do
-                    row = nested_value_into_row(&value.unwrap(), row)?;
+                    nested_value_into_row(&value.unwrap(), &mut row)?;
                 } else if let Some(default) = f.default_value() {
                     row.push(default_to_datum(default)?);
                 } else {

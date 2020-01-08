@@ -380,7 +380,7 @@ fn push_column(
         DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => {
             let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
             if let Some(serde) = serde {
-                row = Jsonb::new(serde)?.pack_into(row)
+                Jsonb::new(serde)?.pack_into(&mut row)
             } else {
                 row.push(Datum::Null)
             }
