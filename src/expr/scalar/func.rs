@@ -2184,7 +2184,7 @@ pub fn concatenate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datu
     for d in datums {
         if !d.is_null() {
             let next_arg = match d {
-                Datum::String(s) => s.to_string(),
+                Datum::String(s) => (*s).to_string(),
                 // PSQL treats booleans as single characters (f if False/false, t if True/true)
                 Datum::False => "f".to_string(),
                 Datum::True => "t".to_string(),
