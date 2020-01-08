@@ -414,6 +414,14 @@ fn cast_jsonb_to_string_unless_string<'a>(a: Datum<'a>, temp_storage: &'a RowAre
 fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
         Datum::Null => Datum::JsonNull,
+        Datum::Float64(f) => {
+            if f.is_finite() {
+                a
+            } else {
+                // invalid json float
+                Datum::Null
+            }
+        }
         _ => a,
     }
 }
@@ -1950,8 +1958,8 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::String).nullable(true)
             }
 
-            // converts null to jsonb
-            CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(false),
+            // converts null to jsonnull but converts nan to null
+            CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
 
             // can return null for other jsonb types
             CastJsonbToFloat64 | CastJsonbToBool => {
@@ -2242,13 +2250,23 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
 }
 
 fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| packer.push_list(datums))
+    if datums.iter().any(|datum| datum.is_null()) {
+        // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
+        Datum::Null
+    } else {
+        temp_storage.make_datum(|packer| packer.push_list(datums))
+    }
 }
 
 fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
-        packer.push_dict(datums.chunks(2).map(|kv| (kv[0].unwrap_str(), kv[1])))
-    })
+    if datums.iter().any(|datum| datum.is_null()) {
+        // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
+        Datum::Null
+    } else {
+        temp_storage.make_datum(|packer| {
+            packer.push_dict(datums.chunks(2).map(|kv| (kv[0].unwrap_str(), kv[1])))
+        })
+    }
 }
 
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
