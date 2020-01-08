@@ -1262,6 +1262,7 @@ dependencies = [
  "avro-rs",
  "byteorder",
  "ccsr",
+ "chrono",
  "criterion",
  "failure",
  "ordered-float",

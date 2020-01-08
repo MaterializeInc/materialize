@@ -573,27 +573,24 @@ impl Encoder {
         data: &[Datum],
     ) -> Result<Value, failure::Error> {
         Ok(match data {
-            [] => match record_schema {
-                Schema::Null => Value::Null,
-                _ => bail!(
-                    "Expected to convert Datum to type {:#?}, but no Datum found.",
-                    record_schema
-                ),
-            },
+            [] => bail!("Expected to convert Datum to type {:#?}, but no Datum found."),
             [datum] => {
                 match record_schema {
+                    Schema::Null => match datum {
+                        Datum::Null => Value::Null,
+                        _ => bail!(
+                            "Schema expected Datum to be Null, Datum was non-Null type: {:#?}.",
+                            datum
+                        ),
+                    },
                     Schema::Boolean => Value::Boolean(datum.unwrap_bool()),
                     Schema::Int => Value::Int(datum.unwrap_int32()),
                     Schema::Long => Value::Long(datum.unwrap_int64()),
                     Schema::Float => Value::Float(datum.unwrap_float32()),
                     Schema::Double => Value::Double(datum.unwrap_float64()),
                     Schema::Date => Value::Date(datum.unwrap_date()),
-                    Schema::TimestampMilli => {
-                        Value::Long(datum.unwrap_timestamp().timestamp_millis())
-                    }
-                    Schema::TimestampMicro => {
-                        Value::Long(datum.unwrap_timestamp().timestamp() * 1_000_000)
-                    }
+                    Schema::TimestampMilli => Value::Timestamp(datum.unwrap_timestamp()),
+                    Schema::TimestampMicro => Value::Timestamp(datum.unwrap_timestamp()),
                     Schema::Decimal {
                         precision, scale, ..
                     } => Value::Decimal {
@@ -641,10 +638,6 @@ impl Encoder {
                     // Schema::Union and Schema::Record can serialize >= 1 Datums
                     Schema::Union(union) => self.convert_to_avro_union(data, union)?,
                     Schema::Record { fields, .. } => self.convert_to_avro_record(data, fields)?,
-                    _ => bail!(
-                        "Expected to convert Datum to type {:#?}, but exactly one Datum found.",
-                        record_schema
-                    ),
                 }
             }
             _ => match record_schema {
@@ -732,12 +725,20 @@ impl SchemaCache {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
     use failure::ResultExt;
+    use ordered_float::OrderedFloat;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use std::fs::File;
 
-    use repr::RelationDesc;
+    use avro_rs::schema::{Schema, UnionSchema};
+    use avro_rs::types::Value;
+    use failure::_core::sync::atomic::Ordering::Relaxed;
+    use protobuf::rustproto::exts::serde_derive;
+    use repr::decimal::Significand;
+    use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, ScalarType};
+    use std::collections::HashMap;
 
     #[derive(Deserialize)]
     struct TestCase {
@@ -761,6 +762,84 @@ mod tests {
             let schema = serde_json::to_string(&tc.input)?;
             let output = super::validate_value_schema(&schema)?;
             assert_eq!(output, tc.expected, "failed test case name: {}", tc.name)
+        }
+
+        Ok(())
+    }
+
+    // row_to_avro
+    #[test]
+    fn test_encoding() -> Result<(), failure::Error> {
+        // TODO@jldlaughlin: Add
+        // The Encoder's schema is not used in data_to_avro(), use simple mock instead.
+        let dummy_relation_desc = RelationDesc::empty();
+        let schema = super::encode_schema(&dummy_relation_desc)?;
+
+        let encoder = super::Encoder::new(&schema.to_string());
+
+        // Data to be used in pairings.
+        let date = NaiveDate::from_ymd(2020, 1, 8);
+        let date_time = NaiveDateTime::new(date, NaiveTime::from_hms(1, 1, 1));
+        let bytes: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let string = String::from("test");
+
+        // array and map hard to test because of internal Datum representation
+        // cant test unionschema because private
+        // todo: (above?), record, enum, fixed
+        let pairings = [
+            (Schema::Null, vec![Datum::Null], Value::Null),
+            (Schema::Boolean, vec![Datum::True], Value::Boolean(true)),
+            (Schema::Boolean, vec![Datum::False], Value::Boolean(false)),
+            (Schema::Int, vec![Datum::Int32(1)], Value::Int(1)),
+            (Schema::Long, vec![Datum::Int64(1)], Value::Long(1)),
+            (
+                Schema::Float,
+                vec![Datum::Float32(OrderedFloat::from(1f32))],
+                Value::Float(1f32),
+            ),
+            (
+                Schema::Double,
+                vec![Datum::Float64(OrderedFloat::from(1f64))],
+                Value::Double(1f64),
+            ),
+            (Schema::Date, vec![Datum::Date(date)], Value::Date(date)),
+            (
+                Schema::TimestampMilli,
+                vec![Datum::Timestamp(date_time)],
+                Value::Timestamp(date_time),
+            ),
+            (
+                Schema::TimestampMicro,
+                vec![Datum::Timestamp(date_time)],
+                Value::Timestamp(date_time),
+            ),
+            (
+                Schema::Decimal {
+                    precision: 1usize,
+                    scale: 1usize,
+                    fixed_size: None,
+                },
+                vec![Datum::Decimal(Significand::new(1i128))],
+                Value::Decimal {
+                    unscaled: bytes.clone(),
+                    precision: 1,
+                    scale: 1,
+                },
+            ),
+            (
+                Schema::Bytes,
+                vec![Datum::Bytes(&bytes)],
+                Value::Bytes(bytes.clone()),
+            ),
+            (
+                Schema::String,
+                vec![Datum::String(&string)],
+                Value::String(string.clone()),
+            ),
+        ];
+        for (s, d, expected) in pairings.iter() {
+            let avro_value = encoder.data_to_avro(&s, d)?;
+            assert_eq!(*expected, avro_value); // which should come first?
         }
 
         Ok(())
