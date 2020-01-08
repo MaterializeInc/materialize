@@ -88,8 +88,6 @@ $ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA REGISTRY 'http://localhost:8081';
 > SHOW COLUMNS FROM quotes;
-> PEEK quotes;
-> SELECT quote, 42 FROM quotes;
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
 > PEEK business_insights;
 ```
