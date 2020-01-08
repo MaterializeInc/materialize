@@ -26,6 +26,7 @@ pub mod projection_lifting;
 pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
+pub mod redundant_join;
 pub mod simplify;
 pub mod split_predicates;
 pub mod update_let;
@@ -126,6 +127,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::column_knowledge::ColumnKnowledge),
                     Box::new(crate::transform::constant_join::InsertConstantJoin),
                     Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
+                    Box::new(crate::transform::redundant_join::RedundantJoin),
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.

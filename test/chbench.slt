@@ -388,13 +388,11 @@ Reduce {
         predicates: [#6 >= #14],
         Join {
           variables: [
-            [(0, 0), (1, 0), (2, 0)],
-            [(0, 1), (1, 1), (2, 1)],
-            [(0, 2), (1, 2), (2, 2)],
-            [(1, 4), (2, 4)]
+            [(0, 0), (1, 0)],
+            [(0, 1), (1, 1)],
+            [(0, 2), (1, 2)]
           ],
           Get { orderline (u13) },
-          Get { l0 },
           Get { l0 }
         }
       }
@@ -984,10 +982,9 @@ Let { l3 = Distinct { group_key: [#17], Get { l0 } } } in
 Let {
   l2 = Reduce {
     group_key: [#0],
-    aggregates: [all(#0 != i32toi64 #2)],
+    aggregates: [all(#0 != i32toi64 #1)],
     Join {
-      variables: [[(0, 0), (1, 0)]],
-      Get { l3 },
+      variables: [],
       Get { l3 },
       Filter { predicates: [^.*bad.*$ ~ #6], Get { supplier (u21) } }
     }
@@ -1204,9 +1201,7 @@ Let {
 } in
 Let {
   l3 = Join {
-    variables: [[(0, 0), (1, 0), (2, 0)], [(3, 4), (4, 0)]],
-    Get { l0 },
-    Get { l0 },
+    variables: [[(1, 4), (2, 0)]],
     Get { l0 },
     Filter {
       predicates: [datetots #6 > 2010-05-23 12:00:00],
@@ -1215,7 +1210,6 @@ Let {
     Get { stock (u17) }
   }
 } in
-Let { l7 = Distinct { group_key: [#43], Get { l3 } } } in
 Project {
   outputs: [1, 2],
   Join {
@@ -1227,16 +1221,15 @@ Project {
       Filter {
         predicates: [(2 * i32toi64 #3) > i32toi64 #4],
         Reduce {
-          group_key: [#0, #43, #44, #45],
-          aggregates: [sum(#40)],
+          group_key: [#0, #21, #22, #23],
+          aggregates: [sum(#18)],
           Join {
-            variables: [[(0, 43), (1, 0), (2, 0), (3, 0)]],
+            variables: [[(0, 21), (1, 0), (2, 0)]],
             Filter {
-              predicates: [i32toi64 #0 = ((#43 * #44) % 10000)],
+              predicates: [i32toi64 #0 = ((#21 * #22) % 10000)],
               Get { l3 }
             },
-            Get { l7 },
-            Get { l7 },
+            Distinct { group_key: [#21], Get { l3 } },
             Filter { predicates: [^co.*$ ~ #4], Get { item (u15) } }
           }
         }
@@ -1313,15 +1306,13 @@ Reduce {
             Distinct {
               group_key: [#0, #1, #2, #3],
               Filter {
-                predicates: [#14 > #3],
+                predicates: [#10 > #3],
                 Join {
                   variables: [
-                    [(0, 0), (1, 0), (2, 0)],
-                    [(0, 1), (1, 1), (2, 1)],
-                    [(0, 2), (1, 2), (2, 2)],
-                    [(0, 3), (1, 3)]
+                    [(0, 0), (1, 0)],
+                    [(0, 1), (1, 1)],
+                    [(0, 2), (1, 2)]
                   ],
-                  Get { l2 },
                   Get { l2 },
                   Get { orderline (u13) }
                 }
@@ -1447,12 +1438,11 @@ Reduce {
               group_key: [#8, #9, #10],
               Join {
                 variables: [
-                  [(0, 1), (1, 1), (2, 1)],
-                  [(0, 2), (1, 2), (2, 2)],
-                  [(0, 3), (1, 0), (2, 0)]
+                  [(0, 1), (1, 1)],
+                  [(0, 2), (1, 2)],
+                  [(0, 3), (1, 0)]
                 ],
                 Get { "order" (u11) },
-                Get { l0 },
                 Get { l0 }
               }
             }
