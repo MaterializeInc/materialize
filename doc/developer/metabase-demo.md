@@ -160,6 +160,38 @@ More queries can be found and added from the appendix.
 
 #### Add questions to the dashboard
 
+## Running the demo
+
+An important part of this demo, and the reason we're using TPC-CH is to point out that we
+are capable of running arbitrary SQL, including arbitrary joins, across arbitrary
+sources. As we add more source types we will demo merging e.g. CSV and log sources with
+TPC-CH seamlessly.
+
+Go back to the "browse data" (the materialize db from `/browse`) screen, some talking
+points:
+
+* We are a streaming data engine that is capable of supporting all of SQL, with strong
+  consistency guarantees. The only thing left at this point is engineering effort to add
+  more features, we know that they are acheivable.
+* To demonstrate where we are now we're going to walk through just using a regular BI
+  tool in the way that a regular analyst would use it, but then show the power of
+  materialize maintaining streaming views.
+* A useful example of this is to click the lightning bolt next to `Mysql Tpcch Order
+  Line` just sort of to demo that we do in fact support a standard end-user analyst
+  experience.
+
+  Talking points: these are just a variety of non-join queries that we support, but the
+  point is that this un-hacked BI tool just works with us, and we'll work with them to
+  make sure that their BI tool of choice also works with us.
+* Ask a simple question to demonstrate that we can work with the standard
+  analytics interfaces.
+* Then go to a pre-configured dashboard from one of the previous steps
+* Then you can run the demo-load generator:
+
+    dc.sh demo-load
+
+* And manually reload (issue #1286) the dashboard to watch things changing.
+
 ## Appendix: TPC-CH Queries
 
 - Query 2
