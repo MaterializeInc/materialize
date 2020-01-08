@@ -1966,6 +1966,8 @@ fn parse_show_objects() {
             verified_stmt(&sql),
             Statement::ShowObjects {
                 object_type: *ot,
+                extended: false,
+                full: false,
                 filter: None
             }
         )
@@ -1978,6 +1980,8 @@ fn parse_show_objects_with_like_regex() {
     match verified_stmt(sql) {
         Statement::ShowObjects {
             object_type,
+            extended: false,
+            full: false,
             filter,
         } => {
             assert_eq!(filter.unwrap(), ShowStatementFilter::Like("%foo%".into()));
@@ -1988,12 +1992,37 @@ fn parse_show_objects_with_like_regex() {
 }
 
 #[test]
+fn parse_show_objects_with_full() {
+    let canonical_sql = "SHOW FULL VIEWS";
+    assert_eq!(
+        verified_stmt(&canonical_sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::View,
+            extended: false,
+            full: true,
+            filter: None,
+        }
+    );
+    let canonical_sql = "SHOW FULL TABLES";
+    assert_eq!(
+        verified_stmt(&canonical_sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::Table,
+            extended: false,
+            full: true,
+            filter: None,
+        }
+    );
+}
+
+#[test]
 fn parse_show_indexes() {
     let canonical_sql = "SHOW INDEXES FROM foo";
     assert_eq!(
         verified_stmt(&canonical_sql),
         Statement::ShowIndexes {
             table_name: ObjectName(vec!["foo".into()]),
+            extended: false,
             filter: None,
         }
     );
@@ -2009,10 +2038,27 @@ fn parse_show_indexes() {
 }
 
 #[test]
+fn parse_show_indexes_with_extended() {
+    let canonical_sql = "SHOW EXTENDED INDEXES FROM foo";
+    assert_eq!(
+        verified_stmt(&canonical_sql),
+        Statement::ShowIndexes {
+            table_name: ObjectName(vec!["foo".into()]),
+            extended: true,
+            filter: None,
+        }
+    );
+}
+
+#[test]
 fn parse_show_indexes_with_where_expr() {
     let canonical_sql = "SHOW INDEXES FROM foo WHERE index_name = 'bar'";
     match verified_stmt(canonical_sql) {
-        Statement::ShowIndexes { table_name, filter } => {
+        Statement::ShowIndexes {
+            table_name,
+            extended: _,
+            filter,
+        } => {
             assert_eq!(
                 filter.unwrap(),
                 ShowStatementFilter::Where(Expr::BinaryOp {
@@ -3594,6 +3640,15 @@ fn parse_show_columns() {
         verified_stmt("SHOW FULL COLUMNS FROM mytable"),
         Statement::ShowColumns {
             extended: false,
+            full: true,
+            table_name: table_name.clone(),
+            filter: None,
+        }
+    );
+    assert_eq!(
+        verified_stmt("SHOW EXTENDED FULL COLUMNS FROM mytable"),
+        Statement::ShowColumns {
+            extended: true,
             full: true,
             table_name: table_name.clone(),
             filter: None,

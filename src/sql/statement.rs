@@ -195,12 +195,16 @@ pub fn handle_statement(
         } => handle_set_variable(scx, local, variable, value),
         Statement::ShowVariable { variable } => handle_show_variable(scx, variable),
         Statement::ShowObjects {
+            extended,
+            full,
             object_type: ot,
             filter,
-        } => handle_show_objects(scx, ot, filter.as_ref()),
-        Statement::ShowIndexes { table_name, filter } => {
-            handle_show_indexes(scx, &table_name.try_into()?, filter.as_ref())
-        }
+        } => handle_show_objects(scx, extended, full, ot, filter.as_ref()),
+        Statement::ShowIndexes {
+            extended,
+            table_name,
+            filter,
+        } => handle_show_indexes(scx, extended, &table_name.try_into()?, filter.as_ref()),
         Statement::ShowColumns {
             extended,
             full,
@@ -288,9 +292,20 @@ fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
 
 fn handle_show_objects(
     scx: &StatementContext,
+    extended: bool,
+    full: bool,
     object_type: ObjectType,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
+    if extended {
+        bail!("SHOW EXTENDED ... is not supported ");
+    }
+    if full {
+        if object_type != ObjectType::View {
+            bail!("SHOW FULL is only supported for VIEW")
+        }
+    }
+
     let like_regex = match filter {
         Some(ShowStatementFilter::Like(like_string)) => {
             build_like_regex_from_string(like_string.as_ref())?
@@ -314,9 +329,13 @@ fn handle_show_objects(
 
 fn handle_show_indexes(
     scx: &StatementContext,
+    extended: bool,
     from_name: &QualName,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
+    if extended {
+        bail!("SHOW EXTENDED INDEXES is not supported")
+    }
     if filter.is_some() {
         bail!("SHOW INDEXES ... WHERE is not supported");
     }

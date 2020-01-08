@@ -492,12 +492,12 @@ macro_rules! make_visitor {
                 visit_show_variable(self, variable)
             }
 
-            fn visit_show_objects(&mut self, object_type: ObjectType, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
-                visit_show_objects(self, object_type, filter)
+            fn visit_show_objects(&mut self, extended: bool, full: bool, object_type: ObjectType, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
+                visit_show_objects(self, extended, full, object_type, filter)
             }
 
-            fn visit_show_indexes(&mut self, table_name: &'ast $($mut)* ObjectName, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
-                visit_show_indexes(self, table_name, filter)
+            fn visit_show_indexes(&mut self, extended: bool, table_name: &'ast $($mut)* ObjectName, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
+                visit_show_indexes(self, extended, table_name, filter)
             }
 
             fn visit_show_columns(
@@ -648,11 +648,11 @@ macro_rules! make_visitor {
                     value,
                 } => visitor.visit_set_variable(*local, variable, value),
                 Statement::ShowVariable { variable } => visitor.visit_show_variable(variable),
-                Statement::ShowObjects { object_type, filter } => {
-                    visitor.visit_show_objects(*object_type, filter.as_auto_ref())
+                Statement::ShowObjects { object_type, extended, full, filter } => {
+                    visitor.visit_show_objects( *extended, *full, *object_type, filter.as_auto_ref())
                 }
-                Statement::ShowIndexes { table_name, filter } => {
-                    visitor.visit_show_indexes(table_name, filter.as_auto_ref())
+                Statement::ShowIndexes { table_name, extended, filter } => {
+                    visitor.visit_show_indexes(*extended, table_name, filter.as_auto_ref())
                 }
                 Statement::ShowColumns {
                     extended,
@@ -1531,6 +1531,8 @@ macro_rules! make_visitor {
 
         pub fn visit_show_objects<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
+            _extended: bool,
+            _full: bool,
             object_type: ObjectType,
             filter: Option<&'ast $($mut)* ShowStatementFilter>
         ) {
@@ -1542,6 +1544,7 @@ macro_rules! make_visitor {
 
         pub fn visit_show_indexes<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
+            _extended: bool,
             table_name: &'ast $($mut)* ObjectName,
             filter: Option<&'ast $($mut)* ShowStatementFilter>
         ) {
