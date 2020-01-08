@@ -307,13 +307,13 @@ fn parse_column_aliases() {
 #[test]
 fn parse_concat_function() {
     let sql = "SELECT CONCAT('CONCAT', ' ', 'function')";
-    let select = verified_only_select(sql);
+    let _select = verified_only_select(sql);
     let sql = "SELECT CONCAT(first_name, ' ', last_name) FROM customer";
-    let select = verified_only_select(sql);
+    let _select = verified_only_select(sql);
     let sql = "SELECT CONCAT('Concat with ', NULL) AS result_string";
-    let select = verified_only_select(sql);
+    let _select = verified_only_select(sql);
     let sql = "SELECT first_name, concat('A', 3, 'chars') FROM customer";
-    let select = verified_only_select(sql);
+    let _select = verified_only_select(sql);
 }
 
 #[test]
