@@ -504,7 +504,6 @@ SELECT concat(3.32::decimal, 3)
 ----
 33
 
-
 query T
 SELECT concat(3.32::float, 3)
 ----
@@ -524,5 +523,3 @@ query T
 SELECT concat('你好')
 ----
 你好
-
-
