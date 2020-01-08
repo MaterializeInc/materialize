@@ -822,6 +822,7 @@ fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan,
         ObjectType::Source => Plan::DropItems(to_remove, ObjectType::Source),
         ObjectType::View => Plan::DropItems(to_remove, ObjectType::View),
         ObjectType::Index => Plan::DropItems(to_remove, ObjectType::Index),
+        ObjectType::Sink => Plan::DropItems(to_remove, ObjectType::Sink),
         _ => bail!("unsupported SQL statement: DROP {}", object_type),
     })
 }

@@ -58,6 +58,7 @@ pub enum ExecuteResponse {
     DroppedTable,
     DroppedView,
     DroppedIndex,
+    DroppedSink,
     EmptyQuery,
     Inserted(usize),
     /// The current session has been taken out of transaction mode by ROLLBACK
@@ -84,6 +85,7 @@ impl fmt::Debug for ExecuteResponse {
             ExecuteResponse::CreatedView => f.write_str("ExecuteResponse::CreatedView"),
             ExecuteResponse::Deleted(n) => write!(f, "ExecuteResponse::Deleted({})", n),
             ExecuteResponse::DroppedIndex => f.write_str("ExecuteResponse::DroppedIndex"),
+            ExecuteResponse::DroppedSink => f.write_str("ExecuteResponse::DroppedSink"),
             ExecuteResponse::DroppedSource => f.write_str("ExecuteResponse::DroppedSource"),
             ExecuteResponse::DroppedTable => f.write_str("ExecuteResponse::DroppedTable"),
             ExecuteResponse::DroppedView => f.write_str("ExecuteResponse::DroppedView"),
