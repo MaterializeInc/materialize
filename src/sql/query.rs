@@ -1512,7 +1512,6 @@ fn plan_function<'a>(
                     _ => unreachable!(),
                 })
             }
-
             "coalesce" => {
                 if sql_func.args.is_empty() {
                     bail!("coalesce requires at least one argument");
@@ -1528,7 +1527,25 @@ fn plan_function<'a>(
                 };
                 Ok(expr)
             }
-
+            "concat" => {
+                if sql_func.args.is_empty() {
+                    bail!("concatenate requires at least one argument");
+                }
+                let mut exprs = Vec::new();
+                for arg in &sql_func.args {
+                    let mut expr = plan_expr(ecx, arg, Some(ScalarType::String))?;
+                    let typ = ecx.column_type(&expr).scalar_type;
+                    if typ != ScalarType::Null && typ != ScalarType::Bool {
+                        expr = plan_cast_internal(ecx, "concat", expr, ScalarType::String)?;
+                    }
+                    exprs.push(expr);
+                }
+                let expr = ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Concatenate,
+                    exprs,
+                };
+                Ok(expr)
+            }
             "current_timestamp" | "now" => {
                 if !sql_func.args.is_empty() {
                     bail!("{} does not take any arguments", ident);

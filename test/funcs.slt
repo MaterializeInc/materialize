@@ -254,3 +254,19 @@ query R
 SELECT sqrt(1.23783::decimal(15, 5))
 ----
 1.11257
+
+# Test coalesce
+query I
+SELECT coalesce(NULL,1,NULL)
+----
+1
+
+query R
+SELECT coalesce(NULL,1,NULL)
+----
+1
+
+query T
+SELECT coalesce('hello','world', NULL)
+----
+hello

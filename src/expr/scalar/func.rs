@@ -2248,6 +2248,23 @@ fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
+pub fn concatenate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    let mut st = String::new();
+    for d in datums {
+        if !d.is_null() {
+            let next_arg = match d {
+                Datum::String(s) => (*s).to_string(),
+                // PSQL treats booleans as single characters (f if False/false, t if True/true)
+                Datum::False => "f".to_string(),
+                Datum::True => "t".to_string(),
+                _ => panic!("Concatenate called on {:?}", d),
+            };
+            st.push_str(&next_arg);
+        }
+    }
+    Datum::String(temp_storage.push_string(st))
+}
+
 fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let string: &'a str = datums[0].unwrap_str();
     let mut chars = string.chars();
@@ -2383,6 +2400,7 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
+    Concatenate,
     MakeTimestamp,
     Substr,
     LengthString,
@@ -2400,6 +2418,7 @@ impl VariadicFunc {
     ) -> Datum<'a> {
         match self {
             VariadicFunc::Coalesce => coalesce(datums),
+            VariadicFunc::Concatenate => concatenate(datums, temp_storage),
             VariadicFunc::MakeTimestamp => make_timestamp(datums),
             VariadicFunc::Substr => substr(datums),
             VariadicFunc::LengthString => length_string(datums),
@@ -2421,6 +2440,7 @@ impl VariadicFunc {
                 }
                 ColumnType::new(ScalarType::Null)
             }
+            Concatenate => ColumnType::new(ScalarType::String).nullable(true),
             MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
@@ -2434,9 +2454,8 @@ impl VariadicFunc {
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
         match self {
-            VariadicFunc::Coalesce
-            | VariadicFunc::JsonbBuildArray
-            | VariadicFunc::JsonbBuildObject => false,
+            VariadicFunc::Coalesce | VariadicFunc::Concatenate => false,
+            VariadicFunc::JsonbBuildArray | VariadicFunc::JsonbBuildObject => false,
             _ => true,
         }
     }
@@ -2446,6 +2465,7 @@ impl fmt::Display for VariadicFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
+            VariadicFunc::Concatenate => f.write_str("concatenate"),
             VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::LengthString => f.write_str("lengthstr"),
