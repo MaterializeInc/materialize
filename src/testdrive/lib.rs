@@ -102,6 +102,7 @@ fn run_line_reader(config: &Config, line_reader: &mut LineReader) -> Result<(), 
     let mut state = action::create_state(config)?;
     let actions = action::build(cmds, &state)?;
     let mut ddl = Ddl::new(&mut state.pgclient())?;
+
     for a in &actions {
         a.action.redo(&mut state).map_err(|e| {
             let _ = ddl.clear_since_new(state.pgclient());
