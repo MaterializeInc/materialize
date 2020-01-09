@@ -34,7 +34,6 @@ reqwest = "0.10.0"
 serde_json = { version = "1.0.44", features = ["preserve_order"] }
 sql-parser = { path = "../sql-parser" }
 termcolor = "1.0.5"
-tokio = "0.2"
 
 [dev-dependencies]
 assert_cmd = "0.12.0"
