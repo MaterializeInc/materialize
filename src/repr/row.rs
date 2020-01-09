@@ -226,10 +226,22 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let t = read_copy::<DateTime<Utc>>(data, offset);
             Datum::TimestampTz(t)
         }
-        Tag::Interval => {
-            let i = read_copy::<Interval>(data, offset);
-            Datum::Interval(i)
-        }
+        Tag::Interval => match read_copy::<u8>(data, offset) {
+            0 => {
+                let i = read_copy::<i64>(data, offset);
+                Datum::Interval(Interval::Months(i))
+            }
+            1 => {
+                let is_positive = read_copy::<bool>(data, offset);
+                let secs = read_copy::<u64>(data, offset);
+                let nanosecs = read_copy::<u32>(data, offset);
+                Datum::Interval(Interval::Duration {
+                    is_positive,
+                    duration: std::time::Duration::new(secs, nanosecs),
+                })
+            }
+            other => panic!("Bad interval tag: {}", other),
+        },
         Tag::Decimal => {
             let s = read_copy::<Significand>(data, offset);
             Datum::Decimal(s)
@@ -312,7 +324,21 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval as u8);
-            push_copy!(data, i, Interval);
+            match i {
+                Interval::Months(months) => {
+                    data.push(0);
+                    push_copy!(data, months, i64);
+                }
+                Interval::Duration {
+                    is_positive,
+                    duration,
+                } => {
+                    data.push(1);
+                    push_copy!(data, is_positive, bool);
+                    push_copy!(data, duration.as_secs(), u64);
+                    push_copy!(data, duration.subsec_nanos(), u32);
+                }
+            }
         }
         Datum::Decimal(s) => {
             data.push(Tag::Decimal as u8);
@@ -771,13 +797,18 @@ mod tests {
             Datum::Int32(-42),
             Datum::Interval(Interval::Months(312)),
         ]);
-        assert_eq!(arena.push_row(row.clone()), &row);
+        assert_eq!(arena.push_row(row.clone()).unpack(), row.unpack());
     }
 
     #[test]
     fn miri_test_round_trip() {
         fn round_trip(datums: Vec<Datum>) {
             let row = Row::pack(datums.clone());
+
+            // When run under miri this catchs undefined bytes written to data
+            // eg by calling push_copy! on a type which contains undefined padding values
+            dbg!(row.data());
+
             let datums2 = row.iter().collect::<Vec<_>>();
             let datums3 = row.unpack();
             assert_eq!(datums, datums2);
