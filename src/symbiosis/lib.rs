@@ -307,7 +307,7 @@ fn push_column(
             row.push(i.into());
         }
         DataType::Int => {
-            let i = get_column_inner::<i32>(postgres_row, i, nullable)?.map(|i| i64::from(i));
+            let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
             row.push(i.into());
         }
         DataType::BigInt => {

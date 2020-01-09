@@ -227,13 +227,13 @@ SELECT 1, 2 INTERSECT SELECT 3
 query error pgcode 42601 each EXCEPT query must have the same number of columns: 2 vs 1
 SELECT 1, 2 EXCEPT SELECT 3
 
-query error pgcode 42804 UNION types i64 and string cannot be matched
+query error pgcode 42804 UNION types i32 and string cannot be matched
 SELECT 1 UNION SELECT '3'
 
-query error pgcode 42804 INTERSECT types i64 and string cannot be matched
+query error pgcode 42804 INTERSECT types i32 and string cannot be matched
 SELECT 1 INTERSECT SELECT '3'
 
-query error pgcode 42804 EXCEPT types i64 and string cannot be matched
+query error pgcode 42804 EXCEPT types i32 and string cannot be matched
 SELECT 1 EXCEPT SELECT '3'
 
 query error pgcode 42703 column "z" does not exist

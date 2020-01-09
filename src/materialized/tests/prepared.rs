@@ -26,22 +26,22 @@ fn test_bind_params() -> util::TestResult {
         .collect();
     assert_eq!(rows, &["42"]);
 
-    let rows: Vec<i64> = client
-        .query("SELECT $1 + 1", &[&42_i64])?
+    let rows: Vec<i32> = client
+        .query("SELECT $1 + 1", &[&42_i32])?
         .into_iter()
         .map(|row| row.get(0))
         .collect();
     assert_eq!(rows, &[43]);
 
-    let rows: Vec<i64> = client
-        .query("SELECT $1 - 1", &[&42_i64])?
+    let rows: Vec<i32> = client
+        .query("SELECT $1 - 1", &[&42_i32])?
         .into_iter()
         .map(|row| row.get(0))
         .collect();
     assert_eq!(rows, &[41]);
 
-    let rows: Vec<i64> = client
-        .query("SELECT 1 - $1", &[&42_i64])?
+    let rows: Vec<i32> = client
+        .query("SELECT 1 - $1", &[&42_i32])?
         .into_iter()
         .map(|row| row.get(0))
         .collect();
