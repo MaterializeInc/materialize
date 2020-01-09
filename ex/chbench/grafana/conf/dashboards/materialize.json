@@ -928,12 +928,12 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(mz_server_events_read_total[2s])",
+          "expr": "rate(mz_dataflow_events_read_total[2s])",
           "legendFormat": "{{format}} events {{status}}",
           "refId": "A"
         },
         {
-          "expr": "mz_server_events_read_total",
+          "expr": "mz_dataflow_events_read_total",
           "instant": false,
           "legendFormat": "{{format}} events total {{status}}",
           "refId": "B"
@@ -943,7 +943,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Kafka Events",
+      "title": "Ingest Events",
       "tooltip": {
         "shared": true,
         "sort": 0,

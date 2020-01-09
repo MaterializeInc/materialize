@@ -141,7 +141,7 @@ fn handle_status(_: Request<Body>, start_time: Instant) -> FutureResponse {
 
     let desired_metrics = {
         let mut s = BTreeSet::new();
-        s.insert("mz_kafka_events_read_total");
+        s.insert("mz_dataflow_events_read_total");
         s.insert("mz_kafka_bytes_read_total");
         s.insert("mz_worker_command_queue_size");
         s.insert("mz_command_durations");
