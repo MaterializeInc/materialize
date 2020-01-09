@@ -5,16 +5,11 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 #
-# slt-fast.sh — runs fast subset of sqllogictests in CI.
+# slt-fast-asan.sh — runs fast subset of sqllogictests under AddressSanitizer.
 
 set -euo pipefail
 
-if [[ ! "${BUILDKITE-}" ]]; then
-    sqllogictest() {
-        cargo run --release --bin sqllogictest -- "$@"
-    }
-fi
-
 export RUST_BACKTRACE=full
+export RUSTFLAGS="-Z sanitizer=address"
 
-sqllogictest -v "$("$(dirname "$0")"/slt-fast-files.sh)"
+cargo +nightly run --target x86_64-unknown-linux-gnu --bin=sqllogictest -- -v "$("$(dirname "$0")"/slt-fast-files.sh)"
