@@ -915,11 +915,27 @@
       "renderer": "flot",
       "seriesOverrides": [
         {
-          "alias": "events total error",
+          "alias": "avro events total success",
           "yaxis": 2
         },
         {
-          "alias": "events total success",
+          "alias": "avro events total error",
+          "yaxis": 2
+        },
+        {
+          "alias": "protobuf events total success",
+          "yaxis": 2
+        },
+        {
+          "alias": "protobuf events total error",
+          "yaxis": 2
+        },
+        {
+          "alias": "csv events total success",
+          "yaxis": 2
+        },
+        {
+          "alias": "csv events total error",
           "yaxis": 2
         }
       ],
@@ -928,12 +944,12 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(mz_server_events_read_total[2s])",
+          "expr": "rate(mz_dataflow_events_read_total[2s])",
           "legendFormat": "{{format}} events {{status}}",
           "refId": "A"
         },
         {
-          "expr": "mz_server_events_read_total",
+          "expr": "mz_dataflow_events_read_total",
           "instant": false,
           "legendFormat": "{{format}} events total {{status}}",
           "refId": "B"
@@ -943,7 +959,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Kafka Events",
+      "title": "Ingest Events",
       "tooltip": {
         "shared": true,
         "sort": 0,
