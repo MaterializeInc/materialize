@@ -47,6 +47,7 @@ WORKDIR /workdir
 
 ARG RUST_DATE
 ARG RUST_VERSION
+ARG RUST_COMPONENTS
 
 RUN mkdir rust \
     && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz > rust.tar.gz \
@@ -54,5 +55,5 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C rust --strip-components=1 \
     && rm -f rust.asc rust.tar.gz \
-    && rust/install.sh --components=rustc,cargo,clippy-preview,rustfmt-preview,rust-std-x86_64-unknown-linux-gnu \
+    && rust/install.sh --components=$RUST_COMPONENTS \
     && rm -rf /rust

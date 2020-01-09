@@ -34,6 +34,11 @@ case "$channel" in
         ;;
 esac
 
+rust_components=rustc,cargo,clippy-preview,rustfmt-preview,rust-std-x86_64-unknown-linux-gnu
+if [[ $rust_version = nightly ]]; then
+    rust_components+=,miri
+fi
+
 uid=$(id -u)
 gid=$(id -g)
 [[ "$uid" -lt 500 ]] && uid=501
@@ -43,6 +48,7 @@ build() {
     docker build --pull \
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
+        --build-arg "RUST_COMPONENTS=$rust_components" \
         --tag materialize/ci-builder \
         "$@" misc/docker/ci-builder
 }
