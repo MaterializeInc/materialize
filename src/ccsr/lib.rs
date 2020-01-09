@@ -10,41 +10,34 @@
 use std::error::Error;
 use std::fmt;
 
-use futures::executor::block_on;
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::json;
 
-/// A synchronous API client for a Confluent-compatible schema registry.
-#[derive(Debug)]
-pub struct Client {
-    inner: AsyncClient,
-}
-
 /// An API client for a Confluent-compatible schema registry.
 #[derive(Debug)]
-pub struct AsyncClient {
-    inner: reqwest::Client,
+pub struct Client {
+    inner: reqwest::blocking::Client,
     url: Url,
 }
 
-impl AsyncClient {
+impl Client {
     /// Creates a new API client that will send requests to the schema registry
     /// at the provided URL.
-    pub fn new(url: Url) -> Self {
-        let inner = reqwest::Client::builder()
+    pub fn new(url: Url) -> Client {
+        let inner = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        Self { inner, url }
+        Client { inner, url }
     }
 
     /// Gets the schema with the associated ID.
-    pub async fn get_schema_by_id(&self, id: i32) -> Result<Schema, GetByIdError> {
+    pub fn get_schema_by_id(&self, id: i32) -> Result<Schema, GetByIdError> {
         let mut url = self.url.clone();
         url.set_path(&format!("/schemas/ids/{}", id));
-        let res: GetByIdResponse = send_request(self.inner.get(url)).await?;
+        let res: GetByIdResponse = send_request(self.inner.get(url))?;
         Ok(Schema {
             id,
             raw: res.schema,
@@ -52,10 +45,10 @@ impl AsyncClient {
     }
 
     /// Gets the latest schema for the specified subject.
-    pub async fn get_schema_by_subject(&self, subject: &str) -> Result<Schema, GetBySubjectError> {
+    pub fn get_schema_by_subject(&self, subject: &str) -> Result<Schema, GetBySubjectError> {
         let mut url = self.url.clone();
         url.set_path(&format!("/subjects/{}/versions/latest", subject));
-        let res: GetBySubjectResponse = send_request(self.inner.get(url)).await?;
+        let res: GetBySubjectResponse = send_request(self.inner.get(url))?;
         Ok(Schema {
             id: res.id,
             raw: res.schema,
@@ -68,66 +61,19 @@ impl AsyncClient {
     /// Note that if a schema that is identical to an existing schema for the
     /// same subject is published, the ID of the existing schema will be
     /// returned.
-    pub async fn publish_schema(&self, subject: &str, schema: &str) -> Result<i32, PublishError> {
+    pub fn publish_schema(&self, subject: &str, schema: &str) -> Result<i32, PublishError> {
         let mut url = self.url.clone();
         url.set_path(&format!("/subjects/{}/versions", subject));
         let json = json!({ "schema": schema }).to_string();
-        let res: PublishResponse = send_request(self.inner.post(url).body(json)).await?;
+        let res: PublishResponse = send_request(self.inner.post(url).body(json))?;
         Ok(res.id)
     }
 
     /// Lists the names of all subjects that the schema registry is aware of.
-    pub async fn list_subjects(&self) -> Result<Vec<String>, ListError> {
+    pub fn list_subjects(&self) -> Result<Vec<String>, ListError> {
         let mut url = self.url.clone();
         url.set_path("/subjects");
-        Ok(send_request(self.inner.get(url)).await?)
-    }
-
-    /// Deletes all schema versions associated with the specified subject.
-    ///
-    /// This API is only intended to be used in development environments.
-    /// Deleting schemas only allows new, potentially incompatible schemas to
-    /// be registered under the same subject. It does not allow the schema ID
-    /// to be reused.
-    pub async fn delete_subject(&self, subject: &str) -> Result<(), DeleteError> {
-        let mut url = self.url.clone();
-        url.set_path(&format!("/subjects/{}", subject));
-        let _res: Vec<i32> = send_request(self.inner.delete(url)).await?;
-        Ok(())
-    }
-}
-
-impl Client {
-    /// Creates a new API client that will send requests to the schema registry
-    /// at the provided URL.
-    pub fn new(url: Url) -> Client {
-        let inner = AsyncClient::new(url);
-        Client { inner }
-    }
-
-    /// Gets the schema with the associated ID.
-    pub fn get_schema_by_id(&self, id: i32) -> Result<Schema, GetByIdError> {
-        block_on(self.inner.get_schema_by_id(id))
-    }
-
-    /// Gets the latest schema for the specified subject.
-    pub fn get_schema_by_subject(&self, subject: &str) -> Result<Schema, GetBySubjectError> {
-        block_on(self.inner.get_schema_by_subject(subject))
-    }
-
-    /// Publishes a new schema for the specified subject. The ID of the new
-    /// schema is returned.
-    ///
-    /// Note that if a schema that is identical to an existing schema for the
-    /// same subject is published, the ID of the existing schema will be
-    /// returned.
-    pub fn publish_schema(&self, subject: &str, schema: &str) -> Result<i32, PublishError> {
-        block_on(self.inner.publish_schema(subject, schema))
-    }
-
-    /// Lists the names of all subjects that the schema registry is aware of.
-    pub fn list_subjects(&self) -> Result<Vec<String>, ListError> {
-        block_on(self.inner.list_subjects())
+        Ok(send_request(self.inner.get(url))?)
     }
 
     /// Deletes all schema versions associated with the specified subject.
@@ -137,20 +83,23 @@ impl Client {
     /// be registered under the same subject. It does not allow the schema ID
     /// to be reused.
     pub fn delete_subject(&self, subject: &str) -> Result<(), DeleteError> {
-        block_on(self.inner.delete_subject(subject))
+        let mut url = self.url.clone();
+        url.set_path(&format!("/subjects/{}", subject));
+        let _res: Vec<i32> = send_request(self.inner.delete(url))?;
+        Ok(())
     }
 }
 
-async fn send_request<T>(req: reqwest::RequestBuilder) -> Result<T, UnhandledError>
+fn send_request<T>(req: reqwest::blocking::RequestBuilder) -> Result<T, UnhandledError>
 where
     T: DeserializeOwned,
 {
-    let res = req.send().await?;
+    let res = req.send()?;
     let status = res.status();
     if status.is_success() {
-        Ok(res.json().await?)
+        Ok(res.json()?)
     } else {
-        match res.json::<ErrorResponse>().await {
+        match res.json::<ErrorResponse>() {
             Ok(err_res) => Err(UnhandledError::Api {
                 code: err_res.error_code,
                 message: err_res.message,
