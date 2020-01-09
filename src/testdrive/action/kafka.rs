@@ -226,7 +226,7 @@ impl IngestAction {
             // many assumptions that our tests make.)
             let mut backoff = ExponentialBackoff::default();
             backoff.max_elapsed_time = Some(Duration::from_secs(5));
-                #[allow(clippy::try_err)]
+            #[allow(clippy::try_err)]
             (|| {
                 let metadata = state
                     .kafka_consumer
@@ -258,8 +258,8 @@ impl IngestAction {
                 }
                 Ok(())
             })
-                .retry(&mut backoff)
-                .map_err(|e| e.to_string())?
+            .retry(&mut backoff)
+            .map_err(|e| e.to_string())?
         }
 
         let ccsr_subject = if self.publish {
@@ -294,8 +294,8 @@ impl IngestAction {
                     .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
                 &schema,
             )?
-                .resolve(&schema)
-                .map_err(|e| format!("resolving avro schema: {}", e))?;
+            .resolve(&schema)
+            .map_err(|e| format!("resolving avro schema: {}", e))?;
 
             // The first byte is a magic byte (0) that indicates the Confluent
             // serialization format version, and the next four bytes are a
@@ -319,14 +319,14 @@ impl IngestAction {
 
 impl Action for IngestAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
-        tokio::runtime::Runtime::new().unwrap().enter(|| {
-            self.do_undo(state)
-        })
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .enter(|| self.do_undo(state))
     }
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        tokio::runtime::Runtime::new().unwrap().enter(|| {
-            self.do_redo(state)
-        })
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .enter(|| self.do_redo(state))
     }
 }
 
