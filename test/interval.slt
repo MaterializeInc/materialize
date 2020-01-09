@@ -541,6 +541,12 @@ SELECT INTERVAL '-9223372036854775807 months -9223372036854775807 seconds';
 ----
 -768614336404564650 years -7 months -106751991167300 days -15:30:07
 
+# Largest number of cumulative nanoseconds
+query T
+SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.999999999 minutes 0.999999999 seconds';
+----
+31 days 01:00:56.702350704
+
 ## Overflows
 
 statement error

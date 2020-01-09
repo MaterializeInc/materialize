@@ -481,8 +481,8 @@ impl Parser {
         let value = self.parse_literal_string()?;
         let pdt = Self::parse_timestamp_string(&value, false)?;
 
-        // pdt.hour, pdt.minute, pdt.second, pdt.nano are all dropped, which is allowed
-        // by PostgreSQL.
+        // pdt.hour, pdt.minute, pdt.second are all dropped, which is allowed by
+        // PostgreSQL.
         match (pdt.year, pdt.month, pdt.day) {
             (Some(year), Some(month), Some(day)) => {
                 let p_err = |e: std::num::TryFromIntError, field: &str| {
@@ -492,19 +492,30 @@ impl Parser {
                     ))
                 };
 
-                if month > 12 || month <= 0 {
+                if year.unit == 0 {
+                    return parser_err!("YEAR in DATE '{}' cannot be zero.", value,);
+                }
+
+                if month.unit > 12 || month.unit <= 0 {
                     return parser_err!(
-                        "Month in date '{}' must be a number between 1 and 12, got: {}",
+                        "MONTH in DATE '{}' must be a number between 1 and 12, got: {}",
                         value,
-                        month
+                        month.unit
                     );
                 }
-                let month: u8 = month.try_into().expect("invalid month");
-                let day: u8 = day.try_into().map_err(|e| p_err(e, "Day"))?;
+                let month: u8 = month.unit.try_into().expect("invalid month");
+                let day: u8 = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
                 if day == 0 {
-                    return parser_err!("Day in date '{}' cannot be zero", value);
+                    return parser_err!("DAY in DATE '{}' cannot be zero", value);
                 }
-                Ok(Value::Date(value, ParsedDate { year, month, day }))
+                Ok(Value::Date(
+                    value,
+                    ParsedDate {
+                        year: year.unit,
+                        month,
+                        day,
+                    },
+                ))
             }
             (_, _, _) => {
                 return parser_err!(
@@ -542,19 +553,9 @@ impl Parser {
             pdt.hour,
             pdt.minute,
             pdt.second,
-            pdt.nano,
             pdt.timezone_offset_second,
         ) {
-            (
-                Some(year),
-                Some(month),
-                Some(day),
-                hour,
-                minute,
-                second,
-                nano,
-                timezone_offset_second,
-            ) => {
+            (Some(year), Some(month), Some(day), hour, minute, second, timezone_offset_second) => {
                 let p_err = |e: std::num::TryFromIntError, field: &str| {
                     ParserError::ParserError(format!(
                         "{} in date '{}' is invalid: {}",
@@ -562,22 +563,22 @@ impl Parser {
                     ))
                 };
 
-                if month > 12 || month <= 0 {
+                if month.unit > 12 || month.unit <= 0 {
                     return parser_err!(
                         "Month in date '{}' must be a number between 1 and 12, got: {}",
                         value,
-                        month
+                        month.unit
                     );
                 }
-                let month: u8 = month.try_into().expect("invalid month");
-                let day: u8 = day.try_into().map_err(|e| p_err(e, "Day"))?;
+                let month: u8 = month.unit.try_into().expect("invalid month");
+                let day: u8 = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
                 if day == 0 {
                     return parser_err!("Day in timestamp '{}' cannot be zero: {}", value, day);
                 }
 
-                let (hour, minute, second) = match (hour, minute, second) {
+                let (hour, minute, second, nano) = match (hour, minute, second) {
                     (Some(hour), Some(minute), Some(second)) => {
-                        let hour: u8 = hour.try_into().map_err(|e| p_err(e, "Hour"))?;
+                        let hour: u8 = hour.unit.try_into().map_err(|e| p_err(e, "Hour"))?;
                         if hour > 23 {
                             return parser_err!(
                                 "Hour in timestamp '{}' cannot be > 23: {}",
@@ -585,7 +586,7 @@ impl Parser {
                                 hour
                             );
                         }
-                        let minute: u8 = minute.try_into().map_err(|e| p_err(e, "Minute"))?;
+                        let minute: u8 = minute.unit.try_into().map_err(|e| p_err(e, "Minute"))?;
                         if minute > 59 {
                             return parser_err!(
                                 "Minute in timestamp '{}' cannot be > 59: {}",
@@ -593,7 +594,12 @@ impl Parser {
                                 minute
                             );
                         }
-                        let second: u8 = second.try_into().map_err(|e| p_err(e, "Minute"))?;
+
+                        let nano: u32 = second
+                            .fraction
+                            .try_into()
+                            .map_err(|e| p_err(e, "Nanosecond"))?;
+                        let second: u8 = second.unit.try_into().map_err(|e| p_err(e, "Minute"))?;
                         if second > 60 {
                             return parser_err!(
                                 "Second in timestamp '{}' cannot be > 60: {}",
@@ -601,9 +607,9 @@ impl Parser {
                                 second
                             );
                         }
-                        (hour, minute, second)
+                        (hour, minute, second, nano)
                     }
-                    (None, None, None) => (0, 0, 0),
+                    (None, None, None) => (0, 0, 0, 0),
                     _ => {
                         return parser_err!(
                         "Hour, minute, and second fields must all be specified or all be omitted"
@@ -615,13 +621,13 @@ impl Parser {
                     return Ok(Value::TimestampTz(
                         value,
                         ParsedTimestamp {
-                            year,
+                            year: year.unit,
                             month,
                             day,
                             hour,
                             minute,
                             second,
-                            nano: nano.unwrap_or(0) as u32,
+                            nano,
                             timezone_offset_second: timezone_offset_second.unwrap_or(0),
                         },
                     ));
@@ -630,13 +636,13 @@ impl Parser {
                 Ok(Value::Timestamp(
                     value,
                     ParsedTimestamp {
-                        year,
+                        year: year.unit,
                         month,
                         day,
                         hour,
                         minute,
                         second,
-                        nano: nano.unwrap_or(0) as u32,
+                        nano,
                         timezone_offset_second: 0,
                     },
                 ))
@@ -656,7 +662,7 @@ impl Parser {
     ///   2. `INTERVAL '1-1' YEAR TO MONTH`
     ///   3. `INTERVAL '1' SECOND`
     ///   4. `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
-    ///   5. `INTERVAL '1.1' SECOND (2)`
+    ///   5. `INTERVAL '1.111' SECOND (2)`
     ///
     pub fn parse_literal_interval(&mut self) -> Result<Expr, ParserError> {
         // The first token in an interval is a string literal which specifies
@@ -665,56 +671,56 @@ impl Parser {
 
         // Determine the range of TimeUnits , whether explicit (`INTERVAL ... DAY TO MINUTE`) or
         // implicit (in which all date fields are eligible).
-        let (precision_high, precision_low, nanosecond_precision) = match self
-            .expect_one_of_keywords(&[
+        let (precision_high, precision_low, fsec_max_precision) =
+            match self.expect_one_of_keywords(&[
                 "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "YEARS", "MONTHS", "DAYS",
                 "HOURS", "MINUTES", "SECONDS",
             ]) {
-            Ok(d) => {
-                if self.parse_keyword("TO") {
-                    let e = self.expect_one_of_keywords(&[
-                        "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "YEARS", "MONTHS",
-                        "DAYS", "HOURS", "MINUTES", "SECONDS",
-                    ])?;
+                Ok(d) => {
+                    if self.parse_keyword("TO") {
+                        let e = self.expect_one_of_keywords(&[
+                            "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "YEARS", "MONTHS",
+                            "DAYS", "HOURS", "MINUTES", "SECONDS",
+                        ])?;
 
-                    let high = DateTimeField::from_str(d)?;
-                    let low = DateTimeField::from_str(e)?;
+                        let high = DateTimeField::from_str(d)?;
+                        let low = DateTimeField::from_str(e)?;
 
-                    // Check for invalid ranges, i.e. precision_high is the same
-                    // as or a less significant DateTimeField than
-                    // precision_low.
-                    if high >= low {
-                        return parser_err!(
-                            "Invalid field range in INTERVAL '{}' {} TO {}; the value in the \
-                             position of {} should be more significant than {}.",
-                            raw_value,
-                            d,
-                            e,
-                            d,
-                            e,
-                        );
+                        // Check for invalid ranges, i.e. precision_high is the same
+                        // as or a less significant DateTimeField than
+                        // precision_low.
+                        if high >= low {
+                            return parser_err!(
+                                "Invalid field range in INTERVAL '{}' {} TO {}; the value in the \
+                                 position of {} should be more significant than {}.",
+                                raw_value,
+                                d,
+                                e,
+                                d,
+                                e,
+                            );
+                        }
+
+                        let fsec_max_precision = if low == DateTimeField::Second {
+                            self.parse_optional_precision()?
+                        } else {
+                            None
+                        };
+
+                        (high, low, fsec_max_precision)
+                    } else {
+                        let low = DateTimeField::from_str(d)?;
+                        let fsec_max_precision = if low == DateTimeField::Second {
+                            self.parse_optional_precision()?
+                        } else {
+                            None
+                        };
+
+                        (DateTimeField::Year, low, fsec_max_precision)
                     }
-
-                    let nanosecond_precision = if low == DateTimeField::Second {
-                        self.parse_optional_precision()?
-                    } else {
-                        None
-                    };
-
-                    (high, low, nanosecond_precision)
-                } else {
-                    let low = DateTimeField::from_str(d)?;
-                    let nanosecond_precision = if low == DateTimeField::Second {
-                        self.parse_optional_precision()?
-                    } else {
-                        None
-                    };
-
-                    (DateTimeField::Year, low, nanosecond_precision)
                 }
-            }
-            Err(_) => (DateTimeField::Year, DateTimeField::Second, None),
-        };
+                Err(_) => (DateTimeField::Year, DateTimeField::Second, None),
+            };
 
         // Determine the date-time values expressed in `raw_value`. This should be done
         // after determining the TimeUnit range so you can use `precision_low` in cases
@@ -727,7 +733,7 @@ impl Parser {
             parsed,
             precision_high,
             precision_low,
-            nanosecond_precision,
+            fsec_max_precision,
         })))
     }
 
@@ -874,6 +880,19 @@ impl Parser {
         datetime::build_parsed_datetime_interval(value, ambiguous_resolver)
     }
 
+    /// parse
+    ///
+    /// ```test
+    /// <unquoted timestamp string> ::=
+    ///     <date value> <space> <time value> [ <time zone interval> ]
+    /// <date value> ::=
+    ///     <years value> <minus sign> <months value> <minus sign> <days value>
+    /// <time value> ::=
+    ///     <hours value> <colon> <minutes value> <colon> <seconds integer value>
+    ///     [ <period> [ <seconds fraction> ] ]
+    /// <time zone interval> ::=
+    ///     <sign> <hours value> <colon> <minutes value>
+    /// ```
     pub fn parse_timestamp_string(
         value: &str,
         parse_timezone: bool,

@@ -737,3 +737,17 @@ query T
 SELECT to_timestamp('nan'::double)
 ----
 NULL
+
+# Negative timestamps are not allowed
+
+statement error
+SELECT TIMESTAMP '-2000-01-01 1:2:3';
+
+statement error
+SELECT DATE '-2000-01-01';
+
+statement error
+SELECT TIMESTAMP '-2000-01 1:2:3';
+
+statement error
+SELECT DATE '-2000-01 1:2:3';

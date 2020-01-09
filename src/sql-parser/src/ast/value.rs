@@ -22,7 +22,7 @@ use std::fmt;
 
 mod datetime;
 pub use datetime::{
-    DateTimeField, ExtractField, Interval, IntervalValue, ParsedDate, ParsedDateTime,
+    DateTimeField, DateTimeUnit, ExtractField, Interval, IntervalValue, ParsedDate, ParsedDateTime,
     ParsedTimestamp,
 };
 
@@ -61,14 +61,10 @@ pub enum Value {
     /// INTERVAL literals, roughly in the following format:
     ///
     /// ```text
-    /// INTERVAL '<value>' <leading_field> [ (<leading_precision>) ]
-    ///     [ TO <last_field> [ (<nanosecond_precision>) ] ]
+    /// INTERVAL '<value>' <leading_field> [ TO <last_field>
+    ///     [ (<fractional_seconds_precision>) ] ]
     /// ```
-    /// e.g. `INTERVAL '123:45.67' MINUTE(3) TO SECOND(2)`.
-    ///
-    /// The parser does not validate the `<value>`, nor does it ensure
-    /// that the `<leading_field>` units >= the units in `<last_field>`,
-    /// so the user will have to reject intervals like `HOUR TO YEAR`.
+    /// e.g. `INTERVAL '123:45.678' MINUTE TO SECOND(2)`.
     Interval(IntervalValue),
     /// `NULL` value
     Null,
@@ -98,22 +94,22 @@ impl fmt::Display for Value {
                 value,
                 precision_high: _,
                 precision_low: _,
-                nanosecond_precision: Some(nanosecond_precision),
+                fsec_max_precision: Some(fsec_max_precision),
             }) => write!(
                 f,
                 "INTERVAL '{}' SECOND ({})",
                 escape_single_quote_string(value),
-                nanosecond_precision
+                fsec_max_precision
             ),
             Value::Interval(IntervalValue {
                 parsed: _,
                 value,
                 precision_high,
                 precision_low,
-                nanosecond_precision,
+                fsec_max_precision,
             }) => {
                 write!(f, "INTERVAL '{}'", escape_single_quote_string(value),)?;
-                match (precision_high, precision_low, nanosecond_precision) {
+                match (precision_high, precision_low, fsec_max_precision) {
                     (DateTimeField::Year, DateTimeField::Second, None) => {}
                     (DateTimeField::Year, DateTimeField::Second, Some(ns)) => {
                         write!(f, " SECOND({})", ns)?;

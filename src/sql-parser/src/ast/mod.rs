@@ -61,7 +61,7 @@ pub use self::query::{
     SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, Values,
 };
 pub use self::value::{
-    DateTimeField, ExtractField, Interval, IntervalValue, ParsedDate, ParsedDateTime,
+    DateTimeField, DateTimeUnit, ExtractField, Interval, IntervalValue, ParsedDate, ParsedDateTime,
     ParsedTimestamp, Value,
 };
 

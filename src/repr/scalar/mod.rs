@@ -813,7 +813,7 @@ impl fmt::Display for Interval {
         }
 
         if months > 0 {
-            if years > 0 {
+            if years != 0 {
                 f.write_char(' ')?;
             }
             if neg_mos {

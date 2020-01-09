@@ -1784,7 +1784,7 @@ fn parse_literal_interval_durationlike() {
 }
 
 #[test]
-fn parse_literal_interval_with_nanosecond_precision() {
+fn parse_literal_interval_with_fsec_max_precision() {
     use std::time::Duration;
 
     // Properly truncates nanoseconds.
@@ -1801,7 +1801,7 @@ fn parse_literal_interval_with_nanosecond_precision() {
                 nano: Some(111_111_111),
                 ..Default::default()
             },
-            nanosecond_precision: Some(5),
+            fsec_max_precision: Some(5),
             ..Default::default()
         },
         Interval {
@@ -1825,7 +1825,7 @@ fn parse_literal_interval_with_nanosecond_precision() {
                 nano: Some(111_500_000),
                 ..Default::default()
             },
-            nanosecond_precision: Some(3),
+            fsec_max_precision: Some(3),
             ..Default::default()
         },
         Interval {
