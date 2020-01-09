@@ -119,6 +119,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
     Ok(out)
 }
 
+/// Substituted `${}`-delimited variables from `vars` into `msg`
 fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, String> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"\$\{([^}]+)\}").unwrap();
