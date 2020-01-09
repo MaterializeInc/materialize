@@ -2643,7 +2643,7 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             let d: Decimal = s.parse()?;
             if d.scale() == 0 {
                 match d.significand().try_into() {
-                    Ok(n) => (Datum::Int64(n), ScalarType::Int64),
+                    Ok(n) => (Datum::Int32(n), ScalarType::Int32),
                     Err(_) => (
                         Datum::from(d.significand()),
                         ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
@@ -2921,6 +2921,7 @@ where
             expr.call_binary(s, BinaryFunc::CastFloat32ToDecimal)
         }
         (Float32, String) => expr.call_unary(CastFloat32ToString),
+        (Float64, Int32) => expr.call_unary(CastFloat64ToInt32),
         (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
         (Float64, Decimal(_, s)) => {
             let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
@@ -3063,8 +3064,8 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
             ScalarType::String
         }
         DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-        DataType::SmallInt => ScalarType::Int32,
-        DataType::Int | DataType::BigInt => ScalarType::Int64,
+        DataType::SmallInt | DataType::Int => ScalarType::Int32,
+        DataType::BigInt => ScalarType::Int64,
         DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
         DataType::Decimal(precision, scale) => {
             let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
