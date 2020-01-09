@@ -9,7 +9,9 @@
 
 set -euo pipefail
 
-rustup component add miri --toolchain nightly
+if [[ ! "${BUILDKITE-}" ]]; then
+    rustup component add miri --toolchain nightly
+fi
 
 cd "$(dirname "$0")"/../../src/repr
 cargo +nightly miri test -- -- miri
