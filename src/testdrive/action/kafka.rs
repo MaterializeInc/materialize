@@ -65,8 +65,8 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     })
 }
 
-impl Action for IngestAction {
-    fn undo(&self, state: &mut State) -> Result<(), String> {
+impl IngestAction {
+    fn do_undo(&self, state: &mut State) -> Result<(), String> {
         let metadata = state
             .kafka_consumer
             .fetch_metadata(None, Some(Duration::from_secs(1)))
@@ -138,7 +138,7 @@ impl Action for IngestAction {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    fn do_redo(&self, state: &mut State) -> Result<(), String> {
         // NOTE(benesch): it is critical that we invent a new topic name on
         // every testdrive run. We previously tried to delete and recreate the
         // topic with a fixed name, but ran into serious race conditions in
@@ -226,7 +226,7 @@ impl Action for IngestAction {
             // many assumptions that our tests make.)
             let mut backoff = ExponentialBackoff::default();
             backoff.max_elapsed_time = Some(Duration::from_secs(5));
-            #[allow(clippy::try_err)]
+                #[allow(clippy::try_err)]
             (|| {
                 let metadata = state
                     .kafka_consumer
@@ -258,8 +258,8 @@ impl Action for IngestAction {
                 }
                 Ok(())
             })
-            .retry(&mut backoff)
-            .map_err(|e| e.to_string())?
+                .retry(&mut backoff)
+                .map_err(|e| e.to_string())?
         }
 
         let ccsr_subject = if self.publish {
@@ -294,8 +294,8 @@ impl Action for IngestAction {
                     .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
                 &schema,
             )?
-            .resolve(&schema)
-            .map_err(|e| format!("resolving avro schema: {}", e))?;
+                .resolve(&schema)
+                .map_err(|e| format!("resolving avro schema: {}", e))?;
 
             // The first byte is a magic byte (0) that indicates the Confluent
             // serialization format version, and the next four bytes are a
@@ -314,6 +314,19 @@ impl Action for IngestAction {
             futs.push(state.kafka_producer.send(record, 1000 /* block_ms */));
         }
         block_on(futs.try_for_each(|_| future::ok(()))).map_err(|e| e.to_string())
+    }
+}
+
+impl Action for IngestAction {
+    fn undo(&self, state: &mut State) -> Result<(), String> {
+        tokio::runtime::Runtime::new().unwrap().enter(|| {
+            self.do_undo(state)
+        })
+    }
+    fn redo(&self, state: &mut State) -> Result<(), String> {
+        tokio::runtime::Runtime::new().unwrap().enter(|| {
+            self.do_redo(state)
+        })
     }
 }
 

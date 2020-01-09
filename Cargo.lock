@@ -3044,6 +3044,7 @@ dependencies = [
  "serde_json",
  "sql-parser",
  "termcolor",
+ "tokio",
 ]
 
 [[package]]
