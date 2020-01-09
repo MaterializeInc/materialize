@@ -27,7 +27,7 @@ use dataflow_types::{
 };
 use expr as relationexpr;
 use interchange::{avro, protobuf};
-use relationexpr::{EvalEnv, Id};
+use relationexpr::{EvalEnv, GlobalId, Id};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr::like::build_like_regex_from_string;
@@ -121,14 +121,21 @@ pub fn describe_statement(
             vec![],
         ),
 
-        Statement::ShowObjects { object_type, .. } => (
-            Some(
-                RelationDesc::empty()
-                    .add_column(object_type_as_plural_str(object_type), ScalarType::String),
-            ),
-            vec![],
-        ),
-
+        Statement::ShowObjects {
+            object_type, full, ..
+        } => {
+            let col_name = object_type_as_plural_str(object_type);
+            (
+                Some(if full {
+                    RelationDesc::empty()
+                        .add_column(col_name, ScalarType::String)
+                        .add_column("TYPE", ScalarType::String)
+                } else {
+                    RelationDesc::empty().add_column(col_name, ScalarType::String)
+                }),
+                vec![],
+            )
+        }
         Statement::ShowVariable { variable, .. } => {
             if variable.value == unicase::Ascii::new("ALL") {
                 (
@@ -300,11 +307,6 @@ fn handle_show_objects(
     if extended {
         bail!("SHOW EXTENDED ... is not supported ");
     }
-    if full {
-        if object_type != ObjectType::View {
-            bail!("SHOW FULL is only supported for VIEW")
-        }
-    }
 
     let like_regex = match filter {
         Some(ShowStatementFilter::Like(like_string)) => {
@@ -314,15 +316,26 @@ fn handle_show_objects(
         None => build_like_regex_from_string(&String::from("%"))?,
     };
 
-    let mut rows: Vec<Row> = scx
-        .catalog
-        .iter()
-        .filter(|entry| {
-            object_type_matches(object_type, entry.item())
-                && like_regex.is_match(&entry.name().to_string())
+    let rows = scx.catalog.iter().filter(|entry| {
+        object_type_matches(object_type, entry.item())
+            && like_regex.is_match(&entry.name().to_string())
+    });
+    let mut rows: Vec<Row> = if full {
+        rows.map(|entry| {
+            let object_type = match entry.id() {
+                GlobalId::System(_) => "SYSTEM",
+                GlobalId::User(_) => "USER",
+            };
+            Row::pack(&[
+                Datum::from(&*entry.name().to_string()),
+                Datum::from(object_type),
+            ])
         })
-        .map(|entry| Row::pack(&[Datum::from(&*entry.name().to_string())]))
-        .collect();
+        .collect()
+    } else {
+        rows.map(|entry| Row::pack(&[Datum::from(&*entry.name().to_string())]))
+            .collect()
+    };
     rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
     Ok(Plan::SendRows(rows))
 }

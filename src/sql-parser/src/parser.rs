@@ -2114,7 +2114,7 @@ impl Parser {
 
         let full = self.parse_keyword("FULL");
         if full {
-            self.expect_one_of_keywords(&["COLUMNS", "TABLES", "VIEWS", "SINKS"])?;
+            self.expect_one_of_keywords(&["COLUMNS", "TABLES", "VIEWS", "SINKS", "SOURCES"])?;
             self.prev_token();
         }
 
