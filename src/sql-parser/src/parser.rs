@@ -2104,12 +2104,22 @@ impl Parser {
     }
 
     pub fn parse_show(&mut self) -> Result<Statement, ParserError> {
-        if self
-            .parse_one_of_keywords(&["EXTENDED", "FULL", "COLUMNS", "FIELDS"])
-            .is_some()
-        {
+        let extended = self.parse_keyword("EXTENDED");
+        if extended {
+            self.expect_one_of_keywords(&[
+                "INDEX", "INDEXES", "KEYS", "TABLES", "COLUMNS", "FULL",
+            ])?;
             self.prev_token();
-            self.parse_show_columns()
+        }
+
+        let full = self.parse_keyword("FULL");
+        if full {
+            self.expect_one_of_keywords(&["COLUMNS", "TABLES", "VIEWS", "SINKS", "SOURCES"])?;
+            self.prev_token();
+        }
+
+        if self.parse_one_of_keywords(&["COLUMNS", "FIELDS"]).is_some() {
+            self.parse_show_columns(extended, full)
         } else if let Some(object_type) =
             self.parse_one_of_keywords(&["SOURCES", "VIEWS", "SINKS", "TABLES"])
         {
@@ -2126,6 +2136,8 @@ impl Parser {
                         val
                     ),
                 },
+                extended,
+                full,
                 filter: self.parse_show_statement_filter()?,
             })
         } else if self
@@ -2140,7 +2152,11 @@ impl Parser {
                     } else {
                         None
                     };
-                    Ok(Statement::ShowIndexes { table_name, filter })
+                    Ok(Statement::ShowIndexes {
+                        table_name,
+                        extended,
+                        filter,
+                    })
                 }
                 None => self.expected("FROM or IN after SHOW INDEXES", self.peek_token()),
             }
@@ -2159,10 +2175,7 @@ impl Parser {
         }
     }
 
-    fn parse_show_columns(&mut self) -> Result<Statement, ParserError> {
-        let extended = self.parse_keyword("EXTENDED");
-        let full = self.parse_keyword("FULL");
-        self.expect_one_of_keywords(&["COLUMNS", "FIELDS"])?;
+    fn parse_show_columns(&mut self, extended: bool, full: bool) -> Result<Statement, ParserError> {
         self.expect_one_of_keywords(&["FROM", "IN"])?;
         let table_name = self.parse_object_name()?;
         // MySQL also supports FROM <database> here. In other words, MySQL
