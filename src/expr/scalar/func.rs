@@ -1962,9 +1962,8 @@ impl UnaryFunc {
             CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
 
             // can return null for other jsonb types
-            CastJsonbToFloat64 | CastJsonbToBool => {
-                ColumnType::new(ScalarType::Jsonb).nullable(true)
-            }
+            CastJsonbToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
+            CastJsonbToBool => ColumnType::new(ScalarType::Bool).nullable(true),
 
             CeilFloat32 | FloorFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)

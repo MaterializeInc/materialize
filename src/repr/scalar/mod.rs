@@ -668,7 +668,7 @@ impl fmt::Display for ScalarType {
             Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
-            Jsonb => f.write_str("json"),
+            Jsonb => f.write_str("jsonb"),
         }
     }
 }
