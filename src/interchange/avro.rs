@@ -621,10 +621,7 @@ impl Encoder {
                         let symbol = datum.unwrap_str();
                         let position = symbols.iter().position(|s| s == symbol);
                         match position {
-                            Some(p) => {
-                                Value::Enum(p as i32, String::from(symbol))
-                                // is there a better way to cast here?
-                            }
+                            Some(p) => Value::Enum(p as i32, String::from(symbol)),
                             None => bail!(
                                 "Datum has value {:#?}, not found in Enum symbols: {:#?}",
                                 symbol,
@@ -675,7 +672,7 @@ impl Encoder {
     ) -> Result<Value, failure::Error> {
         let mut value = None;
         for s in union.variants() {
-            if let Ok(v) = self.data_to_avro(s, data.clone()) {
+            if let Ok(v) = self.data_to_avro(s, data) {
                 value = Some(v)
             }
         }
@@ -725,20 +722,17 @@ impl SchemaCache {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     use failure::ResultExt;
     use ordered_float::OrderedFloat;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use std::fs::File;
 
-    use avro_rs::schema::{Schema, UnionSchema};
+    use avro_rs::schema::Schema;
     use avro_rs::types::Value;
-    use failure::_core::sync::atomic::Ordering::Relaxed;
-    use protobuf::rustproto::exts::serde_derive;
     use repr::decimal::Significand;
-    use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, ScalarType};
-    use std::collections::HashMap;
+    use repr::{Datum, RelationDesc};
 
     #[derive(Deserialize)]
     struct TestCase {
@@ -767,50 +761,53 @@ mod tests {
         Ok(())
     }
 
-    // row_to_avro
     #[test]
-    fn test_encoding() -> Result<(), failure::Error> {
-        // TODO@jldlaughlin: Add
+    /// Test that primitive Avro Schema types are allow Datums to be correctly
+    /// serialized into Avro Values.
+    ///
+    /// Complete list of primitive types in test, also found in this
+    /// documentation:
+    /// https://avro.apache.org/docs/current/spec.html#schemas
+    fn test_row_to_avro_primitive_types() -> Result<(), failure::Error> {
         // The Encoder's schema is not used in data_to_avro(), use simple mock instead.
         let dummy_relation_desc = RelationDesc::empty();
         let schema = super::encode_schema(&dummy_relation_desc)?;
 
         let encoder = super::Encoder::new(&schema.to_string());
 
-        // Data to be used in pairings.
+        // Data to be used later in assertions.
         let date = NaiveDate::from_ymd(2020, 1, 8);
         let date_time = NaiveDateTime::new(date, NaiveTime::from_hms(1, 1, 1));
         let bytes: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
         let string = String::from("test");
 
-        // array and map hard to test because of internal Datum representation
-        // cant test unionschema because private
-        // todo: (above?), record, enum, fixed
-        let pairings = [
-            (Schema::Null, vec![Datum::Null], Value::Null),
-            (Schema::Boolean, vec![Datum::True], Value::Boolean(true)),
-            (Schema::Boolean, vec![Datum::False], Value::Boolean(false)),
-            (Schema::Int, vec![Datum::Int32(1)], Value::Int(1)),
-            (Schema::Long, vec![Datum::Int64(1)], Value::Long(1)),
+        // Simple transformations from primitive Avro Schema types
+        // to Avro Values.
+        let valid_pairings = [
+            (Schema::Null, Datum::Null, Value::Null),
+            (Schema::Boolean, Datum::True, Value::Boolean(true)),
+            (Schema::Boolean, Datum::False, Value::Boolean(false)),
+            (Schema::Int, Datum::Int32(1), Value::Int(1)),
+            (Schema::Long, Datum::Int64(1), Value::Long(1)),
             (
                 Schema::Float,
-                vec![Datum::Float32(OrderedFloat::from(1f32))],
+                Datum::Float32(OrderedFloat::from(1f32)),
                 Value::Float(1f32),
             ),
             (
                 Schema::Double,
-                vec![Datum::Float64(OrderedFloat::from(1f64))],
+                Datum::Float64(OrderedFloat::from(1f64)),
                 Value::Double(1f64),
             ),
-            (Schema::Date, vec![Datum::Date(date)], Value::Date(date)),
+            (Schema::Date, Datum::Date(date), Value::Date(date)),
             (
                 Schema::TimestampMilli,
-                vec![Datum::Timestamp(date_time)],
+                Datum::Timestamp(date_time),
                 Value::Timestamp(date_time),
             ),
             (
                 Schema::TimestampMicro,
-                vec![Datum::Timestamp(date_time)],
+                Datum::Timestamp(date_time),
                 Value::Timestamp(date_time),
             ),
             (
@@ -819,7 +816,7 @@ mod tests {
                     scale: 1usize,
                     fixed_size: None,
                 },
-                vec![Datum::Decimal(Significand::new(1i128))],
+                Datum::Decimal(Significand::new(1i128)),
                 Value::Decimal {
                     unscaled: bytes.clone(),
                     precision: 1,
@@ -828,18 +825,18 @@ mod tests {
             ),
             (
                 Schema::Bytes,
-                vec![Datum::Bytes(&bytes)],
+                Datum::Bytes(&bytes),
                 Value::Bytes(bytes.clone()),
             ),
             (
                 Schema::String,
-                vec![Datum::String(&string)],
+                Datum::String(&string),
                 Value::String(string.clone()),
             ),
         ];
-        for (s, d, expected) in pairings.iter() {
-            let avro_value = encoder.data_to_avro(&s, d)?;
-            assert_eq!(*expected, avro_value); // which should come first?
+        for (s, d, expected) in valid_pairings.iter() {
+            let avro_value = encoder.data_to_avro(&s, &[*d])?;
+            assert_eq!(*expected, avro_value);
         }
 
         Ok(())
