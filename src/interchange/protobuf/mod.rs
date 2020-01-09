@@ -19,7 +19,9 @@ use serde_protobuf::value;
 use serde_value::Value;
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{
+    ColumnType, Datum, DatumPacker, RelationDesc, RelationType, Row, RowPacker, ScalarType,
+};
 
 pub mod test;
 
@@ -192,7 +194,7 @@ impl Decoder {
         let deserialized_message =
             Value::deserialize(&mut deserializer).expect("Deserializing into rust object");
 
-        fn value_into_row(v: &Value, packer: &mut RowPacker) -> Result<(), failure::Error> {
+        fn value_into_row(v: &Value, packer: DatumPacker) -> Result<(), failure::Error> {
             match v {
                 Value::Bool(true) => packer.push(Datum::True),
                 Value::Bool(false) => packer.push(Datum::False),
@@ -210,7 +212,7 @@ impl Decoder {
             Ok(())
         };
 
-        fn nested_value_into_row(v: &Value, packer: &mut RowPacker) -> Result<(), failure::Error> {
+        fn nested_value_into_row(v: &Value, packer: DatumPacker) -> Result<(), failure::Error> {
             match v {
                 Value::Bool(true) => packer.push(Datum::True),
                 Value::Bool(false) => packer.push(Datum::False),
@@ -226,22 +228,23 @@ impl Decoder {
                 }
                 Value::Seq(s) => packer.push_list_with(|packer| {
                     for value in s {
-                        nested_value_into_row(&value, packer)?;
+                        nested_value_into_row(&value, packer.as_datum_packer())?;
                     }
                     Ok::<_, failure::Error>(())
                 })?,
-                Value::Map(m) => packer.push_dict_with(|packer| {
+                Value::Map(m) => packer.push_dict_with(|dict| {
                     for (k, v) in m {
-                        // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
                         match (k, v) {
                             (Value::String(s), Value::Option(Some(val))) => {
-                                packer.push(Datum::String(s.as_str()));
-                                nested_value_into_row(&val, packer)?;
+                                dict.push_with(s.as_str(), |packer| {
+                                    nested_value_into_row(&val, packer)
+                                })?;
                             }
                             (Value::String(_), Value::Option(None)) => (),
                             (Value::String(s), Value::Seq(_seq)) => {
-                                packer.push(Datum::String(s.as_str()));
-                                nested_value_into_row(&v, packer)?;
+                                dict.push_with(s.as_str(), |packer| {
+                                    nested_value_into_row(&v, packer)
+                                })?;
                             }
                             _ => bail!("Unrecognized value while trying to parse a nested message"),
                         }
@@ -285,13 +288,13 @@ impl Decoder {
                 let value = deserialized_message.get(&key);
 
                 if let Some(Value::Option(Some(value))) = value {
-                    value_into_row(&value, &mut row)?;
+                    value_into_row(&value, row.as_datum_packer())?;
                 } else if let Some(Value::Seq(_inner)) = value {
                     // Note(rkhaitan) This control flow feels extremely weird to me
                     // but the library gives different types in very different
                     // 'packaging / wrapping' of Options so this seemed like the cleanest
                     // thing to do
-                    nested_value_into_row(&value.unwrap(), &mut row)?;
+                    nested_value_into_row(&value.unwrap(), row.as_datum_packer())?;
                 } else if let Some(default) = f.default_value() {
                     row.push(default_to_datum(default)?);
                 } else {

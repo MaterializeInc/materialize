@@ -8,7 +8,7 @@ use std::str::FromStr;
 
 use failure::bail;
 
-use crate::{Datum, Row, RowPacker};
+use crate::{Datum, DatumPacker, Row, RowPacker};
 
 #[derive(Debug)]
 pub struct Jsonb {
@@ -81,7 +81,7 @@ impl Jsonb {
     }
 
     pub fn pack_into(self, packer: &mut RowPacker) {
-        fn pack(val: serde_json::Value, packer: &mut RowPacker) {
+        fn pack(val: serde_json::Value, packer: DatumPacker) {
             use serde_json::Value;
             match val {
                 Value::Null => packer.push(Datum::JsonNull),
@@ -99,21 +99,20 @@ impl Jsonb {
                 Value::String(s) => packer.push(Datum::String(&s)),
                 Value::Array(array) => packer.push_list_with(|packer| {
                     for elem in array {
-                        pack(elem, packer);
+                        pack(elem, packer.as_datum_packer());
                     }
                 }),
-                Value::Object(object) => packer.push_dict_with(|packer| {
+                Value::Object(object) => packer.push_dict_with(|dict| {
                     let mut pairs = object.into_iter().collect::<Vec<_>>();
                     // dict keys must be in ascending order
                     pairs.sort_by(|(k1, _), (k2, _)| k1.cmp(&k2));
                     for (key, val) in pairs {
-                        packer.push(Datum::String(&key));
-                        pack(val, packer);
+                        dict.push_with(&key, |packer| pack(val, packer));
                     }
                 }),
             }
         }
-        pack(self.inner, packer)
+        pack(self.inner, packer.as_datum_packer())
     }
 
     pub fn into_row(self) -> Row {

@@ -6,7 +6,7 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::fmt;
-use std::mem::{size_of, transmute};
+use std::mem::{self, size_of, transmute};
 
 use crate::decimal::Significand;
 use crate::scalar::Interval;
@@ -84,6 +84,16 @@ pub struct DatumDictIter<'a> {
 pub struct RowPacker {
     data: Vec<u8>,
 }
+
+/// `DictPacker` wraps a `RowPacker` to enforce the invariant that dictionaries
+/// have alternating string/non-string pairs.
+#[derive(Debug)]
+pub struct DictPacker<'a>(&'a mut RowPacker);
+
+/// `DatumPacker` wraps a `RowPacker` to enforce the invariant that exactly
+/// one datum is added to the row packer.
+#[derive(Debug)]
+pub struct DatumPacker<'a>(&'a mut RowPacker);
 
 /// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
 #[derive(Debug)]
@@ -523,6 +533,10 @@ impl RowPacker {
         }
     }
 
+    pub fn as_datum_packer(&mut self) -> DatumPacker {
+        DatumPacker(self)
+    }
+
     /// Finish packing and return a `Row`
     pub fn finish(self) -> Row {
         Row {
@@ -561,23 +575,12 @@ impl RowPacker {
 
     /// Pack a `DatumDict`.
     ///
-    /// You must alternate pushing string keys and arbitary values, otherwise reading the dict will cause a panic.
-    /// You must push keys in ascending order, otherwise equality checks on the resulting `Row` may be wrong and reading the dict IN DEBUG MODE will cause a panic.
-    ///
     /// ```
     /// # use repr::{Row, Datum, RowPacker};
     /// let mut packer = RowPacker::new();
-    /// packer.push_dict_with(|packer| {
-    ///
-    ///     // key
-    ///     packer.push(Datum::String("age"));
-    ///     // value
-    ///     packer.push(Datum::Int64(42));
-    ///
-    ///     // key
-    ///     packer.push(Datum::String("name"));
-    ///     // value
-    ///     packer.push(Datum::String("bob"));
+    /// packer.push_dict_with(|dict| {
+    ///     dict.push("age", Datum::Int64(42));
+    ///     dict.push("name", Datum::String("bob"));
     /// });
     /// let row = packer.finish();
     ///
@@ -585,13 +588,13 @@ impl RowPacker {
     /// ```
     pub fn push_dict_with<F, R>(&mut self, f: F) -> R
     where
-        F: FnOnce(&mut RowPacker) -> R,
+        F: FnOnce(&mut DictPacker) -> R,
     {
         self.data.push(Tag::Dict as u8);
         let start = self.data.len();
         // write a dummy len, will fix it up later
         push_copy!(&mut self.data, 0, usize);
-        let res = f(self);
+        let res = f(&mut DictPacker(self));
         let len = self.data.len() - start - size_of::<usize>();
         // fix up the len
         self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
@@ -617,10 +620,9 @@ impl RowPacker {
         I: IntoIterator<Item = (&'a str, D)>,
         D: Borrow<Datum<'a>>,
     {
-        self.push_dict_with(|packer| {
+        self.push_dict_with(|dict| {
             for (k, v) in iter {
-                packer.push(Datum::String(k));
-                packer.push(*v.borrow())
+                dict.push(k, *v.borrow());
             }
         })
     }
@@ -628,6 +630,71 @@ impl RowPacker {
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+}
+
+impl<'a> DictPacker<'a> {
+    pub fn push(&mut self, key: &str, datum: Datum) {
+        self.0.push(Datum::String(key));
+        self.0.push(datum);
+    }
+
+    pub fn push_with<F, R>(&mut self, key: &str, f: F) -> R
+    where
+        F: FnOnce(DatumPacker) -> R,
+    {
+        self.0.push(Datum::String(key));
+        f(self.0.as_datum_packer())
+    }
+}
+
+impl<'a> DatumPacker<'a> {
+    pub fn push(self, datum: Datum) {
+        self.0.push(datum);
+        mem::forget(self)
+    }
+
+    pub fn push_list_with<F, R>(self, f: F) -> R
+    where
+        F: FnOnce(&mut RowPacker) -> R,
+    {
+        let res = self.0.push_list_with(f);
+        mem::forget(self);
+        res
+    }
+
+    pub fn push_dict_with<F, R>(self, f: F) -> R
+    where
+        F: FnOnce(&mut DictPacker) -> R,
+    {
+        let res = self.0.push_dict_with(f);
+        mem::forget(self);
+        res
+    }
+
+    pub fn push_list<'b, I, D>(self, iter: I)
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'b>>,
+    {
+        self.0.push_list(iter);
+        mem::forget(self)
+    }
+
+    /// Convenience function to push a `DatumDict` from an iter of `(&str, Datum)` pairs
+    pub fn push_dict<'b, I, D>(self, iter: I)
+    where
+        I: IntoIterator<Item = (&'b str, D)>,
+        D: Borrow<Datum<'b>>,
+    {
+        self.0.push_dict(iter);
+        mem::forget(self)
+    }
+}
+
+impl<'a> Drop for DatumPacker<'a> {
+    fn drop(&mut self) {
+        self.0.push(Datum::Null)
     }
 }
 
@@ -781,15 +848,15 @@ mod tests {
     #[test]
     fn test_nesting() {
         let mut packer = RowPacker::new();
-        packer.push_dict_with(|packer| {
-            packer.push(Datum::String("favourites"));
-            packer.push_list_with(|packer| {
-                packer.push(Datum::String("ice cream"));
-                packer.push(Datum::String("oreos"));
-                packer.push(Datum::String("cheesecake"));
+        packer.push_dict_with(|dict| {
+            dict.push_with("favourites", |packer| {
+                packer.push_list_with(|packer| {
+                    packer.push(Datum::String("ice cream"));
+                    packer.push(Datum::String("oreos"));
+                    packer.push(Datum::String("cheesecake"));
+                })
             });
-            packer.push(Datum::String("name"));
-            packer.push(Datum::String("bob"));
+            dict.push("name", Datum::String("bob"));
         });
         let row = packer.finish();
 

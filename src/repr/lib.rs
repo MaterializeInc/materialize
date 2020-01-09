@@ -19,7 +19,7 @@ mod row;
 mod scalar;
 
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
-pub use row::{DatumDict, DatumList, Row, RowArena, RowPacker};
+pub use row::{DatumDict, DatumList, DatumPacker, DictPacker, Row, RowArena, RowPacker};
 pub use scalar::decimal;
 pub use scalar::jsonb;
 pub use scalar::regex;
