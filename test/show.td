@@ -25,11 +25,6 @@ $ set names-schema={
     ]
   }
 
-$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
-{"before": null, "after": {"num": 1, "name": "one"}}
-{"before": null, "after": {"num": 2, "name": "two"}}
-{"before": null, "after": {"num": 3, "name": "three"}}
-
 $ set mods-schema={
     "type": "record",
     "name": "envelope",
@@ -51,11 +46,6 @@ $ set mods-schema={
         { "name": "after", "type": ["row", "null"] }
     ]
   }
-
-$ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=1
-{"before": null, "after": {"num": 0, "mod": "even"}}
-{"before": null, "after": {"num": 1, "mod": "odd"}}
-{"before": null, "after": {"num": 2, "mod": "even"}}
 
 $ set plurals-schema={
     "type": "record",
@@ -79,12 +69,6 @@ $ set plurals-schema={
     ]
   }
 
-$ kafka-ingest format=avro topic=plurals schema=${plurals-schema} timestamp=1
-{"before": null, "after": {"num": "one", "noun": "sheep"}}
-{"before": null, "after": {"num": "two", "noun": "sheep"}}
-{"before": null, "after": {"num": "one", "noun": "mouse"}}
-{"before": null, "after": {"num": "two", "noun": "meeses"}}
-
 > CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}'
   USING SCHEMA '${names-schema}'
 
@@ -94,8 +78,7 @@ $ kafka-ingest format=avro topic=plurals schema=${plurals-schema} timestamp=1
 > CREATE SOURCE plurals FROM 'kafka://${testdrive.kafka-addr}/testdrive-plurals-${testdrive.seed}'
   USING SCHEMA '${plurals-schema}'
 
-> CREATE MATERIALIZED VIEW test1 AS
-  SELECT * FROM names, mods, plurals WHERE names.num = mods.num AND names.name = plurals.num;
+> CREATE MATERIALIZED VIEW test1 AS SELECT 1
 
 > SHOW SOURCES
 SOURCES
