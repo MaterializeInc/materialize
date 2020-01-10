@@ -22,6 +22,7 @@ use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
+use dataflow_types::Timestamp;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr};
 use repr::{Datum, Row, RowArena};
 
@@ -36,6 +37,7 @@ use crate::server::LocalInput;
 
 mod context;
 mod reduce;
+mod delta_join;
 
 pub(crate) fn build_local_input<A: Allocate>(
     manager: &mut TraceManager,
@@ -271,11 +273,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
     })
 }
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: timely::progress::Timestamp + Lattice,
+    G: Scope<Timestamp=Timestamp>,
+    // G::Timestamp: Lattice + Refines<T>,
+    // T: timely::progress::Timestamp + Lattice,
 {
     /// Ensures the context contains an entry for `relation_expr`.
     ///
@@ -414,7 +416,8 @@ where
                 }
 
                 RelationExpr::Join { .. } => {
-                    self.render_join(relation_expr, env, scope, worker_index);
+                    self.render_delta_join(relation_expr, env, scope, worker_index, |t| t.saturating_sub(1));
+                    // self.render_join(relation_expr, env, scope, worker_index);
                 }
 
                 RelationExpr::Reduce { .. } => {

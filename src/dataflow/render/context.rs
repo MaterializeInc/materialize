@@ -210,6 +210,18 @@ where
             self.trace.insert(key2.clone(), handles);
         }
     }
+
+    /// Reports the keys available for a specified collection.
+    pub fn available_keys(&self, expr: &P) -> Vec<Vec<ScalarExpr>> {
+        let mut results = Vec::new();
+        if let Some(entry) = self.local.get(expr) {
+            results.extend(entry.keys().cloned());
+        }
+        if let Some(entry) = self.trace.get(expr) {
+            results.extend(entry.keys().cloned());
+        }
+        results
+    }
 }
 
 /// Describes flavor of arrangement: local or imported trace.
