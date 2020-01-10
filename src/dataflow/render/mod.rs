@@ -8,7 +8,6 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
@@ -18,7 +17,6 @@ use differential_dataflow::Collection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
@@ -276,8 +274,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
-    // G::Timestamp: Lattice + Refines<T>,
-    // T: timely::progress::Timestamp + Lattice,
 {
     /// Ensures the context contains an entry for `relation_expr`.
     ///
@@ -504,6 +500,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     fn render_join(
         &mut self,
         relation_expr: &RelationExpr,

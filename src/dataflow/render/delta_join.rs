@@ -4,8 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 use timely::dataflow::Scope;
-use timely::order::TotalOrder;
-use timely::progress::timestamp::Refines;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
@@ -22,8 +20,6 @@ use super::context::{ArrangementFlavor, Context};
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
-    // G::Timestamp: Lattice + Refines<T>,// + TotalOrder,
-    // T: timely::progress::Timestamp + Lattice,
 {
     /// Renders `RelationExpr:Join` using dogs^3 delta query dataflows.
     pub fn render_delta_join<F>(
@@ -240,7 +236,10 @@ where
 
 /// Orders `0 .. relations` starting with `start` so that arrangement use is maximized.
 ///
-///
+/// The ordering starts from `start` and attempts to add relations if we have access to an
+/// arrangement with keys that could be used for the join with the relations thus far. This
+/// reasoning does not know about uniqueness (yet) and may make bad decisions that inflate
+/// the number of updates flowing through the system (but not the arranged footprint).
 fn order_delta_join(
     relations: usize,
     start: usize,
