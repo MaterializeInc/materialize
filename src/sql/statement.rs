@@ -641,7 +641,11 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
                                         Value::SingleQuotedString(s) => match s.as_ref() {
                                             "protobuf-descriptor" => KafkaSchemaFormat::Protobuf,
                                             "avro" => KafkaSchemaFormat::Avro,
-                                            _ => bail!("Unrecognized source format: {}", s),
+                                            _ => bail!(
+                                            "Unrecognized source format: {:?} legal formats: {}",
+                                            s,
+                                            KafkaSchemaFormat::legal_formats().join(", ")
+                                        ),
                                         },
                                         _ => bail!("Source format must be a string"),
                                     }
@@ -1116,6 +1120,22 @@ fn build_kafka_protobuf_source(
 enum KafkaSchemaFormat {
     Avro,
     Protobuf,
+}
+
+impl KafkaSchemaFormat {
+    pub fn legal_formats() -> &'static [&'static str] {
+        #[allow(dead_code)]
+        {
+            // the list below must match all the possible variants
+            use KafkaSchemaFormat::*;
+            let a = Avro;
+            match a {
+                Avro | Protobuf => (),
+            }
+        }
+
+        &["protobuf-descriptor", "avro"]
+    }
 }
 
 enum SourceFileFormat {
