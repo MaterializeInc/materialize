@@ -219,6 +219,17 @@ where
                                         .extend((0..arities[other]).map(|c| (other, c)));
                                 }
 
+                                // We must now de-permute the results to return to the common order.
+                                update_stream = update_stream.map(move |row| {
+                                    let datums = row.unpack();
+                                    let mut to_sort = update_column_sources
+                                        .iter()
+                                        .zip(datums)
+                                        .collect::<Vec<_>>();
+                                    to_sort.sort();
+                                    Row::pack(to_sort.into_iter().map(|(_, datum)| datum))
+                                });
+
                                 update_stream.leave()
                             });
 
