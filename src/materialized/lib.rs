@@ -235,6 +235,9 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
 
     let logging_config = config.logging_granularity.map(|d| LoggingConfig::new(d));
 
+    let (ts_s, ts_r) =
+        std::sync::mpsc::channel::<coord::Update>();
+
     // Initialize command queue and sql planner, but only on the primary.
     let coord_thread = if is_primary {
         let mut coord = coord::Coordinator::new(coord::Config {
@@ -244,9 +247,21 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             logging: logging_config.as_ref(),
             bootstrap_sql: config.bootstrap_sql,
             data_directory: config.data_directory.as_deref(),
+            ts_channel: ts_s,
             executor: &executor,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
+    } else {
+        None
+    };
+
+    // Initialise a timestamp advancement service, but only on the primary
+    let timestamp_thread = if is_primary {
+        let mut tsper = coord::Timestamper::new(
+            config.data_directory.as_deref(),
+            ts_r,
+        );
+        Some(thread::spawn(move || tsper.update()))
     } else {
         None
     };

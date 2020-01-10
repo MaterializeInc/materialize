@@ -21,6 +21,8 @@ futures = "0.3"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 repr = { path = "../repr" }
+rusqlite = { version = "0.20", features = ["bundled"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
 sql = { path = "../sql" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }

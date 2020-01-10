@@ -40,7 +40,7 @@ CREATE TABLE items (
 
 INSERT INTO databases VALUES (1, 'materialize');
 INSERT INTO schemas VALUES
-    (1, NULL, 'mz_catalog'),
+   (1, NULL, 'mz_catalog'),
     (2, NULL, 'pg_catalog'),
     (3, 1, 'public');
 ";

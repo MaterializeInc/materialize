@@ -379,6 +379,9 @@ impl State {
             host = env::var("PGHOST").unwrap_or_else(|_| "localhost".into()),
             port = env::var("PGPORT").unwrap_or_else(|_| "5432".into()),
         );
+
+        let (ts_s, ts_r) = std::sync::mpsc::channel::<coord::Update>();
+
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
             num_timely_workers: NUM_TIMELY_WORKERS,
@@ -387,8 +390,16 @@ impl State {
             bootstrap_sql: "".into(),
             data_directory: None,
             executor: &executor,
+            ts_channel: ts_s,
         })?;
+
         let coord_thread = thread::spawn(move || coord.serve(cmd_rx));
+
+        let mut tsper = coord::Timestamper::new(
+            None,
+            ts_r,
+        );
+        let timestamp_thread = thread::spawn(move || tsper.update());
 
         let dataflow_workers = dataflow::serve(
             vec![None],

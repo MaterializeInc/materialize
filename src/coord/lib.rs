@@ -18,6 +18,8 @@
 
 mod command;
 mod coord;
+mod timestamp;
 
 pub use self::coord::{Config, Coordinator};
 pub use command::{Command, ExecuteResponse, Response, RowsFuture};
+pub use self::timestamp::{Update,Timestamper};
