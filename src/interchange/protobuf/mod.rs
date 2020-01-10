@@ -7,7 +7,8 @@
 
 use std::fs;
 
-use failure::{bail, Error};
+use failure::{bail, format_err, Error};
+use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
 use protoc::Protoc;
 use serde::de::Deserialize;
