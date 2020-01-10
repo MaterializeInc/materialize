@@ -32,6 +32,7 @@ fn no_block() {
         bootstrap_sql: "".into(),
         data_directory: None,
         executor: &executor,
+        ts_channel: None,
     })
     .unwrap();
 
@@ -47,6 +48,7 @@ fn no_block() {
         process_id,
         switchboard,
         runtime.handle().clone(),
+        false,
         logging_config,
     )
     .unwrap();

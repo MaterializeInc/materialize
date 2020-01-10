@@ -43,6 +43,7 @@ INSERT INTO schemas VALUES
     (1, NULL, 'mz_catalog'),
     (2, NULL, 'pg_catalog'),
     (3, 1, 'public');
+
 ";
 
 #[derive(Debug)]
@@ -286,7 +287,7 @@ fn is_constraint_violation(err: &rusqlite::Error) -> bool {
     }
 }
 
-struct SqlVal<T>(pub T);
+pub struct SqlVal<T>(pub T);
 
 impl<T> ToSql for SqlVal<T>
 where

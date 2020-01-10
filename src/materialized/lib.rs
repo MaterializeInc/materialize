@@ -30,6 +30,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Runtime;
 
 use comm::Switchboard;
+use coord::TimestampChannel;
 use dataflow_types::logging::LoggingConfig;
 use ore::future::OreTryFutureExt;
 use ore::netio;
@@ -63,6 +64,10 @@ pub struct Config {
     /// The interval at which the internal Timely cluster should publish updates
     /// about its state.
     pub logging_granularity: Option<Duration>,
+    /// The interval at which sources should be timestamped
+    pub timestamp_frequency: Option<Duration>,
+    /// The maximum size of a timestamp batch
+    pub max_increment_ts_size: i64,
     /// The number of Timely worker threads that this process should host.
     pub threads: usize,
     /// The ID of this process in the cluster. IDs must be contiguously
@@ -235,6 +240,9 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
 
     let logging_config = config.logging_granularity.map(|d| LoggingConfig::new(d));
 
+    let (source_tx, source_rx) = std::sync::mpsc::channel::<coord::TimestampMessage>();
+    let (ts_tx, ts_rx) = std::sync::mpsc::channel::<coord::TimestampMessage>();
+
     // Initialize command queue and sql planner, but only on the primary.
     let coord_thread = if is_primary {
         let mut coord = coord::Coordinator::new(coord::Config {
@@ -244,9 +252,33 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             logging: logging_config.as_ref(),
             bootstrap_sql: config.bootstrap_sql,
             data_directory: config.data_directory.as_deref(),
+            ts_channel: if config.timestamp_frequency.is_some() {
+                Some(TimestampChannel {
+                    sender: source_tx,
+                    receiver: ts_rx,
+                })
+            } else {
+                None
+            },
             executor: &executor,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
+    } else {
+        None
+    };
+
+    // Initialise a timestamp advancement service, but only on the primary
+    let timestamp_thread = if is_primary && config.timestamp_frequency.is_some() {
+        let mut tsper = coord::Timestamper::new(
+            config.timestamp_frequency.expect("Duration cannot be none"),
+            config.max_increment_ts_size,
+            config.data_directory.as_deref(),
+            coord::TimestampChannel {
+                sender: ts_tx,
+                receiver: source_rx,
+            },
+        );
+        Some(thread::spawn(move || tsper.update()).join_on_drop())
     } else {
         None
     };
@@ -258,6 +290,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         config.process,
         switchboard,
         executor,
+        config.timestamp_frequency.is_some(),
         logging_config,
     )
     .map_err(|s| format_err!("{}", s))?;
@@ -267,6 +300,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         _cmd_tx: cmd_tx,
         _dataflow_guard: Box::new(dataflow_guard),
         _coord_thread: coord_thread,
+        _timestamp_thread: timestamp_thread,
         _runtime: runtime,
     })
 }
@@ -277,6 +311,7 @@ pub struct Server {
     // Drop order matters for these fields.
     _cmd_tx: Arc<mpsc::UnboundedSender<coord::Command>>,
     _dataflow_guard: Box<dyn Any>,
+    _timestamp_thread: Option<JoinOnDropHandle<()>>,
     _coord_thread: Option<JoinOnDropHandle<()>>,
     _runtime: Runtime,
 }

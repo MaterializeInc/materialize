@@ -25,6 +25,7 @@ use dataflow_types::Timestamp;
 
 use crate::source::util::source;
 use crate::source::{SourceStatus, SourceToken};
+use expr::SourceInstanceId;
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
@@ -189,6 +190,7 @@ async fn read_file_task(
 }
 
 pub fn file<G>(
+    id: SourceInstanceId,
     region: &G,
     name: String,
     path: PathBuf,
@@ -205,7 +207,7 @@ where
     const MAX_LINES_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
-    let (stream, capability) = source(region, &name, move |info| {
+    let (stream, capability) = source(id, None, region, &name, move |info| {
         let activator = region.activator_for(&info.address[..]);
         let (tx, mut rx) = futures::channel::mpsc::channel(MAX_LINES_PER_INVOCATION);
         if read_file {

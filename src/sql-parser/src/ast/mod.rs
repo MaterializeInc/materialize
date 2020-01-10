@@ -549,6 +549,7 @@ pub enum Statement {
         schema: Option<SourceSchema>,
         with_options: Vec<SqlOption>,
         if_not_exists: bool,
+        consistency: SourceTimestamp,
     },
     /// `CREATE SOURCES`
     CreateSources {
@@ -556,6 +557,7 @@ pub enum Statement {
         url: String,
         schema_registry: String,
         with_options: Vec<SqlOption>,
+        consistency: SourceTimestamp,
     },
     /// `CREATE SINK`
     CreateSink {
@@ -796,6 +798,7 @@ impl fmt::Display for Statement {
                 schema,
                 with_options,
                 if_not_exists,
+                consistency,
             } => {
                 write!(f, "CREATE SOURCE ")?;
                 if *if_not_exists {
@@ -827,6 +830,12 @@ impl fmt::Display for Statement {
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }
+                match consistency {
+                    SourceTimestamp::BringYourOwn(url) => {
+                        write!(f, " CONSISTENCY {}", url)?;
+                    }
+                    _ => {}
+                }
                 Ok(())
             }
             Statement::CreateSources {
@@ -834,6 +843,7 @@ impl fmt::Display for Statement {
                 url,
                 schema_registry,
                 with_options,
+                consistency,
             } => {
                 write!(f, "CREATE SOURCES ")?;
                 if let Some(like) = like {
@@ -847,6 +857,12 @@ impl fmt::Display for Statement {
                 )?;
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                }
+                match consistency {
+                    SourceTimestamp::BringYourOwn(url) => {
+                        write!(f, " CONSISTENCY {} ", url)?;
+                    }
+                    _ => {}
                 }
                 Ok(())
             }
@@ -1139,6 +1155,15 @@ pub enum SourceSchema {
     /// The schema is available in a Confluent-compatible schema registry that
     /// is accessible at the specified URL.
     Registry(String),
+}
+
+/// Specifies the timestamp logic associated with a given source
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SourceTimestamp {
+    /// The automatic real-time timestamp assignment
+    RealTime,
+    /// The Bring-Your-Own consistency through Kafka Topics
+    BringYourOwn(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]

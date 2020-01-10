@@ -16,16 +16,16 @@ use failure::{bail, format_err, ResultExt};
 use futures::future::join_all;
 use sql_parser::ast::{
     Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
-    Stage, Statement, Value,
+    SourceTimestamp, Stage, Statement, Value,
 };
 use url::Url;
 
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
-    AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
-    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, Sink,
-    SinkConnector, Source, SourceConnector, View,
+    AvroEncoding, Consistency, CsvEncoding, DataEncoding, ExternalSourceConnector,
+    FileSourceConnector, Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
+    ProtobufEncoding, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use futures::future::TryFutureExt;
@@ -818,10 +818,15 @@ async fn handle_create_dataflow(
             schema,
             with_options,
             if_not_exists,
+            consistency,
         } => {
             let source_url = parse_source_url(url)?;
             let mut format = KafkaSchemaFormat::Avro;
             let mut message_name = None;
+            let consistency = match consistency {
+                SourceTimestamp::RealTime => Consistency::RealTime,
+                SourceTimestamp::BringYourOwn(topic) => Consistency::BringYourOwn(topic.clone()),
+            };
             match source_url {
                 SourceUrl::Kafka(KafkaUrl { addr, topic }) => {
                     if !with_options.is_empty() {
@@ -857,9 +862,15 @@ async fn handle_create_dataflow(
                                 &current_database,
                                 normalize::object_name(name.clone())?,
                             );
-                            let source =
-                                build_kafka_source(schema, addr, topic, format, message_name)
-                                    .await?;
+                            let source = build_kafka_source(
+                                schema,
+                                addr,
+                                topic,
+                                format,
+                                message_name,
+                                consistency,
+                            )
+                            .await?;
                             Ok(Plan::CreateSource {
                                 name,
                                 source,
@@ -986,6 +997,7 @@ async fn handle_create_dataflow(
                                 tail,
                             }),
                             encoding,
+                            consistency: Consistency::RealTime,
                         },
                         desc,
                     };
@@ -1004,6 +1016,7 @@ async fn handle_create_dataflow(
             url,
             schema_registry,
             with_options,
+            consistency,
         } => {
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
@@ -1015,7 +1028,10 @@ async fn handle_create_dataflow(
                 let like_regex = build_like_regex_from_string(value)?;
                 subjects.retain(|a| like_regex.is_match(a))
             }
-
+            let consistency = match consistency {
+                SourceTimestamp::RealTime => Consistency::RealTime,
+                SourceTimestamp::BringYourOwn(topic) => Consistency::BringYourOwn(topic.clone()),
+            };
             let names = subjects.iter().filter_map(|s| {
                 let parts: Vec<&str> = s.rsplitn(2, '-').collect();
                 if parts.len() == 2 && parts[0] == "value" {
@@ -1041,11 +1057,13 @@ async fn handle_create_dataflow(
                     s
                 );
             }
+
             async fn make_source(
                 topic_name: &str,
                 sql_name: FullName,
                 addr: SocketAddr,
                 schema_registry: &str,
+                consistency: Consistency,
             ) -> Result<(FullName, Source), failure::Error> {
                 Ok((
                     sql_name,
@@ -1053,12 +1071,19 @@ async fn handle_create_dataflow(
                         &SourceSchema::Registry(schema_registry.to_owned()),
                         addr,
                         topic_name.to_owned(),
+                        consistency,
                     )
                     .await?,
                 ))
             }
             let sources = join_all(names.map(|(topic_name, sql_name)| {
-                make_source(topic_name, sql_name, addr, &*schema_registry)
+                make_source(
+                    topic_name,
+                    sql_name,
+                    addr,
+                    &*schema_registry,
+                    consistency.clone(),
+                )
             }))
             .await
             .into_iter()
@@ -1275,11 +1300,14 @@ fn build_kafka_source(
     topic: String,
     format: KafkaSchemaFormat,
     message_name: Option<String>,
+    consistency: Consistency,
 ) -> MaybeFuture<Result<Source, failure::Error>> {
     match (format, message_name) {
-        (KafkaSchemaFormat::Avro, None) => build_kafka_avro_source(schema, kafka_addr, topic),
+        (KafkaSchemaFormat::Avro, None) => {
+            build_kafka_avro_source(schema, kafka_addr, topic, consistency)
+        }
         (KafkaSchemaFormat::Protobuf, Some(m)) => {
-            build_kafka_protobuf_source(schema, kafka_addr, topic, m)
+            build_kafka_protobuf_source(schema, kafka_addr, topic, m, consistency).into()
         }
         (KafkaSchemaFormat::Avro, Some(s)) => Err(format_err!(
             "Invalid parameter message name {} provided for Avro source",
@@ -1326,6 +1354,7 @@ fn build_kafka_avro_source(
     schema: &SourceSchema,
     kafka_addr: SocketAddr,
     topic: String,
+    consistency: Consistency,
 ) -> MaybeFuture<Result<Source, failure::Error>> {
     let schema = match schema {
         // TODO(jldlaughlin): we need a way to pass in primary key information
@@ -1378,6 +1407,7 @@ fn build_kafka_avro_source(
                         raw_schema: value_schema,
                         schema_registry_url,
                     }),
+                    consistency,
                 },
                 desc,
             })
@@ -1390,6 +1420,7 @@ fn build_kafka_protobuf_source(
     kafka_addr: SocketAddr,
     topic: String,
     message_name: String,
+    consistency: Consistency,
 ) -> MaybeFuture<Result<Source, failure::Error>> {
     let descriptors: MaybeFuture<Result<_, failure::Error>> = match schema {
         SourceSchema::Inline(bytes) => strconv::parse_bytes(bytes).map_err(Into::into).into(),
@@ -1418,6 +1449,7 @@ fn build_kafka_protobuf_source(
                         descriptors,
                         message_name,
                     }),
+                    consistency,
                 },
                 desc,
             })

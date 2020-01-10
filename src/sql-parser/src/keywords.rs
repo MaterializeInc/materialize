@@ -117,6 +117,7 @@ define_keywords!(
     COMMITTED,
     CONDITION,
     CONNECT,
+    CONSISTENCY,
     CONSTRAINT,
     CONTAINS,
     CONVERT,

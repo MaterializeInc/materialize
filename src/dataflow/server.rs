@@ -6,9 +6,12 @@
 //! An interactive dataflow server.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::pin::Pin;
+use std::rc::Rc;
+use std::rc::Weak;
 use std::sync::Mutex;
 
 use differential_dataflow::trace::cursor::Cursor;
@@ -36,7 +39,7 @@ use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     compare_columns, DataflowDesc, Diff, Index, PeekResponse, RowSetFinishing, Timestamp, Update,
 };
-use expr::{EvalEnv, GlobalId};
+use expr::{EvalEnv, GlobalId, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, Row, RowArena};
 
@@ -47,6 +50,8 @@ use crate::arrangement::{
 };
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
+
+use crate::source::SourceToken;
 
 lazy_static! {
     static ref COMMAND_QUEUE_RAW: IntGaugeVec = register_int_gauge_vec!(
@@ -125,6 +130,14 @@ pub enum SequencedCommand {
     AllowCompaction(Vec<(GlobalId, Vec<Timestamp>)>),
     /// Append a new event to the log stream.
     AppendLog(MaterializedEvent),
+    /// Advance worker timestamp
+    AdvanceSourceTimestamp {
+        id: SourceInstanceId,
+        timestamp: Timestamp,
+        offset: i64,
+    },
+    /// Drop timestamping information for a given source instantiation
+    DropTimestampInformation { id: SourceInstanceId },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
@@ -142,6 +155,8 @@ pub struct WorkerFeedbackWithMeta {
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
+    /// The id of a source whose source connector has been dropped
+    DroppedSource(SourceInstanceId),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -155,6 +170,7 @@ pub fn serve<C>(
     process: usize,
     switchboard: comm::Switchboard<C>,
     executor: tokio::runtime::Handle,
+    advance_timestamp: bool,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String>
 where
@@ -204,11 +220,17 @@ where
                 reported_frontiers: HashMap::new(),
                 executor: executor.clone(),
                 metrics: Metrics::for_worker_id(worker_idx),
+                advance_timestamp,
+                ts_histories: Default::default(),
+                ts_source_mapping: HashMap::new(),
+                ts_source_drops: Default::default(),
             }
             .run()
         })
     })
 }
+
+pub type TimestampHistories = Rc<RefCell<HashMap<SourceInstanceId, Vec<(Timestamp, i64)>>>>;
 
 struct Worker<'w, A>
 where
@@ -223,6 +245,10 @@ where
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: HashMap<GlobalId, LocalInput>,
+    advance_timestamp: bool,
+    ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
+    ts_histories: TimestampHistories,
+    ts_source_drops: Rc<RefCell<Vec<SourceInstanceId>>>,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     executor: tokio::runtime::Handle,
     metrics: Metrics,
@@ -363,6 +389,9 @@ where
             // Report frontier information back the coordinator.
             self.report_frontiers();
 
+            // Report whether any sources have been dropped to the coordinator
+            self.report_source_drops();
+
             // Handle any received commands.
             let mut cmds = vec![];
             while let Ok(Some(cmd)) = self.command_rx.try_next() {
@@ -379,6 +408,20 @@ where
             self.metrics.observe_pending_peeks(&self.pending_peeks);
             self.process_peeks();
         }
+    }
+
+    /// Send source drop notifications to the coordinator
+    fn report_source_drops(&mut self) {
+        let mut updates = self.ts_source_drops.borrow_mut();
+        for id in updates.iter() {
+            let connector = self.feedback_tx.as_mut().unwrap();
+            block_on(connector.send(WorkerFeedbackWithMeta {
+                worker_id: self.inner.index(),
+                message: WorkerFeedback::DroppedSource(*id),
+            }))
+            .unwrap();
+        }
+        updates.clear();
     }
 
     /// Send progress information to the coordinator.
@@ -436,6 +479,10 @@ where
                         &mut self.traces,
                         self.inner,
                         &mut self.sink_tokens,
+                        self.advance_timestamp,
+                        &mut self.ts_source_mapping,
+                        self.ts_histories.clone(),
+                        self.ts_source_drops.clone(),
                         &mut self.materialized_logger,
                         &self.executor,
                     );
@@ -447,13 +494,11 @@ where
                     self.local_inputs.remove(&name);
                 }
             }
-
             SequencedCommand::DropSinks(ids) => {
                 for id in ids {
                     self.sink_tokens.remove(&id);
                 }
             }
-
             SequencedCommand::DropIndexes(ids) => {
                 for id in ids {
                     self.traces.del_trace(&id);
@@ -588,11 +633,42 @@ where
                         |err| panic!("error sending worker feedback: {}", err),
                     )));
             }
-
             SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.traces.del_all_traces();
                 self.shutdown_logging();
+            }
+            SequencedCommand::DropTimestampInformation { id } => {
+                self.ts_histories.borrow_mut().remove(&id);
+                self.ts_source_mapping.remove(&id);
+            }
+            SequencedCommand::AdvanceSourceTimestamp {
+                id,
+                timestamp,
+                offset,
+            } => {
+                let mut timestamps = self.ts_histories.borrow_mut();
+                if let Some(entries) = timestamps.get_mut(&id) {
+                    entries.push((timestamp, offset));
+                    let last_offset = if let Some(offs) = timestamps.get(&id).unwrap().last() {
+                        offs.1
+                    } else {
+                        -1
+                    };
+                    if last_offset == offset {
+                        // We only activate the Kakfa source if the offset is the same as the last
+                        // offset as new data already triggers the Kafka source's activation
+                        let source = self
+                            .ts_source_mapping
+                            .get(&id)
+                            .expect("Id should be present");
+                        if let Some(source) = source.upgrade() {
+                            if let Some(token) = &*source {
+                                token.activate();
+                            }
+                        }
+                    }
+                }
             }
         }
     }

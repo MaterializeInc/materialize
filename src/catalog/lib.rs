@@ -19,7 +19,7 @@ use crate::names::{DatabaseSpecifier, FullName, PartialName};
 
 pub mod names;
 
-mod sql;
+pub mod sql;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///

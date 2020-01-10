@@ -82,6 +82,21 @@ impl fmt::Display for GlobalId {
     }
 }
 
+/// Unique identifier used for each *instance* of a source in a dataflow
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct SourceInstanceId {
+    // Global Source Id
+    pub sid: GlobalId,
+    // Id of the view with which this source is instantiated
+    pub vid: GlobalId,
+}
+
+impl fmt::Display for SourceInstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}/{}", self.sid, self.vid)
+    }
+}
+
 /// Humanizer that provides no additional information.
 #[derive(Debug)]
 pub struct DummyHumanizer;
