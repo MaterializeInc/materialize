@@ -5,13 +5,20 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 #
-# cargo-test-miri.sh - runs cargo test under miri to check for undefined behaviour
+# cargo-test-miri.sh — runs subset of unit tests under miri to check for
+# undefined behaviour.
 
 set -euo pipefail
 
-if [[ ! "${BUILDKITE-}" ]]; then
-    rustup component add miri --toolchain nightly
-fi
+# miri artifacts are thoroughly incompatible with normal build artifacts,
+# so keep them away from the `target` directory.
+export CARGO_TARGET_DIR=miri-target
 
-cd "$(dirname "$0")"/../../src/repr
-cargo +nightly miri test -- -- miri
+# At the moment only repr has tests meant to be run under miri.
+pkgs=(
+    repr
+)
+
+for pkg in "${pkgs[@]}"; do
+    (cd src/"$pkg" && cargo miri test -- -- miri)
+done

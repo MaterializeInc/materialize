@@ -34,9 +34,11 @@ case "$channel" in
         ;;
 esac
 
-rust_components=rustc,cargo,clippy-preview,rustfmt-preview,rust-std-x86_64-unknown-linux-gnu
+rust_components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
 if [[ $rust_version = nightly ]]; then
-    rust_components+=,miri
+    rust_components+=,miri-preview
+else
+    rust_components+=clippy-preview,rustfmt-preview
 fi
 
 uid=$(id -u)

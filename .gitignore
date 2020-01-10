@@ -10,6 +10,7 @@
 # https://github.com/github/gitignore/tree/master/Global
 
 target
+miri-target
 /.cargo
 .mtrlz.log
 **/*.rs.bk

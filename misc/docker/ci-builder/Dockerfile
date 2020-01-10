@@ -51,9 +51,19 @@ ARG RUST_COMPONENTS
 
 RUN mkdir rust \
     && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz > rust.tar.gz \
-    && curl -fsSL "https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz.asc" > rust.asc \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz.asc > rust.asc \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C rust --strip-components=1 \
     && rm -f rust.asc rust.tar.gz \
     && rust/install.sh --components=$RUST_COMPONENTS \
+    && curl -fsSL https://static.rust-lang.org/dist/rustc-$RUST_VERSION-src.tar.gz > rust-src.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist/rustc-$RUST_VERSION-src.tar.gz.asc > rust-src.asc \
+    && gpg --verify rust-src.asc rust-src.tar.gz \
+    && mkdir -p /usr/local/lib/rustlib/src/rust \
+    && tar -xzf rust-src.tar.gz -C /usr/local/lib/rustlib/src/rust --strip-components=1 \
+    && rm -f rust-src.asc rust-src.tar.gz \
+    && case $RUST_COMPONENTS in *miri*) PATH=$PATH:/root/.cargo/bin cargo miri setup && mv /root/.cargo/bin/xargo /usr/local/bin/xargo;; esac \
     && rm -rf /rust
+
+# TODO(benesch): why is this required now with nightly?
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+#
+# sanshim/cargo — shims cargo(1) to enable sanitizers.
+
+# See: https://github.com/japaric/rust-san
+#
+# > Be sure to always pass `--target [HOST-TRIPLE]`` to Cargo or else you'll end
+# > up sanitizing the build scripts that Cargo runs or run into compilation
+# > errors if your crate depends on a dylib.
+#
+# We have to parse Cargo's arguments a bit so that we can stick the `--target`
+# argument in the right spot: after `build`, `test`, or `run`.
+
+set -euo pipefail
+
+# shellcheck source=misc/shlib/shlib.bash
+. "$(dirname "$0")/../shlib/shlib.bash"
+
+option_args=()
+command=()
+target_args=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --target*) die "sanshim/cargo: specifying --target explicitly is prohibited" ;;
+        +*) die "sanshim/cargo: overriding toolchain with +TOOLCHAIN is prohibited" ;;
+    esac
+done
+
+for arg in "$@"; do
+    shift
+    if [[ "$arg" = -* ]]; then
+        option_args+=("$arg")
+    else
+        command=("$arg")
+        break
+    fi
+done
+
+case "${command[0]:-}" in
+    build|run|test) target_args+=(--target "$(rustc -vV | awk '/host/ { print $2 }')") ;;
+esac
+
+# TODO(benesch): we shouldn't need to stick SYSROOT/lib onto the linker search
+# path once https://github.com/rust-lang/rust/issues/66140 is fixed.
+RUSTFLAGS+=" -Z sanitizer=$MZ_DEV_SANITIZER -L$(rustc +nightly --print sysroot)/lib"
+export RUSTFLAGS
+
+run "$CARGO" +nightly "${option_args[@]}" "${command[@]}" "${target_args[@]}" "$@"
