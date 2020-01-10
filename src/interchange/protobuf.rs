@@ -2,15 +2,14 @@
 //
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
-//
-// Protobuf source connector
+
+//! Protobuf source connector
 
 use std::fs;
 
 use failure::{bail, format_err, Error};
 use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
-use protoc::Protoc;
 use serde::de::Deserialize;
 use serde_protobuf::de::Deserializer;
 use serde_protobuf::descriptor::{
@@ -22,31 +21,12 @@ use serde_value::Value as SerdeValue;
 use repr::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
-pub mod test;
+pub mod test_util;
 
 fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
     let mut file = fs::File::open(descriptor_file).expect("Opening descriptor set file failed");
     let proto = protobuf::parse_from_reader(&mut file).expect("Parsing descriptor set failed");
     Descriptors::from_proto(&proto)
-}
-
-// Takes a path to a .proto spec and attempts to generate a binary file
-// containing a set of descriptors for the message (and any nested messages)
-// defined in the spec. Only useful for test purposes and currently unused
-#[allow(dead_code)]
-fn generate_descriptors(proto_path: &str, out: &str) -> Descriptors {
-    let protoc = Protoc::from_env_path();
-    let descriptor_set_out_args = protoc::DescriptorSetOutArgs {
-        out,
-        includes: &[],
-        input: &[proto_path],
-        include_imports: false,
-    };
-
-    protoc
-        .write_descriptor_set(descriptor_set_out_args)
-        .expect("protoc write descriptor set failed");
-    read_descriptors_from_file(out)
 }
 
 fn validate_proto_field(
@@ -161,7 +141,7 @@ pub fn validate_proto_schema_with_descriptors(
     ))
 }
 
-// Manages required metadata to read protobuf
+/// Manages required metadata to read protobuf
 #[derive(Debug)]
 pub struct Decoder {
     descriptors: Descriptors,
@@ -218,6 +198,7 @@ fn extract_row(
 
     let mut row = RowPacker::new();
 
+    // TODO: This is actually unpacking a row, it should always return json
     for f in message_descriptors.fields().iter() {
         let key = SerdeValue::String(f.name().to_string());
         let value = deserialized_message.get(&key);
@@ -353,7 +334,7 @@ fn json_nested_from_serde_value(
 
 #[cfg(test)]
 mod tests {
-    use super::test::test_proto_schemas::{
+    use super::test_util::gen::fuzz::{
         file_descriptor_proto, Color, TestNestedRecord, TestRecord, TestRepeatedNestedRecord,
         TestRepeatedRecord,
     };
