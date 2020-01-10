@@ -21,8 +21,8 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
 
-use dataflow_types::*;
 use dataflow_types::Timestamp;
+use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr};
 use repr::{Datum, Row, RowArena};
 
@@ -275,7 +275,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
-    G: Scope<Timestamp=Timestamp>,
+    G: Scope<Timestamp = Timestamp>,
     // G::Timestamp: Lattice + Refines<T>,
     // T: timely::progress::Timestamp + Lattice,
 {
@@ -416,7 +416,9 @@ where
                 }
 
                 RelationExpr::Join { .. } => {
-                    self.render_delta_join(relation_expr, env, scope, worker_index, |t| t.saturating_sub(1));
+                    self.render_delta_join(relation_expr, env, scope, worker_index, |t| {
+                        t.saturating_sub(1)
+                    });
                     // self.render_join(relation_expr, env, scope, worker_index);
                 }
 

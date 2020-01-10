@@ -1,6 +1,6 @@
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 use timely::order::TotalOrder;
+use timely::progress::timestamp::Refines;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
@@ -16,7 +16,7 @@ use super::context::{ArrangementFlavor, Context};
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
-    G: Scope<Timestamp=Timestamp>,
+    G: Scope<Timestamp = Timestamp>,
     // G::Timestamp: Lattice + Refines<T>,// + TotalOrder,
     // T: timely::progress::Timestamp + Lattice,
 {
@@ -28,8 +28,7 @@ where
         scope: &mut G,
         worker_index: usize,
         subtract: F,
-    )
-    where
+    ) where
         F: Fn(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
         if let RelationExpr::Join {
@@ -57,114 +56,177 @@ where
             // We'll need a new scope, to hold `AltNeu` wrappers, and we'll want
             // to import all traces as alt and neu variants (unless we do a more
             // careful analysis).
-            let results = scope.clone().scoped::<AltNeu<G::Timestamp>, _, _>("delta query", |inner| {
+            let results =
+                scope
+                    .clone()
+                    .scoped::<AltNeu<G::Timestamp>, _, _>("delta query", |inner| {
+                        // Our plan is to iterate through each input relation, and attempt
+                        // to find a plan that maximally uses existing keys (better: uses
+                        // existing arrangements, to which we have access).
+                        let mut delta_queries = Vec::new();
 
-                // Our plan is to iterate through each input relation, and attempt
-                // to find a plan that maximally uses existing keys (better: uses
-                // existing arrangements, to which we have access).
-                let mut delta_queries = Vec::new();
+                        // We'll need type information for arities, if nothing else.
+                        let types = inputs.iter().map(|input| input.typ()).collect::<Vec<_>>();
+                        let arities = types
+                            .iter()
+                            .map(|typ| typ.column_types.len())
+                            .collect::<Vec<_>>();
 
-                // We'll need type information for arities, if nothing else.
-                let types = inputs.iter().map(|input| input.typ()).collect::<Vec<_>>();
-                let arities = types.iter().map(|typ| typ.column_types.len()).collect::<Vec<_>>();
+                        for relation in 0..inputs.len() {
+                            // This collection determines changes that result from updates inbound
+                            // from `inputs[relation]` and reflects all strictly prior updates and
+                            // concurrent updates from relations prior to `relation`.
+                            let delta_query = inner.clone().region(|region| {
+                                // Ensure this input is rendered, and extract its update stream.
+                                let mut update_stream = self
+                                    .collection(&inputs[relation])
+                                    .expect("Failed to render update stream")
+                                    .enter(inner)
+                                    .enter(region);
 
-                for relation in 0 .. inputs.len() {
+                                // We track the sources of each column in our update stream.
+                                let mut update_column_sources = (0..arities[relation])
+                                    .map(|c| (relation, c))
+                                    .collect::<Vec<_>>();
 
-                    // This collection determines changes that result from updates inbound
-                    // from `inputs[relation]` and reflects all strictly prior updates and
-                    // concurrent updates from relations prior to `relation`.
-                    let delta_query = inner.clone().region(|region| {
+                                // We must determine an order to join the other relations, starting from
+                                // `relation`, and ideally maximizing the number of arrangements used.
+                                let arrange_keys = inputs
+                                    .iter()
+                                    .map(|i| self.available_keys(i))
+                                    .collect::<Vec<_>>();
+                                let order = order_delta_join(
+                                    inputs.len(),
+                                    relation,
+                                    variables,
+                                    &arrange_keys,
+                                );
 
-                        // Ensure this input is rendered, and extract its update stream.
-                        let mut update_stream = self.collection(&inputs[relation]).expect("Failed to render update stream").enter(inner).enter(region);
+                                // Repeatedly update `update_stream` to reflect joins with more and more
+                                // other relations, in the specified order.
+                                for index in 1..order.len() {
+                                    let other = order[index];
 
-                        // We track the sources of each column in our update stream.
-                        let mut update_column_sources = (0 .. arities[relation]).map(|c| (relation, c)).collect::<Vec<_>>();
+                                    // Determine which existing columns must be keys, and which incoming
+                                    // columns must be keys.
+                                    let mut prev_key = Vec::new();
+                                    let mut next_key = Vec::new();
 
-                        // We must determine an order to join the other relations, starting from
-                        // `relation`, and ideally maximizing the number of arrangements used.
-                        let arrange_keys = inputs.iter().map(|i| self.available_keys(i)).collect::<Vec<_>>();
-                        let order = order_delta_join(inputs.len(), relation, variables, &arrange_keys);
-
-                        // Repeatedly update `update_stream` to reflect joins with more and more
-                        // other relations, in the specified order.
-                        for (index, other) in order.iter().enumerate() {
-
-                            // Determine which existing columns must be keys, and which incoming
-                            // columns must be keys.
-                            let mut prev_key = Vec::new();
-                            let mut next_key = Vec::new();
-
-                            for variable in variables {
-                                // A constraint is active iff it constraints both prior and new relations.
-                                let prev_col = variable.iter().find(|(rel,_)| order[..index].contains(rel));
-                                let next_col = variable.iter().find(|(rel,_)| rel == other);
-                                if let (Some(prev), Some(next)) = (prev_col, next_col) {
-                                    prev_key.push(update_column_sources.iter().position(|cs| cs == prev).expect("Did not find prior key column"));
-                                    next_key.push(next.1); // capture only the column.
-                                }
-                            }
-
-                            // Keys might be empty (in cross-join scenarios) but ideally we now have
-                            // some none-trivial columns to work with.
-
-                            // Ensures that the necessary arrangement exists. Manufacture it if not.
-                            if self.arrangement_columns(&inputs[*other], &next_key[..]).is_none() {
-                                let built = self.collection(&inputs[*other]).expect("Collection not found!");
-                                let next_key_clone = next_key.clone();
-                                let next_keyed = built
-                                    .map(move |row| {
-                                        let datums = row.unpack();
-                                        let key_row = Row::pack(next_key_clone.iter().map(|i| datums[*i]));
-                                        (key_row, row)
-                                    })
-                                    .arrange_named::<OrdValSpine<_, _, _, _>>(&format!(
-                                        "DeltaJoinIndex: {}, {}, {}",
-                                        relation,
-                                        other,
-                                        index,
-                                    ));
-                                self.set_local_columns(&inputs[*other], &next_key[..], next_keyed);
-                            }
-
-                            // We require different logic based on the flavor of arrangement.
-                            // We may need to cache each of these if we want to re-use the same wrapped
-                            // arrangement, rather than re-wrap each time we use a thing.
-                            let subtract = subtract.clone();
-                            update_stream = match self.arrangement_columns(&inputs[*other], &next_key[..]).expect("Arrangement alarmingly absent!") {
-                                ArrangementFlavor::Local(local) => {
-                                    if *other > relation {
-                                        let local = local.enter_at(inner, |_,_,t|AltNeu::alt(t.clone()), move |t| subtract(&t.time)).enter(region);
-                                        build_lookup(update_stream, local, prev_key)
-                                    } else {
-                                        let local = local.enter_at(inner, |_,_,t|AltNeu::neu(t.clone()), move |t| subtract(&t.time)).enter(region);
-                                        build_lookup(update_stream, local, prev_key)
+                                    for variable in variables {
+                                        // A constraint is active iff it constraints both prior and new relations.
+                                        let prev_col = variable
+                                            .iter()
+                                            .find(|(rel, _)| order[..index].contains(rel));
+                                        let next_col =
+                                            variable.iter().find(|(rel, _)| rel == &other);
+                                        if let (Some(prev), Some(next)) = (prev_col, next_col) {
+                                            prev_key.push(
+                                                update_column_sources
+                                                    .iter()
+                                                    .position(|cs| cs == prev)
+                                                    .expect("Did not find prior key column"),
+                                            );
+                                            next_key.push(next.1); // capture only the column.
+                                        }
                                     }
-                                }
-                                ArrangementFlavor::Trace(trace) => {
-                                    if *other > relation {
-                                        let trace = trace.enter_at(inner, |_,_,t|AltNeu::alt(t.clone()), move |t| subtract(&t.time)).enter(region);
-                                        build_lookup(update_stream, trace, prev_key)
-                                    } else {
-                                        let trace = trace.enter_at(inner, |_,_,t|AltNeu::neu(t.clone()), move |t| subtract(&t.time)).enter(region);
-                                        build_lookup(update_stream, trace, prev_key)
-                                    }
-                                }
-                            };
 
-                            // Update our map of the sources of each column in the update stream.
-                            update_column_sources.extend((0 .. arities[*other]).map(|c| (*other, c)));
+                                    // Keys might be empty (in cross-join scenarios) but ideally we now have
+                                    // some none-trivial columns to work with.
+
+                                    // Ensures that the necessary arrangement exists. Manufacture it if not.
+                                    if self
+                                        .arrangement_columns(&inputs[other], &next_key[..])
+                                        .is_none()
+                                    {
+                                        let built = self
+                                            .collection(&inputs[other])
+                                            .expect("Collection not found!");
+                                        let next_key_clone = next_key.clone();
+                                        let next_keyed = built
+                                            .map(move |row| {
+                                                let datums = row.unpack();
+                                                let key_row = Row::pack(
+                                                    next_key_clone.iter().map(|i| datums[*i]),
+                                                );
+                                                (key_row, row)
+                                            })
+                                            .arrange_named::<OrdValSpine<_, _, _, _>>(&format!(
+                                                "DeltaJoinIndex: {}, {}, {}",
+                                                relation, other, index,
+                                            ));
+                                        self.set_local_columns(
+                                            &inputs[other],
+                                            &next_key[..],
+                                            next_keyed,
+                                        );
+                                    }
+
+                                    // We require different logic based on the flavor of arrangement.
+                                    // We may need to cache each of these if we want to re-use the same wrapped
+                                    // arrangement, rather than re-wrap each time we use a thing.
+                                    let subtract = subtract.clone();
+                                    update_stream = match self
+                                        .arrangement_columns(&inputs[other], &next_key[..])
+                                        .expect("Arrangement alarmingly absent!")
+                                    {
+                                        ArrangementFlavor::Local(local) => {
+                                            if other > relation {
+                                                let local = local
+                                                    .enter_at(
+                                                        inner,
+                                                        |_, _, t| AltNeu::alt(t.clone()),
+                                                        move |t| subtract(&t.time),
+                                                    )
+                                                    .enter(region);
+                                                build_lookup(update_stream, local, prev_key)
+                                            } else {
+                                                let local = local
+                                                    .enter_at(
+                                                        inner,
+                                                        |_, _, t| AltNeu::neu(t.clone()),
+                                                        move |t| subtract(&t.time),
+                                                    )
+                                                    .enter(region);
+                                                build_lookup(update_stream, local, prev_key)
+                                            }
+                                        }
+                                        ArrangementFlavor::Trace(trace) => {
+                                            if other > relation {
+                                                let trace = trace
+                                                    .enter_at(
+                                                        inner,
+                                                        |_, _, t| AltNeu::alt(t.clone()),
+                                                        move |t| subtract(&t.time),
+                                                    )
+                                                    .enter(region);
+                                                build_lookup(update_stream, trace, prev_key)
+                                            } else {
+                                                let trace = trace
+                                                    .enter_at(
+                                                        inner,
+                                                        |_, _, t| AltNeu::neu(t.clone()),
+                                                        move |t| subtract(&t.time),
+                                                    )
+                                                    .enter(region);
+                                                build_lookup(update_stream, trace, prev_key)
+                                            }
+                                        }
+                                    };
+
+                                    // Update our map of the sources of each column in the update stream.
+                                    update_column_sources
+                                        .extend((0..arities[other]).map(|c| (other, c)));
+                                }
+
+                                update_stream.leave()
+                            });
+
+                            delta_queries.push(delta_query);
                         }
 
-                        update_stream.leave()
+                        // Concatenate the results of each delta query as the accumulated results.
+                        differential_dataflow::collection::concatenate(inner, delta_queries).leave()
                     });
-
-                    delta_queries.push(delta_query);
-                }
-
-                // Concatenate the results of each delta query as the accumulated results.
-                differential_dataflow::collection::concatenate(inner, delta_queries).leave()
-            });
 
             self.collections.insert(relation_expr.clone(), results);
         }
@@ -190,11 +252,13 @@ fn order_delta_join(
                     if let expr::ScalarExpr::Column(key) = key {
                         constraints.iter().any(|variables| {
                             let contains_key = variables.contains(&(*i, *key));
-                            let contains_bound = variables.iter().any(|(idx, _)| order.contains(idx));
+                            let contains_bound =
+                                variables.iter().any(|(idx, _)| order.contains(idx));
                             contains_key && contains_bound
                         })
+                    } else {
+                        false
                     }
-                    else { false }
                 })
             })
         });
@@ -209,9 +273,7 @@ fn order_delta_join(
                             .iter()
                             .filter(|vars| {
                                 vars.iter().any(|(idx, _)| &i == idx)
-                                    && vars
-                                        .iter()
-                                        .any(|(idx, _)| order.contains(idx))
+                                    && vars.iter().any(|(idx, _)| order.contains(idx))
                             })
                             .count(),
                         i,
@@ -228,25 +290,30 @@ fn order_delta_join(
     order
 }
 
-
-use differential_dataflow::Collection;
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::Cursor;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::TraceReader;
+use differential_dataflow::Collection;
 
 /// Constructs a `lookup_map` from supplied arguments.
 ///
 /// This method exists to factor common logic from four code paths that are generic over the type of trace.
-fn build_lookup<G, Tr>(updates: Collection<G, Row>, trace: Arranged<G, Tr>, prev_key: Vec<usize>) -> Collection<G, Row>
+fn build_lookup<G, Tr>(
+    updates: Collection<G, Row>,
+    trace: Arranged<G, Tr>,
+    prev_key: Vec<usize>,
+) -> Collection<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice,
-    Tr: TraceReader<Time=G::Timestamp, Key=Row, Val=Row, R=isize>+Clone+'static,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
-    dogsdogsdogs::operators::lookup_map(&updates, trace,
+    dogsdogsdogs::operators::lookup_map(
+        &updates,
+        trace,
         move |row, key| {
             // Prefix key selector must populate `key` with key from prefix `row`.
             // TODO: This could re-use the allocation behind `key`.
@@ -259,11 +326,14 @@ where
             let prev_datums = prev_row.unpack();
             let next_datums = next_row.unpack();
             // Append columns on to accumulated columns.
-            (Row::pack(prev_datums.into_iter().chain(next_datums)), diff1 * diff2)
+            (
+                Row::pack(prev_datums.into_iter().chain(next_datums)),
+                diff1 * diff2,
+            )
         },
         // Three default values, for decoding keys into.
-        Row::pack::<_,Datum>(None),
-        Row::pack::<_,Datum>(None),
-        Row::pack::<_,Datum>(None),
+        Row::pack::<_, Datum>(None),
+        Row::pack::<_, Datum>(None),
+        Row::pack::<_, Datum>(None),
     )
 }
