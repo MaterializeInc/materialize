@@ -541,7 +541,11 @@ impl RowPacker {
         }
     }
 
-    /// Start packing a `DatumList`. Returns the starting offset, which needs to be passed to `finish_list`.
+    /// Start packing a `DatumList`.
+    ///
+    /// Returns the starting offset, which needs to be passed to `finish_list`.
+    ///
+    /// See also [`push_list`] and [`push_list_with`] for a more convenient api.
     ///
     /// # Safety
     /// You must finish the list (or throw away self).
@@ -555,7 +559,7 @@ impl RowPacker {
         start
     }
 
-    /// Finish packing a `DatumList`
+    /// Finish packing a [`DatumList`]
     ///
     /// # Safety
     /// See `start_list`
@@ -565,7 +569,11 @@ impl RowPacker {
         self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
     }
 
-    /// Start packing a `DatumDict`. Returns the starting offset, which needs to be passed to `finish_dict`.
+    /// Start packing a [`DatumDict`].
+    ///
+    /// Returns the starting offset, which needs to be passed to `finish_dict`.
+    ///
+    /// See also [`push_dict`] and [`push_dict_with`] for a more convenient api.
     ///
     /// # Safety
     /// You must finish the dict (or throw away self).
@@ -589,7 +597,7 @@ impl RowPacker {
         self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
     }
 
-    /// Pack a `DatumList`.
+    /// Pack a [`DatumList`] with an arbitrary closure
     ///
     /// ```
     /// # use repr::{Row, Datum, RowPacker};
@@ -611,10 +619,17 @@ impl RowPacker {
         unsafe { self.finish_list(start) };
     }
 
-    /// Pack a `DatumDict`.
+    /// Pack a [`DatumDict`].
     ///
-    /// You must alternate pushing string keys and arbitary values, otherwise reading the dict will cause a panic.
-    /// You must push keys in ascending order, otherwise equality checks on the resulting `Row` may be wrong and reading the dict IN DEBUG MODE will cause a panic.
+    /// # Panics
+    ///
+    /// You *must* alternate pushing string keys and arbitary values, otherwise reading
+    /// the dict will cause a panic.
+    ///
+    /// You must push keys in ascending order, otherwise equality checks on the resulting
+    /// `Row` may be wrong and reading the dict IN DEBUG MODE will cause a panic.
+    ///
+    /// # Example
     ///
     /// ```
     /// # use repr::{Row, Datum, RowPacker};
@@ -633,7 +648,10 @@ impl RowPacker {
     /// });
     /// let row = packer.finish();
     ///
-    /// assert_eq!(row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(), vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))])
+    /// assert_eq!(
+    ///     row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(),
+    ///     vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))]
+    /// );
     /// ```
     pub fn push_dict_with<F>(&mut self, f: F)
     where
