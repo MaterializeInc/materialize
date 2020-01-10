@@ -20,13 +20,15 @@ use std::time::Duration;
 use avro_rs::types::Value as AvroValue;
 use avro_rs::Schema;
 use backoff::{ExponentialBackoff, Operation};
-use byteorder::{NetworkEndian, WriteBytesExt};
+use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use futures::executor::block_on;
-use futures::future;
 use futures::stream::{FuturesUnordered, TryStreamExt};
+use futures::{future, StreamExt};
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::consumer::Consumer;
 use rdkafka::error::RDKafkaError;
+use rdkafka::message::Message;
+
 use rdkafka::producer::FutureRecord;
 use serde_json::Value as JsonValue;
 
@@ -34,6 +36,100 @@ use ore::collections::CollectionExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+
+pub struct QuerySinkAction {
+    topic_prefix: String,
+    schema: String,
+    expected_messages: Vec<String>,
+}
+
+pub fn query_sink(mut cmd: BuiltinCommand) -> Result<QuerySinkAction, String> {
+    let format = cmd.args.string("format")?;
+    let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
+    let schema = cmd.args.string("schema")?;
+    let expected_messages = cmd.input;
+
+    cmd.args.done()?;
+    if format != "avro" {
+        return Err("formats besides avro are not supported".into());
+    }
+    Ok(QuerySinkAction {
+        topic_prefix,
+        schema,
+        expected_messages,
+    })
+}
+
+impl Action for QuerySinkAction {
+    fn undo(&self, _state: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn redo(&self, state: &mut State) -> Result<(), String> {
+        // Todo@jldlaughlin: we add "testdrive-" prefix to thing which won't exist on sink/Kafka topic.
+        // Deal with this more gracefully.
+        let sink_name = self.topic_prefix.replace("testdrive-", "");
+        state
+            .kafka_consumer
+            .subscribe(&[&sink_name])
+            .map_err(|e| e.to_string());
+
+        let schema = interchange::avro::parse_schema(&self.schema)
+            .map_err(|e| format!("parsing avro schema: {}", e))?;
+        let mut converted_expected_messages = Vec::new();
+        for expected in &self.expected_messages {
+            converted_expected_messages.push(
+                json_to_avro(
+                    &serde_json::from_str(expected)
+                        .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
+                    &schema,
+                )
+                .unwrap(),
+            );
+        }
+
+        //        let converted_expected_messages = &converted_expected_messages;
+        let mut message_stream = state.kafka_consumer.start();
+        for message in converted_expected_messages {
+            let output = block_on(message_stream.next());
+            let result = match output {
+                Some(result) => match result {
+                    Ok(m) => {
+                        match m.payload() {
+                            Some(mut bytes) => {
+                                if bytes.len() < 5 {
+                                    return Err(format!(
+                                        "avro datum is too few bytes: expected at least 5 bytes, got {}",
+                                        bytes.len()
+                                    ));
+                                }
+                                let magic = bytes[0];
+                                let _schema_id = BigEndian::read_i32(&bytes[1..5]);
+                                bytes = &bytes[5..];
+
+                                if magic != 0 {
+                                    return Err(format!(
+                                        "wrong avro serialization magic: expected 0, got {}",
+                                        bytes[0]
+                                    ));
+                                }
+                                let value =
+                                    avro_rs::from_avro_datum(&schema, &mut bytes, None).unwrap();
+                                // TODO: assert equality, issue right now
+                                //                                assert_eq!(message, value);
+                            }
+                            None => return Err(String::from("No bytes")),
+                        }
+                        let mut bytes = m.payload();
+                    }
+                    Err(e) => return Err(String::from("hit kafka error")),
+                },
+                None => return Err(String::from("No result.")),
+            };
+        }
+        Ok(())
+    }
+}
 
 pub struct IngestAction {
     topic_prefix: String,

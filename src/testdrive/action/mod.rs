@@ -78,6 +78,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
                 }
                 match builtin.name.as_ref() {
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
+                    "kafka-sink" => Box::new(kafka::query_sink(builtin).map_err(wrap_err)?),
                     "set" => {
                         vars.extend(builtin.args);
                         continue;
@@ -180,6 +181,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             .unwrap_or_else(|| "localhost:9092");
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &addr);
+        config.set("group.id", "materialize-testdrive");
 
         let admin: AdminClient<DefaultClientContext> =
             config.create().map_err(|e| Error::General {

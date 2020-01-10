@@ -487,42 +487,57 @@ pub fn encode_schema(desc: &RelationDesc) -> Result<serde_json::Value, Error> {
             None => bail!("All Kafka sink columns must have a name."),
         };
 
-        let mut field_types = Vec::new();
-        if typ.nullable {
-            field_types.push("null");
-        }
-        match typ.scalar_type {
-            ScalarType::Null => field_types.push("null"),
-            ScalarType::Bool => field_types.push("boolean"),
-            ScalarType::Int32 => field_types.push("int"),
-            ScalarType::Int64 => field_types.push("long"),
-            ScalarType::Float32 => field_types.push("float"),
-            ScalarType::Float64 => field_types.push("double"),
-            ScalarType::Decimal(_, _) => field_types.push("decimal"),
-            ScalarType::Date => field_types.push("date"),
+        let field_type = match typ.scalar_type {
+            ScalarType::Null => "null",
+            ScalarType::Bool => "boolean",
+            ScalarType::Int32 => "int",
+            ScalarType::Int64 => "long",
+            ScalarType::Float32 => "float",
+            ScalarType::Float64 => "double",
+            ScalarType::Decimal(_, _) => "decimal",
+            ScalarType::Date => "date",
             //            ScalarType::Timestamp => ,
             //            ScalarType::TimestampTz => ,
-            ScalarType::Interval => field_types.push("duration"),
-            ScalarType::Bytes => field_types.push("bytes"),
-            ScalarType::String => field_types.push("string"),
+            ScalarType::Interval => "duration",
+            ScalarType::Bytes => "bytes",
+            ScalarType::String => "string",
             //            ScalarType::Jsonb => ,
             _ => bail!(
                 "Do not support schemas with field type: {:#?}",
                 typ.scalar_type
             ),
-        }
-
-        let field = json!({
-            "name": field_name,
-            "type": field_types,
-        });
-        fields.push(field);
+        };
+        let field_types = match typ.nullable {
+            true => json!({
+                "name": field_name,
+                "type": ["null", field_type],
+            }),
+            false => json!({
+                "name": field_name,
+                "type": field_type, // Want a string, not a list!
+            }),
+        };
+        fields.push(field_types);
     }
 
+    // Add before and after wrapper.
     Ok(json!({
         "type": "record",
         "name": "envelope",
-        "fields": fields,
+        "fields":
+            [
+                {"name": "before",
+                 "type": [
+                    {
+                        "name": "row",
+                        "type": "record",
+                        "fields": fields,
+                    },
+                        "null"
+                  ]},
+                {"name": "after",
+                 "type": [ "row",  "null" ]}
+            ]
     }))
 }
 
@@ -561,10 +576,21 @@ impl Encoder {
     }
 
     fn row_to_avro(&self, row: &Row) -> Result<Vec<u8>, failure::Error> {
-        avro_rs::to_avro_datum(
-            &self.writer_schema,
-            self.data_to_avro(&self.writer_schema, &row.unpack())?,
-        )
+        match &self.writer_schema {
+            Schema::Record { fields, .. } => match fields.as_slice() {
+                [before, _after] => {
+                    let avro_val = self.data_to_avro(&before.schema, &row.unpack())?;
+                    // Add wrapper Record with before and after RecordFields
+                    let wrapped_avro_val = Value::Record(vec![
+                        ("before".into(), Value::Union(Box::from(Value::Null))),
+                        ("after".into(), Value::Union(Box::from(avro_val))),
+                    ]);
+                    avro_rs::to_avro_datum(&self.writer_schema, wrapped_avro_val)
+                }
+                _ => bail!("Expected schema to contain before and after fields."),
+            },
+            _ => bail!("Expected schema to be wrapped in a Schema::Record"),
+        }
     }
 
     fn data_to_avro(
@@ -677,7 +703,7 @@ impl Encoder {
             }
         }
         match value {
-            Some(v) => Ok(Value::Union(Box::new(v))),
+            Some(v) => Ok(v),
             None => bail!("Unable to parse Datum into any Avro schema options."),
         }
     }
