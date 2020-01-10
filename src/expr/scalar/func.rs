@@ -1301,6 +1301,7 @@ fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
         Datum::Dict(_) => Datum::String("object"),
         Datum::List(_) => Datum::String("array"),
+        Datum::String(_) => Datum::String("string"),
         Datum::Float64(_) => Datum::String("number"),
         Datum::True | Datum::False => Datum::String("boolean"),
         Datum::JsonNull => Datum::String("null"),
