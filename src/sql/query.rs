@@ -88,7 +88,7 @@ fn plan_expr_or_col_index<'a>(
     e: &'a Expr,
     type_hint: Option<ScalarType>,
     clause_name: &str,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<(ScalarExpr, Option<ScopeItemName>), failure::Error> {
     match e {
         Expr::Value(Value::Number(n)) => {
             let n = n.parse::<usize>().with_context(|err| {
@@ -108,11 +108,11 @@ fn plan_expr_or_col_index<'a>(
                     max
                 );
             }
-            Some(Ok(ScalarExpr::Column(ColumnRef::Inner(n - 1))))
+            Some(Ok((ScalarExpr::Column(ColumnRef::Inner(n - 1)), None)))
         }
         _ => None,
     }
-    .unwrap_or_else(|| plan_expr(ecx, e, type_hint))
+    .unwrap_or_else(|| plan_expr_returning_name(ecx, e, type_hint))
 }
 
 fn plan_query(
@@ -145,7 +145,8 @@ fn plan_query(
             allow_aggregates: true,
             allow_subqueries: true,
         };
-        let expr = plan_expr_or_col_index(ecx, &obe.expr, Some(ScalarType::String), "ORDER BY")?;
+        let (expr, _maybe_name) =
+            plan_expr_or_col_index(ecx, &obe.expr, Some(ScalarType::String), "ORDER BY")?;
         // If the expression is a reference to an existing column,
         // do not introduce a new column to support it.
         if let ScalarExpr::Column(ColumnRef::Inner(column)) = expr {
@@ -399,7 +400,7 @@ fn plan_view_select(
         let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in &s.group_by {
-            let expr =
+            let (expr, maybe_name) =
                 plan_expr_or_col_index(ecx, group_expr, Some(ScalarType::String), "GROUP BY")?;
             let new_column = group_key.len();
             // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
@@ -408,16 +409,20 @@ fn plan_view_select(
                 .find(|existing_expr| **existing_expr == expr)
                 .is_none()
             {
-                let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr
-                {
+                let scope_item = if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr {
                     // If we later have `SELECT foo.*` then we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
                     // This is really hard to do right using SQL name resolution, so instead we just track the movement here.
                     select_all_mapping.insert(*old_column, new_column);
-                    ecx.scope.items[*old_column].clone()
+                    let mut scope_item = ecx.scope.items[*old_column].clone();
+                    scope_item.expr = Some(group_expr.clone());
+                    scope_item
                 } else {
-                    ScopeItem::from_column_name(None)
+                    ScopeItem {
+                        names: maybe_name.into_iter().collect(),
+                        expr: Some(group_expr.clone()),
+                        nameable: true,
+                    }
                 };
-                scope_item.expr = Some(group_expr.clone());
 
                 group_key.push(from_scope.len() + group_exprs.len());
                 group_exprs.push(expr);
@@ -1126,7 +1131,7 @@ fn plan_expr_returning_name<'a>(
                 None,
             ),
             Expr::Nested(expr) => (plan_expr(ecx, expr, type_hint)?, None),
-            Expr::Cast { expr, data_type } => (plan_cast(ecx, expr, data_type)?, None),
+            Expr::Cast { expr, data_type } => plan_cast(ecx, expr, data_type)?,
             Expr::Function(func) => {
                 let expr = plan_function(ecx, func)?;
                 let name = ScopeItemName {
@@ -1405,10 +1410,13 @@ fn plan_cast<'a>(
     ecx: &ExprContext,
     expr: &'a Expr,
     data_type: &'a DataType,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<(ScalarExpr, Option<ScopeItemName>), failure::Error> {
     let to_scalar_type = scalar_type_from_sql(data_type)?;
-    let expr = plan_expr(ecx, expr, Some(to_scalar_type.clone()))?;
-    plan_cast_internal(ecx, "CAST", expr, to_scalar_type)
+    let (expr, maybe_name) = plan_expr_returning_name(ecx, expr, Some(to_scalar_type.clone()))?;
+    Ok((
+        plan_cast_internal(ecx, "CAST", expr, to_scalar_type)?,
+        maybe_name,
+    ))
 }
 
 fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, failure::Error> {

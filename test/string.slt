@@ -12,6 +12,16 @@ SELECT length('a'), ascii('a'), substr('a', 1) LIMIT 0
 ----
 length  ascii  substr
 
+query T colnames
+SELECT length(column1) FROM (VALUES ('a')) GROUP BY length(column1) LIMIT 0
+----
+length
+
+query T colnames
+SELECT column1::text FROM (VALUES ('a')) LIMIT 0
+----
+column1
+
 ### ascii ###
 
 statement ok
