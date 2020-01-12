@@ -1290,6 +1290,24 @@ fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
+fn to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
+    let f = a.unwrap_float64();
+    if !f.is_finite() {
+        return Datum::Null;
+    }
+    let secs = f.trunc() as i64;
+    // NOTE(benesch): PostgreSQL has microsecond precision in its timestamps,
+    // while chrono has nanosecond precision. While we normally accept
+    // nanosecond precision, here we round to the nearest microsecond because
+    // f64s lose quite a bit of accuracy in the nanosecond digits when dealing
+    // with common Unix timestamp values (> 1 billion).
+    let nanosecs = ((f.fract() * 1_000_000.0).round() as u32) * 1_000;
+    match NaiveDateTime::from_timestamp_opt(secs as i64, nanosecs as u32) {
+        None => Datum::Null,
+        Some(ts) => Datum::TimestampTz(DateTime::<Utc>::from_utc(ts, Utc)),
+    }
+}
+
 fn jsonb_array_length<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
         Datum::List(list) => Datum::Int64(list.iter().count() as i64),
@@ -1783,6 +1801,7 @@ pub enum UnaryFunc {
     ExtractTimestampTzDayOfWeek,
     ExtractTimestampTzIsoDayOfWeek,
     DateTrunc(DateTruncTo),
+    ToTimestamp,
     JsonbArrayLength,
     JsonbTypeof,
     JsonbStripNulls,
@@ -1918,6 +1937,7 @@ impl UnaryFunc {
                 DateTruncTo::Century => date_trunc_century(a),
                 DateTruncTo::Millennium => date_trunc_millennium(a),
             },
+            UnaryFunc::ToTimestamp => to_timestamp(a),
             UnaryFunc::JsonbArrayLength => jsonb_array_length(a),
             UnaryFunc::JsonbTypeof => jsonb_typeof(a),
             UnaryFunc::JsonbStripNulls => jsonb_strip_nulls(a, temp_storage),
@@ -2081,6 +2101,8 @@ impl UnaryFunc {
 
             DateTrunc(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
 
+            ToTimestamp => ColumnType::new(ScalarType::TimestampTz).nullable(true),
+
             JsonbArrayLength => ColumnType::new(ScalarType::Int64).nullable(true),
             JsonbTypeof => ColumnType::new(ScalarType::String).nullable(in_nullable),
             JsonbStripNulls => ColumnType::new(ScalarType::Jsonb).nullable(true),
@@ -2233,6 +2255,7 @@ impl fmt::Display for UnaryFunc {
                 f.write_str("date_trunc_")?;
                 f.write_str(&format!("{:?}", to).to_lowercase())
             }
+            UnaryFunc::ToTimestamp => f.write_str("tots"),
             UnaryFunc::JsonbArrayLength => f.write_str("jsonb_array_length"),
             UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),
             UnaryFunc::JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
