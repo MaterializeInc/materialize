@@ -24,60 +24,77 @@ use std::str::FromStr;
 /// # Arguments
 ///
 /// * `value` is a PostgreSQL-compatible timestamp-like string, e.g `TIMESTAMP 'value'`.
-///     This can be either a `timestamp`, `timestamptz`, `date`, or `time`.
+///     This can be either a `timestamp`, `timestamptz`, or `date`. `TIME` is not supported yet and
+///     requires this function to be refactored.
 pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime, ParserError> {
     use TimeStrToken::*;
+
     let mut pdt = ParsedDateTime::default();
 
-    let actual = tokenize_time_str(value)?;
-    let mut actual = actual.iter().peekable();
-    // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
-    while let Some(Colon) = actual.peek() {
-        actual.next();
+    let mut value_parts = Vec::new();
+
+    let value_split = value.trim().split_whitespace().collect::<Vec<&str>>();
+
+    if value_split.len() > 2 {
+        return parser_err!("Invalid DATE/TIME '{}'; unknown format", value);
+    }
+    for s in value_split {
+        value_parts.push(tokenize_time_str(s)?);
     }
 
-    let expected = [
+    let mut date_actual = value_parts[0].iter().peekable();
+    // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
+    while let Some(Colon) = date_actual.peek() {
+        date_actual.next();
+    }
+
+    let date_expected = [
         Num(0), // year
         Dash,
         Num(0), // month
         Dash,
         Num(0), // day
-        Space,
-        Num(0), // hour
-        Colon,
-        Num(0), // minute
-        Colon,
-        Num(0), // second
-        Dot,
-        Nanos(0), // Nanos
     ];
-    let mut expected = expected.iter().peekable();
+    let mut date_expected = date_expected.iter().peekable();
 
-    if let Err(e) =
-        fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, DateTimeField::Year, 1)
-    {
+    if let Err(e) = fill_pdt_from_tokens(
+        &mut pdt,
+        &mut date_actual,
+        &mut date_expected,
+        DateTimeField::Year,
+        1,
+    ) {
         return parser_err!("Invalid DATE/TIME '{}'; {}", value, e);
     }
 
+    // Only parse time-component of TIMESTAMP if present.
+    if value_parts.len() == 2 {
+        match determine_format_w_datetimefield(&value_parts[1].clone(), value)? {
+            Some(TimePartFormat::SQLStandard(leading_field)) => {
+                let mut time_actual = value_parts[1].iter().peekable();
+
+                // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
+                while let Some(Colon) = time_actual.peek() {
+                    time_actual.next();
+                }
+                let time_expected = expected_dur_like_tokens(leading_field);
+                let mut time_expected = time_expected.iter().peekable();
+
+                if let Err(e) = fill_pdt_from_tokens(
+                    &mut pdt,
+                    &mut time_actual,
+                    &mut time_expected,
+                    leading_field,
+                    1,
+                ) {
+                    return parser_err!("Invalid: DATE/TIME '{}'; {}", value, e);
+                }
+            }
+            _ => return parser_err!("Invalid DATE/TIME '{}'; unknown format", value),
+        }
+    }
+
     Ok(pdt)
-}
-
-/// Interval strings can be presented in one of two formats:
-/// - SQL Standard, e.g. `1-2 3 4:5:6.7`
-/// - PostgreSQL, e.g. `1 year 2 months 3 days`
-/// IntervalPartFormat indicates which type of parsing to use and encodes a
-/// DateTimeField, which indicates "where" you should begin parsing the
-/// associated tokens w/r/t their respective syntax.
-enum IntervalPartFormat {
-    SQLStandard(DateTimeField),
-    PostgreSQL(DateTimeField),
-}
-
-/// AnnotatedIntervalPart contains the tokens to be parsed, as well as the format
-/// to parse them.
-struct AnnotatedIntervalPart {
-    pub tokens: std::vec::Vec<TimeStrToken>,
-    pub fmt: IntervalPartFormat,
 }
 
 /// Builds a ParsedDateTime from an interval string (`value`).
@@ -115,7 +132,7 @@ pub(crate) fn build_parsed_datetime_interval(
             fmt = match value_parts.next() {
                 Some(next_part) => {
                     match determine_format_w_datetimefield(&next_part, value)? {
-                        Some(IntervalPartFormat::SQLStandard(f)) => {
+                        Some(TimePartFormat::SQLStandard(f)) => {
                             match f {
                                 // Do not capture this token because expression
                                 // is going to fail.
@@ -127,15 +144,15 @@ pub(crate) fn build_parsed_datetime_interval(
                                     // We can capture these annotated tokens
                                     // because expressions are commutative.
                                     annotated_parts.push(AnnotatedIntervalPart {
-                                        fmt: IntervalPartFormat::SQLStandard(f),
+                                        fmt: TimePartFormat::SQLStandard(f),
                                         tokens: next_part.clone(),
                                     });
-                                    Some(IntervalPartFormat::PostgreSQL(Day))
+                                    Some(TimePartFormat::PostgreSQL(Day))
                                 }
                             }
                         }
-                        // None | Some(IntervalPartFormat::PostgreSQL(f))
-                        // If next_fmt is IntervalPartFormat::PostgreSQL, that
+                        // None | Some(TimePartFormat::PostgreSQL(f))
+                        // If next_fmt is TimePartFormat::PostgreSQL, that
                         // indicates that the following string was a TimeUnit,
                         // e.g. `day`, and this is where those tokens get
                         // consumed and propagated to their preceding numerical
@@ -144,7 +161,7 @@ pub(crate) fn build_parsed_datetime_interval(
                     }
                 }
                 // Allow resolution of final part using ambiguous_resolver.
-                None => Some(IntervalPartFormat::PostgreSQL(ambiguous_resolver)),
+                None => Some(TimePartFormat::PostgreSQL(ambiguous_resolver)),
             }
         }
         match fmt {
@@ -154,8 +171,8 @@ pub(crate) fn build_parsed_datetime_interval(
             }),
             None => {
                 return parser_err!(
-                    "Invalid: INTERVAL '{}'; cannot determine format of all parts. Add \
-                     explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY.",
+                    "Invalid INTERVAL '{}': cannot determine format of all parts. Add \
+                     explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
                     value
                 )
             }
@@ -164,82 +181,14 @@ pub(crate) fn build_parsed_datetime_interval(
 
     for ap in annotated_parts {
         match ap.fmt {
-            IntervalPartFormat::SQLStandard(f) => {
+            TimePartFormat::SQLStandard(f) => {
                 fill_pdt_sql_standard(&ap.tokens, f, value, &mut pdt)?
             }
-            IntervalPartFormat::PostgreSQL(f) => fill_pdt_pg(&ap.tokens, f, value, &mut pdt)?,
+            TimePartFormat::PostgreSQL(f) => fill_pdt_pg(&ap.tokens, f, value, &mut pdt)?,
         }
     }
 
     Ok(pdt)
-}
-
-/// Determines the format of the interval part (uses None to identify an
-/// indeterminant/ambiguous format). IntervalPartFormat also encodes the greatest
-/// DateTimeField in the token. This is necessary because the interval string
-/// format is not LL(1); we instead parse as few tokens as possible to generate
-/// the string's semantics.
-fn determine_format_w_datetimefield(
-    toks: &[TimeStrToken],
-    interval_str: &str,
-) -> Result<Option<IntervalPartFormat>, ParserError> {
-    use DateTimeField::*;
-    use IntervalPartFormat::*;
-    use TimeStrToken::*;
-
-    let mut toks = toks.iter().peekable();
-
-    trim_interval_chars_return_sign(&mut toks);
-
-    if let Some(Num(_)) = toks.peek() {
-        toks.next();
-    }
-
-    match toks.next() {
-        // Implies {?}{?}{?}, ambiguous case.
-        None => Ok(None),
-        Some(Dot) => {
-            if let Some(Num(_)) = toks.peek() {
-                toks.next();
-            }
-            match toks.peek() {
-                // Implies {Num.NumTimeUnit}
-                Some(TimeUnit(f)) => Ok(Some(PostgreSQL(*f))),
-                // Implies {?}{?}{?}, ambiguous case.
-                _ => Ok(None),
-            }
-        }
-        // Implies {Y-...}{}{}
-        Some(Dash) => Ok(Some(SQLStandard(Year))),
-        // Implies {}{}{?:...}
-        Some(Colon) => {
-            if let Some(Num(_)) = toks.peek() {
-                toks.next();
-            }
-            match toks.peek() {
-                // Implies {H:M:...}
-                Some(Colon) | None => Ok(Some(SQLStandard(Hour))),
-                // Implies {M:S.NS}
-                Some(Dot) => Ok(Some(SQLStandard(Minute))),
-                _ => {
-                    return parser_err!(
-                        "Invalid: INTERVAL '{}': '{}' is not a well formed interval string",
-                        interval_str,
-                        interval_str
-                    )
-                }
-            }
-        }
-        // Implies {Num}?{TimeUnit}
-        Some(TimeUnit(f)) => Ok(Some(PostgreSQL(*f))),
-        _ => {
-            return parser_err!(
-                "Invalid: INTERVAL '{}': '{}' is not a well formed interval string",
-                interval_str,
-                interval_str
-            )
-        }
-    }
 }
 
 /// Fills a ParsedDateTime's fields when encountering SQL standard-style interval
@@ -265,20 +214,20 @@ fn fill_pdt_sql_standard(
         Year | Month => {
             if pdt.year.is_some() || pdt.month.is_some() {
                 return parser_err!(
-                    "Invalid INTERVAL '{}': YEAR or MONTH field set twice.",
+                    "Invalid INTERVAL '{}': YEAR or MONTH field set twice",
                     value
                 );
             }
         }
         Day => {
             if pdt.day.is_some() {
-                return parser_err!("Invalid INTERVAL '{}': DAY field set twice.", value);
+                return parser_err!("Invalid INTERVAL '{}': DAY field set twice", value);
             }
         }
         Hour | Minute | Second => {
             if pdt.hour.is_some() || pdt.minute.is_some() || pdt.second.is_some() {
                 return parser_err!(
-                    "Invalid INTERVAL '{}': HOUR, MINUTE, SECOND field set twice.",
+                    "Invalid INTERVAL '{}': HOUR, MINUTE, SECOND field set twice",
                     value
                 );
             }
@@ -286,14 +235,14 @@ fn fill_pdt_sql_standard(
     }
 
     let mut actual = v.iter().peekable();
-    let expected = potential_sql_standard_interval_tokens(leading_field);
+    let expected = expected_sql_standard_interval_tokens(leading_field);
     let mut expected = expected.iter().peekable();
 
     let sign = trim_interval_chars_return_sign(&mut actual);
 
     if let Err(e) = fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, sign)
     {
-        return parser_err!("Invalid: INTERVAL '{}'; {}", value, e);
+        return parser_err!("Invalid INTERVAL '{}': {}", value, e);
     }
 
     // Do not allow any fields in the group to be modified afterward, and check
@@ -362,43 +311,9 @@ fn fill_pdt_sql_standard(
     Ok(())
 }
 
-/// Get the tokens that you *might* end up parsing starting with a most
-/// significant unit, and ending with a least significant unit.
-/// Space tokens are never actually included in the output, but are
-/// illustrative of what the expected input of SQL Standard interval
-/// values looks like.
-fn potential_sql_standard_interval_tokens(from: DateTimeField) -> Vec<TimeStrToken> {
-    use DateTimeField::*;
-    use TimeStrToken::*;
-
-    let all_toks = [
-        Num(0), // year
-        Dash,
-        Num(0), // month
-        Space,
-        Num(0), // day
-        Space,
-        Num(0), // hour
-        Colon,
-        Num(0), // minute
-        Colon,
-        Num(0), // second
-        Dot,
-        Nanos(0), // Nanos
-    ];
-    let (start, end) = match from {
-        Year => (0, 4),
-        Month => (2, 4),
-        Day => (4, 6),
-        Hour => (6, 13),
-        Minute => (8, 13),
-        Second => (10, 13),
-    };
-    all_toks[start..end].to_vec()
-}
-
-/// Fills a ParsedDateTime's fields when encountering PostgreSQL-style interval
-/// parts, e.g. `1 month 2 days`.
+/// Fills a ParsedDateTime's fields for a single PostgreSQL-style interval
+/// parts, e.g. `1 month`. Invoke this function once for each PostgreSQL-style
+/// interval part.
 ///
 /// Note that:
 /// - This function only meaningfully parses the numerical component of the
@@ -428,31 +343,6 @@ fn fill_pdt_pg(
     }
 
     Ok(())
-}
-
-/// Trims tokens equivalent to regex `(:*(+|-)?)` and returns a value reflecting
-/// the expressed sign: 1 for positive, -1 for negative.
-fn trim_interval_chars_return_sign(
-    z: &mut std::iter::Peekable<std::slice::Iter<'_, TimeStrToken>>,
-) -> i64 {
-    use TimeStrToken::*;
-
-    // PostgreSQL inexplicably trims all leading colons from interval parts.
-    while let Some(Colon) = z.peek() {
-        z.next();
-    }
-
-    match z.peek() {
-        Some(Dash) => {
-            z.next();
-            -1
-        }
-        Some(Plus) => {
-            z.next();
-            1
-        }
-        _ => 1,
-    }
 }
 
 /// Fills the fields of `pdt` using the `actual` tokens, starting at `leading_field`
@@ -505,10 +395,17 @@ fn fill_pdt_from_tokens(
                     actual.next();
                 }
                 (Num(val), Num(_)) => {
-                    unit_buf = Some(DateTimeUnit {
-                        unit: *val * sign,
-                        fraction: 0,
-                    });
+                    match unit_buf {
+                        Some(_) => failure::bail!(
+                            "Invalid syntax; parts must be separated by '-', ':', or ' '"
+                        ),
+                        None => {
+                            unit_buf = Some(DateTimeUnit {
+                                unit: *val * sign,
+                                fraction: 0,
+                            });
+                        }
+                    }
                     actual.next();
                 }
                 (Nanos(val), Nanos(_)) => {
@@ -571,12 +468,9 @@ fn fill_pdt_from_tokens(
                 // having the 'h' token parse if not preceded by a number or
                 // nano position, while still allowing those fields to be
                 // skipped over.
-                (TimeUnit(f), TimeUnit(_)) if unit_buf.is_none() => failure::bail!(
-                    "Invalid syntax at offset {}: {:?} must be preceeded by a number, e.g. '1{:?}'",
-                    i,
-                    f,
-                    f
-                ),
+                (TimeUnit(f), TimeUnit(_)) if unit_buf.is_none() => {
+                    failure::bail!("{:?} must be preceeded by a number, e.g. '1{:?}'", f, f)
+                }
                 (TimeUnit(f), TimeUnit(_)) => {
                     if *f != current_field {
                         failure::bail!(
@@ -612,6 +506,169 @@ fn fill_pdt_from_tokens(
     pdt.write_field_iff_none(current_field, unit_buf)?;
 
     Ok(())
+}
+
+/// Interval strings can be presented in one of two formats:
+/// - SQL Standard, e.g. `1-2 3 4:5:6.7`
+/// - PostgreSQL, e.g. `1 year 2 months 3 days`
+/// TimePartFormat indicates which type of parsing to use and encodes a
+/// DateTimeField, which indicates "where" you should begin parsing the
+/// associated tokens w/r/t their respective syntax.
+#[derive(Debug, Eq, PartialEq, Clone)]
+enum TimePartFormat {
+    SQLStandard(DateTimeField),
+    PostgreSQL(DateTimeField),
+}
+
+/// AnnotatedIntervalPart contains the tokens to be parsed, as well as the format
+/// to parse them.
+struct AnnotatedIntervalPart {
+    pub tokens: std::vec::Vec<TimeStrToken>,
+    pub fmt: TimePartFormat,
+}
+
+/// Determines the format of the interval part (uses None to identify an
+/// indeterminant/ambiguous format). This is necessary because the interval
+/// string format is not LL(1); we instead parse as few tokens as possible to
+/// generate the string's semantics.
+///
+/// Note that `toks` should _not_ contain space
+fn determine_format_w_datetimefield(
+    toks: &[TimeStrToken],
+    interval_str: &str,
+) -> Result<Option<TimePartFormat>, ParserError> {
+    use DateTimeField::*;
+    use TimePartFormat::*;
+    use TimeStrToken::*;
+
+    let mut toks = toks.iter().peekable();
+
+    trim_interval_chars_return_sign(&mut toks);
+
+    if let Some(Num(_)) = toks.peek() {
+        toks.next();
+    }
+
+    match toks.next() {
+        // Implies {?}{?}{?}, ambiguous case.
+        None | Some(Space) => Ok(None),
+        Some(Dot) => {
+            if let Some(Num(_)) = toks.peek() {
+                toks.next();
+            }
+            match toks.peek() {
+                // Implies {Num.NumTimeUnit}
+                Some(TimeUnit(f)) => Ok(Some(PostgreSQL(*f))),
+                // Implies {?}{?}{?}, ambiguous case.
+                _ => Ok(None),
+            }
+        }
+        // Implies {Y-...}{}{}
+        Some(Dash) => Ok(Some(SQLStandard(Year))),
+        // Implies {}{}{?:...}
+        Some(Colon) => {
+            if let Some(Num(_)) = toks.peek() {
+                toks.next();
+            }
+            match toks.peek() {
+                // Implies {H:M:?...}
+                Some(Colon) | Some(Space) | None => Ok(Some(SQLStandard(Hour))),
+                // Implies {M:S.NS}
+                Some(Dot) => Ok(Some(SQLStandard(Minute))),
+                _ => {
+                    return parser_err!(
+                        "Invalid date-time type string '{}': cannot determine format",
+                        interval_str,
+                    )
+                }
+            }
+        }
+        // Implies {Num}?{TimeUnit}
+        Some(TimeUnit(f)) => Ok(Some(PostgreSQL(*f))),
+        _ => {
+            return parser_err!(
+                "Invalid date-time type string '{}': cannot determine format",
+                interval_str,
+            )
+        }
+    }
+}
+
+/// Get the expected TimeStrTokens to parse SQL Standard time-like
+/// DateTimeFields, i.e. HOUR, MINUTE, SECOND. This is used for INTERVAL,
+/// TIMESTAMP, and will eventually be used for TIME.
+fn expected_dur_like_tokens(from: DateTimeField) -> Vec<TimeStrToken> {
+    use DateTimeField::*;
+    use TimeStrToken::*;
+
+    let all_toks = [
+        Num(0), // hour
+        Colon,
+        Num(0), // minute
+        Colon,
+        Num(0), // second
+        Dot,
+        Nanos(0), // Nanos
+    ];
+    let start = match from {
+        Hour => 0,
+        Minute => 2,
+        Second => 4,
+        _ => panic!(
+            "expected_dur_like_tokens can only be called with HOUR, MINUTE, SECOND; got {}",
+            from
+        ),
+    };
+    all_toks[start..all_toks.len()].to_vec()
+}
+
+/// Get the expected TimeStrTokens to parse TimePartFormat::SqlStandard parts,
+/// starting from some `DateTimeField`. Space tokens are never actually included
+/// in the output, but are illustrative of what the expected input of SQL
+/// Standard interval values looks like.
+fn expected_sql_standard_interval_tokens(from: DateTimeField) -> Vec<TimeStrToken> {
+    use DateTimeField::*;
+    use TimeStrToken::*;
+
+    let all_toks = [
+        Num(0), // year
+        Dash,
+        Num(0), // month
+        Space,
+        Num(0), // day
+        Space,
+    ];
+    match from {
+        Year => all_toks[0..4].to_vec(),
+        Month => all_toks[2..4].to_vec(),
+        Day => all_toks[4..6].to_vec(),
+        hms => expected_dur_like_tokens(hms),
+    }
+}
+
+/// Trims tokens equivalent to regex `(:*(+|-)?)` and returns a value reflecting
+/// the expressed sign: 1 for positive, -1 for negative.
+fn trim_interval_chars_return_sign(
+    z: &mut std::iter::Peekable<std::slice::Iter<'_, TimeStrToken>>,
+) -> i64 {
+    use TimeStrToken::*;
+
+    // PostgreSQL inexplicably trims all leading colons from interval parts.
+    while let Some(Colon) = z.peek() {
+        z.next();
+    }
+
+    match z.peek() {
+        Some(Dash) => {
+            z.next();
+            -1
+        }
+        Some(Plus) => {
+            z.next();
+            1
+        }
+        _ => 1,
+    }
 }
 
 /// TimeStrToken represents valid tokens in time-like strings,
@@ -1005,60 +1062,1366 @@ mod test {
     use crate::parser::*;
 
     #[test]
-    fn test_potential_interval_tokens() {
+    fn test_expected_dur_like_tokens() {
         use DateTimeField::*;
         use TimeStrToken::*;
         assert_eq!(
-            potential_sql_standard_interval_tokens(Year),
+            expected_sql_standard_interval_tokens(Hour),
+            vec![Num(0), Colon, Num(0), Colon, Num(0), Dot, Nanos(0)]
+        );
+        assert_eq!(
+            expected_sql_standard_interval_tokens(Minute),
+            vec![Num(0), Colon, Num(0), Dot, Nanos(0)]
+        );
+        assert_eq!(
+            expected_sql_standard_interval_tokens(Second),
+            vec![Num(0), Dot, Nanos(0)]
+        );
+    }
+
+    #[test]
+    fn test_expected_sql_standard_interval_tokens() {
+        use DateTimeField::*;
+        use TimeStrToken::*;
+        assert_eq!(
+            expected_sql_standard_interval_tokens(Year),
             vec![Num(0), Dash, Num(0), Space]
         );
 
         assert_eq!(
-            potential_sql_standard_interval_tokens(Day),
+            expected_sql_standard_interval_tokens(Day),
             vec![Num(0), Space,]
         );
         assert_eq!(
-            potential_sql_standard_interval_tokens(Hour),
+            expected_sql_standard_interval_tokens(Hour),
             vec![Num(0), Colon, Num(0), Colon, Num(0), Dot, Nanos(0)]
         );
     }
     #[test]
     fn test_trim_interval_chars_return_sign() {
-        let s = tokenize_time_str("::::-2").unwrap();
-        let mut s = s.iter().peekable();
+        let test_cases = [
+            ("::::-2", -1, "2"),
+            ("-3", -1, "3"),
+            ("::::+4", 1, "4"),
+            ("+5", 1, "5"),
+            ("-::::", -1, ":"),
+            ("-YEAR", -1, "YEAR"),
+            ("YEAR", 1, "YEAR"),
+        ];
 
-        assert_eq!(trim_interval_chars_return_sign(&mut s), -1);
-        assert_eq!(**s.peek().unwrap(), tokenize_time_str("2").unwrap()[0]);
+        for test in test_cases.iter() {
+            let s = tokenize_time_str(test.0).unwrap();
+            let mut s = s.iter().peekable();
 
-        let s = tokenize_time_str("-3").unwrap();
-        let mut s = s.iter().peekable();
+            assert_eq!(trim_interval_chars_return_sign(&mut s), test.1);
+            assert_eq!(**s.peek().unwrap(), tokenize_time_str(test.2).unwrap()[0]);
+        }
+    }
+    #[test]
+    fn test_determine_format_w_datetimefield() {
+        use DateTimeField::*;
+        use TimePartFormat::*;
 
-        assert_eq!(trim_interval_chars_return_sign(&mut s), -1);
-        assert_eq!(**s.peek().unwrap(), tokenize_time_str("3").unwrap()[0]);
+        let test_cases = [
+            ("1-2 3", Some(SQLStandard(Year))),
+            ("4:5", Some(SQLStandard(Hour))),
+            ("4:5.6", Some(SQLStandard(Minute))),
+            ("-4:5.6", Some(SQLStandard(Minute))),
+            ("+4:5.6", Some(SQLStandard(Minute))),
+            ("year", Some(PostgreSQL(Year))),
+            ("4year", Some(PostgreSQL(Year))),
+            ("-4year", Some(PostgreSQL(Year))),
+            ("5", None),
+            ("5.6", None),
+            ("3 4:5:6.7", None),
+        ];
 
-        let s = tokenize_time_str("::::+4").unwrap();
-        let mut s = s.iter().peekable();
+        for test in test_cases.iter() {
+            let s = tokenize_time_str(test.0).unwrap();
 
-        assert_eq!(trim_interval_chars_return_sign(&mut s), 1);
-        assert_eq!(**s.peek().unwrap(), tokenize_time_str("4").unwrap()[0]);
+            match (
+                determine_format_w_datetimefield(&s, test.0).unwrap(),
+                test.1.as_ref(),
+            ) {
+                (Some(a), Some(b)) => {
+                    if a != *b {
+                        panic!(
+                            "determine_format_w_datetimefield returned {:?}, expected {:?}",
+                            a, b,
+                        )
+                    }
+                }
+                (None, None) => {}
+                (x, y) => panic!(
+                    "determine_format_w_datetimefield returned {:?}, expected {:?}",
+                    x, y,
+                ),
+            }
+        }
+    }
+    #[test]
+    fn test_determine_format_w_datetimefield_error() {
+        let test_cases = [
+            (
+                "1+2",
+                "sql parser error: Invalid date-time type string '1+2': cannot determine format",
+            ),
+            (
+                "1:2+3",
+                "sql parser error: Invalid date-time type string '1:2+3': cannot determine format",
+            ),
+            (
+                "1:1YEAR2",
+                "sql parser error: Invalid date-time type string '1:1YEAR2': cannot determine format",
+            ),
+        ];
 
-        let s = tokenize_time_str("+5").unwrap();
-        let mut s = s.iter().peekable();
+        for test in test_cases.iter() {
+            let s = tokenize_time_str(test.0).unwrap();
+            match determine_format_w_datetimefield(&s, test.0) {
+                Err(e) => assert_eq!(e.to_string(), test.1),
+                Ok(f) => panic!(
+                    "Test passed when expected to fail: {}, generated {:?}",
+                    test.0, f
+                ),
+            };
+        }
+    }
 
-        assert_eq!(trim_interval_chars_return_sign(&mut s), 1);
-        assert_eq!(**s.peek().unwrap(), tokenize_time_str("5").unwrap()[0]);
+    #[test]
+    fn test_fill_pdt_from_tokens() {
+        use DateTimeField::*;
+        let test_cases = [
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 0)),
+                    ..Default::default()
+                },
+                "1 2 3 4 5 6",
+                "0 0 0 0 0 0",
+                Year,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(4, 0)),
+                    hour: Some(DateTimeUnit::new(5, 0)),
+                    minute: Some(DateTimeUnit::new(6, 0)),
+                    ..Default::default()
+                },
+                "4 5 6",
+                "0 0 0",
+                Day,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(-4, 0)),
+                    hour: Some(DateTimeUnit::new(-5, 0)),
+                    minute: Some(DateTimeUnit::new(-6, 0)),
+                    ..Default::default()
+                },
+                "4 5 6",
+                "0 0 0",
+                Day,
+                -1,
+            ),
+            // Mixed delimeter parsing
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 0)),
+                    ..Default::default()
+                },
+                "1-2:3-4 5 6",
+                "0-0:0-0 0 0",
+                Year,
+                1,
+            ),
+            // Skip an element at the end
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(5, 0)),
+                    minute: Some(DateTimeUnit::new(6, 0)),
+                    ..Default::default()
+                },
+                "1 2 3 5 6",
+                "0 0 0 0 0 0",
+                Year,
+                1,
+            ),
+            // Skip an element w/ non-space parsing
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 0)),
+                    ..Default::default()
+                },
+                "1-2:3- 5 6",
+                "0-0:0-0 0 0",
+                Year,
+                1,
+            ),
+            // Get Nanos from tokenizer
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    ..Default::default()
+                },
+                "1-2:3-4 5 6.7",
+                "0-0:0-0 0 0.0",
+                Year,
+                1,
+            ),
+            // Proper fraction/nano conversion anywhere
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 200_000_000)),
+                    ..Default::default()
+                },
+                "1.2",
+                "0.0",
+                Year,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    minute: Some(DateTimeUnit::new(1, 200_000_000)),
+                    ..Default::default()
+                },
+                "1.2",
+                "0.0",
+                Minute,
+                1,
+            ),
+            // Parse TimeUnit
+            (
+                ParsedDateTime {
+                    month: Some(DateTimeUnit::new(3, 0)),
+                    ..Default::default()
+                },
+                "3MONTHS",
+                "0YEAR",
+                Month,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    ..Default::default()
+                },
+                "1MONTHS 2DAYS 3HOURS",
+                "0YEAR 0YEAR 0YEAR",
+                Month,
+                1,
+            ),
+            (
+                ParsedDateTime {
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "1MONTHS-2",
+                "0YEAR-0",
+                Month,
+                1,
+            ),
+        ];
+        for test in test_cases.iter() {
+            let mut pdt = ParsedDateTime::default();
+            let actual = tokenize_time_str(test.1).unwrap();
+            let mut actual = actual.iter().peekable();
+            let expected = tokenize_time_str(test.2).unwrap();
+            let mut expected = expected.iter().peekable();
 
-        let s = tokenize_time_str("-::::").unwrap();
-        let mut s = s.iter().peekable();
+            fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.3, test.4).unwrap();
 
-        assert_eq!(trim_interval_chars_return_sign(&mut s), -1);
-        assert_eq!(**s.peek().unwrap(), tokenize_time_str(":").unwrap()[0]);
+            assert_eq!(pdt, test.0);
+        }
+    }
 
-        let s = tokenize_time_str("-YEAR").unwrap();
-        let mut s = s.iter().peekable();
+    #[test]
+    fn test_fill_pdt_from_tokens_errors() {
+        use DateTimeField::*;
+        let test_cases = [
+            // Mismatched syntax
+            (
+                "1 2 3",
+                "0-0 0",
+                Year,
+                1,
+                "Invalid syntax at offset 1: provided Space but expected Dash",
+            ),
+            // If you have Nanos, you cannot convert to Num.
+            (
+                "1 2.3",
+                "0 0.0YEAR",
+                Year,
+                1,
+                "Invalid syntax at offset 5: provided Nanos(300000000) but expected TimeUnit(Year)",
+            ),
+        ];
+        for test in test_cases.iter() {
+            let mut pdt = ParsedDateTime::default();
+            let actual = tokenize_time_str(test.0).unwrap();
+            let mut actual = actual.iter().peekable();
+            let expected = tokenize_time_str(test.1).unwrap();
+            let mut expected = expected.iter().peekable();
 
-        assert_eq!(trim_interval_chars_return_sign(&mut s), -1);
-        assert_eq!(**s.peek().unwrap(), tokenize_time_str("YEAR").unwrap()[0]);
+            match fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.2, test.3) {
+                Err(e) => assert_eq!(e.to_string(), test.4),
+                Ok(_) => panic!(
+                    "Test passed when expected to fail, generated ParsedDateTime {:?}",
+                    pdt
+                ),
+            };
+        }
+    }
+    #[test]
+    #[should_panic(expected = "Cannot get smaller DateTimeField than SECOND")]
+    fn test_fill_pdt_from_tokens_panic() {
+        use DateTimeField::*;
+        let test_cases = [
+            // Mismatched syntax
+            ("1 2", "0 0", Second, 1),
+        ];
+        for test in test_cases.iter() {
+            let mut pdt = ParsedDateTime::default();
+            let actual = tokenize_time_str(test.0).unwrap();
+            let mut actual = actual.iter().peekable();
+            let expected = tokenize_time_str(test.1).unwrap();
+            let mut expected = expected.iter().peekable();
+
+            match fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.2, test.3) {
+                Err(_) => {}
+                Ok(_) => {}
+            };
+        }
+    }
+
+    #[test]
+    fn test_fill_pdt_pg() {
+        use DateTimeField::*;
+        let test_cases = [
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "2",
+                Year,
+            ),
+            (
+                ParsedDateTime {
+                    month: Some(DateTimeUnit::new(2, 300_000_000)),
+                    ..Default::default()
+                },
+                "2.3",
+                Month,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    ..Default::default()
+                },
+                "-2.3",
+                Day,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "2",
+                Hour,
+            ),
+            (
+                ParsedDateTime {
+                    minute: Some(DateTimeUnit::new(2, 300_000_000)),
+                    ..Default::default()
+                },
+                "2.3",
+                Minute,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    ..Default::default()
+                },
+                "-2.3",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "2year",
+                Year,
+            ),
+            (
+                ParsedDateTime {
+                    month: Some(DateTimeUnit::new(2, 300_000_000)),
+                    ..Default::default()
+                },
+                "2.3month",
+                Month,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    ..Default::default()
+                },
+                "-2.3day",
+                Day,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "2hour",
+                Hour,
+            ),
+            (
+                ParsedDateTime {
+                    minute: Some(DateTimeUnit::new(2, 300_000_000)),
+                    ..Default::default()
+                },
+                "2.3minute",
+                Minute,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    ..Default::default()
+                },
+                "-2.3second",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    ..Default::default()
+                },
+                ":::::::::-2.3second",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeUnit::new(2, 300_000_000)),
+                    ..Default::default()
+                },
+                ":::::::::+2.3second",
+                Second,
+            ),
+        ];
+        for test in test_cases.iter() {
+            let mut pdt = ParsedDateTime::default();
+            let mut actual = tokenize_time_str(test.1).unwrap();
+            fill_pdt_pg(&mut actual, test.2, test.1, &mut pdt).unwrap();
+
+            assert_eq!(pdt, test.0);
+        }
+    }
+
+    #[test]
+    fn fill_pdt_pg_errors() {
+        use DateTimeField::*;
+        let test_cases = [
+            // Invalid syntax
+            (
+                "1.2.",
+                Month,
+                "sql parser error: Invalid INTERVAL \'1.2.\': Invalid syntax at offset 3: \
+                 provided Dot but expected TimeUnit(Year)",
+            ),
+            (
+                "YEAR",
+                Year,
+                "sql parser error: Invalid INTERVAL \'YEAR\': Year must be preceeded \
+                 by a number, e.g. \'1Year\'",
+            ),
+            // Running into this error means that determine_format_w_datetimefield
+            // failed.
+            (
+                "1YEAR",
+                Month,
+                "sql parser error: Invalid INTERVAL \'1YEAR\': Invalid syntax at offset \
+                 3: provided Month but expected Year\'",
+            ),
+        ];
+        for test in test_cases.iter() {
+            let mut pdt = ParsedDateTime::default();
+            let mut actual = tokenize_time_str(test.0).unwrap();
+            match fill_pdt_pg(&mut actual, test.1, test.0, &mut pdt) {
+                Err(e) => assert_eq!(e.to_string(), test.2),
+                Ok(_) => panic!(
+                    "Test passed when expected to fail, generated ParsedDateTime {:?}",
+                    pdt
+                ),
+            };
+        }
+    }
+
+    #[test]
+    fn test_fill_pdt_sql_standard() {
+        use DateTimeField::*;
+        let test_cases = [
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "1-2",
+                Year,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(1, 0)),
+                    minute: Some(DateTimeUnit::new(2, 0)),
+                    second: Some(DateTimeUnit::new(3, 400_000_000)),
+                    ..Default::default()
+                },
+                "1:2:3.4",
+                Hour,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(1, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(3, 400_000_000)),
+                    ..Default::default()
+                },
+                "1::3.4",
+                Hour,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(1, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 400_000_000)),
+                    ..Default::default()
+                },
+                "1::.4",
+                Hour,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(0, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 400_000_000)),
+                    ..Default::default()
+                },
+                ".4",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(0, 0)),
+                    minute: Some(DateTimeUnit::new(1, 0)),
+                    second: Some(DateTimeUnit::new(2, 300_000_000)),
+                    ..Default::default()
+                },
+                "1:2.3",
+                Minute,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(-1, 0)),
+                    month: Some(DateTimeUnit::new(-2, 0)),
+                    ..Default::default()
+                },
+                "-1-2",
+                Year,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(-1, 0)),
+                    minute: Some(DateTimeUnit::new(-2, 0)),
+                    second: Some(DateTimeUnit::new(-3, -400_000_000)),
+                    ..Default::default()
+                },
+                "-1:2:3.4",
+                Hour,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "+1-2",
+                Year,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(1, 0)),
+                    minute: Some(DateTimeUnit::new(2, 0)),
+                    second: Some(DateTimeUnit::new(3, 400_000_000)),
+                    ..Default::default()
+                },
+                "+1:2:3.4",
+                Hour,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(-1, 0)),
+                    month: Some(DateTimeUnit::new(-2, 0)),
+                    ..Default::default()
+                },
+                "::::::-1-2",
+                Year,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(-1, 0)),
+                    minute: Some(DateTimeUnit::new(-2, 0)),
+                    second: Some(DateTimeUnit::new(-3, -400_000_000)),
+                    ..Default::default()
+                },
+                ":::::::-1:2:3.4",
+                Hour,
+            ),
+        ];
+        for test in test_cases.iter() {
+            let mut pdt = ParsedDateTime::default();
+            let mut actual = tokenize_time_str(test.1).unwrap();
+            fill_pdt_sql_standard(&mut actual, test.2, test.1, &mut pdt).unwrap();
+
+            assert_eq!(pdt, test.0);
+        }
+    }
+
+    #[test]
+    fn fill_pdt_sql_standard_errors() {
+        use DateTimeField::*;
+        let test_cases = [
+            // Invalid syntax
+            (
+                "1.2",
+                Year,
+                "sql parser error: Invalid INTERVAL \'1.2\': Invalid syntax at \
+                 offset 1: provided Dot but expected Dash",
+            ),
+            (
+                "1-2:3.4",
+                Minute,
+                "sql parser error: Invalid INTERVAL \'1-2:3.4\': Invalid syntax at \
+                 offset 1: provided Dash but expected Colon",
+            ),
+            (
+                "1:2.2.",
+                Minute,
+                "sql parser error: Invalid INTERVAL \'1:2.2.\': Invalid syntax at \
+                 offset 5: provided Dot but expected None",
+            ),
+            (
+                "1YEAR",
+                Year,
+                "sql parser error: Invalid INTERVAL \'1YEAR\': Invalid syntax at \
+                 offset 1: provided TimeUnit(Year) but expected Dash",
+            ),
+        ];
+        for test in test_cases.iter() {
+            let mut pdt = ParsedDateTime::default();
+            let mut actual = tokenize_time_str(test.0).unwrap();
+            match fill_pdt_sql_standard(&mut actual, test.1, test.0, &mut pdt) {
+                Err(e) => assert_eq!(e.to_string(), test.2),
+                Ok(_) => panic!(
+                    "Test passed when expected to fail, generated ParsedDateTime {:?}",
+                    pdt
+                ),
+            };
+        }
+    }
+
+    #[test]
+    fn test_build_parsed_datetime_timestamp() {
+        let test_cases = [
+            (
+                "2000-01-02",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000-01-02 3:4:5.6",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000 3:4:5.6",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000-1 3:4:5.6",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000-1- 3:4:5.6",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000-01-02 3:4",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000-01-02 3:4.5",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    minute: Some(DateTimeUnit::new(3, 0)),
+                    second: Some(DateTimeUnit::new(4, 500_000_000)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000-01-02 0::4.5",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(4, 500_000_000)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000-01-02 0::.5",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 500_000_000)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "2000-1- 0::.5",
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(2000, 0)),
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    hour: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 500_000_000)),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for test in test_cases.iter() {
+            assert_eq!(build_parsed_datetime_timestamp(test.0), Ok(test.1.clone()));
+        }
+    }
+
+    #[test]
+    fn test_build_parsed_datetime_interval() {
+        use DateTimeField::*;
+        let test_cases = [
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    ..Default::default()
+                },
+                "1-2 3 4:5:6.7",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    ..Default::default()
+                },
+                "1 year 2 months 3 days 4 hours 5 minutes 6.7 seconds",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeUnit::new(1, 0)),
+                    ..Default::default()
+                },
+                "1",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(1, 0)),
+                    ..Default::default()
+                },
+                "1",
+                Day,
+            ),
+            (
+                ParsedDateTime {
+                    month: Some(DateTimeUnit::new(1, 0)),
+                    ..Default::default()
+                },
+                "1",
+                Month,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(1, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                "1:",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                "1-",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(1, 0)),
+                    hour: Some(DateTimeUnit::new(2, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                "1 2:",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                "1-2 3:4",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(0, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                "1- 2 3:",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(5, 0)),
+                    month: Some(DateTimeUnit::new(6, 0)),
+                    hour: Some(DateTimeUnit::new(1, 0)),
+                    minute: Some(DateTimeUnit::new(2, 0)),
+                    second: Some(DateTimeUnit::new(3, 400_000_000)),
+                    ..Default::default()
+                },
+                "1:2:3.4 5-6",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    ..Default::default()
+                },
+                "1-2 3",
+                Hour,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(-1, 0)),
+                    month: Some(DateTimeUnit::new(-2, 0)),
+                    day: Some(DateTimeUnit::new(-3, 0)),
+                    hour: Some(DateTimeUnit::new(-4, 0)),
+                    minute: Some(DateTimeUnit::new(-5, 0)),
+                    second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                    ..Default::default()
+                },
+                "-1-2 -3 -4:5:6.7",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(-1, 0)),
+                    month: Some(DateTimeUnit::new(-2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(-4, 0)),
+                    minute: Some(DateTimeUnit::new(-5, 0)),
+                    second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                    ..Default::default()
+                },
+                "-1-2 3 -4:5:6.7",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(-1, 0)),
+                    month: Some(DateTimeUnit::new(-2, 0)),
+                    day: Some(DateTimeUnit::new(-3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 500_000_000)),
+                    ..Default::default()
+                },
+                "-1-2 -3 4::.5",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    hour: Some(DateTimeUnit::new(0, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(-1, -270_000_000)),
+                    ..Default::default()
+                },
+                "-::1.27",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    second: Some(DateTimeUnit::new(1, 270_000_000)),
+                    ..Default::default()
+                },
+                ":::::1.27",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(0, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(0, 0)),
+                    second: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                ":::1- ::2 ::::3:",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    ..Default::default()
+                },
+                "1 years 2 months 3 days 4 hours 5 minutes 6.7 seconds",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    ..Default::default()
+                },
+                "1y 2mon 3d 4h 5m 6.7s",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    ..Default::default()
+                },
+                "6.7 seconds 5 minutes 3 days 4 hours 1 year 2 month",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(-1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(-3, 0)),
+                    hour: Some(DateTimeUnit::new(4, 0)),
+                    minute: Some(DateTimeUnit::new(5, 0)),
+                    second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                    ..Default::default()
+                },
+                "-6.7 seconds 5 minutes -3 days 4 hours -1 year 2 month",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 300_000_000)),
+                    day: Some(DateTimeUnit::new(4, 500_000_000)),
+                    ..Default::default()
+                },
+                "1y 2.3mon 4.5d",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(-1, -200_000_000)),
+                    month: Some(DateTimeUnit::new(2, 300_000_000)),
+                    day: Some(DateTimeUnit::new(-3, -400_000_000)),
+                    hour: Some(DateTimeUnit::new(4, 500_000_000)),
+                    minute: Some(DateTimeUnit::new(5, 600_000_000)),
+                    second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                    ..Default::default()
+                },
+                "-6.7 seconds 5.6 minutes -3.4 days 4.5 hours -1.2 year 2.3 month",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(1, 0)),
+                    second: Some(DateTimeUnit::new(0, -270_000_000)),
+                    ..Default::default()
+                },
+                "1 day -0.27 seconds",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(-1, 0)),
+                    second: Some(DateTimeUnit::new(0, 270_000_000)),
+                    ..Default::default()
+                },
+                "-1 day 0.27 seconds",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(10, 333_000_000)),
+                    ..Default::default()
+                },
+                "10.333 years",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(10, 333_000_000)),
+                    ..Default::default()
+                },
+                "10.333",
+                Year,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(5, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                "1-2 3:4 5 day",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(5, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                "5 day 3:4 1-2",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    day: Some(DateTimeUnit::new(5, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(0, 0)),
+                    ..Default::default()
+                },
+                "1-2 5 day 3:4",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeUnit::new(3, 0)),
+                    minute: Some(DateTimeUnit::new(4, 0)),
+                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    ..Default::default()
+                },
+                "+1 year +2 days +3:4:5.6",
+                Second,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "1-2",
+                Month,
+            ),
+            (
+                ParsedDateTime {
+                    year: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeUnit::new(2, 0)),
+                    ..Default::default()
+                },
+                "1-2",
+                Minute,
+            ),
+            (
+                ParsedDateTime {
+                    day: Some(DateTimeUnit::new(1, 999_999_999)),
+                    ..Default::default()
+                },
+                "1.999999999999999999 days",
+                Second,
+            ),
+        ];
+
+        for test in test_cases.iter() {
+            let actual = build_parsed_datetime_interval(test.1, test.2);
+            if actual != Ok(test.0.clone()) {
+                panic!(
+                    "In test INTERVAL '{}' {}\n actual: {:?} \n expected: {:?}",
+                    test.1, test.2, actual, test.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_parsed_datetime_interval_errors() {
+        use DateTimeField::*;
+        let test_cases = [
+            (
+                "1 year 2 years",
+                Second,
+                "sql parser error: Invalid INTERVAL '1 year 2 years': YEAR field \
+                set twice",
+            ),
+            (
+                "1-2 3-4",
+                Second,
+                "sql parser error: Invalid INTERVAL '1-2 3-4': YEAR or MONTH field \
+                set twice",
+            ),
+            (
+                "1-2 3 year",
+                Second,
+                "sql parser error: Invalid INTERVAL '1-2 3 year': YEAR field set twice",
+            ),
+            (
+                "1-2 3",
+                Month,
+                "sql parser error: Invalid INTERVAL '1-2 3': MONTH field set twice",
+            ),
+            (
+                "1-2 3:4 5",
+                Second,
+                "sql parser error: Invalid INTERVAL '1-2 3:4 5': SECOND field set twice",
+            ),
+            (
+                "1:2:3.4 5-6 7",
+                Year,
+                "sql parser error: Invalid INTERVAL '1:2:3.4 5-6 7': YEAR field set twice",
+            ),
+            (
+                "-:::::1.27",
+                Second,
+                "sql parser error: Invalid INTERVAL '-:::::1.27': Invalid syntax at \
+                offset 7: provided Colon but expected None",
+            ),
+            (
+                "-1 ::.27",
+                Second,
+                "sql parser error: Invalid INTERVAL '-1 ::.27': cannot determine format of all parts. \
+                Add explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
+            ),
+            (
+                "100-13",
+                Second,
+                "sql parser error: Invalid INTERVAL '100-13': MONTH field out range; must be < 12, have 13",
+            ),
+            (
+                "100-11 366 250:61",
+                Second,
+                "sql parser error: Invalid INTERVAL '100-11 366 250:61': MINUTE field out range; \
+                must be < 60, have 61",
+            ),
+            (
+                "100-11 366 250:59:61",
+                Second,
+                "sql parser error: Invalid INTERVAL '100-11 366 250:59:61': SECOND field out range; \
+                must be < 60, have 61",
+            ),
+            (
+                "1:2:3.4.5",
+                Second,
+                "sql parser error: Invalid INTERVAL '1:2:3.4.5': Invalid syntax at offset 7: provided \
+                Dot but expected None",
+            ),
+            (
+                "1+2:3.4",
+                Second,
+                "sql parser error: Invalid date-time type string '1+2:3.4': cannot determine format",
+            ),
+            (
+                "1x2:3.4",
+                Second,
+                "sql parser error: invalid DateTimeField: X",
+            ),
+            (
+                "0 foo",
+                Second,
+                "sql parser error: invalid DateTimeField: FOO",
+            ),
+            (
+                "1-2 hour",
+                Second,
+                "sql parser error: Invalid INTERVAL '1-2 hour': Hour must be preceeded by a number, e.g. '1Hour'",
+            ),
+            (
+                "1-2hour",
+                Second,
+                "sql parser error: Invalid INTERVAL '1-2hour': Invalid syntax at offset 3: provided TimeUnit(Hour) \
+                but expected Space",
+            ),
+            (
+                "1-2 3:4 5 second",
+                Second,
+                "sql parser error: Invalid INTERVAL '1-2 3:4 5 second': SECOND field set twice",
+            ),
+            (
+                "1-2 5 second 3:4",
+                Second,
+                "sql parser error: Invalid INTERVAL '1-2 5 second 3:4': HOUR, MINUTE, SECOND field set twice",
+            ),
+            (
+                "1 2-3 4:5",
+                Day,
+                "sql parser error: Invalid INTERVAL '1 2-3 4:5': cannot determine format of all parts. Add \
+                explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
+            ),
+            (
+                "9223372036854775808 months",
+                Day,
+                "sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type",
+            ),
+            (
+                "-9223372036854775808 months",
+                Day,
+                "sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type",
+            ),
+            (
+                "9223372036854775808 seconds",
+                Day,
+                "sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type",
+            ),
+            (
+                "-9223372036854775808 seconds",
+                Day,
+                "sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type",
+            ),
+        ];
+        for test in test_cases.iter() {
+            match build_parsed_datetime_interval(test.0, test.1) {
+                Err(e) => assert_eq!(e.to_string(), test.2),
+                Ok(pdt) => panic!(
+                    "Test INTERVAL '{}' {} passed when expected to fail with {}, generated ParsedDateTime {:?}",
+                    test.0,
+                    test.1,
+                    test.2,
+                    pdt,
+                ),
+            }
+        }
     }
 
     #[test]

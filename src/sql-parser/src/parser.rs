@@ -576,8 +576,8 @@ impl Parser {
                     return parser_err!("Day in timestamp '{}' cannot be zero: {}", value, day);
                 }
 
-                let (hour, minute, second, nano) = match (hour, minute, second) {
-                    (Some(hour), Some(minute), Some(second)) => {
+                let hour = match hour {
+                    Some(hour) => {
                         let hour: u8 = hour.unit.try_into().map_err(|e| p_err(e, "Hour"))?;
                         if hour > 23 {
                             return parser_err!(
@@ -586,6 +586,13 @@ impl Parser {
                                 hour
                             );
                         }
+                        hour
+                    }
+                    None => 0,
+                };
+
+                let minute = match minute {
+                    Some(minute) => {
                         let minute: u8 = minute.unit.try_into().map_err(|e| p_err(e, "Minute"))?;
                         if minute > 59 {
                             return parser_err!(
@@ -594,7 +601,13 @@ impl Parser {
                                 minute
                             );
                         }
+                        minute
+                    }
+                    None => 0,
+                };
 
+                let (second, nano) = match second {
+                    Some(second) => {
                         let nano: u32 = second
                             .fraction
                             .try_into()
@@ -607,14 +620,10 @@ impl Parser {
                                 second
                             );
                         }
-                        (hour, minute, second, nano)
+
+                        (second, nano)
                     }
-                    (None, None, None) => (0, 0, 0, 0),
-                    _ => {
-                        return parser_err!(
-                        "Hour, minute, and second fields must all be specified or all be omitted"
-                    )
-                    }
+                    None => (0, 0),
                 };
 
                 if parse_timezone {

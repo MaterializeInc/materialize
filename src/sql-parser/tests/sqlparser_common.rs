@@ -1284,20 +1284,6 @@ fn parse_literal_date() {
         expr_from_projection(only(&select.projection)),
     );
 
-    let sql = "SELECT DATE '0-01-01'";
-    let select = verified_only_select(sql);
-    assert_eq!(
-        &Expr::Value(Value::Date(
-            "0-01-01".into(),
-            ParsedDate {
-                year: 0,
-                month: 1,
-                day: 1,
-            }
-        )),
-        expr_from_projection(only(&select.projection)),
-    );
-
     let sql = "SELECT DATE '1-1-1 2'";
     let select = verified_only_select(sql);
     assert_eq!(
@@ -1313,19 +1299,24 @@ fn parse_literal_date() {
     );
 
     assert_eq!(
-        ParserError::ParserError(
-            "Month in date \'0-00-00\' must be a number between 1 and 12, got: 0".into()
-        ),
+        ParserError::ParserError("YEAR in DATE \'0-00-00\' cannot be zero.".into()),
         parse_sql_statements("SELECT DATE '0-00-00'").unwrap_err(),
-    );
-    assert_eq!(
-        ParserError::ParserError("Day in date \'0-01-00\' cannot be zero".into()),
-        parse_sql_statements("SELECT DATE '0-01-00'").unwrap_err(),
     );
 
     assert_eq!(
         ParserError::ParserError(
-            "Invalid DATE/TIME \'-1-01-01\'; Invalid syntax at offset 5: provided Dash but expected Space".into()
+            "MONTH in DATE \'1-00-00\' must be a number between 1 and 12, got: 0".into()
+        ),
+        parse_sql_statements("SELECT DATE '1-00-00'").unwrap_err(),
+    );
+    assert_eq!(
+        ParserError::ParserError("DAY in DATE \'1-01-00\' cannot be zero".into()),
+        parse_sql_statements("SELECT DATE '1-01-00'").unwrap_err(),
+    );
+
+    assert_eq!(
+        ParserError::ParserError(
+            "Invalid DATE/TIME \'-1-01-01\'; Invalid syntax at offset 5: provided Dash but expected None".into()
         ),
         parse_sql_statements("SELECT DATE '-1-01-01'").unwrap_err(),
     );
@@ -1458,8 +1449,7 @@ fn parse_literal_interval_monthlike() {
     // which sets fractional parts to 0.
     let mut iv = IntervalValue::default();
     iv.value = "1".into();
-    iv.parsed.year = Some(1);
-    iv.parsed.year_frac = Some(0);
+    iv.parsed.year = Some(DateTimeUnit::new(1, 0));
     iv.precision_low = DateTimeField::Year;
     verify_interval(
         "SELECT INTERVAL '1' YEAR",
@@ -1485,8 +1475,7 @@ fn parse_literal_interval_monthlike() {
 
     let mut iv = IntervalValue::default();
     iv.value = "1".into();
-    iv.parsed.month = Some(1);
-    iv.parsed.month_frac = Some(0);
+    iv.parsed.month = Some(DateTimeUnit::new(1, 0));
     iv.precision_low = DateTimeField::Month;
     verify_interval(
         "SELECT INTERVAL '1' MONTH",
@@ -1511,10 +1500,8 @@ fn parse_literal_interval_monthlike() {
     );
     let mut iv = IntervalValue::default();
     iv.value = "1-1".into();
-    iv.parsed.year = Some(1);
-    iv.parsed.year_frac = Some(0);
-    iv.parsed.month = Some(1);
-    iv.parsed.month_frac = Some(0);
+    iv.parsed.year = Some(DateTimeUnit::new(1, 0));
+    iv.parsed.month = Some(DateTimeUnit::new(1, 0));
     verify_interval(
         "SELECT INTERVAL '1-1'",
         iv.clone(),
@@ -1546,8 +1533,7 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "10".into(),
             parsed: ParsedDateTime {
-                day: Some(10),
-                day_frac: Some(0),
+                day: Some(DateTimeUnit::new(10, 0)),
                 ..dflt()
             },
             precision_low: Day,
@@ -1565,8 +1551,7 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "10".into(),
             parsed: ParsedDateTime {
-                hour: Some(10),
-                hour_frac: Some(0),
+                hour: Some(DateTimeUnit::new(10, 0)),
                 ..dflt()
             },
             precision_low: Hour,
@@ -1584,8 +1569,7 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "10".into(),
             parsed: ParsedDateTime {
-                minute: Some(10),
-                minute_frac: Some(0),
+                minute: Some(DateTimeUnit::new(10, 0)),
                 ..dflt()
             },
             precision_low: Minute,
@@ -1603,8 +1587,7 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "10".into(),
             parsed: ParsedDateTime {
-                second: Some(10),
-                nano: Some(0),
+                second: Some(DateTimeUnit::new(10, 0)),
                 ..dflt()
             },
             ..Default::default()
@@ -1621,8 +1604,7 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "0.01".into(),
             parsed: ParsedDateTime {
-                second: Some(0),
-                nano: Some(10_000_000),
+                second: Some(DateTimeUnit::new(0, 10_000_000)),
                 ..dflt()
             },
             ..Default::default()
@@ -1639,14 +1621,10 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "1 1:1:1.1".to_string(),
             parsed: ParsedDateTime {
-                day: Some(1),
-                day_frac: Some(0),
-                hour: Some(1),
-                hour_frac: Some(0),
-                minute: Some(1),
-                minute_frac: Some(0),
-                second: Some(1),
-                nano: Some(100_000_000),
+                day: Some(DateTimeUnit::new(1, 0)),
+                hour: Some(DateTimeUnit::new(1, 0)),
+                minute: Some(DateTimeUnit::new(1, 0)),
+                second: Some(DateTimeUnit::new(1, 100_000_000)),
                 ..dflt()
             },
             ..Default::default()
@@ -1663,14 +1641,10 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "-1 1:1:1.1".to_string(),
             parsed: ParsedDateTime {
-                day: Some(-1),
-                day_frac: Some(0),
-                hour: Some(1),
-                hour_frac: Some(0),
-                minute: Some(1),
-                minute_frac: Some(0),
-                second: Some(1),
-                nano: Some(100_000_000),
+                day: Some(DateTimeUnit::new(-1, 0)),
+                hour: Some(DateTimeUnit::new(1, 0)),
+                minute: Some(DateTimeUnit::new(1, 0)),
+                second: Some(DateTimeUnit::new(1, 100_000_000)),
                 ..dflt()
             },
             ..Default::default()
@@ -1689,14 +1663,10 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "1 -1:1:1.1".to_string(),
             parsed: ParsedDateTime {
-                day: Some(1),
-                day_frac: Some(0),
-                hour: Some(-1),
-                hour_frac: Some(0),
-                minute: Some(-1),
-                minute_frac: Some(0),
-                second: Some(-1),
-                nano: Some(-100_000_000),
+                day: Some(DateTimeUnit::new(1, 0)),
+                hour: Some(DateTimeUnit::new(-1, 0)),
+                minute: Some(DateTimeUnit::new(-1, 0)),
+                second: Some(DateTimeUnit::new(-1, -100_000_000)),
                 ..dflt()
             },
             ..Default::default()
@@ -1714,14 +1684,10 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "1 2:3".into(),
             parsed: ParsedDateTime {
-                day: Some(1),
-                day_frac: Some(0),
-                hour: Some(2),
-                hour_frac: Some(0),
-                minute: Some(3),
-                minute_frac: Some(0),
-                second: Some(0),
-                nano: Some(0),
+                day: Some(DateTimeUnit::new(1, 0)),
+                hour: Some(DateTimeUnit::new(2, 0)),
+                minute: Some(DateTimeUnit::new(3, 0)),
+                second: Some(DateTimeUnit::new(0, 0)),
                 ..dflt()
             },
             precision_high: Day,
@@ -1740,14 +1706,10 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "1 4:5".into(),
             parsed: ParsedDateTime {
-                day: Some(1),
-                day_frac: Some(0),
-                hour: Some(4),
-                hour_frac: Some(0),
-                minute: Some(5),
-                minute_frac: Some(0),
-                second: Some(0),
-                nano: Some(0),
+                day: Some(DateTimeUnit::new(1, 0)),
+                hour: Some(DateTimeUnit::new(4, 0)),
+                minute: Some(DateTimeUnit::new(5, 0)),
+                second: Some(DateTimeUnit::new(0, 0)),
                 ..dflt()
             },
             precision_high: Day,
@@ -1767,8 +1729,7 @@ fn parse_literal_interval_durationlike() {
         IntervalValue {
             value: "1".into(),
             parsed: ParsedDateTime {
-                hour: Some(1),
-                hour_frac: Some(0),
+                hour: Some(DateTimeUnit::new(1, 0)),
                 ..dflt()
             },
             precision_high: Day,
@@ -1793,12 +1754,9 @@ fn parse_literal_interval_with_fsec_max_precision() {
         IntervalValue {
             value: "01:01:01.111111111".to_string(),
             parsed: ParsedDateTime {
-                hour: Some(1),
-                hour_frac: Some(0),
-                minute: Some(1),
-                minute_frac: Some(0),
-                second: Some(1),
-                nano: Some(111_111_111),
+                hour: Some(DateTimeUnit::new(1, 0)),
+                minute: Some(DateTimeUnit::new(1, 0)),
+                second: Some(DateTimeUnit::new(1, 111_111_111)),
                 ..Default::default()
             },
             fsec_max_precision: Some(5),
@@ -1817,12 +1775,9 @@ fn parse_literal_interval_with_fsec_max_precision() {
         IntervalValue {
             value: "01:01:01.1115".to_string(),
             parsed: ParsedDateTime {
-                hour: Some(1),
-                hour_frac: Some(0),
-                minute: Some(1),
-                minute_frac: Some(0),
-                second: Some(1),
-                nano: Some(111_500_000),
+                hour: Some(DateTimeUnit::new(1, 0)),
+                minute: Some(DateTimeUnit::new(1, 0)),
+                second: Some(DateTimeUnit::new(1, 111_500_000)),
                 ..Default::default()
             },
             fsec_max_precision: Some(3),
@@ -1873,6 +1828,200 @@ fn parse_literal_interval_with_fsec_max_precision() {
 }
 
 #[test]
+fn parse_literal_interval_full() {
+    use std::time::Duration;
+    use DateTimeField::*;
+
+    verify_interval(
+        "SELECT INTERVAL '1-2 3 4:5:6.7'",
+        IntervalValue {
+            value: "1-2 3 4:5:6.7".into(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(1, 0)),
+                month: Some(DateTimeUnit::new(2, 0)),
+                day: Some(DateTimeUnit::new(3, 0)),
+                hour: Some(DateTimeUnit::new(4, 0)),
+                minute: Some(DateTimeUnit::new(5, 0)),
+                second: Some(DateTimeUnit::new(6, 700_000_000)),
+                ..dflt()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: 14,
+            is_positive_dur: true,
+            duration: Duration::new(273906, 700_000_000),
+        },
+        None,
+    );
+
+    verify_interval(
+        "SELECT INTERVAL '-1-2 3 4:5:6.7'",
+        IntervalValue {
+            value: "-1-2 3 4:5:6.7".into(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, 0)),
+                month: Some(DateTimeUnit::new(-2, 0)),
+                day: Some(DateTimeUnit::new(3, 0)),
+                hour: Some(DateTimeUnit::new(4, 0)),
+                minute: Some(DateTimeUnit::new(5, 0)),
+                second: Some(DateTimeUnit::new(6, 700_000_000)),
+                ..dflt()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: -14,
+            is_positive_dur: true,
+            duration: Duration::new(273906, 700_000_000),
+        },
+        None,
+    );
+
+    verify_interval(
+        "SELECT INTERVAL '1-2 -3 -4:5:6.7'",
+        IntervalValue {
+            value: "1-2 -3 -4:5:6.7".into(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(1, 0)),
+                month: Some(DateTimeUnit::new(2, 0)),
+                day: Some(DateTimeUnit::new(-3, 0)),
+                hour: Some(DateTimeUnit::new(-4, 0)),
+                minute: Some(DateTimeUnit::new(-5, 0)),
+                second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                ..dflt()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: 14,
+            is_positive_dur: false,
+            duration: Duration::new(273906, 700_000_000),
+        },
+        None,
+    );
+
+    verify_interval(
+        "SELECT INTERVAL '-1-2 -3 -4:5:6.7'",
+        IntervalValue {
+            value: "-1-2 -3 -4:5:6.7".into(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, 0)),
+                month: Some(DateTimeUnit::new(-2, 0)),
+                day: Some(DateTimeUnit::new(-3, 0)),
+                hour: Some(DateTimeUnit::new(-4, 0)),
+                minute: Some(DateTimeUnit::new(-5, 0)),
+                second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                ..dflt()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: -14,
+            is_positive_dur: false,
+            duration: Duration::new(273906, 700_000_000),
+        },
+        None,
+    );
+
+    verify_interval(
+        "SELECT INTERVAL '-1-2 3 -4:5:6.7'",
+        IntervalValue {
+            value: "-1-2 3 -4:5:6.7".into(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, 0)),
+                month: Some(DateTimeUnit::new(-2, 0)),
+                day: Some(DateTimeUnit::new(3, 0)),
+                hour: Some(DateTimeUnit::new(-4, 0)),
+                minute: Some(DateTimeUnit::new(-5, 0)),
+                second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                ..dflt()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: -14,
+            is_positive_dur: true,
+            duration: Duration::new(244493, 300_000_000),
+        },
+        None,
+    );
+
+    verify_interval(
+        "SELECT INTERVAL '-1-2 -3 4:5:6.7'",
+        IntervalValue {
+            value: "-1-2 -3 4:5:6.7".into(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, 0)),
+                month: Some(DateTimeUnit::new(-2, 0)),
+                day: Some(DateTimeUnit::new(-3, 0)),
+                hour: Some(DateTimeUnit::new(4, 0)),
+                minute: Some(DateTimeUnit::new(5, 0)),
+                second: Some(DateTimeUnit::new(6, 700_000_000)),
+                ..dflt()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: -14,
+            is_positive_dur: false,
+            duration: Duration::new(244493, 300_000_000),
+        },
+        None,
+    );
+
+    verify_interval(
+        "SELECT INTERVAL '1-2 3 4:5:6.7' MONTH TO MINUTE",
+        IntervalValue {
+            value: "1-2 3 4:5:6.7".into(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(1, 0)),
+                month: Some(DateTimeUnit::new(2, 0)),
+                day: Some(DateTimeUnit::new(3, 0)),
+                hour: Some(DateTimeUnit::new(4, 0)),
+                minute: Some(DateTimeUnit::new(5, 0)),
+                second: Some(DateTimeUnit::new(6, 700_000_000)),
+                ..dflt()
+            },
+            precision_high: Month,
+            precision_low: Minute,
+            ..Default::default()
+        },
+        Interval {
+            months: 2,
+            is_positive_dur: true,
+            duration: Duration::new(273900, 0),
+        },
+        None,
+    );
+
+    verify_interval(
+        "SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO HOUR",
+        IntervalValue {
+            value: "1-2 3 4:5:6.7".into(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(1, 0)),
+                month: Some(DateTimeUnit::new(2, 0)),
+                day: Some(DateTimeUnit::new(3, 0)),
+                hour: Some(DateTimeUnit::new(4, 0)),
+                minute: Some(DateTimeUnit::new(5, 0)),
+                second: Some(DateTimeUnit::new(6, 700_000_000)),
+                ..dflt()
+            },
+            precision_high: Day,
+            precision_low: Hour,
+            ..Default::default()
+        },
+        Interval {
+            months: 0,
+            is_positive_dur: true,
+            duration: Duration::new(273600, 0),
+        },
+        None,
+    );
+}
+
+#[test]
 fn parse_literal_interval_error_messages() {
     let result = parse_sql_statements("SELECT INTERVAL '1' SECOND TO SECOND");
     assert_eq!(
@@ -1900,8 +2049,8 @@ fn parse_literal_interval_error_messages() {
     let result = parse_sql_statements("SELECT INTERVAL '1 1-1' DAY");
     assert_eq!(
         ParserError::ParserError(
-            "Invalid: INTERVAL '1 1-1'; cannot determine format of all parts. Add explicit time \
-             components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY."
+            "Invalid INTERVAL '1 1-1': cannot determine format of all parts. Add explicit time \
+             components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY"
                 .to_string()
         ),
         result.unwrap_err()

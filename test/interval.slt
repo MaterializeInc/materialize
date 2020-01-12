@@ -63,21 +63,21 @@ SELECT INTERVAL '1-2 3' HOUR;
 1 year 2 months 03:00:00
 
 # Disallow components to be set twice.
-statement error
+statement error sql parser error: Invalid INTERVAL '1 year 2 years': YEAR field set twice
 SELECT INTERVAL '1 year 2 years'
 
-statement error
+statement error sql parser error: Invalid INTERVAL '1-2 3-4': YEAR or MONTH field set twice
 SELECT INTERVAL '1-2 3-4'
 
-statement error
+statement error sql parser error: Invalid INTERVAL '1-2 3 year': YEAR field set twice
 SELECT INTERVAL '1-2 3 year'
 
-statement error
+statement error sql parser error: Invalid INTERVAL '1-2 3': MONTH field set twice
 SELECT INTERVAL '1-2 3' MONTH;
 
 # 5 would be parsed as second, but the H:M:S.NS
 # group was already set by 3:4/
-statement error
+statement error sql parser error: Invalid INTERVAL '1-2 3:4 5': SECOND field set twice
 SELECT INTERVAL '1-2 3:4 5';
 
 # Treat trailing TimeUnit as terminating range.
@@ -138,7 +138,7 @@ SELECT INTERVAL '1:2:3.4 5-6 7' DAY;
 
 # Disambiguate component (YEAR), but disallow because
 # the group it's in has been closed.
-statement error
+statement error sql parser error: Invalid INTERVAL '1:2:3.4 5-6 7': YEAR field set twice
 SELECT INTERVAL '1:2:3.4 5-6 7' YEAR;
 
 # Negative components
@@ -216,23 +216,23 @@ SELECT INTERVAL '0-0 0 0:0:0.0';
 00:00:00
 
 # Oversized components in SQL standard-style variables
-statement error
+statement error sql parser error: Invalid INTERVAL '100-13': MONTH field out range; must be < 12, have 13
 SELECT INTERVAL '100-13';
 
-statement error
+statement error sql parser error: Invalid INTERVAL '100-11 366 250:61': MINUTE field out range; must be < 60, have 61
 SELECT INTERVAL '100-11 366 250:61';
 
-statement error
+statement error sql parser error: Invalid INTERVAL '100-11 366 250:59:61': SECOND field out range; must be < 60, have 61
 SELECT INTERVAL '100-11 366 250:59:61';
 
 # Invalid syntax
-statement error
+statement error sql parser error: Invalid INTERVAL '1:2:3.4.5': Invalid syntax at offset 7: provided Dot but expected None
 SELECT INTERVAL '1:2:3.4.5';
 
 statement error
 SELECT INTERVAL '1+2:3.4';
 
-statement error
+statement error sql parser error: invalid DateTimeField: X
 SELECT INTERVAL '1x2:3.4';
 
 ## PostgreSQL format
@@ -344,7 +344,7 @@ SELECT INTERVAL '0 year 0 month 0 day 0 hour 0 minute 0.0 second';
 00:00:00
 
 # Fails any non-DateTimeField string.
-statement error
+statement error sql parser error: invalid DateTimeField: FOO
 SELECT INTERVAL '0 foo';
 
 ## Misc.
@@ -378,7 +378,7 @@ SELECT INTERVAL '1-2' HOUR;
 ----
 1 year 2 months
 
-statement error
+statement error sql parser error: Invalid INTERVAL '1-2 hour': Hour must be preceeded by a number, e.g. '1Hour'
 SELECT INTERVAL '1-2 hour';
 
 statement error
@@ -418,11 +418,11 @@ SELECT INTERVAL '1-2 3:4 5 day';
 1 year 2 months 5 days 03:04:00
 
 # Mix style allowed, but cannot assigning to closed group.
-statement error
+statement error sql parser error: Invalid INTERVAL '1-2 3:4 5 second': SECOND field set twice
 SELECT INTERVAL '1-2 3:4 5 second';
 
 # Commutativity means this is also not allowed.
-statement error
+statement error sql parser error: Invalid INTERVAL '1-2 5 second 3:4': HOUR, MINUTE, SECOND field set twice
 SELECT INTERVAL '1-2 5 second 3:4';
 
 # Fractional month in addition to other fields.
@@ -492,18 +492,18 @@ SELECT INTERVAL '1.999999999999999999days'
 1 day 23:59:59.999914
 
 # Precision must be (0, 6)
-statement error
+statement error SECOND precision must be \(0, 6\), have SECOND\(7\)
 SELECT INTERVAL '1 day 2-3 4' SECOND(7);
 
 # Only allow precision notation for trailing SECOND .
-statement error
+statement error sql parser error: Expected end of statement, found: SECOND
 SELECT INTERVAL '2-3 3:4' SECOND(1) to SECOND
 
-statement error
+statement error sql parser error: Expected end of statement, found: \(
 SELECT INTERVAL '2-3 3:4' DAY(1)
 
 # Only allow positive integer nanosecond precision
-statement error
+statement error sql parser error: Expected literal int, found: -
 SELECT INTERVAL '1 day 2-3 4' SECOND(-1);
 
 ## Math
@@ -549,41 +549,41 @@ SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.9999999
 
 ## Overflows
 
-statement error
+statement error INTERVAL '768614336404564651 year' overflows maximum months; cannot exceed 9223372036854775807 months
 SELECT INTERVAL '768614336404564651 year';
 
-statement error
-select interval '768614336404564650.7 year';
+statement error INTERVAL '768614336404564650.7 year' overflows maximum months; cannot exceed 9223372036854775807 months
+SELECT INTERVAL '768614336404564650.7 year';
 
-statement error
+statement error sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 months';
 
-statement error
+statement error sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 months';
 
-statement error
+statement error INTERVAL '106751991167300 days .1 month' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167300 days .1 month';
 
-statement error
+statement error INTERVAL '106751991167301 days' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167301 days';
 
-statement error
+statement error INTERVAL '106751991167300.9 days' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167300.9 days';
 
-statement error
+statement error INTERVAL '9223372036854775807 seconds 1 hour' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775807 seconds 1 hour';
 
-statement error
+statement error INTERVAL '9223372036854771807 seconds 1.9 hour' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854771807 seconds 1.9 hour';
 
-statement error
+statement error INTERVAL '9223372036854775807 seconds 1 minute' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775807 seconds 1 minute';
 
-statement error
+statement error INTERVAL '9223372036854775707 seconds 1.9 minute' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
 
-statement error
+statement error sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 seconds';
 
-statement error
+statement error sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 seconds';

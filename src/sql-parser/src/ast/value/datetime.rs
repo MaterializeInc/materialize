@@ -374,6 +374,13 @@ impl Default for DateTimeUnit {
         }
     }
 }
+
+impl DateTimeUnit {
+    /// Construct DateTimeUnit { unit, fraction }.
+    pub fn new(unit: i64, fraction: i64) -> Self {
+        DateTimeUnit { unit, fraction }
+    }
+}
 /// All of the fields that can appear in a literal `DATE`, `TIMESTAMP` or `INTERVAL` string.
 ///
 /// This is only used in an `Interval`, which can have any contiguous set of
@@ -650,5 +657,559 @@ impl FromStr for ExtractField {
             "EPOCH" => ExtractField::Epoch,
             _ => return Err(ValueError(format!("invalid EXTRACT specifier: {}", s))),
         })
+    }
+}
+
+#[test]
+fn test_interval_value_truncate_low_fields() {
+    use DateTimeField::*;
+
+    let mut test_cases = [
+        (
+            IntervalValue {
+                precision_low: Year,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (26 * 12, 0, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Month,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 0, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Day,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 7 * 60 * 60 * 24, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Hour,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 181 * 60 * 60, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Minute,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 10905 * 60, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Second,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 654_321, 321_000_000),
+        ),
+        (
+            IntervalValue {
+                precision_low: Second,
+                fsec_max_precision: Some(1),
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 654_321, 300_000_000),
+        ),
+        (
+            IntervalValue {
+                precision_low: Second,
+                fsec_max_precision: Some(0),
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 654_321, 0),
+        ),
+    ];
+
+    for test in test_cases.iter_mut() {
+        test.0
+            .truncate_low_fields(&mut (test.1).0, &mut (test.1).1, &mut (test.1).2)
+            .unwrap();
+        if (test.1).0 != (test.2).0 || (test.1).1 != (test.2).1 || (test.1).2 != (test.2).2 {
+            panic!(
+                "test_interval_value_truncate_low_fields failed \n actual: {:?} \n expected: {:?}",
+                test.1, test.2
+            );
+        }
+    }
+}
+
+#[test]
+fn test_interval_value_truncate_high_fields() {
+    use DateTimeField::*;
+
+    let mut test_cases = [
+        (
+            IntervalValue {
+                precision_high: Year,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (321, 654_321),
+        ),
+        (
+            IntervalValue {
+                precision_high: Month,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (321 % 12, 654_321),
+        ),
+        (
+            IntervalValue {
+                precision_high: Day,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (0, 654_321),
+        ),
+        (
+            IntervalValue {
+                precision_high: Hour,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (0, 654_321 % (60 * 60 * 24)),
+        ),
+        (
+            IntervalValue {
+                precision_high: Minute,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (0, 654_321 % (60 * 60)),
+        ),
+        (
+            IntervalValue {
+                precision_high: Second,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (0, 654_321 % 60),
+        ),
+    ];
+
+    for test in test_cases.iter_mut() {
+        test.0
+            .truncate_high_fields(&mut (test.1).0, &mut (test.1).1);
+        if (test.1).0 != (test.2).0 || (test.1).1 != (test.2).1 {
+            panic!(
+                "test_interval_value_truncate_high_fields failed \n actual: {:?} \n expected: {:?}",
+                test.1, test.2
+            );
+        }
+    }
+}
+
+#[test]
+fn test_interval_value_add_field() {
+    use DateTimeField::*;
+    let iv_unit = IntervalValue {
+        parsed: ParsedDateTime {
+            year: Some(DateTimeUnit::new(1, 0)),
+            month: Some(DateTimeUnit::new(2, 0)),
+            day: Some(DateTimeUnit::new(2, 0)),
+            hour: Some(DateTimeUnit::new(3, 0)),
+            minute: Some(DateTimeUnit::new(4, 0)),
+            second: Some(DateTimeUnit::new(5, 0)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let iv_frac = IntervalValue {
+        parsed: ParsedDateTime {
+            year: Some(DateTimeUnit::new(1, 555_555_555)),
+            month: Some(DateTimeUnit::new(2, 555_555_555)),
+            day: Some(DateTimeUnit::new(2, 555_555_555)),
+            hour: Some(DateTimeUnit::new(3, 555_555_555)),
+            minute: Some(DateTimeUnit::new(4, 555_555_555)),
+            second: Some(DateTimeUnit::new(5, 555_555_555)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let iv_frac_neg = IntervalValue {
+        parsed: ParsedDateTime {
+            year: Some(DateTimeUnit::new(-1, -555_555_555)),
+            month: Some(DateTimeUnit::new(-2, -555_555_555)),
+            day: Some(DateTimeUnit::new(-2, -555_555_555)),
+            hour: Some(DateTimeUnit::new(-3, -555_555_555)),
+            minute: Some(DateTimeUnit::new(-4, -555_555_555)),
+            second: Some(DateTimeUnit::new(-5, -555_555_555)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    run_test_interval_value_add_field(iv_unit.clone(), Year, (12, 0, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Month, (2, 0, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Day, (0, 2 * 60 * 60 * 24, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Hour, (0, 3 * 60 * 60, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Minute, (0, 4 * 60, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Second, (0, 5, 0));
+    run_test_interval_value_add_field(iv_frac.clone(), Year, (18, 0, 0));
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Month,
+        (
+            2,
+            // 16 days 15:59:59.99856
+            16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59,
+            998_560_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Day,
+        (
+            0,
+            // 2 days 13:19:59.999952
+            2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59,
+            999_952_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Hour,
+        (
+            0,
+            // 03:33:19.999998
+            3 * 60 * 60 + 33 * 60 + 19,
+            999_998_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Minute,
+        (
+            0,
+            // 00:04:33.333333
+            4 * 60 + 33,
+            333_333_300,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Second,
+        (
+            0,
+            // 00:00:05.555556
+            5,
+            555_555_555,
+        ),
+    );
+    run_test_interval_value_add_field(iv_frac_neg.clone(), Year, (-18, 0, 0));
+    (
+        iv_frac_neg.clone(),
+        Month,
+        (
+            -2,
+            // -16 days -15:59:59.99856
+            -1 * (16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59),
+            -998_560_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac_neg.clone(),
+        Day,
+        (
+            0,
+            // -2 days 13:19:59.999952
+            -1 * (2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59),
+            -999_952_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac_neg.clone(),
+        Hour,
+        (
+            0,
+            // -03:33:19.999998
+            -1 * (3 * 60 * 60 + 33 * 60 + 19),
+            -999_998_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac_neg.clone(),
+        Minute,
+        (
+            0,
+            // -00:04:33.333333
+            -1 * (4 * 60 + 33),
+            -333_333_300,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac_neg.clone(),
+        Second,
+        (
+            0,
+            // -00:00:05.555556
+            -5,
+            -555_555_555,
+        ),
+    );
+
+    fn run_test_interval_value_add_field(
+        iv: IntervalValue,
+        f: DateTimeField,
+        expected: (i64, i64, i64),
+    ) {
+        let mut res = (0, 0, 0);
+
+        iv.add_field(f, &mut res.0, &mut res.1, &mut res.2).unwrap();
+
+        if res.0 != expected.0 || res.1 != expected.1 || res.2 != expected.2 {
+            panic!(
+                "test_interval_value_add_field failed \n actual: {:?} \n expected: {:?}",
+                res, expected
+            );
+        }
+    }
+}
+
+#[test]
+fn test_interval_value_compute_interval() {
+    use DateTimeField::*;
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(1, 0)),
+                month: Some(DateTimeUnit::new(1, 0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: 13,
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(1, 0)),
+                month: Some(DateTimeUnit::new(-1, 0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: 11,
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, 0)),
+                month: Some(DateTimeUnit::new(1, 0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: -11,
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                day: Some(DateTimeUnit::new(1, 0)),
+                hour: Some(DateTimeUnit::new(-2, 0)),
+                minute: Some(DateTimeUnit::new(-3, 0)),
+                second: Some(DateTimeUnit::new(-4, -500_000_000)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // 21:56:55.5
+        Interval {
+            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                day: Some(DateTimeUnit::new(-1, 0)),
+                hour: Some(DateTimeUnit::new(2, 0)),
+                minute: Some(DateTimeUnit::new(3, 0)),
+                second: Some(DateTimeUnit::new(4, 500_000_000)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // -21:56:55.5
+        Interval {
+            is_positive_dur: false,
+            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                day: Some(DateTimeUnit::new(1, 0)),
+                second: Some(DateTimeUnit::new(0, -270_000_000)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // 23:59:59.73
+        Interval {
+            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                day: Some(DateTimeUnit::new(-1, 0)),
+                second: Some(DateTimeUnit::new(0, 270_000_000)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // -23:59:59.73
+        Interval {
+            months: 0,
+            is_positive_dur: false,
+            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, -555_555_555)),
+                month: Some(DateTimeUnit::new(2, 555_555_555)),
+                day: Some(DateTimeUnit::new(-3, -555_555_555)),
+                hour: Some(DateTimeUnit::new(4, 555_555_555)),
+                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
+                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // -1 year -4 months +13 days +07:07:53.220828
+        Interval {
+            months: -16,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 220_828_000),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, -555_555_555)),
+                month: Some(DateTimeUnit::new(2, 555_555_555)),
+                day: Some(DateTimeUnit::new(-3, -555_555_555)),
+                hour: Some(DateTimeUnit::new(4, 555_555_555)),
+                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
+                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            fsec_max_precision: Some(1),
+            ..Default::default()
+        },
+        // -1 year -4 months +13 days +07:07:53.2
+        Interval {
+            months: -16,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 200_000_000),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, -555_555_555)),
+                month: Some(DateTimeUnit::new(2, 555_555_555)),
+                day: Some(DateTimeUnit::new(-3, -555_555_555)),
+                hour: Some(DateTimeUnit::new(4, 555_555_555)),
+                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
+                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            precision_high: Month,
+            precision_low: Minute,
+            ..Default::default()
+        },
+        // -4 months +13 days +07:07:00
+        Interval {
+            months: -4,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60, 0),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, -555_555_555)),
+                month: Some(DateTimeUnit::new(2, 555_555_555)),
+                day: Some(DateTimeUnit::new(-3, -555_555_555)),
+                hour: Some(DateTimeUnit::new(4, 555_555_555)),
+                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
+                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            precision_high: Day,
+            precision_low: Hour,
+            ..Default::default()
+        },
+        // 13 days 07:00:00
+        Interval {
+            months: 0,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60, 0),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            value: "".to_string(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeUnit::new(-1, -555_555_555)),
+                month: Some(DateTimeUnit::new(2, 555_555_555)),
+                day: Some(DateTimeUnit::new(-3, -555_555_555)),
+                hour: Some(DateTimeUnit::new(4, 555_555_555)),
+                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
+                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            precision_high: Day,
+            precision_low: Hour,
+            fsec_max_precision: Some(1),
+        },
+        // 13 days 07:00:00
+        Interval {
+            months: 0,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60, 0),
+        },
+    );
+
+    fn run_test_interval_value_compute_interval(iv: IntervalValue, expected: Interval) {
+        let actual = iv.compute_interval().unwrap();
+
+        if actual != expected {
+            panic!(
+                "test_interval_compute_interval failed\n input {:?}\nactual {:?}\nexpected {:?}",
+                iv, actual, expected
+            )
+        }
     }
 }
