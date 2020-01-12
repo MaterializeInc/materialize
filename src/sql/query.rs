@@ -1982,6 +1982,15 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "to_timestamp" => {
+                if sql_func.args.len() != 1 {
+                    bail!("to_timestamp requires exactly one argument");
+                }
+                let expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::Float64))?;
+                let expr = promote_number_float64(ecx, "to_timestamp", expr)?;
+                Ok(expr.call_unary(UnaryFunc::ToTimestamp))
+            }
+
             _ => bail!("unsupported function: {}", ident),
         }
     }
@@ -3035,6 +3044,25 @@ where
         ScalarType::Null | ScalarType::Int32 | ScalarType::Int64 => {
             plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
         }
+        other => bail!("{} has non-numeric type {:?}", name, other),
+    })
+}
+
+fn promote_number_float64<'a, S>(
+    ecx: &ExprContext<'a>,
+    name: S,
+    expr: ScalarExpr,
+) -> Result<ScalarExpr, failure::Error>
+where
+    S: fmt::Display + Copy,
+{
+    Ok(match ecx.column_type(&expr).scalar_type {
+        ScalarType::Float64 => expr,
+        ScalarType::Null
+        | ScalarType::Int32
+        | ScalarType::Int64
+        | ScalarType::Decimal(_, _)
+        | ScalarType::Float32 => plan_cast_internal(ecx, name, expr, ScalarType::Float64)?,
         other => bail!("{} has non-numeric type {:?}", name, other),
     })
 }
