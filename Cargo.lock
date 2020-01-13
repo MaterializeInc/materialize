@@ -654,7 +654,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#80066510b54f1ae05d51f65b52e18bdd5357016c"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#fbea6a8ec599c6173642bf5b40a19ea3024d537d"
 dependencies = [
  "abomonation",
  "abomonation_derive",
