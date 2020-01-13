@@ -8,6 +8,7 @@
 use std::fs;
 
 use failure::{bail, format_err, Error};
+use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
 use protoc::Protoc;
 use serde::de::Deserialize;
@@ -295,48 +296,58 @@ fn json_nested_from_serde_value(
     val: &SerdeValue,
     mut packer: RowPacker,
 ) -> Result<RowPacker, Error> {
-    match val {
-        SerdeValue::Bool(true) => packer.push(Datum::True),
-        SerdeValue::Bool(false) => packer.push(Datum::False),
-        SerdeValue::I32(i) => packer.push(Datum::Float64(OrderedFloat::from(*i as f64))),
-        SerdeValue::I64(i) => packer.push(Datum::Float64(OrderedFloat::from(*i as f64))),
-        SerdeValue::U32(i) => packer.push(Datum::Float64(OrderedFloat::from(*i as f64))),
-        SerdeValue::U64(i) => packer.push(Datum::Float64(OrderedFloat::from(*i as f64))),
-        SerdeValue::F32(f) => packer.push(Datum::Float64((*f as f64).into())),
-        SerdeValue::F64(f) => packer.push(Datum::Float64((*f).into())),
-        SerdeValue::String(s) => packer.push(Datum::String(s)),
+    fn json_number<N: ToPrimitive + std::fmt::Display>(i: &N) -> Result<Datum<'static>, Error> {
+        Ok(Datum::Float64(OrderedFloat::from(i.to_f64().ok_or_else(
+            || format_err!("couldn't convert {} into an f64", i),
+        )?)))
+    }
+
+    packer.push(match val {
+        SerdeValue::Bool(true) => Datum::True,
+        SerdeValue::Bool(false) => Datum::False,
+        SerdeValue::I8(i) => json_number(i)?,
+        SerdeValue::I16(i) => json_number(i)?,
+        SerdeValue::I32(i) => json_number(i)?,
+        SerdeValue::I64(i) => json_number(i)?,
+        SerdeValue::U8(i) => json_number(i)?,
+        SerdeValue::U16(i) => json_number(i)?,
+        SerdeValue::U32(i) => json_number(i)?,
+        SerdeValue::U64(i) => json_number(i)?,
+        SerdeValue::F32(f) => json_number(f)?,
+        SerdeValue::F64(f) => json_number(f)?,
+        SerdeValue::String(s) => Datum::String(s),
         SerdeValue::Bytes(_) => {
             bail!("We don't currently support arrays or nested messages with bytes")
         }
         SerdeValue::Seq(s) => {
-            let start = unsafe { packer.start_list() };
-            for value in s {
-                // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
-                packer = json_nested_from_serde_value(&value, packer)?;
-            }
-            unsafe { packer.finish_list(start) };
+            return packer.try_push_list_with(|mut packer| {
+                for value in s {
+                    packer = json_nested_from_serde_value(&value, packer)?;
+                }
+                Ok(packer)
+            });
         }
         SerdeValue::Map(m) => {
-            let start = unsafe { packer.start_dict() };
-            for (k, v) in m {
-                // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
-                match (k, v) {
-                    (SerdeValue::String(s), SerdeValue::Option(Some(val))) => {
-                        packer.push(Datum::String(s.as_str()));
-                        packer = json_nested_from_serde_value(&val, packer)?;
+            return packer.try_push_dict_with(|mut packer| {
+                for (k, v) in m {
+                    match (k, v) {
+                        (SerdeValue::String(s), SerdeValue::Option(Some(val))) => {
+                            packer.push(Datum::String(s.as_str()));
+                            packer = json_nested_from_serde_value(&val, packer)?;
+                        }
+                        (SerdeValue::String(_), SerdeValue::Option(None)) => (),
+                        (SerdeValue::String(s), SerdeValue::Seq(_seq)) => {
+                            packer.push(Datum::String(s.as_str()));
+                            packer = json_nested_from_serde_value(&v, packer)?;
+                        }
+                        _ => bail!("Unrecognized value while trying to parse a nested message"),
                     }
-                    (SerdeValue::String(_), SerdeValue::Option(None)) => (),
-                    (SerdeValue::String(s), SerdeValue::Seq(_seq)) => {
-                        packer.push(Datum::String(s.as_str()));
-                        packer = json_nested_from_serde_value(&v, packer)?;
-                    }
-                    _ => bail!("Unrecognized value while trying to parse a nested message"),
                 }
-            }
-            unsafe { packer.finish_dict(start) };
+                Ok(packer)
+            });
         }
         _ => bail!("Unsupported types from serde_value"),
-    }
+    });
     Ok(packer)
 }
 
