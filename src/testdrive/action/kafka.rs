@@ -130,7 +130,7 @@ impl Action for QuerySinkAction {
                                             }
                                         }
                                     }
-                                    _ => return Err(String::from("Expected and actual Kafka message Values did not match.")), 
+                                    _ => return Err(String::from("Expected and actual Kafka message Values did not match.")),
                                 }
                                 }
                                 None => {
