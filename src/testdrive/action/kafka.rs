@@ -20,13 +20,15 @@ use std::time::Duration;
 use avro_rs::types::Value as AvroValue;
 use avro_rs::Schema;
 use backoff::{ExponentialBackoff, Operation};
-use byteorder::{NetworkEndian, WriteBytesExt};
+use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use futures::executor::block_on;
-use futures::future;
 use futures::stream::{FuturesUnordered, TryStreamExt};
+use futures::{future, StreamExt};
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::consumer::Consumer;
 use rdkafka::error::RDKafkaError;
+use rdkafka::message::Message;
+
 use rdkafka::producer::FutureRecord;
 use serde_json::Value as JsonValue;
 
@@ -34,6 +36,99 @@ use ore::collections::CollectionExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+
+pub struct VerifyAction {
+    topic_prefix: String,
+    schema: String,
+    expected_messages: Vec<String>,
+}
+
+pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
+    let format = cmd.args.string("format")?;
+    let topic_prefix = cmd.args.string("topic")?;
+    let schema = cmd.args.string("schema")?;
+    let expected_messages = cmd.input;
+
+    cmd.args.done()?;
+    if format != "avro" {
+        return Err("formats besides avro are not supported".into());
+    }
+    Ok(VerifyAction {
+        topic_prefix,
+        schema,
+        expected_messages,
+    })
+}
+
+impl Action for VerifyAction {
+    fn undo(&self, _state: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn redo(&self, state: &mut State) -> Result<(), String> {
+        state
+            .kafka_consumer
+            .subscribe(&[&self.topic_prefix])
+            .map_err(|e| e.to_string())?;
+
+        let schema = interchange::avro::parse_schema(&self.schema)
+            .map_err(|e| format!("parsing avro schema: {}", e))?;
+        let mut converted_expected_messages = Vec::new();
+        for expected in &self.expected_messages {
+            converted_expected_messages.push(
+                json_to_avro(
+                    &serde_json::from_str(expected)
+                        .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
+                    &schema,
+                )
+                .unwrap(),
+            );
+        }
+
+        let mut message_stream = state.kafka_consumer.start();
+        for message in converted_expected_messages {
+            let output = block_on(message_stream.next());
+            match output {
+                Some(result) => match result {
+                    Ok(m) => match m.payload() {
+                        Some(mut bytes) => {
+                            if bytes.len() < 5 {
+                                return Err(format!(
+                                        "avro datum is too few bytes: expected at least 5 bytes, got {}",
+                                        bytes.len()
+                                    ));
+                            }
+                            let magic = bytes[0];
+                            let _schema_id = BigEndian::read_i32(&bytes[1..5]);
+                            bytes = &bytes[5..];
+
+                            if magic != 0 {
+                                return Err(format!(
+                                    "wrong avro serialization magic: expected 0, got {}",
+                                    bytes[0]
+                                ));
+                            }
+                            let value =
+                                avro_rs::from_avro_datum(&schema, &mut bytes, None).unwrap();
+                            assert_eq!(message, value);
+                        }
+                        None => {
+                            return Err(String::from("No bytes found in Kafka message payload."))
+                        }
+                    },
+                    Err(e) => return Err(e.to_string()),
+                },
+                None => {
+                    return Err(format!(
+                        "No Kafka messages found for topic {}",
+                        &self.topic_prefix
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
 pub struct IngestAction {
     topic_prefix: String,
@@ -427,7 +522,7 @@ fn json_to_avro(json: &JsonValue, schema: &Schema) -> Result<AvroValue, String> 
             let mut last_err = format!("Union schema {:?} did not match {:?}", variants, val);
             for variant in variants {
                 match json_to_avro(val, variant) {
-                    Ok(avro) => return Ok(avro),
+                    Ok(avro) => return Ok(AvroValue::Union(Box::new(avro))),
                     Err(msg) => last_err = msg,
                 }
             }
