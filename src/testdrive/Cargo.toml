@@ -30,7 +30,7 @@ postgres = { version = "0.17", features = ["with-chrono-0_4"] }
 rand = "0.7.2"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
 regex = "1"
-reqwest = "0.10.0"
+reqwest = "0.10.1"
 serde_json = { version = "1.0.44", features = ["preserve_order"] }
 sql-parser = { path = "../sql-parser" }
 termcolor = "1.0.5"
