@@ -36,21 +36,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
-> SHOW CREATE SOURCE data
-Source   Create Source
-------------------
-data  "kafka://${testdrive.kafka-addr-resolved}/testdrive-data-${testdrive.seed}"
-
-! PEEK data
-data is not a view
-
-> CREATE VIEW data_view as SELECT * from data
-
-> PEEK data_view
-a b
----
-
-
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 {"before": null, "after": {"a": 1, "b": 1}}
 {"before": null, "after": {"a": 2, "b": 1}}
@@ -60,17 +45,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> PEEK data_view
-a b
----
-1 1
-2 1
-3 1
-1 2
-
 > CREATE SINK data_sink FROM data INTO 'kafka://${testdrive.kafka-addr}/data-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
 
-$ kafka-sink format=avro topic=data-sink schema=${schema}
+$ kafka-verify format=avro topic=data-sink schema=${schema}
 {"before": null, "after": {"a": 1, "b": 1}}
 {"before": null, "after": {"a": 2, "b": 1}}
 {"before": null, "after": {"a": 3, "b": 1}}

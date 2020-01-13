@@ -37,15 +37,15 @@ use ore::collections::CollectionExt;
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
-pub struct QuerySinkAction {
+pub struct VerifyAction {
     topic_prefix: String,
     schema: String,
     expected_messages: Vec<String>,
 }
 
-pub fn query_sink(mut cmd: BuiltinCommand) -> Result<QuerySinkAction, String> {
+pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
     let format = cmd.args.string("format")?;
-    let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
+    let topic_prefix = cmd.args.string("topic")?;
     let schema = cmd.args.string("schema")?;
     let expected_messages = cmd.input;
 
@@ -53,25 +53,22 @@ pub fn query_sink(mut cmd: BuiltinCommand) -> Result<QuerySinkAction, String> {
     if format != "avro" {
         return Err("formats besides avro are not supported".into());
     }
-    Ok(QuerySinkAction {
+    Ok(VerifyAction {
         topic_prefix,
         schema,
         expected_messages,
     })
 }
 
-impl Action for QuerySinkAction {
+impl Action for VerifyAction {
     fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        // Todo@jldlaughlin: we add "testdrive-" prefix to thing which won't exist on sink/Kafka topic.
-        // Deal with this more gracefully.
-        let sink_name = self.topic_prefix.replace("testdrive-", "");
         state
             .kafka_consumer
-            .subscribe(&[&sink_name])
+            .subscribe(&[&self.topic_prefix])
             .map_err(|e| e.to_string())?;
 
         let schema = interchange::avro::parse_schema(&self.schema)
@@ -121,7 +118,12 @@ impl Action for QuerySinkAction {
                     },
                     Err(e) => return Err(e.to_string()),
                 },
-                None => return Err(format!("No Kafka messages found for topic {}", sink_name,)),
+                None => {
+                    return Err(format!(
+                        "No Kafka messages found for topic {}",
+                        &self.topic_prefix
+                    ))
+                }
             }
         }
         Ok(())

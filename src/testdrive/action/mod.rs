@@ -78,7 +78,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
                 }
                 match builtin.name.as_ref() {
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
-                    "kafka-sink" => Box::new(kafka::query_sink(builtin).map_err(wrap_err)?),
+                    "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
                     "set" => {
                         vars.extend(builtin.args);
                         continue;

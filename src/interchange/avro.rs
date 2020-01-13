@@ -487,6 +487,7 @@ pub fn encode_schema(desc: &RelationDesc) -> Result<serde_json::Value, Error> {
             None => bail!("All Kafka sink columns must have a name."),
         };
 
+        // todo@jldlaughlin: Support all ScalarTypes #1517
         let field_type = match typ.scalar_type {
             ScalarType::Null => "null",
             ScalarType::Bool => "boolean",
@@ -579,7 +580,7 @@ impl Encoder {
         match &self.writer_schema {
             Schema::Record { fields, .. } => match fields.as_slice() {
                 [before, _after] => {
-                    let avro_val = self.data_to_avro(&before.schema, &row.unpack())?;
+                    let avro_val = Self::data_to_avro(&before.schema, &row.unpack())?;
                     // Add wrapper Record with before and after RecordFields
                     let wrapped_avro_val = Value::Record(vec![
                         ("before".into(), Value::Union(Box::from(Value::Null))),
@@ -593,11 +594,7 @@ impl Encoder {
         }
     }
 
-    fn data_to_avro(
-        &self,
-        record_schema: &Schema,
-        data: &[Datum],
-    ) -> Result<Value, failure::Error> {
+    fn data_to_avro(record_schema: &Schema, data: &[Datum]) -> Result<Value, failure::Error> {
         Ok(match data {
             [] => bail!("Expected to convert Datum to type {:#?}, but no Datum found."),
             [datum] => {
@@ -629,7 +626,7 @@ impl Encoder {
                     Schema::Array(array) => {
                         let mut value_array = Vec::new();
                         for d in datum.unwrap_list().iter() {
-                            value_array.push(self.data_to_avro(&*array, &[d]).unwrap())
+                            value_array.push(Self::data_to_avro(&*array, &[d]).unwrap())
                         }
                         Value::Array(value_array)
                     }
@@ -638,7 +635,7 @@ impl Encoder {
                         for (key, datum) in datum.unwrap_dict().iter() {
                             value_map.insert(
                                 String::from(key),
-                                self.data_to_avro(&*map, &[datum]).unwrap(),
+                                Self::data_to_avro(&*map, &[datum]).unwrap(),
                             );
                         }
                         Value::Map(value_map)
@@ -659,14 +656,14 @@ impl Encoder {
                         Value::Fixed(*size, Vec::from(datum.unwrap_bytes()))
                     }
                     // Schema::Union and Schema::Record can serialize >= 1 Datums
-                    Schema::Union(union) => self.convert_to_avro_union(data, union)?,
-                    Schema::Record { fields, .. } => self.convert_to_avro_record(data, fields)?,
+                    Schema::Union(union) => Self::convert_to_avro_union(data, union)?,
+                    Schema::Record { fields, .. } => Self::convert_to_avro_record(data, fields)?,
                 }
             }
             _ => match record_schema {
                 // Schema::Union and Schema::Record can serialize >= 1 Datums
-                Schema::Union(union) => self.convert_to_avro_union(data, union)?,
-                Schema::Record { fields, .. } => self.convert_to_avro_record(data, fields)?,
+                Schema::Union(union) => Self::convert_to_avro_union(data, union)?,
+                Schema::Record { fields, .. } => Self::convert_to_avro_record(data, fields)?,
                 _ => bail!(
                     "Expected to convert Datum to type {:#?}, but more than one Datum found.",
                     record_schema
@@ -676,7 +673,6 @@ impl Encoder {
     }
 
     fn convert_to_avro_record(
-        &self,
         data: &[Datum],
         fields: &[RecordField],
     ) -> Result<Value, failure::Error> {
@@ -684,21 +680,17 @@ impl Encoder {
         for (rf, datum) in fields.iter().zip(data) {
             match rf {
                 avro_rs::schema::RecordField { name, schema, .. } => {
-                    vals.push((String::from(name), self.data_to_avro(schema, &[*datum])?));
+                    vals.push((String::from(name), Self::data_to_avro(schema, &[*datum])?));
                 }
             }
         }
         Ok(Value::Record(vals))
     }
 
-    fn convert_to_avro_union(
-        &self,
-        data: &[Datum],
-        union: &UnionSchema,
-    ) -> Result<Value, failure::Error> {
+    fn convert_to_avro_union(data: &[Datum], union: &UnionSchema) -> Result<Value, failure::Error> {
         let mut value = None;
         for s in union.variants() {
-            if let Ok(v) = self.data_to_avro(s, data) {
+            if let Ok(v) = Self::data_to_avro(s, data) {
                 value = Some(v)
             }
         }
@@ -795,11 +787,11 @@ mod tests {
     /// documentation:
     /// https://avro.apache.org/docs/current/spec.html#schemas
     fn test_row_to_avro_primitive_types() -> Result<(), failure::Error> {
-        // The Encoder's schema is not used in data_to_avro(), use simple mock instead.
-        let dummy_relation_desc = RelationDesc::empty();
-        let schema = super::encode_schema(&dummy_relation_desc)?;
-
-        let encoder = super::Encoder::new(&schema.to_string());
+        //        // The Encoder's schema is not used in data_to_avro(), use simple mock instead.
+        //        let dummy_relation_desc = RelationDesc::empty();
+        //        let schema = super::encode_schema(&dummy_relation_desc)?;
+        //
+        //        let encoder = super::Encoder::new(&schema.to_string());
 
         // Data to be used later in assertions.
         let date = NaiveDate::from_ymd(2020, 1, 8);
@@ -861,7 +853,7 @@ mod tests {
             ),
         ];
         for (s, d, expected) in valid_pairings.iter() {
-            let avro_value = encoder.data_to_avro(&s, &[*d])?;
+            let avro_value = super::Encoder::data_to_avro(&s, &[*d])?;
             assert_eq!(*expected, avro_value);
         }
 
