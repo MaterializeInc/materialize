@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
-use expr::{ColumnOrder, EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr};
+use expr::{
+    ColumnOrder, EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr,
+    SourceInstanceId,
+};
 use regex::Regex;
 use repr::{Datum, RelationDesc, RelationType, Row};
 
@@ -157,7 +160,7 @@ pub struct BuildDesc {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
-    pub source_imports: HashMap<GlobalId, Source>,
+    pub source_imports: HashMap<SourceInstanceId, Source>,
     pub index_imports: HashMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
@@ -200,7 +203,7 @@ impl DataflowDesc {
             .push(dependent_id);
     }
 
-    pub fn add_source_import(&mut self, id: GlobalId, source: Source) {
+    pub fn add_source_import(&mut self, id: SourceInstanceId, source: Source) {
         self.source_imports.insert(id, source);
     }
 

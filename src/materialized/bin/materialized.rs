@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::Mutex;
 use std::thread;
+use url::Url;
 
 use backtrace::Backtrace;
 use failure::{bail, format_err, ResultExt};
@@ -49,6 +50,24 @@ fn run() -> Result<(), failure::Error> {
         "logging-granularity",
         "dataflow logging granularity (default 1s)",
         "DURATION/\"off\"",
+    );
+    opts.optopt(
+        "",
+        "timestamp-frequency",
+        "timestamp advancement frequency (default off)",
+        "DURATION/\"off\"",
+    );
+    opts.optopt(
+        "",
+        "batch-size",
+        "maximum number of messages with same timestamp (default 5000) ",
+        "SIZE",
+    );
+    opts.optopt(
+        "",
+        "source-ts",
+        "obtain ts from specified source",
+        "kafka://addr/topic",
     );
     opts.optopt(
         "w",
@@ -111,6 +130,54 @@ fn run() -> Result<(), failure::Error> {
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
+
+    let timestamp_frequency = match popts
+        .opt_str("timestamp-frequency")
+        .as_ref()
+        .map(|x| x.as_str())
+    {
+        None => None,
+        Some("off") => None,
+        Some(d) => Some(parse_duration::parse(&d)?),
+    };
+
+    let ts_source: Option<(SocketAddr, String)> =
+        match popts.opt_str("source-ts").as_ref().map(|x| x.as_str()) {
+            Some(address) => {
+                let url = Url::parse(address).expect("URL is not appropriately formatted");
+                if url.scheme() != "kafka" {
+                    bail!("only kafka:// sources are supported: {}", url);
+                } else if !url.has_host() {
+                    bail!("source URL missing hostname: {}", url)
+                }
+                let topic = match url.path_segments() {
+                    None => None,
+                    Some(segments) => {
+                        let segments: Vec<_> = segments.collect();
+                        if segments.is_empty() {
+                            None
+                        } else if segments.len() != 1 {
+                            bail!("source URL should have at most one path segment: {}", url);
+                        } else if segments[0].is_empty() {
+                            None
+                        } else {
+                            Some(segments[0].to_owned())
+                        }
+                    }
+                };
+                if topic.is_none() {
+                    bail!("must specify a topic for timestamp source");
+                }
+                let topic = topic.expect("must specify a topic for timestamp source");
+                // We already checked for kafka scheme above, so it's safe to assume port
+                // 9092.
+                let addr = url.socket_addrs(|| Some(9092))?[0];
+                Some((addr, topic))
+            }
+            _ => None,
+        };
+
+    let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
     let threads = popts.opt_get_default("threads", 1)?;
     let process = popts.opt_get_default("process", 0)?;
     let processes = popts.opt_get_default("processes", 1)?;
@@ -138,6 +205,9 @@ fn run() -> Result<(), failure::Error> {
 
     let _server = materialized::serve(materialized::Config {
         logging_granularity,
+        timestamp_frequency,
+        max_increment_ts_size,
+        ts_source,
         threads,
         process,
         addresses,

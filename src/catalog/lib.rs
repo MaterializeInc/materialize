@@ -19,7 +19,7 @@ use crate::names::{DatabaseSpecifier, FullName, PartialName};
 
 pub mod names;
 
-mod sql;
+pub mod sql;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -208,7 +208,7 @@ impl Catalog {
         for (id, name, def) in catalog.storage.load_items()? {
             catalog.insert_item(id, name, def);
             if let GlobalId::User(id) = id {
-               catalog.id = cmp::max(catalog.id, id);
+                catalog.id = cmp::max(catalog.id, id);
             }
         }
 

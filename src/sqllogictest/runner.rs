@@ -39,6 +39,8 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use coord::ExecuteResponse;
+use coord::TimestampChannel;
+
 use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
@@ -272,6 +274,7 @@ pub(crate) struct State {
     cmd_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     _dataflow_workers: Box<dyn Drop>,
     _coord_thread: JoinOnDropHandle<()>,
+    _timestamp_thread: JoinOnDropHandle<()>,
     _runtime: tokio::runtime::Runtime,
 
     session: Session,
@@ -380,7 +383,8 @@ impl State {
             port = env::var("PGPORT").unwrap_or_else(|_| "5432".into()),
         );
 
-        let (ts_s, ts_r) = std::sync::mpsc::channel::<coord::Update>();
+        let (ts_tx, ts_rx) = std::sync::mpsc::channel::<coord::TimestampMessage>();
+        let (source_tx, source_rx) = std::sync::mpsc::channel::<coord::TimestampMessage>();
 
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
@@ -390,15 +394,25 @@ impl State {
             bootstrap_sql: "".into(),
             data_directory: None,
             executor: &executor,
-            ts_channel: ts_s,
+            ts_channel: Some(TimestampChannel {
+                sender: ts_tx,
+                receiver: source_rx,
+            }),
         })?;
 
         let coord_thread = thread::spawn(move || coord.serve(cmd_rx));
 
         let mut tsper = coord::Timestamper::new(
+            std::time::Duration::from_millis(50),
+            1000,
             None,
-            ts_r,
+            TimestampChannel {
+                sender: source_tx,
+                receiver: ts_rx,
+            },
+            None,
         );
+
         let timestamp_thread = thread::spawn(move || tsper.update());
 
         let dataflow_workers = dataflow::serve(
@@ -407,6 +421,7 @@ impl State {
             process_id,
             switchboard,
             runtime.handle().clone(),
+            true,
             logging_config,
         )
         .unwrap();
@@ -415,6 +430,7 @@ impl State {
             cmd_tx,
             _dataflow_workers: Box::new(dataflow_workers),
             _coord_thread: coord_thread.join_on_drop(),
+            _timestamp_thread: timestamp_thread.join_on_drop(),
             _runtime: runtime,
             session: Session::default(),
             conn_id: 1,

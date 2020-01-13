@@ -40,10 +40,17 @@ CREATE TABLE items (
 
 INSERT INTO databases VALUES (1, 'materialize');
 INSERT INTO schemas VALUES
-   (1, NULL, 'mz_catalog'),
+    (1, NULL, 'mz_catalog'),
     (2, NULL, 'pg_catalog'),
     (3, 1, 'public');
-";
+
+CREATE TABLE IF NOT EXISTS timestamp (
+    sid blob NOT NULL,
+    vid blob NOT NULL,
+    timestamp unsigned bigint NOT NULL,
+    offset blob NOT NULL,
+    PRIMARY KEY (sid,vid,timestamp)
+);";
 
 #[derive(Debug)]
 pub struct Connection {
@@ -286,7 +293,7 @@ fn is_constraint_violation(err: &rusqlite::Error) -> bool {
     }
 }
 
-struct SqlVal<T>(pub T);
+pub struct SqlVal<T>(pub T);
 
 impl<T> ToSql for SqlVal<T>
 where

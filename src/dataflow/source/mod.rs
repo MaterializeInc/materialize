@@ -23,6 +23,12 @@ pub struct SourceToken {
     activator: Activator,
 }
 
+impl SourceToken {
+    pub fn activate(&self) {
+        self.activator.activate();
+    }
+}
+
 impl Drop for SourceToken {
     fn drop(&mut self) {
         *self.capability.borrow_mut() = None;

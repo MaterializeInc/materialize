@@ -18,11 +18,12 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.3"
+log = "0.4"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 repr = { path = "../repr" }
 rusqlite = { version = "0.20", features = ["bundled"] }
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
+rdkafka = { version = "0.23.1", features = ["cmake-build"] }
 sql = { path = "../sql" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }

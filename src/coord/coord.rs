@@ -36,15 +36,19 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, Sink, SinkConnector, TailSinkConnector,
-    Timestamp, Update, View,
+    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PeekWhen, Sink, SinkConnector,
+    TailSinkConnector, Timestamp, Update, View,
 };
-use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr};
+use expr::{
+    EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr,
+    SourceInstanceId,
+};
 use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
 
+use crate::timestamp::{TimestampChannel, TimestampMessage};
 use crate::{Command, ExecuteResponse, Response};
 use futures::Stream;
 
@@ -68,6 +72,7 @@ where
     pub bootstrap_sql: String,
     pub data_directory: Option<&'a Path>,
     pub executor: &'a tokio::runtime::Handle,
+    pub ts_channel: Option<TimestampChannel>,
 }
 
 /// Glues the external world to the Timely workers.
@@ -93,6 +98,10 @@ where
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
     active_tails: HashMap<u32, GlobalId>,
+    /// Channel for exchanging timestamping information. None if timestamping not activated
+    source_updates: Option<TimestampChannel>,
+    /// Instance count: number of times sources have been instantiated in views. This is used
+    /// to associate each new instance of a source with a unique instance id (iid)
     local_input_time: Timestamp,
     log: bool,
     executor: Option<tokio::runtime::Handle>,
@@ -187,6 +196,7 @@ where
             local_input_time: 1,
             log: config.logging.is_some(),
             executor: Some(config.executor.clone()),
+            source_updates: config.ts_channel,
         };
 
         let executor = config.executor;
@@ -276,7 +286,6 @@ where
                     }
                 }
             }
-
             Ok(coord)
         })
     }
@@ -287,18 +296,52 @@ where
             .expect("serve called twice on coordinator")
             .enter(|| {
                 let feedback_rx = self.enable_feedback();
+
                 let streams: Vec<Box<dyn Stream<Item = Result<Message, comm::Error>> + Unpin>> = vec![
-                    Box::new(
-                        cmd_rx
-                            .map(Message::Command)
-                            .chain(stream::once(future::ready(Message::Shutdown)))
-                            .map(Ok),
-                    ),
-                    Box::new(feedback_rx.map_ok(Message::Worker)),
-                ];
+                                        Box::new(
+                                            cmd_rx
+                                                .map(Message::Command)
+                                                .chain(stream::once(future::ready(Message::Shutdown)))
+                                                .map(Ok),
+                                        ),
+                                        Box::new(feedback_rx.map_ok(Message::Worker)),
+                                    ];
 
                 let mut messages = stream::select_all(streams);
-                while let Some(msg) = block_on(messages.next()) {
+
+               while let Some(msg) = block_on(messages.next()) {
+                    // Check for timestamp updates
+                    // TODO(natacha): cleaner if make channel a future channel?
+                    if let Some(source_updates) = &self.source_updates {
+                        while let Ok(update) = source_updates.receiver.try_recv() {
+                            match update {
+                                TimestampMessage::BatchedUpdate(timestamp, updates) => {
+                                    for (id, offset) in updates {
+                                        broadcast(
+                                            &mut self.broadcast_tx,
+                                            SequencedCommand::AdvanceSourceTimestamp {
+                                                id,
+                                                timestamp,
+                                                offset,
+                                            },
+                                        );
+                                    }
+                                }
+                                TimestampMessage::Update(id, timestamp, offset) => {
+                                    broadcast(
+                                        &mut self.broadcast_tx,
+                                        SequencedCommand::AdvanceSourceTimestamp {
+                                            id,
+                                            timestamp,
+                                            offset,
+                                        },
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
                     match msg.expect("coordinator message receiver failed") {
                         Message::Command(Command::Execute {
                             portal_name,
@@ -377,9 +420,9 @@ where
                     match msg.expect("coordinator message receiver failed") {
                         Message::Command(_) | Message::Shutdown => unreachable!(),
                         Message::Worker(_) | Message::PlanReady(_, _, _, _) => (),
-                    }
+                   }
                 }
-            })
+            });
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
@@ -866,14 +909,40 @@ where
         Ok(id)
     }
 
-    fn import_source_or_view(&mut self, id: &GlobalId, dataflow: &mut DataflowDesc) {
+    fn import_source_or_view(
+        &mut self,
+        orig_id: &GlobalId,
+        id: &GlobalId,
+        dataflow: &mut DataflowDesc,
+    ) {
         if dataflow.objects_to_build.iter().any(|bd| &bd.id == id)
-            || dataflow.source_imports.iter().any(|(i, _)| i == id)
+            || dataflow.source_imports.iter().any(|(i, _)| &i.sid == id)
         {
             return;
         }
         if let Some(source) = self.sources.get(id) {
-            dataflow.add_source_import(*id, source.clone());
+            // A source is being imported as part of a new view. We have to notify the timestamping
+            // thread that a source instance is being created for this view
+            let instance_id = SourceInstanceId {
+                sid: *id,
+                vid: *orig_id,
+            };
+            // Notify timestamping thread that we should start computing timestamps for that thread
+            if let ExternalSourceConnector::Kafka(ksc) = &source.connector.connector {
+                if let Some(source_updates) = &self.source_updates {
+                    source_updates
+                        .sender
+                        .send(TimestampMessage::Add(
+                            self.catalog.get_by_id(id).name().clone(),
+                            self.catalog.get_by_id(orig_id).name().clone(),
+                            instance_id,
+                            ksc.addr.clone(),
+                            ksc.topic.clone(),
+                        ))
+                        .expect("Failed to send source update");
+                }
+            }
+            dataflow.add_source_import(instance_id, source.clone());
         } else {
             let view_item = self.catalog.get_by_id(id).item().clone();
             match view_item {
@@ -939,7 +1008,7 @@ where
                 typ: _,
             } = e
             {
-                self.import_source_or_view(id, dataflow);
+                self.import_source_or_view(view_id, id, dataflow);
                 dataflow.add_dependency(*view_id, *id)
             }
         });
@@ -975,7 +1044,7 @@ where
         index: dataflow_types::Index,
         mut dataflow: DataflowDesc,
     ) {
-        self.import_source_or_view(&index.desc.on_id, &mut dataflow);
+        self.import_source_or_view(id, &index.desc.on_id, &mut dataflow);
         dataflow.add_index_to_build(*id, index.clone());
         dataflow.add_index_export(*id, index.desc.clone(), index.relation_type.clone());
         // TODO: should we still support creating multiple dataflows with a single command,
@@ -1025,7 +1094,7 @@ where
 
     fn create_sink_dataflow(&mut self, name: String, id: GlobalId, sink: dataflow_types::Sink) {
         let mut dataflow = DataflowDesc::new(name);
-        self.import_source_or_view(&sink.from.0, &mut dataflow);
+        self.import_source_or_view(&id, &sink.from.0, &mut dataflow);
         dataflow.add_sink_export(id, sink);
         broadcast(
             &mut self.broadcast_tx,
@@ -1056,6 +1125,17 @@ where
         }
 
         if !views_to_drop.is_empty() {
+            for v in &views_to_drop {
+                if let Some(source_updates) = &self.source_updates {
+                    source_updates
+                        .sender
+                        .send(TimestampMessage::DropView(
+                            self.catalog.get_by_id(v).name().clone(),
+                            v.clone(),
+                        ))
+                        .expect("Failed to send source update");
+                }
+            }
             self.drop_views(views_to_drop);
         }
 
@@ -1221,6 +1301,7 @@ where
         // a larger timestamp and block, perhaps the user should intervene).
         let mut uses_ids = Vec::new();
         source.global_uses(&mut uses_ids);
+
         uses_ids.sort();
         uses_ids.dedup();
 

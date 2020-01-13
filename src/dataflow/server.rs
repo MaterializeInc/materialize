@@ -6,9 +6,11 @@
 //! An interactive dataflow server.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Mutex;
 
 use differential_dataflow::trace::cursor::Cursor;
@@ -37,7 +39,7 @@ use dataflow_types::{
     compare_columns, DataflowDesc, Diff, Index, IndexDesc, PeekResponse, RowSetFinishing,
     Timestamp, Update,
 };
-use expr::{EvalEnv, GlobalId};
+use expr::{EvalEnv, GlobalId, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, Row, RowArena};
 
@@ -48,6 +50,8 @@ use crate::arrangement::{
 };
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
+
+use crate::source::SourceToken;
 
 lazy_static! {
     static ref COMMAND_QUEUE_RAW: IntGaugeVec = register_int_gauge_vec!(
@@ -128,6 +132,12 @@ pub enum SequencedCommand {
     AllowCompaction(Vec<(GlobalId, Vec<Timestamp>)>),
     /// Append a new event to the log stream.
     AppendLog(MaterializedEvent),
+    /// Advance worker timestamp
+    AdvanceSourceTimestamp {
+        id: SourceInstanceId,
+        timestamp: Timestamp,
+        offset: i64,
+    },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
@@ -158,6 +168,7 @@ pub fn serve<C>(
     process: usize,
     switchboard: comm::Switchboard<C>,
     executor: tokio::runtime::Handle,
+    advance_timestamp: bool,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String>
 where
@@ -207,11 +218,16 @@ where
                 reported_frontiers: HashMap::new(),
                 executor: executor.clone(),
                 metrics: Metrics::for_worker_id(worker_idx),
+                advance_timestamp,
+                timestamp_histories: Default::default(),
+                global_source_mapping: HashMap::new(),
             }
             .run()
         })
     })
 }
+
+pub type TimestampHistories = Rc<RefCell<HashMap<SourceInstanceId, Vec<(Timestamp, i64)>>>>;
 
 struct Worker<'w, A>
 where
@@ -226,6 +242,9 @@ where
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: HashMap<GlobalId, LocalInput>,
+    advance_timestamp: bool,
+    global_source_mapping: HashMap<SourceInstanceId, Rc<Option<SourceToken>>>,
+    timestamp_histories: TimestampHistories,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     executor: tokio::runtime::Handle,
     metrics: Metrics,
@@ -444,6 +463,9 @@ where
                         &mut self.traces,
                         self.inner,
                         &mut self.sink_tokens,
+                        self.advance_timestamp,
+                        &mut self.global_source_mapping,
+                        self.timestamp_histories.clone(),
                         &mut self.materialized_logger,
                         &self.executor,
                     );
@@ -453,6 +475,10 @@ where
             SequencedCommand::DropSources(names) => {
                 for name in names {
                     self.local_inputs.remove(&name);
+                    // TODO(natacha): implement
+                    unimplemented!();
+                    // self.timestamp_histories.borrow_mut().remove(&name);
+                    // self.global_source_mapping.remove(&name);
                 }
             }
 
@@ -468,6 +494,10 @@ where
                             .remove(view_id)
                             .expect("Dropped view with no frontier");
                     }
+                    self.global_source_mapping.retain(|&k, _| k.vid != *view_id);
+                    self.timestamp_histories
+                        .borrow_mut()
+                        .retain(|&k, _| k.vid != *view_id);
                 }
             }
 
@@ -610,6 +640,30 @@ where
                 // this should lead timely to wind down eventually
                 self.traces.del_all_traces();
                 self.shutdown_logging();
+            }
+
+            SequencedCommand::AdvanceSourceTimestamp {
+                id,
+                timestamp,
+                offset,
+            } => {
+                let mut timestamps = self.timestamp_histories.borrow_mut();
+                let entries = timestamps.entry(id).or_insert_with(|| vec![]);
+                entries.push((timestamp, offset));
+                let last_offset = if let Some(offs) = timestamps.get(&id).unwrap().last() {
+                    offs.1
+                } else {
+                    -1
+                };
+                if last_offset == offset {
+                    // We only activate the Kakfa source if the offset is the same as the last
+                    // offset as new data already triggers the Kafka source's activation
+                    if let Some(source) = self.global_source_mapping.get(&id) {
+                        if let Some(token) = &**source {
+                            token.activate();
+                        }
+                    }
+                }
             }
         }
     }

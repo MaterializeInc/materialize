@@ -444,6 +444,7 @@ dependencies = [
  "expr",
  "failure",
  "futures",
+ "log",
  "ore",
  "pgrepr",
  "rdkafka",
@@ -1583,6 +1584,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-postgres",
+ "url",
 ]
 
 [[package]]
