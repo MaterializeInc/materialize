@@ -10,6 +10,13 @@ distributed without the express permission of Materialize, Inc.
 <head>
     <meta charset="utf-8">
     <title>Materialize developer hub</title>
+
+    <style>
+        .code {
+            font-family: monospace;
+            margin-left: 40px;
+        }
+    </style>
 </head>
 <body>
     <h1>Materialize developer documentation</h1>
@@ -22,9 +29,9 @@ distributed without the express permission of Materialize, Inc.
     </ul>
 
     <p>Linux one-liner:</p>
-    <pre>
-      $ curl -L http://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz | tar -C /usr/local materialized
-    </pre>
+    <div class="code">
+      $ curl -L https://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz | tar -xzC /usr/local --strip-components=1
+    </div>
 
     <p>Resources:</p>
     <ul>
