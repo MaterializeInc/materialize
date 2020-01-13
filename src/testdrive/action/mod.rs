@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use crate::error::{Error, InputError};
 use crate::parser::{Command, PosCommand};
+use compile_proto::compile_protoc;
 
+mod compile_proto;
 mod kafka;
 mod sql;
 
@@ -21,6 +23,8 @@ pub struct Config {
     pub kafka_addr: Option<String>,
     pub schema_registry_url: Option<String>,
     pub materialized_url: Option<String>,
+    /// The correct path to the `testdrive_data` directory relative to execution
+    pub data_dir: Option<String>,
 }
 
 pub struct State {
@@ -51,7 +55,11 @@ pub trait Action {
     fn redo(&self, state: &mut State) -> Result<(), String>;
 }
 
-pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, InputError> {
+pub fn build(
+    cmds: Vec<PosCommand>,
+    state: &State,
+    data_dir: Option<&str>,
+) -> Result<Vec<PosAction>, InputError> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
     vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
@@ -64,6 +72,11 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
             .and_then(|mut addrs| addrs.next())
             .map(|addr| addr.to_string())
             .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
+    );
+    vars.insert(
+        "testdrive.data_dir".into(),
+        // this should only happen if test drive is being run from stdin
+        data_dir.unwrap_or("<COULD_NOT_FIND_DATA_DIR>").into(),
     );
     vars.insert(
         "testdrive.schema-registry-url".into(),
@@ -85,6 +98,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
                 match builtin.name.as_ref() {
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
+                    "compile-protoc" => {
+                        Box::new(compile_protoc(builtin).map_err(|e| InputError {
+                            msg: e.to_string(),
+                            pos,
+                        })?)
+                    }
                     "set" => {
                         vars.extend(builtin.args);
                         continue;

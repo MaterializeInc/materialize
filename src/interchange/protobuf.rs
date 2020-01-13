@@ -23,7 +23,8 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, Scalar
 
 pub mod test_util;
 
-fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
+pub fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
+    // TODO: turn this into a result/remove panics
     let mut file = fs::File::open(descriptor_file).expect("Opening descriptor set file failed");
     let proto = protobuf::parse_from_reader(&mut file).expect("Parsing descriptor set failed");
     Descriptors::from_proto(&proto)
