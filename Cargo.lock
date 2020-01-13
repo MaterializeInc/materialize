@@ -2869,6 +2869,7 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
+ "futures",
  "interchange",
  "ore",
  "pgrepr",

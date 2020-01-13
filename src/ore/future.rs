@@ -8,12 +8,14 @@
 //! This module provides future and stream combinators that are missing from
 //! the [`futures`](futures) crate.
 
+use fmt::Debug;
+use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::future::{Either, MapOk, TryFuture, TryFutureExt};
+use futures::future::{Either, FutureExt, MapOk, TryFuture, TryFutureExt};
 use futures::sink::Sink;
 use futures::stream::{
     Fuse, FuturesUnordered, Stream, StreamExt, StreamFuture, TryStream, TryStreamExt,
@@ -331,5 +333,57 @@ impl<T, E> Sink<T> for DevNull<T, E> {
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
+    }
+}
+
+/// Either a future or an immediately available value
+pub enum MaybeFuture<'a, T: Unpin + Debug> {
+    /// An immediately available value. Will be `Some` unless
+    /// `poll` has been called.
+    Immediate(Option<T>),
+    /// A computation producing the value.
+    Future(Pin<Box<dyn Future<Output = T> + 'a + Send>>),
+}
+
+impl<'a, T: Unpin + fmt::Debug> fmt::Debug for MaybeFuture<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Immediate(op) => write!(f, "Immediate({:?})", op),
+            Self::Future(_) => write!(f, "Future(...)"),
+        }
+    }
+}
+
+impl<'a, T: Unpin + Debug> From<T> for MaybeFuture<'a, T> {
+    fn from(t: T) -> Self {
+        Self::Immediate(Some(t))
+    }
+}
+
+impl<'a, T: Unpin + Debug + 'a> MaybeFuture<'a, T> {
+    /// Apply a function to the underlying value
+    /// (possibly after the future completes)
+    pub fn map<F, R: Unpin + Debug>(self, f: F) -> MaybeFuture<'a, R>
+    where
+        F: FnOnce(T) -> R + 'static + Send,
+    {
+        match self {
+            MaybeFuture::Immediate(t) => MaybeFuture::Immediate(t.map(f)),
+            MaybeFuture::Future(fut) => {
+                let fut = Pin::from(Box::new(fut.map(f)));
+                MaybeFuture::Future(fut)
+            }
+        }
+    }
+}
+
+impl<'a, T: Unpin + Debug> Future for MaybeFuture<'a, T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::into_inner(self) {
+            Self::Immediate(t) => Poll::Ready(t.take().unwrap()),
+            Self::Future(fut) => Pin::new(fut).poll(cx),
+        }
     }
 }
