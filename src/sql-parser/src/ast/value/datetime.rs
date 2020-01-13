@@ -12,7 +12,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-// #![deny(missing_docs)]
 
 use std::fmt;
 use std::time::Duration;
@@ -282,7 +281,7 @@ impl IntervalValue {
 
     /// Retrieve any value that we parsed out of the literal string for the
     /// `field`.
-    fn units_of(&self, field: DateTimeField) -> Option<DateTimeUnit> {
+    fn units_of(&self, field: DateTimeField) -> Option<DateTimeFieldValue> {
         match field {
             DateTimeField::Year => self.parsed.year,
             DateTimeField::Month => self.parsed.month,
@@ -358,7 +357,7 @@ pub struct ParsedTimestamp {
 /// Tracks a unit and a fraction from a parsed time-like string, e.g. INTERVAL
 /// '1.2' DAYS.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct DateTimeUnit {
+pub struct DateTimeFieldValue {
     /// Integer part of the value.
     pub unit: i64,
     /// Fractional part of value, padded to billions/has 9 digits of precision,
@@ -366,19 +365,19 @@ pub struct DateTimeUnit {
     pub fraction: i64,
 }
 
-impl Default for DateTimeUnit {
+impl Default for DateTimeFieldValue {
     fn default() -> Self {
-        DateTimeUnit {
+        DateTimeFieldValue {
             unit: 0,
             fraction: 0,
         }
     }
 }
 
-impl DateTimeUnit {
-    /// Construct DateTimeUnit { unit, fraction }.
+impl DateTimeFieldValue {
+    /// Construct DateTimeFieldValue { unit, fraction }.
     pub fn new(unit: i64, fraction: i64) -> Self {
-        DateTimeUnit { unit, fraction }
+        DateTimeFieldValue { unit, fraction }
     }
 }
 /// All of the fields that can appear in a literal `DATE`, `TIMESTAMP` or `INTERVAL` string.
@@ -388,13 +387,13 @@ impl DateTimeUnit {
 /// [`ParsedTimestamp`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParsedDateTime {
-    pub year: Option<DateTimeUnit>,
-    pub month: Option<DateTimeUnit>,
-    pub day: Option<DateTimeUnit>,
-    pub hour: Option<DateTimeUnit>,
-    pub minute: Option<DateTimeUnit>,
+    pub year: Option<DateTimeFieldValue>,
+    pub month: Option<DateTimeFieldValue>,
+    pub day: Option<DateTimeFieldValue>,
+    pub hour: Option<DateTimeFieldValue>,
+    pub minute: Option<DateTimeFieldValue>,
     // second.fraction is equivalent to nanoseconds.
-    pub second: Option<DateTimeUnit>,
+    pub second: Option<DateTimeFieldValue>,
     pub timezone_offset_second: Option<i64>,
 }
 
@@ -418,7 +417,7 @@ impl ParsedDateTime {
     pub fn write_field_iff_none(
         &mut self,
         f: DateTimeField,
-        u: Option<DateTimeUnit>,
+        u: Option<DateTimeFieldValue>,
     ) -> Result<(), failure::Error> {
         use DateTimeField::*;
 
@@ -818,12 +817,12 @@ fn test_interval_value_add_field() {
     use DateTimeField::*;
     let iv_unit = IntervalValue {
         parsed: ParsedDateTime {
-            year: Some(DateTimeUnit::new(1, 0)),
-            month: Some(DateTimeUnit::new(2, 0)),
-            day: Some(DateTimeUnit::new(2, 0)),
-            hour: Some(DateTimeUnit::new(3, 0)),
-            minute: Some(DateTimeUnit::new(4, 0)),
-            second: Some(DateTimeUnit::new(5, 0)),
+            year: Some(DateTimeFieldValue::new(1, 0)),
+            month: Some(DateTimeFieldValue::new(2, 0)),
+            day: Some(DateTimeFieldValue::new(2, 0)),
+            hour: Some(DateTimeFieldValue::new(3, 0)),
+            minute: Some(DateTimeFieldValue::new(4, 0)),
+            second: Some(DateTimeFieldValue::new(5, 0)),
             ..Default::default()
         },
         ..Default::default()
@@ -831,12 +830,12 @@ fn test_interval_value_add_field() {
 
     let iv_frac = IntervalValue {
         parsed: ParsedDateTime {
-            year: Some(DateTimeUnit::new(1, 555_555_555)),
-            month: Some(DateTimeUnit::new(2, 555_555_555)),
-            day: Some(DateTimeUnit::new(2, 555_555_555)),
-            hour: Some(DateTimeUnit::new(3, 555_555_555)),
-            minute: Some(DateTimeUnit::new(4, 555_555_555)),
-            second: Some(DateTimeUnit::new(5, 555_555_555)),
+            year: Some(DateTimeFieldValue::new(1, 555_555_555)),
+            month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+            day: Some(DateTimeFieldValue::new(2, 555_555_555)),
+            hour: Some(DateTimeFieldValue::new(3, 555_555_555)),
+            minute: Some(DateTimeFieldValue::new(4, 555_555_555)),
+            second: Some(DateTimeFieldValue::new(5, 555_555_555)),
             ..Default::default()
         },
         ..Default::default()
@@ -844,12 +843,12 @@ fn test_interval_value_add_field() {
 
     let iv_frac_neg = IntervalValue {
         parsed: ParsedDateTime {
-            year: Some(DateTimeUnit::new(-1, -555_555_555)),
-            month: Some(DateTimeUnit::new(-2, -555_555_555)),
-            day: Some(DateTimeUnit::new(-2, -555_555_555)),
-            hour: Some(DateTimeUnit::new(-3, -555_555_555)),
-            minute: Some(DateTimeUnit::new(-4, -555_555_555)),
-            second: Some(DateTimeUnit::new(-5, -555_555_555)),
+            year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+            month: Some(DateTimeFieldValue::new(-2, -555_555_555)),
+            day: Some(DateTimeFieldValue::new(-2, -555_555_555)),
+            hour: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+            minute: Some(DateTimeFieldValue::new(-4, -555_555_555)),
+            second: Some(DateTimeFieldValue::new(-5, -555_555_555)),
             ..Default::default()
         },
         ..Default::default()
@@ -860,7 +859,7 @@ fn test_interval_value_add_field() {
     run_test_interval_value_add_field(iv_unit.clone(), Day, (0, 2 * 60 * 60 * 24, 0));
     run_test_interval_value_add_field(iv_unit.clone(), Hour, (0, 3 * 60 * 60, 0));
     run_test_interval_value_add_field(iv_unit.clone(), Minute, (0, 4 * 60, 0));
-    run_test_interval_value_add_field(iv_unit.clone(), Second, (0, 5, 0));
+    run_test_interval_value_add_field(iv_unit, Second, (0, 5, 0));
     run_test_interval_value_add_field(iv_frac.clone(), Year, (18, 0, 0));
     run_test_interval_value_add_field(
         iv_frac.clone(),
@@ -903,7 +902,7 @@ fn test_interval_value_add_field() {
         ),
     );
     run_test_interval_value_add_field(
-        iv_frac.clone(),
+        iv_frac,
         Second,
         (
             0,
@@ -913,13 +912,13 @@ fn test_interval_value_add_field() {
         ),
     );
     run_test_interval_value_add_field(iv_frac_neg.clone(), Year, (-18, 0, 0));
-    (
+    run_test_interval_value_add_field(
         iv_frac_neg.clone(),
         Month,
         (
             -2,
             // -16 days -15:59:59.99856
-            -1 * (16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59),
+            -(16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59),
             -998_560_000,
         ),
     );
@@ -929,7 +928,7 @@ fn test_interval_value_add_field() {
         (
             0,
             // -2 days 13:19:59.999952
-            -1 * (2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59),
+            -(2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59),
             -999_952_000,
         ),
     );
@@ -939,7 +938,7 @@ fn test_interval_value_add_field() {
         (
             0,
             // -03:33:19.999998
-            -1 * (3 * 60 * 60 + 33 * 60 + 19),
+            -(3 * 60 * 60 + 33 * 60 + 19),
             -999_998_000,
         ),
     );
@@ -949,12 +948,12 @@ fn test_interval_value_add_field() {
         (
             0,
             // -00:04:33.333333
-            -1 * (4 * 60 + 33),
+            -(4 * 60 + 33),
             -333_333_300,
         ),
     );
     run_test_interval_value_add_field(
-        iv_frac_neg.clone(),
+        iv_frac_neg,
         Second,
         (
             0,
@@ -988,8 +987,8 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                year: Some(DateTimeUnit::new(1, 0)),
-                month: Some(DateTimeUnit::new(1, 0)),
+                year: Some(DateTimeFieldValue::new(1, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
                 ..Default::default()
             },
             ..Default::default()
@@ -1002,8 +1001,8 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                year: Some(DateTimeUnit::new(1, 0)),
-                month: Some(DateTimeUnit::new(-1, 0)),
+                year: Some(DateTimeFieldValue::new(1, 0)),
+                month: Some(DateTimeFieldValue::new(-1, 0)),
                 ..Default::default()
             },
             ..Default::default()
@@ -1016,8 +1015,8 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                year: Some(DateTimeUnit::new(-1, 0)),
-                month: Some(DateTimeUnit::new(1, 0)),
+                year: Some(DateTimeFieldValue::new(-1, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
                 ..Default::default()
             },
             ..Default::default()
@@ -1030,10 +1029,10 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                day: Some(DateTimeUnit::new(1, 0)),
-                hour: Some(DateTimeUnit::new(-2, 0)),
-                minute: Some(DateTimeUnit::new(-3, 0)),
-                second: Some(DateTimeUnit::new(-4, -500_000_000)),
+                day: Some(DateTimeFieldValue::new(1, 0)),
+                hour: Some(DateTimeFieldValue::new(-2, 0)),
+                minute: Some(DateTimeFieldValue::new(-3, 0)),
+                second: Some(DateTimeFieldValue::new(-4, -500_000_000)),
                 ..Default::default()
             },
             ..Default::default()
@@ -1047,10 +1046,10 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                day: Some(DateTimeUnit::new(-1, 0)),
-                hour: Some(DateTimeUnit::new(2, 0)),
-                minute: Some(DateTimeUnit::new(3, 0)),
-                second: Some(DateTimeUnit::new(4, 500_000_000)),
+                day: Some(DateTimeFieldValue::new(-1, 0)),
+                hour: Some(DateTimeFieldValue::new(2, 0)),
+                minute: Some(DateTimeFieldValue::new(3, 0)),
+                second: Some(DateTimeFieldValue::new(4, 500_000_000)),
                 ..Default::default()
             },
             ..Default::default()
@@ -1065,8 +1064,8 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                day: Some(DateTimeUnit::new(1, 0)),
-                second: Some(DateTimeUnit::new(0, -270_000_000)),
+                day: Some(DateTimeFieldValue::new(1, 0)),
+                second: Some(DateTimeFieldValue::new(0, -270_000_000)),
                 ..Default::default()
             },
             ..Default::default()
@@ -1080,8 +1079,8 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                day: Some(DateTimeUnit::new(-1, 0)),
-                second: Some(DateTimeUnit::new(0, 270_000_000)),
+                day: Some(DateTimeFieldValue::new(-1, 0)),
+                second: Some(DateTimeFieldValue::new(0, 270_000_000)),
                 ..Default::default()
             },
             ..Default::default()
@@ -1096,12 +1095,12 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                year: Some(DateTimeUnit::new(-1, -555_555_555)),
-                month: Some(DateTimeUnit::new(2, 555_555_555)),
-                day: Some(DateTimeUnit::new(-3, -555_555_555)),
-                hour: Some(DateTimeUnit::new(4, 555_555_555)),
-                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
-                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
                 ..Default::default()
             },
             ..Default::default()
@@ -1116,12 +1115,12 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                year: Some(DateTimeUnit::new(-1, -555_555_555)),
-                month: Some(DateTimeUnit::new(2, 555_555_555)),
-                day: Some(DateTimeUnit::new(-3, -555_555_555)),
-                hour: Some(DateTimeUnit::new(4, 555_555_555)),
-                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
-                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
                 ..Default::default()
             },
             fsec_max_precision: Some(1),
@@ -1137,12 +1136,12 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                year: Some(DateTimeUnit::new(-1, -555_555_555)),
-                month: Some(DateTimeUnit::new(2, 555_555_555)),
-                day: Some(DateTimeUnit::new(-3, -555_555_555)),
-                hour: Some(DateTimeUnit::new(4, 555_555_555)),
-                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
-                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
                 ..Default::default()
             },
             precision_high: Month,
@@ -1159,12 +1158,12 @@ fn test_interval_value_compute_interval() {
     run_test_interval_value_compute_interval(
         IntervalValue {
             parsed: ParsedDateTime {
-                year: Some(DateTimeUnit::new(-1, -555_555_555)),
-                month: Some(DateTimeUnit::new(2, 555_555_555)),
-                day: Some(DateTimeUnit::new(-3, -555_555_555)),
-                hour: Some(DateTimeUnit::new(4, 555_555_555)),
-                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
-                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
                 ..Default::default()
             },
             precision_high: Day,
@@ -1182,12 +1181,12 @@ fn test_interval_value_compute_interval() {
         IntervalValue {
             value: "".to_string(),
             parsed: ParsedDateTime {
-                year: Some(DateTimeUnit::new(-1, -555_555_555)),
-                month: Some(DateTimeUnit::new(2, 555_555_555)),
-                day: Some(DateTimeUnit::new(-3, -555_555_555)),
-                hour: Some(DateTimeUnit::new(4, 555_555_555)),
-                minute: Some(DateTimeUnit::new(-5, -555_555_555)),
-                second: Some(DateTimeUnit::new(6, 555_555_555)),
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
                 ..Default::default()
             },
             precision_high: Day,

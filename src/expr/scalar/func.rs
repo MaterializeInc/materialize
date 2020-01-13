@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
 use repr::regex::Regex;
-use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
+use repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 
 use self::format::DateTimeFormat;
 pub use crate::like::build_like_regex_from_string;

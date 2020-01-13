@@ -14,7 +14,7 @@
 // limitations under the License.
 #![deny(missing_docs)]
 
-use crate::ast::{DateTimeUnit, ParsedDateTime};
+use crate::ast::{DateTimeFieldValue, ParsedDateTime};
 use crate::parser::{DateTimeField, ParserError};
 use log::warn;
 use std::str::FromStr;
@@ -252,10 +252,10 @@ fn fill_pdt_sql_standard(
     match leading_field {
         Year | Month => {
             if pdt.year.is_none() {
-                pdt.year = Some(DateTimeUnit::default());
+                pdt.year = Some(DateTimeFieldValue::default());
             }
             match pdt.month {
-                None => pdt.month = Some(DateTimeUnit::default()),
+                None => pdt.month = Some(DateTimeFieldValue::default()),
                 Some(m) => {
                     if m.unit >= 12 {
                         return parser_err!(
@@ -270,16 +270,16 @@ fn fill_pdt_sql_standard(
         }
         Day => {
             if pdt.day.is_none() {
-                pdt.day = Some(DateTimeUnit::default());
+                pdt.day = Some(DateTimeFieldValue::default());
             }
         }
         Hour | Minute | Second => {
             if pdt.hour.is_none() {
-                pdt.hour = Some(DateTimeUnit::default());
+                pdt.hour = Some(DateTimeFieldValue::default());
             }
 
             match pdt.minute {
-                None => pdt.minute = Some(DateTimeUnit::default()),
+                None => pdt.minute = Some(DateTimeFieldValue::default()),
                 Some(m) => {
                     if m.unit >= 60 {
                         return parser_err!(
@@ -293,7 +293,7 @@ fn fill_pdt_sql_standard(
             }
 
             match pdt.second {
-                None => pdt.second = Some(DateTimeUnit::default()),
+                None => pdt.second = Some(DateTimeFieldValue::default()),
                 Some(s) => {
                     if s.unit >= 60 {
                         return parser_err!(
@@ -367,7 +367,7 @@ fn fill_pdt_from_tokens(
 
     let mut i = 0u8;
 
-    let mut unit_buf: Option<DateTimeUnit> = None;
+    let mut unit_buf: Option<DateTimeFieldValue> = None;
 
     while let Some(atok) = actual.peek() {
         if let Some(etok) = expected.next() {
@@ -400,7 +400,7 @@ fn fill_pdt_from_tokens(
                             "Invalid syntax; parts must be separated by '-', ':', or ' '"
                         ),
                         None => {
-                            unit_buf = Some(DateTimeUnit {
+                            unit_buf = Some(DateTimeFieldValue {
                                 unit: *val * sign,
                                 fraction: 0,
                             });
@@ -414,7 +414,7 @@ fn fill_pdt_from_tokens(
                             u.fraction = *val * sign;
                         }
                         None => {
-                            unit_buf = Some(DateTimeUnit {
+                            unit_buf = Some(DateTimeFieldValue {
                                 unit: 0,
                                 fraction: *val * sign,
                             });
@@ -456,7 +456,7 @@ fn fill_pdt_from_tokens(
                             u.fraction = n * sign;
                         }
                         None => {
-                            unit_buf = Some(DateTimeUnit {
+                            unit_buf = Some(DateTimeFieldValue {
                                 unit: 0,
                                 fraction: n * sign,
                             });
@@ -1194,12 +1194,12 @@ mod test {
         let test_cases = [
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 0)),
                     ..Default::default()
                 },
                 "1 2 3 4 5 6",
@@ -1209,9 +1209,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(4, 0)),
-                    hour: Some(DateTimeUnit::new(5, 0)),
-                    minute: Some(DateTimeUnit::new(6, 0)),
+                    day: Some(DateTimeFieldValue::new(4, 0)),
+                    hour: Some(DateTimeFieldValue::new(5, 0)),
+                    minute: Some(DateTimeFieldValue::new(6, 0)),
                     ..Default::default()
                 },
                 "4 5 6",
@@ -1221,9 +1221,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(-4, 0)),
-                    hour: Some(DateTimeUnit::new(-5, 0)),
-                    minute: Some(DateTimeUnit::new(-6, 0)),
+                    day: Some(DateTimeFieldValue::new(-4, 0)),
+                    hour: Some(DateTimeFieldValue::new(-5, 0)),
+                    minute: Some(DateTimeFieldValue::new(-6, 0)),
                     ..Default::default()
                 },
                 "4 5 6",
@@ -1234,12 +1234,12 @@ mod test {
             // Mixed delimeter parsing
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 0)),
                     ..Default::default()
                 },
                 "1-2:3-4 5 6",
@@ -1250,11 +1250,11 @@ mod test {
             // Skip an element at the end
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(5, 0)),
-                    minute: Some(DateTimeUnit::new(6, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(5, 0)),
+                    minute: Some(DateTimeFieldValue::new(6, 0)),
                     ..Default::default()
                 },
                 "1 2 3 5 6",
@@ -1265,11 +1265,11 @@ mod test {
             // Skip an element w/ non-space parsing
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 0)),
                     ..Default::default()
                 },
                 "1-2:3- 5 6",
@@ -1280,12 +1280,12 @@ mod test {
             // Get Nanos from tokenizer
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 700_000_000)),
                     ..Default::default()
                 },
                 "1-2:3-4 5 6.7",
@@ -1296,7 +1296,7 @@ mod test {
             // Proper fraction/nano conversion anywhere
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 200_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 200_000_000)),
                     ..Default::default()
                 },
                 "1.2",
@@ -1306,7 +1306,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    minute: Some(DateTimeUnit::new(1, 200_000_000)),
+                    minute: Some(DateTimeFieldValue::new(1, 200_000_000)),
                     ..Default::default()
                 },
                 "1.2",
@@ -1317,7 +1317,7 @@ mod test {
             // Parse TimeUnit
             (
                 ParsedDateTime {
-                    month: Some(DateTimeUnit::new(3, 0)),
+                    month: Some(DateTimeFieldValue::new(3, 0)),
                     ..Default::default()
                 },
                 "3MONTHS",
@@ -1327,9 +1327,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
                     ..Default::default()
                 },
                 "1MONTHS 2DAYS 3HOURS",
@@ -1339,8 +1339,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "1MONTHS-2",
@@ -1414,9 +1414,12 @@ mod test {
             let expected = tokenize_time_str(test.1).unwrap();
             let mut expected = expected.iter().peekable();
 
-            match fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.2, test.3) {
-                Err(_) => {}
-                Ok(_) => {}
+            if fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.2, test.3).is_ok() {
+                panic!(
+                    "test_fill_pdt_from_tokens_panic should have paniced. input {}\nformat {}\
+                     \nDateTimeField {}\nGenerated ParsedDateTime {:?}",
+                    test.0, test.1, test.2, pdt
+                );
             };
         }
     }
@@ -1427,7 +1430,7 @@ mod test {
         let test_cases = [
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2, 0)),
+                    year: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "2",
@@ -1435,7 +1438,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    month: Some(DateTimeUnit::new(2, 300_000_000)),
+                    month: Some(DateTimeFieldValue::new(2, 300_000_000)),
                     ..Default::default()
                 },
                 "2.3",
@@ -1443,7 +1446,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    day: Some(DateTimeFieldValue::new(-2, -300_000_000)),
                     ..Default::default()
                 },
                 "-2.3",
@@ -1451,7 +1454,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "2",
@@ -1459,7 +1462,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    minute: Some(DateTimeUnit::new(2, 300_000_000)),
+                    minute: Some(DateTimeFieldValue::new(2, 300_000_000)),
                     ..Default::default()
                 },
                 "2.3",
@@ -1467,7 +1470,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    second: Some(DateTimeFieldValue::new(-2, -300_000_000)),
                     ..Default::default()
                 },
                 "-2.3",
@@ -1475,7 +1478,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2, 0)),
+                    year: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "2year",
@@ -1483,7 +1486,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    month: Some(DateTimeUnit::new(2, 300_000_000)),
+                    month: Some(DateTimeFieldValue::new(2, 300_000_000)),
                     ..Default::default()
                 },
                 "2.3month",
@@ -1491,7 +1494,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    day: Some(DateTimeFieldValue::new(-2, -300_000_000)),
                     ..Default::default()
                 },
                 "-2.3day",
@@ -1499,7 +1502,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "2hour",
@@ -1507,7 +1510,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    minute: Some(DateTimeUnit::new(2, 300_000_000)),
+                    minute: Some(DateTimeFieldValue::new(2, 300_000_000)),
                     ..Default::default()
                 },
                 "2.3minute",
@@ -1515,7 +1518,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    second: Some(DateTimeFieldValue::new(-2, -300_000_000)),
                     ..Default::default()
                 },
                 "-2.3second",
@@ -1523,7 +1526,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeUnit::new(-2, -300_000_000)),
+                    second: Some(DateTimeFieldValue::new(-2, -300_000_000)),
                     ..Default::default()
                 },
                 ":::::::::-2.3second",
@@ -1531,7 +1534,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeUnit::new(2, 300_000_000)),
+                    second: Some(DateTimeFieldValue::new(2, 300_000_000)),
                     ..Default::default()
                 },
                 ":::::::::+2.3second",
@@ -1540,8 +1543,8 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let mut actual = tokenize_time_str(test.1).unwrap();
-            fill_pdt_pg(&mut actual, test.2, test.1, &mut pdt).unwrap();
+            let actual = tokenize_time_str(test.1).unwrap();
+            fill_pdt_pg(&actual, test.2, test.1, &mut pdt).unwrap();
 
             assert_eq!(pdt, test.0);
         }
@@ -1575,8 +1578,8 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let mut actual = tokenize_time_str(test.0).unwrap();
-            match fill_pdt_pg(&mut actual, test.1, test.0, &mut pdt) {
+            let actual = tokenize_time_str(test.0).unwrap();
+            match fill_pdt_pg(&actual, test.1, test.0, &mut pdt) {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(_) => panic!(
                     "Test passed when expected to fail, generated ParsedDateTime {:?}",
@@ -1592,8 +1595,8 @@ mod test {
         let test_cases = [
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "1-2",
@@ -1601,9 +1604,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(1, 0)),
-                    minute: Some(DateTimeUnit::new(2, 0)),
-                    second: Some(DateTimeUnit::new(3, 400_000_000)),
+                    hour: Some(DateTimeFieldValue::new(1, 0)),
+                    minute: Some(DateTimeFieldValue::new(2, 0)),
+                    second: Some(DateTimeFieldValue::new(3, 400_000_000)),
                     ..Default::default()
                 },
                 "1:2:3.4",
@@ -1611,9 +1614,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(1, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(3, 400_000_000)),
+                    hour: Some(DateTimeFieldValue::new(1, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(3, 400_000_000)),
                     ..Default::default()
                 },
                 "1::3.4",
@@ -1621,9 +1624,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(1, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 400_000_000)),
+                    hour: Some(DateTimeFieldValue::new(1, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 400_000_000)),
                     ..Default::default()
                 },
                 "1::.4",
@@ -1631,9 +1634,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(0, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 400_000_000)),
+                    hour: Some(DateTimeFieldValue::new(0, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 400_000_000)),
                     ..Default::default()
                 },
                 ".4",
@@ -1641,9 +1644,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(0, 0)),
-                    minute: Some(DateTimeUnit::new(1, 0)),
-                    second: Some(DateTimeUnit::new(2, 300_000_000)),
+                    hour: Some(DateTimeFieldValue::new(0, 0)),
+                    minute: Some(DateTimeFieldValue::new(1, 0)),
+                    second: Some(DateTimeFieldValue::new(2, 300_000_000)),
                     ..Default::default()
                 },
                 "1:2.3",
@@ -1651,8 +1654,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(-1, 0)),
-                    month: Some(DateTimeUnit::new(-2, 0)),
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(-2, 0)),
                     ..Default::default()
                 },
                 "-1-2",
@@ -1660,9 +1663,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(-1, 0)),
-                    minute: Some(DateTimeUnit::new(-2, 0)),
-                    second: Some(DateTimeUnit::new(-3, -400_000_000)),
+                    hour: Some(DateTimeFieldValue::new(-1, 0)),
+                    minute: Some(DateTimeFieldValue::new(-2, 0)),
+                    second: Some(DateTimeFieldValue::new(-3, -400_000_000)),
                     ..Default::default()
                 },
                 "-1:2:3.4",
@@ -1670,8 +1673,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "+1-2",
@@ -1679,9 +1682,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(1, 0)),
-                    minute: Some(DateTimeUnit::new(2, 0)),
-                    second: Some(DateTimeUnit::new(3, 400_000_000)),
+                    hour: Some(DateTimeFieldValue::new(1, 0)),
+                    minute: Some(DateTimeFieldValue::new(2, 0)),
+                    second: Some(DateTimeFieldValue::new(3, 400_000_000)),
                     ..Default::default()
                 },
                 "+1:2:3.4",
@@ -1689,8 +1692,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(-1, 0)),
-                    month: Some(DateTimeUnit::new(-2, 0)),
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(-2, 0)),
                     ..Default::default()
                 },
                 "::::::-1-2",
@@ -1698,9 +1701,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(-1, 0)),
-                    minute: Some(DateTimeUnit::new(-2, 0)),
-                    second: Some(DateTimeUnit::new(-3, -400_000_000)),
+                    hour: Some(DateTimeFieldValue::new(-1, 0)),
+                    minute: Some(DateTimeFieldValue::new(-2, 0)),
+                    second: Some(DateTimeFieldValue::new(-3, -400_000_000)),
                     ..Default::default()
                 },
                 ":::::::-1:2:3.4",
@@ -1709,8 +1712,8 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let mut actual = tokenize_time_str(test.1).unwrap();
-            fill_pdt_sql_standard(&mut actual, test.2, test.1, &mut pdt).unwrap();
+            let actual = tokenize_time_str(test.1).unwrap();
+            fill_pdt_sql_standard(&actual, test.2, test.1, &mut pdt).unwrap();
 
             assert_eq!(pdt, test.0);
         }
@@ -1748,8 +1751,8 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let mut actual = tokenize_time_str(test.0).unwrap();
-            match fill_pdt_sql_standard(&mut actual, test.1, test.0, &mut pdt) {
+            let actual = tokenize_time_str(test.0).unwrap();
+            match fill_pdt_sql_standard(&actual, test.1, test.0, &mut pdt) {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(_) => panic!(
                     "Test passed when expected to fail, generated ParsedDateTime {:?}",
@@ -1765,107 +1768,107 @@ mod test {
             (
                 "2000-01-02",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
             ),
             (
                 "2000-01-02 3:4:5.6",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
                     ..Default::default()
                 },
             ),
             (
                 "2000 3:4:5.6",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
                     ..Default::default()
                 },
             ),
             (
                 "2000-1 3:4:5.6",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
                     ..Default::default()
                 },
             ),
             (
                 "2000-1- 3:4:5.6",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
                     ..Default::default()
                 },
             ),
             (
                 "2000-01-02 3:4",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
                     ..Default::default()
                 },
             ),
             (
                 "2000-01-02 3:4.5",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    minute: Some(DateTimeUnit::new(3, 0)),
-                    second: Some(DateTimeUnit::new(4, 500_000_000)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    minute: Some(DateTimeFieldValue::new(3, 0)),
+                    second: Some(DateTimeFieldValue::new(4, 500_000_000)),
                     ..Default::default()
                 },
             ),
             (
                 "2000-01-02 0::4.5",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(4, 500_000_000)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(4, 500_000_000)),
                     ..Default::default()
                 },
             ),
             (
                 "2000-01-02 0::.5",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 500_000_000)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 500_000_000)),
                     ..Default::default()
                 },
             ),
             (
                 "2000-1- 0::.5",
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(2000, 0)),
-                    month: Some(DateTimeUnit::new(1, 0)),
-                    hour: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 500_000_000)),
+                    year: Some(DateTimeFieldValue::new(2000, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
+                    hour: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 500_000_000)),
                     ..Default::default()
                 },
             ),
@@ -1882,12 +1885,12 @@ mod test {
         let test_cases = [
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 700_000_000)),
                     ..Default::default()
                 },
                 "1-2 3 4:5:6.7",
@@ -1895,12 +1898,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 700_000_000)),
                     ..Default::default()
                 },
                 "1 year 2 months 3 days 4 hours 5 minutes 6.7 seconds",
@@ -1908,7 +1911,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeUnit::new(1, 0)),
+                    second: Some(DateTimeFieldValue::new(1, 0)),
                     ..Default::default()
                 },
                 "1",
@@ -1916,7 +1919,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
                     ..Default::default()
                 },
                 "1",
@@ -1924,7 +1927,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    month: Some(DateTimeUnit::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(1, 0)),
                     ..Default::default()
                 },
                 "1",
@@ -1932,9 +1935,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(1, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 0)),
+                    hour: Some(DateTimeFieldValue::new(1, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 "1:",
@@ -1942,8 +1945,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(0, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 "1-",
@@ -1951,10 +1954,10 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(1, 0)),
-                    hour: Some(DateTimeUnit::new(2, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 0)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
+                    hour: Some(DateTimeFieldValue::new(2, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 "1 2:",
@@ -1962,11 +1965,11 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(0, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 "1-2 3:4",
@@ -1974,12 +1977,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(0, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(0, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 "1- 2 3:",
@@ -1987,11 +1990,11 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(5, 0)),
-                    month: Some(DateTimeUnit::new(6, 0)),
-                    hour: Some(DateTimeUnit::new(1, 0)),
-                    minute: Some(DateTimeUnit::new(2, 0)),
-                    second: Some(DateTimeUnit::new(3, 400_000_000)),
+                    year: Some(DateTimeFieldValue::new(5, 0)),
+                    month: Some(DateTimeFieldValue::new(6, 0)),
+                    hour: Some(DateTimeFieldValue::new(1, 0)),
+                    minute: Some(DateTimeFieldValue::new(2, 0)),
+                    second: Some(DateTimeFieldValue::new(3, 400_000_000)),
                     ..Default::default()
                 },
                 "1:2:3.4 5-6",
@@ -1999,9 +2002,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
                     ..Default::default()
                 },
                 "1-2 3",
@@ -2009,12 +2012,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(-1, 0)),
-                    month: Some(DateTimeUnit::new(-2, 0)),
-                    day: Some(DateTimeUnit::new(-3, 0)),
-                    hour: Some(DateTimeUnit::new(-4, 0)),
-                    minute: Some(DateTimeUnit::new(-5, 0)),
-                    second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(-2, 0)),
+                    day: Some(DateTimeFieldValue::new(-3, 0)),
+                    hour: Some(DateTimeFieldValue::new(-4, 0)),
+                    minute: Some(DateTimeFieldValue::new(-5, 0)),
+                    second: Some(DateTimeFieldValue::new(-6, -700_000_000)),
                     ..Default::default()
                 },
                 "-1-2 -3 -4:5:6.7",
@@ -2022,12 +2025,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(-1, 0)),
-                    month: Some(DateTimeUnit::new(-2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(-4, 0)),
-                    minute: Some(DateTimeUnit::new(-5, 0)),
-                    second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(-2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(-4, 0)),
+                    minute: Some(DateTimeFieldValue::new(-5, 0)),
+                    second: Some(DateTimeFieldValue::new(-6, -700_000_000)),
                     ..Default::default()
                 },
                 "-1-2 3 -4:5:6.7",
@@ -2035,12 +2038,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(-1, 0)),
-                    month: Some(DateTimeUnit::new(-2, 0)),
-                    day: Some(DateTimeUnit::new(-3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 500_000_000)),
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(-2, 0)),
+                    day: Some(DateTimeFieldValue::new(-3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 500_000_000)),
                     ..Default::default()
                 },
                 "-1-2 -3 4::.5",
@@ -2048,9 +2051,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    hour: Some(DateTimeUnit::new(0, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(-1, -270_000_000)),
+                    hour: Some(DateTimeFieldValue::new(0, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(-1, -270_000_000)),
                     ..Default::default()
                 },
                 "-::1.27",
@@ -2058,7 +2061,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    second: Some(DateTimeUnit::new(1, 270_000_000)),
+                    second: Some(DateTimeFieldValue::new(1, 270_000_000)),
                     ..Default::default()
                 },
                 ":::::1.27",
@@ -2066,12 +2069,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(0, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(0, 0)),
-                    second: Some(DateTimeUnit::new(0, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(0, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(0, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 ":::1- ::2 ::::3:",
@@ -2079,12 +2082,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 700_000_000)),
                     ..Default::default()
                 },
                 "1 years 2 months 3 days 4 hours 5 minutes 6.7 seconds",
@@ -2092,12 +2095,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 700_000_000)),
                     ..Default::default()
                 },
                 "1y 2mon 3d 4h 5m 6.7s",
@@ -2105,12 +2108,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(6, 700_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(6, 700_000_000)),
                     ..Default::default()
                 },
                 "6.7 seconds 5 minutes 3 days 4 hours 1 year 2 month",
@@ -2118,12 +2121,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(-1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(-3, 0)),
-                    hour: Some(DateTimeUnit::new(4, 0)),
-                    minute: Some(DateTimeUnit::new(5, 0)),
-                    second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                    year: Some(DateTimeFieldValue::new(-1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(-3, 0)),
+                    hour: Some(DateTimeFieldValue::new(4, 0)),
+                    minute: Some(DateTimeFieldValue::new(5, 0)),
+                    second: Some(DateTimeFieldValue::new(-6, -700_000_000)),
                     ..Default::default()
                 },
                 "-6.7 seconds 5 minutes -3 days 4 hours -1 year 2 month",
@@ -2131,9 +2134,9 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 300_000_000)),
-                    day: Some(DateTimeUnit::new(4, 500_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 300_000_000)),
+                    day: Some(DateTimeFieldValue::new(4, 500_000_000)),
                     ..Default::default()
                 },
                 "1y 2.3mon 4.5d",
@@ -2141,12 +2144,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(-1, -200_000_000)),
-                    month: Some(DateTimeUnit::new(2, 300_000_000)),
-                    day: Some(DateTimeUnit::new(-3, -400_000_000)),
-                    hour: Some(DateTimeUnit::new(4, 500_000_000)),
-                    minute: Some(DateTimeUnit::new(5, 600_000_000)),
-                    second: Some(DateTimeUnit::new(-6, -700_000_000)),
+                    year: Some(DateTimeFieldValue::new(-1, -200_000_000)),
+                    month: Some(DateTimeFieldValue::new(2, 300_000_000)),
+                    day: Some(DateTimeFieldValue::new(-3, -400_000_000)),
+                    hour: Some(DateTimeFieldValue::new(4, 500_000_000)),
+                    minute: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                    second: Some(DateTimeFieldValue::new(-6, -700_000_000)),
                     ..Default::default()
                 },
                 "-6.7 seconds 5.6 minutes -3.4 days 4.5 hours -1.2 year 2.3 month",
@@ -2154,8 +2157,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(1, 0)),
-                    second: Some(DateTimeUnit::new(0, -270_000_000)),
+                    day: Some(DateTimeFieldValue::new(1, 0)),
+                    second: Some(DateTimeFieldValue::new(0, -270_000_000)),
                     ..Default::default()
                 },
                 "1 day -0.27 seconds",
@@ -2163,8 +2166,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(-1, 0)),
-                    second: Some(DateTimeUnit::new(0, 270_000_000)),
+                    day: Some(DateTimeFieldValue::new(-1, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 270_000_000)),
                     ..Default::default()
                 },
                 "-1 day 0.27 seconds",
@@ -2172,7 +2175,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(10, 333_000_000)),
+                    year: Some(DateTimeFieldValue::new(10, 333_000_000)),
                     ..Default::default()
                 },
                 "10.333 years",
@@ -2180,7 +2183,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(10, 333_000_000)),
+                    year: Some(DateTimeFieldValue::new(10, 333_000_000)),
                     ..Default::default()
                 },
                 "10.333",
@@ -2188,12 +2191,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(5, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(0, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(5, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 "1-2 3:4 5 day",
@@ -2201,12 +2204,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(5, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(0, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(5, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 "5 day 3:4 1-2",
@@ -2214,12 +2217,12 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
-                    day: Some(DateTimeUnit::new(5, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(0, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
+                    day: Some(DateTimeFieldValue::new(5, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(0, 0)),
                     ..Default::default()
                 },
                 "1-2 5 day 3:4",
@@ -2227,11 +2230,11 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    day: Some(DateTimeUnit::new(2, 0)),
-                    hour: Some(DateTimeUnit::new(3, 0)),
-                    minute: Some(DateTimeUnit::new(4, 0)),
-                    second: Some(DateTimeUnit::new(5, 600_000_000)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    day: Some(DateTimeFieldValue::new(2, 0)),
+                    hour: Some(DateTimeFieldValue::new(3, 0)),
+                    minute: Some(DateTimeFieldValue::new(4, 0)),
+                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
                     ..Default::default()
                 },
                 "+1 year +2 days +3:4:5.6",
@@ -2239,8 +2242,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "1-2",
@@ -2248,8 +2251,8 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    year: Some(DateTimeUnit::new(1, 0)),
-                    month: Some(DateTimeUnit::new(2, 0)),
+                    year: Some(DateTimeFieldValue::new(1, 0)),
+                    month: Some(DateTimeFieldValue::new(2, 0)),
                     ..Default::default()
                 },
                 "1-2",
@@ -2257,7 +2260,7 @@ mod test {
             ),
             (
                 ParsedDateTime {
-                    day: Some(DateTimeUnit::new(1, 999_999_999)),
+                    day: Some(DateTimeFieldValue::new(1, 999_999_999)),
                     ..Default::default()
                 },
                 "1.999999999999999999 days",
