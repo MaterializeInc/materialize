@@ -656,6 +656,9 @@ fn handle_create_dataflow(
                                 })
                                 .collect();
                             let n_cols = names.len();
+                            if n_cols == 0 {
+                                bail!("source regex must contain at least one capture group to be useful");
+                            }
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)
                                 .collect();
