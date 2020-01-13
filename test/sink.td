@@ -74,4 +74,4 @@ $ kafka-sink format=avro topic=data-sink schema=${schema}
 {"before": null, "after": {"a": 1, "b": 1}}
 {"before": null, "after": {"a": 2, "b": 1}}
 {"before": null, "after": {"a": 3, "b": 1}}
-{"before": null, "after": {"a": 1, "b": 2}}
+{"before": null, "after": {"a": 1, "b": 2}}\

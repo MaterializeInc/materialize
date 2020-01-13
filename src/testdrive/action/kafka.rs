@@ -72,7 +72,7 @@ impl Action for QuerySinkAction {
         state
             .kafka_consumer
             .subscribe(&[&sink_name])
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.to_string())?;
 
         let schema = interchange::avro::parse_schema(&self.schema)
             .map_err(|e| format!("parsing avro schema: {}", e))?;
@@ -88,44 +88,63 @@ impl Action for QuerySinkAction {
             );
         }
 
-        //        let converted_expected_messages = &converted_expected_messages;
         let mut message_stream = state.kafka_consumer.start();
         for message in converted_expected_messages {
             let output = block_on(message_stream.next());
-            let result = match output {
-                Some(result) => match result {
-                    Ok(m) => {
-                        match m.payload() {
-                            Some(mut bytes) => {
-                                if bytes.len() < 5 {
-                                    return Err(format!(
+            match output {
+                Some(result) => {
+                    match result {
+                        Ok(m) => {
+                            match m.payload() {
+                                Some(mut bytes) => {
+                                    if bytes.len() < 5 {
+                                        return Err(format!(
                                         "avro datum is too few bytes: expected at least 5 bytes, got {}",
                                         bytes.len()
                                     ));
-                                }
-                                let magic = bytes[0];
-                                let _schema_id = BigEndian::read_i32(&bytes[1..5]);
-                                bytes = &bytes[5..];
+                                    }
+                                    let magic = bytes[0];
+                                    let _schema_id = BigEndian::read_i32(&bytes[1..5]);
+                                    bytes = &bytes[5..];
 
-                                if magic != 0 {
-                                    return Err(format!(
-                                        "wrong avro serialization magic: expected 0, got {}",
-                                        bytes[0]
-                                    ));
+                                    if magic != 0 {
+                                        return Err(format!(
+                                            "wrong avro serialization magic: expected 0, got {}",
+                                            bytes[0]
+                                        ));
+                                    }
+                                    let value = avro_rs::from_avro_datum(&schema, &mut bytes, None)
+                                        .unwrap();
+                                    match (message, value) {
+                                    (AvroValue::Record(m_fields), AvroValue::Record(v_fields)) => {
+                                        for (m_field, v_field) in m_fields.iter().zip(v_fields) {
+                                            assert_eq!(m_field.0, v_field.0); // Assert name of RecordFields are equal
+                                            match v_field.1 {
+                                                // from_avro_datum() wraps the values in an additional union
+                                                AvroValue::Union(union) => {
+                                                    assert_eq!(m_field.1, *union);
+                                                }
+                                                _ => {
+                                                    assert_eq!(m_field.1, v_field.1);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => return Err(String::from("Expected and actual Kafka message Values did not match.")), 
                                 }
-                                let value =
-                                    avro_rs::from_avro_datum(&schema, &mut bytes, None).unwrap();
-                                // TODO: assert equality, issue right now
-                                //                                assert_eq!(message, value);
+                                }
+                                None => {
+                                    return Err(String::from(
+                                        "No bytes found in Kafka message payload.",
+                                    ))
+                                }
                             }
-                            None => return Err(String::from("No bytes")),
                         }
-                        let mut bytes = m.payload();
+                        Err(e) => return Err(e.to_string()),
                     }
-                    Err(e) => return Err(String::from("hit kafka error")),
-                },
-                None => return Err(String::from("No result.")),
-            };
+                }
+                None => return Err(format!("No Kafka messages found for topic {}", sink_name,)),
+            }
         }
         Ok(())
     }
