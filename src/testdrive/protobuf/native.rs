@@ -11,7 +11,7 @@ use protobuf::RepeatedField;
 use serde::Deserialize;
 
 use crate::protobuf::gen::{billing, simple};
-use crate::protobuf::{DbgMsg, DynMessage, ToMessage};
+use crate::protobuf::{DbgMsg, DynMessage, FromMessage, ToMessage};
 
 // Billing demo
 
@@ -19,6 +19,10 @@ impl ToMessage for Batch {
     fn to_message(self) -> DynMessage {
         Box::new(billing::Batch::from(self))
     }
+}
+
+impl FromMessage for Batch {
+    type MessageType = billing::Batch;
 }
 
 impl DbgMsg for billing::Batch {}
@@ -147,6 +151,10 @@ impl ToMessage for Struct {
     fn to_message(self) -> DynMessage {
         Box::new(simple::Struct::from(self))
     }
+}
+
+impl FromMessage for Struct {
+    type MessageType = simple::Struct;
 }
 
 impl DbgMsg for simple::Struct {}

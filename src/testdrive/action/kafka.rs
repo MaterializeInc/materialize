@@ -36,8 +36,8 @@ use ore::collections::CollectionExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-use crate::protobuf::json_to_protobuf;
 use crate::protobuf::native::{Batch, Struct};
+use crate::protobuf::{decode, json_to_protobuf};
 
 pub struct VerifyAction {
     topic_prefix: String,
@@ -166,6 +166,7 @@ enum ParsedSchema {
     },
     Proto {
         parser: &'static dyn Fn(&str) -> Result<crate::protobuf::DynMessage, failure::Error>,
+        validator: &'static dyn Fn(&[u8]) -> Result<Box<dyn std::fmt::Debug>, failure::Error>,
     },
 }
 
@@ -304,9 +305,11 @@ impl IngestAction {
             RawSchema::Proto { message } => match message.as_ref() {
                 ".Struct" => ParsedSchema::Proto {
                     parser: &json_to_protobuf::<Struct>,
+                    validator: &decode::<Struct>,
                 },
                 ".Batch" => ParsedSchema::Proto {
                     parser: &json_to_protobuf::<Batch>,
+                    validator: &decode::<Batch>,
                 },
                 _ => return Err(format!("unknown testdrive protobuf message: {}", message)),
             },
@@ -333,11 +336,17 @@ impl IngestAction {
                     buf.write_i32::<NetworkEndian>(*schema_id).unwrap();
                     buf.extend(avro_rs::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
                 }
-                ParsedSchema::Proto { parser } => {
+                ParsedSchema::Proto { parser, validator } => {
                     let msg = parser(row)
                         .map_err(|e| format!("converting row to type {} -> {}", row, e))?;
-                    msg.write_to(&mut protobuf::CodedOutputStream::vec(&mut buf))
+                    buf = msg
+                        .write_to_bytes()
                         .map_err(|e| format!("writing protobuf message for {}: {}", row, e))?;
+                    // There are a variety of `write_*` methods on `Message` that don't
+                    // seem to automatically do the right thing. This should always
+                    // succeed, otherwise there is no chance for the server.
+                    let _parsed = validator(&buf)
+                        .map_err(|e| format!("error validating proto row={}\nerror={}", row, e))?;
                 }
             }
 

@@ -22,10 +22,27 @@ where
     fn to_message(self) -> DynMessage;
 }
 
+pub trait FromMessage
+where
+    Self: std::marker::Sized,
+{
+    type MessageType: protobuf::Message;
+}
+
+/// Convert a json-formatted string into a protobuf message
 pub fn json_to_protobuf<T>(json_str: &str) -> Result<DynMessage, failure::Error>
 where
     for<'a> T: serde::Deserialize<'a> + ToMessage,
 {
     let obj: T = serde_json::from_str(json_str)?;
     Ok(obj.to_message())
+}
+
+/// Decode a protobuf message from some bytes
+pub fn decode<T>(encoded: &[u8]) -> Result<Box<dyn std::fmt::Debug>, failure::Error>
+where
+    T: FromMessage,
+{
+    let msg = protobuf::parse_from_bytes::<T::MessageType>(encoded)?;
+    Ok(Box::new(msg))
 }
