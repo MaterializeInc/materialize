@@ -7,7 +7,7 @@
 
 use std::fs;
 
-use failure::{bail, format_err};
+use failure::{bail, format_err, ResultExt};
 use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
 use serde::de::Deserialize;
@@ -25,11 +25,12 @@ use crate::error::Result;
 
 pub mod test_util;
 
-pub fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
+pub fn read_descriptors_from_file(descriptor_file: &str) -> Result<Descriptors> {
     // TODO: turn this into a result/remove panics
-    let mut file = fs::File::open(descriptor_file).expect("Opening descriptor set file failed");
-    let proto = protobuf::parse_from_reader(&mut file).expect("Parsing descriptor set failed");
-    Descriptors::from_proto(&proto)
+    let mut file = fs::File::open(descriptor_file)
+        .with_context(|_| format!("Opening descriptor set file failed: {}", descriptor_file))?;
+    let proto = protobuf::parse_from_reader(&mut file).context("Parsing descriptor set failed")?;
+    Ok(Descriptors::from_proto(&proto))
 }
 
 fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<ScalarType> {
@@ -104,7 +105,7 @@ fn validate_proto_field_resolved(field: &FieldDescriptor, descriptors: &Descript
 }
 
 pub fn validate_proto_schema(message_name: &str, descriptor_file: &str) -> Result<RelationDesc> {
-    let descriptors = read_descriptors_from_file(descriptor_file);
+    let descriptors = read_descriptors_from_file(descriptor_file)?;
     validate_proto_schema_with_descriptors(message_name, &descriptors)
 }
 
@@ -154,19 +155,19 @@ impl Decoder {
         }
     }
 
-    pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Decoder {
-        let descriptors = read_descriptors_from_file(descriptor_file_name);
+    pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Result<Decoder> {
+        let descriptors = read_descriptors_from_file(descriptor_file_name)?;
         // TODO: should we validate message exists in descriptor?
-        Decoder::new(descriptors, message_name)
+        Ok(Decoder::new(descriptors, message_name))
     }
 
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
         let mut deserializer =
             Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
-                .expect("Creating a input stream to parse protobuf");
-        let deserialized_message =
-            SerdeValue::deserialize(&mut deserializer).expect("Deserializing into rust object");
+                .with_context(|e| format!("Creating a input stream to parse protobuf: {}", e))?;
+        let deserialized_message = SerdeValue::deserialize(&mut deserializer)
+            .with_context(|e| format!("Deserializing into rust object: {}", e))?;
 
         let msg_name = &self.message_name;
         extract_row(

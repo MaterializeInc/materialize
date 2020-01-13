@@ -34,8 +34,7 @@ impl Action for CompileProto {
     }
 
     fn redo(&self, _state: &mut State) -> Result<(), String> {
-        generate_descriptors(&self.source, &self.dest);
-
+        let _ = generate_descriptors(&self.source, &self.dest)?;
         Ok(())
     }
 }
@@ -43,7 +42,7 @@ impl Action for CompileProto {
 /// Takes a path to a .proto spec and attempts to generate a binary file
 /// containing a set of descriptors for the message (and any nested messages)
 /// defined in the spec.
-pub fn generate_descriptors(proto_path: &str, out: &str) -> Descriptors {
+pub fn generate_descriptors(proto_path: &str, out: &str) -> Result<Descriptors, Error> {
     let protoc = Protoc::from_env_path();
     let descriptor_set_out_args = protoc::DescriptorSetOutArgs {
         out,
@@ -55,5 +54,5 @@ pub fn generate_descriptors(proto_path: &str, out: &str) -> Descriptors {
     protoc
         .write_descriptor_set(descriptor_set_out_args)
         .expect("protoc write descriptor set failed");
-    read_descriptors_from_file(out)
+    Ok(read_descriptors_from_file(out).map_err(|e| format!("{}", e))?)
 }
