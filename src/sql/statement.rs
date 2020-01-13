@@ -587,6 +587,7 @@ fn handle_create_dataflow(
                                 format = Some(match &with_op.value {
                                     Value::SingleQuotedString(s) => match s.as_ref() {
                                         "csv" => SourceFileFormat::Csv,
+                                        "text" => SourceFileFormat::Regex("(?P<line>.*)".into()),
                                         _ => bail!("Unrecognized file format: {}", s),
                                     },
                                     _ => bail!("File format must be a string, e.g. 'csv'."),
