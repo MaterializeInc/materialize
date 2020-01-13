@@ -1166,14 +1166,23 @@ where
                 if !changes.is_empty() {
                     if self.log {
                         for (time, change) in changes {
-                            broadcast(
-                                &mut self.broadcast_tx,
-                                SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                    name.clone(),
-                                    time,
-                                    change,
-                                )),
-                            );
+                            // Rather than use the view's GlobalId, we should use that of its representatives.
+                            for keys in materialization_state.primary_idx_keys.iter() {
+                                // Fetch the representative global id for each of these keys.
+                                let index_desc = IndexDesc {
+                                    on_id: *name,
+                                    keys: keys.to_vec(),
+                                };
+                                let representative_id = self.indexes[&index_desc].1;
+                                broadcast(
+                                    &mut self.broadcast_tx,
+                                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                        representative_id,
+                                        time,
+                                        change,
+                                    )),
+                                );
+                            }
                         }
                     }
 
@@ -1284,19 +1293,23 @@ where
                     if latency_ms.is_some() {
                         materialization_state.set_compaction_latency(latency_ms);
                     }
-                    if self.log {
-                        for time in materialization_state.upper.frontier().iter() {
-                            broadcast(
-                                &mut self.broadcast_tx,
-                                SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                    desc.on_id,
-                                    time.clone(),
-                                    1,
-                                )),
-                            );
-                        }
-                    }
                     viewstate.materialization = Some(materialization_state);
+                }
+            }
+            if self.log {
+                if let Some(materialization_state) = &viewstate.materialization {
+                    for time in materialization_state.upper.frontier().iter() {
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                id,
+                                time.clone(),
+                                1,
+                            )),
+                        );
+                    }
+                } else {
+                    unreachable!()
                 }
             }
             self.index_aliases.insert(id, desc.clone());
@@ -1315,14 +1328,22 @@ where
             if self.log {
                 if let Some(materialization_state) = view_state.materialization {
                     for time in materialization_state.upper.frontier().iter() {
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                name.clone(),
-                                time.clone(),
-                                -1,
-                            )),
-                        );
+                        for keys in materialization_state.primary_idx_keys.iter() {
+                            // Fetch the representative global id for each of these keys.
+                            let index_desc = IndexDesc {
+                                on_id: *name,
+                                keys: keys.to_vec(),
+                            };
+                            let representative_id = self.indexes[&index_desc].1;
+                            broadcast(
+                                &mut self.broadcast_tx,
+                                SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                    representative_id,
+                                    time.clone(),
+                                    -1,
+                                )),
+                            );
+                        }
                     }
                     for key in materialization_state.get_all_idx_keys() {
                         dropped_index_ids.push(
