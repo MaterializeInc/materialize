@@ -346,7 +346,7 @@ dependencies = [
  "num_enum",
  "ore",
  "predicates",
- "rand 0.7.2",
+ "rand 0.7.3",
  "serde",
  "tokio",
  "tokio-serde",
@@ -1059,7 +1059,7 @@ name = "fuzz"
 version = "0.0.1"
 dependencies = [
  "libfuzzer-sys",
- "rand 0.7.2",
+ "rand 0.7.3",
  "sqllogictest",
  "testdrive",
  "walkdir",
@@ -1941,7 +1941,7 @@ dependencies = [
  "ore",
  "pgrepr",
  "prometheus",
- "rand 0.7.2",
+ "rand 0.7.3",
  "repr",
  "sql",
  "tokio",
@@ -2032,7 +2032,7 @@ dependencies = [
  "hmac",
  "md5",
  "memchr",
- "rand 0.7.2",
+ "rand 0.7.3",
  "sha2",
  "stringprep",
 ]
@@ -2304,9 +2304,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.7.2"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ae1b169243eaf61759b8475a998f0a385e42042370f3a7dbaf35246eacc8412"
+checksum = "6a6b1679d49b24bbfe0c803429aa1874472f50d9b363131f0e89fc356b544d03"
 dependencies = [
  "getrandom",
  "libc",
@@ -2572,7 +2572,7 @@ dependencies = [
  "ordered-float",
  "ore",
  "pretty",
- "rand 0.7.2",
+ "rand 0.7.3",
  "rand_chacha 0.2.1",
  "regex",
  "serde",
@@ -3015,7 +3015,7 @@ checksum = "7a6e24d9338a0a5be79593e2fa15a648add6138caa803e2d5bc782c371732ca9"
 dependencies = [
  "cfg-if",
  "libc",
- "rand 0.7.2",
+ "rand 0.7.3",
  "redox_syscall",
  "remove_dir_all",
  "winapi 0.3.7",
@@ -3050,7 +3050,7 @@ dependencies = [
  "pgrepr",
  "postgres",
  "predicates",
- "rand 0.7.2",
+ "rand 0.7.3",
  "rdkafka",
  "regex",
  "reqwest",
@@ -3362,7 +3362,7 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fde2f6a4bea1d6e007c4ad38c6839fa71cbb63b6dbf5b595aa38dc9b1093c11"
 dependencies = [
- "rand 0.7.2",
+ "rand 0.7.3",
  "serde",
 ]
 
