@@ -56,6 +56,23 @@ steps:
           run: app
     if: $CHANGED_RUST
 
+  - id: miri-test
+    label: ":face_with_monocle: miri test"
+    command: ci/test/cargo-test-miri.sh
+    timeout_in_minutes: 30
+    plugins:
+      - docker#v3.1.0:
+          image: materialize/ci-builder:nightly-20200113-111211
+          propagate-uid-gid: true
+          mount-ssh-agent: true
+          volumes:
+          - "$HOME/.cargo:/cargo"
+          environment:
+          - CARGO_HOME=/cargo
+    if: $CHANGED_RUST
+    agents:
+      queue: builder
+
   - id: testdrive
     label: ":racing_car: testdrive"
     depends_on: build
