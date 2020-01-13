@@ -900,16 +900,18 @@ where
                     typ,
                 } = &**input
                 {
-                    let index_desc = IndexDesc {
-                        on_id: *on_id,
-                        keys: keys.to_vec(),
-                    };
-                    dataflow.add_index_import(
-                        self.indexes[&index_desc].1,
-                        index_desc,
-                        typ.clone(),
-                        *view_id,
-                    );
+                    for key_set in keys {
+                        let index_desc = IndexDesc {
+                            on_id: *on_id,
+                            keys: key_set.to_vec(),
+                        };
+                        dataflow.add_index_import(
+                            self.indexes[&index_desc].1,
+                            index_desc,
+                            typ.clone(),
+                            *view_id,
+                        );
+                    }
                 }
             }
         });

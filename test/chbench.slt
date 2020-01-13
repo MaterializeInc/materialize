@@ -276,10 +276,10 @@ Project {
         [(3, 2), (4, 0)]
       ],
       Filter { predicates: [!isnull #2], Get { stock (u17) } },
-      ArrangeBy { columns: [#0], Get { item (u15) } },
-      ArrangeBy { columns: [#0], Get { supplier (u21) } },
-      ArrangeBy { columns: [#0], Get { nation (u19) } },
-      ArrangeBy { columns: [#0], Get { region (u23) } },
+      ArrangeBy { keys: [[#0]], Get { item (u15) } },
+      ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
+      ArrangeBy { keys: [[#0]], Get { nation (u19) } },
+      ArrangeBy { keys: [[#0]], Get { region (u23) } },
       Filter {
         predicates: [!isnull #1],
         Reduce {
@@ -294,9 +294,9 @@ Project {
                 [(2, 2), (3, 0)]
               ],
               Get { stock (u17) },
-              ArrangeBy { columns: [#0], Get { supplier (u21) } },
-              ArrangeBy { columns: [#0], Get { nation (u19) } },
-              ArrangeBy { columns: [#0], Get { region (u23) } }
+              ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
+              ArrangeBy { keys: [[#0]], Get { nation (u19) } },
+              ArrangeBy { keys: [[#0]], Get { region (u23) } }
             }
           }
         }
@@ -339,9 +339,9 @@ Project {
           [(0, 2), (1, 2), (2, 2), (3, 2)]
         ],
         Get { orderline (u13) },
-        ArrangeBy { columns: [#0, #1, #2], Get { neworder (u9) } },
-        ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
-        ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } }
+        ArrangeBy { keys: [[#0, #1, #2]], Get { neworder (u9) } },
+        ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
+        ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } }
       }
     }
   }
@@ -444,12 +444,12 @@ Reduce {
         [(5, 2), (6, 0)]
       ],
       Get { orderline (u13) },
-      ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
-      ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } },
-      ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
+      ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
+      ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } },
+      ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
       Get { supplier (u21) },
-      ArrangeBy { columns: [#0], Get { nation (u19) } },
-      ArrangeBy { columns: [#0], Get { region (u23) } }
+      ArrangeBy { keys: [[#0]], Get { nation (u19) } },
+      ArrangeBy { keys: [[#0]], Get { region (u23) } }
     }
   }
 }
@@ -546,12 +546,12 @@ Reduce {
         ],
         Get { orderline (u13) }
       },
-      ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
-      ArrangeBy { columns: [#0], Get { supplier (u21) } },
-      ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
-      ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } },
-      ArrangeBy { columns: [#0], Get { nation (u19) } },
-      ArrangeBy { columns: [#0], Get { nation (u19) } }
+      ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
+      ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
+      ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
+      ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } },
+      ArrangeBy { keys: [[#0]], Get { nation (u19) } },
+      ArrangeBy { keys: [[#0]], Get { nation (u19) } }
     }
   }
 }
@@ -618,14 +618,14 @@ Project {
             predicates: [!isnull #4, #4 < 1000],
             Get { orderline (u13) }
           },
-          ArrangeBy { columns: [#0], Get { item (u15) } },
-          ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
-          ArrangeBy { columns: [#0], Get { supplier (u21) } },
-          ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
-          ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } },
-          ArrangeBy { columns: [#0], Get { nation (u19) } },
-          ArrangeBy { columns: [#0], Get { nation (u19) } },
-          ArrangeBy { columns: [#0], Get { region (u23) } }
+          ArrangeBy { keys: [[#0]], Get { item (u15) } },
+          ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
+          ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
+          ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
+          ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } },
+          ArrangeBy { keys: [[#0]], Get { nation (u19) } },
+          ArrangeBy { keys: [[#0]], Get { nation (u19) } },
+          ArrangeBy { keys: [[#0]], Get { region (u23) } }
         }
       }
     }
@@ -667,11 +667,11 @@ Reduce {
         [(3, 3), (5, 0)]
       ],
       Get { orderline (u13) },
-      ArrangeBy { columns: [#0], Get { item (u15) } },
-      ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
-      ArrangeBy { columns: [#0], Get { supplier (u21) } },
-      ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
-      ArrangeBy { columns: [#0], Get { nation (u19) } }
+      ArrangeBy { keys: [[#0]], Get { item (u15) } },
+      ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
+      ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
+      ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
+      ArrangeBy { keys: [[#0]], Get { nation (u19) } }
     }
   }
 }
@@ -712,9 +712,9 @@ Project {
             [(2, 21), (3, 0)]
           ],
           Get { orderline (u13) },
-          ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
-          ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } },
-          ArrangeBy { columns: [#0], Get { nation (u19) } }
+          ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
+          ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } },
+          ArrangeBy { keys: [[#0]], Get { nation (u19) } }
         }
       }
     }
@@ -745,8 +745,8 @@ Let {
     Join {
       variables: [[(0, 17), (1, 0)], [(1, 3), (2, 0)]],
       Get { stock (u17) },
-      ArrangeBy { columns: [#0], Get { supplier (u21) } },
-      ArrangeBy { columns: [#0], Get { nation (u19) } }
+      ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
+      ArrangeBy { keys: [[#0]], Get { nation (u19) } }
     }
   }
 } in
@@ -800,7 +800,7 @@ Reduce {
         predicates: [datetots #6 < 2020-01-01 00:00:00],
         Get { orderline (u13) }
       },
-      ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } }
+      ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } }
     }
   }
 }
@@ -825,7 +825,7 @@ Let {
   l0 = Join {
     variables: [[(0, 3), (1, 0)], [(0, 1), (1, 1)], [(0, 2), (1, 2)]],
     Filter { predicates: [#5 > 8], Get { "order" (u11) } },
-    ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } }
+    ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } }
   }
 } in
 Reduce {
@@ -879,7 +879,7 @@ Let {
         ],
         Get { orderline (u13) }
       },
-      ArrangeBy { columns: [#0], Get { item (u15) } }
+      ArrangeBy { keys: [[#0]], Get { item (u15) } }
     }
   }
 } in
@@ -944,7 +944,7 @@ Let {
         predicates: [datetots #6 >= 2007-01-02 00:00:00],
         Get { orderline (u13) }
       },
-      ArrangeBy { columns: [#0, #1], Get { stock (u17) } }
+      ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } }
     }
   }
 } in
@@ -984,7 +984,7 @@ Let {
     Join {
       variables: [[(0, 0), (1, 0)]],
       Get { stock (u17) },
-      ArrangeBy { columns: [#0], Get { item (u15) } }
+      ArrangeBy { keys: [[#0]], Get { item (u15) } }
     }
   }
 } in
@@ -1056,7 +1056,7 @@ Let {
               Join {
                 variables: [[(0, 4), (1, 0)]],
                 Get { orderline (u13) },
-                ArrangeBy { columns: [#0], Get { item (u15) } }
+                ArrangeBy { keys: [[#0]], Get { item (u15) } }
               }
             }
           }
@@ -1112,8 +1112,8 @@ Project {
           [(0, 2), (1, 2), (2, 2)]
         ],
         Get { orderline (u13) },
-        ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
-        ArrangeBy { columns: [#0, #1, #2], Get { customer (u5) } }
+        ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
+        ArrangeBy { keys: [[#0, #1, #2]], Get { customer (u5) } }
       }
     }
   }
@@ -1169,7 +1169,7 @@ Let {
             predicates: [#7 <= 10, #7 >= 1],
             Get { orderline (u13) }
           },
-          ArrangeBy { columns: [#0], Get { item (u15) } }
+          ArrangeBy { keys: [[#0]], Get { item (u15) } }
         }
       }
     }
@@ -1211,7 +1211,7 @@ Let {
     Join {
       variables: [[(0, 3), (1, 0)]],
       Get { supplier (u21) },
-      ArrangeBy { columns: [#0], Get { nation (u19) } }
+      ArrangeBy { keys: [[#0]], Get { nation (u19) } }
     }
   }
 } in
@@ -1250,7 +1250,7 @@ Project {
                   Get { l3 }
                 },
                 Distinct { group_key: [#21], Get { l3 } },
-                ArrangeBy { columns: [#0], Get { item (u15) } }
+                ArrangeBy { keys: [[#0]], Get { item (u15) } }
               }
             }
           }
@@ -1302,10 +1302,10 @@ Let {
           [(3, 3), (4, 0)]
         ],
         Get { orderline (u13) },
-        ArrangeBy { columns: [#0, #1, #2], Get { "order" (u11) } },
-        ArrangeBy { columns: [#0, #1], Get { stock (u17) } },
-        ArrangeBy { columns: [#0], Get { supplier (u21) } },
-        ArrangeBy { columns: [#0], Get { nation (u19) } }
+        ArrangeBy { keys: [[#0, #1, #2]], Get { "order" (u11) } },
+        ArrangeBy { keys: [[#0, #1]], Get { stock (u17) } },
+        ArrangeBy { keys: [[#0]], Get { supplier (u21) } },
+        ArrangeBy { keys: [[#0]], Get { nation (u19) } }
       }
     }
   }

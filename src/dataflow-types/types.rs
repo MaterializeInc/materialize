@@ -223,7 +223,7 @@ impl DataflowDesc {
                     index.desc.on_id,
                     index.relation_type,
                 )),
-                keys: index.desc.keys,
+                keys: vec![index.desc.keys],
             },
             eval_env: index.eval_env,
             typ: None,

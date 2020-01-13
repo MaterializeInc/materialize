@@ -146,7 +146,10 @@ impl Default for Optimizer {
                     Box::new(crate::transform::redundant_join::RedundantJoin),
                 ],
             }),
-            Box::new(crate::transform::use_indexes::FilterEqualLiteral),
+            /*Box::new(crate::transform::use_indexes::FilterEqualLiteral),
+            Box::new(crate::transform::projection_lifting::ProjectionLifting),
+            Box::new(crate::transform::column_knowledge::ColumnKnowledge),
+            Box::new(crate::transform::reduction::FoldConstants),*/
             Box::new(crate::transform::fusion::join::Join),
             Box::new(crate::transform::redundant_join::RedundantJoin),
             Box::new(crate::transform::demand::Demand),

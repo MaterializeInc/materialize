@@ -100,7 +100,13 @@ impl Join {
                 variable.sort();
                 variable.dedup();
             }
-            variables.sort();
+            //disable variable sort if any indexes are being used
+            if !inputs.iter().any(|input| match input {
+                RelationExpr::ArrangeBy { .. } => true,
+                _ => false,
+            }) {
+                variables.sort();
+            }
         }
     }
 }

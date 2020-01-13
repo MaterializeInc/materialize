@@ -518,7 +518,9 @@ impl State {
             _ => bail!("Got multiple statements: {:?}", statements),
         };
         match statement {
-            Statement::CreateView { .. } | Statement::Query { .. } | Statement::ShowIndexes { .. }=> (),
+            Statement::CreateView { .. }
+            | Statement::Query { .. }
+            | Statement::ShowIndexes { .. } => (),
             _ => {
                 if output.is_err() {
                     // We're not interested in testing our hacky handling of INSERT etc

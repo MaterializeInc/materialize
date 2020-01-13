@@ -226,8 +226,10 @@ impl Demand {
                 self.action(right, columns, gets);
             }
             RelationExpr::ArrangeBy { input, keys } => {
-                for key in keys {
-                    columns.extend(key.support());
+                for key_set in keys {
+                    for key in key_set {
+                        columns.extend(key.support());
+                    }
                 }
                 self.action(input, columns, gets);
             }

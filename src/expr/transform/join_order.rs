@@ -126,7 +126,13 @@ impl JoinOrder {
             for variable in new_variables.iter_mut() {
                 variable.sort();
             }
-            new_variables.sort();
+            // disable variable sorting
+            if !new_inputs.iter().any(|new_input| match new_input {
+                RelationExpr::ArrangeBy { .. } => true,
+                _ => false,
+            }) {
+                new_variables.sort();
+            }
 
             let join = if let Some(demand) = demand {
                 let mut new_demand = Vec::new();

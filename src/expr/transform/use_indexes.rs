@@ -71,20 +71,14 @@ impl FilterEqualLiteral {
                             expr2,
                         } = p
                         {
-                            if let ScalarExpr::Literal(litrow, littyp) = &**expr1 {
-                                if let ScalarExpr::Column(c) = &**expr2 {
+                            match (&**expr1, &**expr2) {
+                                (ScalarExpr::Literal(litrow, littyp), ScalarExpr::Column(c)) => {
                                     Some((*c, (litrow.clone(), littyp.clone(), i)))
-                                } else {
-                                    None
                                 }
-                            } else if let ScalarExpr::Column(c) = &**expr1 {
-                                if let ScalarExpr::Literal(litrow, littyp) = &**expr2 {
+                                (ScalarExpr::Column(c), ScalarExpr::Literal(litrow, littyp)) => {
                                     Some((*c, (litrow.clone(), littyp.clone(), i)))
-                                } else {
-                                    None
                                 }
-                            } else {
-                                None
+                                _ => None,
                             }
                         } else {
                             None
@@ -134,7 +128,7 @@ impl FilterEqualLiteral {
                         let arity = input.arity();
                         let converted_join = RelationExpr::join(
                             vec![
-                                input.take_dangerous().arrange_by(keys),
+                                input.take_dangerous().arrange_by(&[keys.clone()]),
                                 RelationExpr::constant(vec![constant_row], constant_type),
                             ],
                             variables,
@@ -191,10 +185,12 @@ impl FilterLifting {
         } = relation
         {
             // find the keys being joined on for each input
-            let mut join_keys_by_input = std::iter::repeat(vec![])
-                .take(inputs.len())
-                .collect::<Vec<_>>();
-            for equivalence in variables.iter() {
+            let mut join_keys_by_input = vec![Vec::new(); inputs.len()];
+            for equivalence in variables.iter_mut() {
+                equivalence.sort();
+                assert_ne!(equivalence[0].0, equivalence[1].0);
+                // We assume the equivalence classes are sorted, and that each relation is included
+                // only once in an equivalence class
                 for (input_num, column) in equivalence.iter().skip(1) {
                     join_keys_by_input[*input_num].push(*column)
                 }
@@ -327,7 +323,7 @@ impl FilterLifting {
                         }
                         inputs[input_num] = input.take_dangerous();
                     }
-                    inputs[input_num] = inputs[input_num].clone().arrange_by(&index);
+                    inputs[input_num] = inputs[input_num].clone().arrange_by(&[index]);
                 }
                 // put an outer filter around the join if any filters were lifted.
                 if !lifted_predicates.is_empty() {
