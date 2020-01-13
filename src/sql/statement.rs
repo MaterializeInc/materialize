@@ -587,6 +587,7 @@ fn handle_create_dataflow(
                                 format = Some(match &with_op.value {
                                     Value::SingleQuotedString(s) => match s.as_ref() {
                                         "csv" => SourceFileFormat::Csv,
+                                        "text" => SourceFileFormat::Regex("(?P<line>.*)".into()),
                                         _ => bail!("Unrecognized file format: {}", s),
                                     },
                                     _ => bail!("File format must be a string, e.g. 'csv'."),
@@ -642,23 +643,23 @@ fn handle_create_dataflow(
                                 Ok(r) => r,
                                 Err(e) => bail!("Error compiling regex: {}", e),
                             };
-                            let unnamed_idx = &mut 0;
                             let names: Vec<_> = regex
                                 .capture_names()
+                                .enumerate()
                                 // The first capture is the entire matched string.
                                 // This will often not be useful, so skip it.
                                 // If people want it they can just surround their
                                 // entire regex in an explicit capture group.
                                 .skip(1)
-                                .map(|ocn| {
-                                    ocn.map(String::from).unwrap_or_else(|| {
-                                        *unnamed_idx += 1;
-                                        format!("unnamed{}", unnamed_idx)
-                                    })
+                                .map(|(i, ocn)| match ocn {
+                                    None => Some(format!("column{}", i)),
+                                    Some(ocn) => Some(String::from(ocn)),
                                 })
-                                .map(|x| Some(x))
                                 .collect();
                             let n_cols = names.len();
+                            if n_cols == 0 {
+                                bail!("source regex must contain at least one capture group to be useful");
+                            }
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)
                                 .collect();
