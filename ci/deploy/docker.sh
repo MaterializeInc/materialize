@@ -19,6 +19,28 @@ for tag in "unstable-$BUILDKITE_COMMIT" latest; do
     runv docker push "materialize/materialized:$tag"
 done
 
+runv docker run --rm --entrypoint bash materialize/materialized -c "
+    set -euo pipefail
+    mkdir -p scratch/materialized/{bin,etc/materialized}
+    cd scratch/materialized
+    cp /usr/local/bin/materialized bin
+    cp /usr/local/etc/materialized/bootstrap.sql etc/materialized
+    cd ..
+    tar cz materialized
+" > materialized.tar.gz
+
+aws s3 cp \
+    --acl=public-read \
+    "materialized.tar.gz" \
+    "s3://downloads.mtrlz.dev/materialized-$BUILDKITE_COMMIT-x86_64-unknown-linux-gnu.tar.gz"
+
+echo -n > empty
+aws s3 cp \
+    --website-redirect="/materialized-$BUILDKITE_COMMIT-x86_64-unknown-linux-gnu.tar.gz" \
+    --acl=public-read \
+    empty \
+    "s3://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz"
+
 docker pull "materialize/ci-peeker:$MATERIALIZED_IMAGE_ID"
 
 for tag in "unstable-$BUILDKITE_COMMIT" latest; do
