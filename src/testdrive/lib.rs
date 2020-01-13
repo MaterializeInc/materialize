@@ -17,6 +17,7 @@ mod action;
 mod ddl;
 mod error;
 mod parser;
+mod protobuf;
 
 pub use self::action::Config;
 use self::ddl::Ddl;

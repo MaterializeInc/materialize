@@ -1,0 +1,43 @@
+// Copyright 2020 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
+syntax = "proto3";
+
+enum Resource {
+  NULL = 0;
+  CPU = 1;
+  MEM = 2;
+  DISK = 3;
+}
+
+enum Units {
+  NULL_UNIT = 0;
+  BYTES = 1;
+  MILLIS = 2;
+  UNITS = 3;
+}
+
+message Measurement {
+  Resource resource = 1;
+  int64 measured_value = 2;
+}
+
+message Record {
+  string interval_start = 1;
+  string interval_end = 2;
+
+  string meter = 3; // What's being measured
+  uint32 value = 4;
+
+  repeated Measurement measurements = 7;
+}
+
+message Batch {
+  string id = 1; // idempotency key
+  string interval_start = 3;
+  string interval_end = 4;
+
+  repeated Record records = 7;
+}

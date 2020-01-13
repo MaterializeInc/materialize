@@ -36,6 +36,8 @@ use ore::collections::CollectionExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+use crate::protobuf::json_to_protobuf;
+use crate::protobuf::native::{Batch, Struct};
 
 pub struct VerifyAction {
     topic_prefix: String,
@@ -147,6 +149,10 @@ enum RawSchema {
         key_schema: Option<String>,
         schema: String,
     },
+    Proto {
+        /// The name of the message to be sent
+        message: String,
+    },
 }
 
 /// The parsed format
@@ -154,23 +160,40 @@ enum RawSchema {
 /// This includes information required for us to parse individual messages, and what we
 /// need to send to kafka along with each message in order for materialize to handle messages
 enum ParsedSchema {
-    Avro { schema: Schema, schema_id: i32 },
+    Avro {
+        schema: Schema,
+        schema_id: i32,
+    },
+    Proto {
+        parser: &'static dyn Fn(&str) -> Result<crate::protobuf::DynMessage, failure::Error>,
+    },
 }
 
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = cmd.args.string("format")?;
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
-    let schema = cmd.args.string("schema")?;
-    let key_schema = cmd.args.opt_string("key_schema");
+    let message_format = match format.as_ref() {
+        "avro" => {
+            let schema = cmd.args.string("schema")?;
+            let key_schema = cmd.args.opt_string("key_schema");
+            RawSchema::Avro { key_schema, schema }
+        }
+        "protobuf" => {
+            let message = cmd.args.string("message")?;
+            RawSchema::Proto { message }
+        }
+        _ => return Err(format!("Unknown message format: {}", format)),
+    };
+
     let timestamp = cmd.args.opt_parse("timestamp")?;
     let publish = cmd.args.opt_bool("publish")?;
     cmd.args.done()?;
-    if format != "avro" {
+    if !["protobuf", "avro"].contains(&&*format) {
         return Err("formats besides avro are not supported".into());
     }
     Ok(IngestAction {
         topic_prefix,
-        message_format: RawSchema::Avro { key_schema, schema },
+        message_format,
         timestamp,
         publish,
         rows: cmd.input,
@@ -278,6 +301,15 @@ impl IngestAction {
                     .map_err(|e| format!("parsing avro schema: {}", e))?;
                 ParsedSchema::Avro { schema, schema_id }
             }
+            RawSchema::Proto { message } => match message.as_ref() {
+                ".Struct" => ParsedSchema::Proto {
+                    parser: &json_to_protobuf::<Struct>,
+                },
+                ".Batch" => ParsedSchema::Proto {
+                    parser: &json_to_protobuf::<Batch>,
+                },
+                _ => return Err(format!("unknown testdrive protobuf message: {}", message)),
+            },
         };
 
         let futs = FuturesUnordered::new();
@@ -300,6 +332,12 @@ impl IngestAction {
                     buf.write_u8(0).unwrap();
                     buf.write_i32::<NetworkEndian>(*schema_id).unwrap();
                     buf.extend(avro_rs::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
+                }
+                ParsedSchema::Proto { parser } => {
+                    let msg = parser(row)
+                        .map_err(|e| format!("converting row to type {} -> {}", row, e))?;
+                    msg.write_to(&mut protobuf::CodedOutputStream::vec(&mut buf))
+                        .map_err(|e| format!("writing protobuf message for {}: {}", row, e))?;
                 }
             }
 

@@ -12,3 +12,16 @@ $ compile-protoc source=${testdrive.data_dir}/simple.proto dest=${outfile}
   WITH (format='protobuf-descriptor', message_name='.Struct')
 
 > CREATE VIEW pm AS SELECT * FROM protomessages
+
+$ kafka-ingest format=protobuf topic=messages message=.Struct timestamp=1
+{"int": 1, "bad_int": 1, "bin": "One", "st": "my-string"}
+{"int": 2, "bad_int": 2, "bin": "One", "st": "something-valid"}
+
+# TODO: default values for enums, strings, bytes do not work right now
+$ kafka-ingest format=protobuf topic=messages message=.Struct timestamp=10
+{"int": 0, "bad_int": 0, "bin": "Zero", "st": ""}
+
+# TODO: these should be fully json
+> SELECT * FROM pm
+1 1 ONE  my-string
+2 2 ONE  something-valid
