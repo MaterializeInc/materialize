@@ -68,10 +68,10 @@ a b
 3 1
 1 2
 
-> CREATE SINK data_sink FROM data INTO 'kafka://${testdrive.kafka-addr}/data-sink' WITH (schema_registry_url = 'http://localhost:8081')
+> CREATE SINK data_sink FROM data INTO 'kafka://${testdrive.kafka-addr}/data-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
 
 $ kafka-sink format=avro topic=data-sink schema=${schema}
 {"before": null, "after": {"a": 1, "b": 1}}
 {"before": null, "after": {"a": 2, "b": 1}}
 {"before": null, "after": {"a": 3, "b": 1}}
-{"before": null, "after": {"a": 1, "b": 2}}\
+{"before": null, "after": {"a": 1, "b": 2}}
