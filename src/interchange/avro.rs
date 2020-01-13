@@ -10,7 +10,7 @@ use std::fmt;
 use avro_rs::schema::{RecordField, Schema, SchemaFingerprint, UnionSchema};
 use avro_rs::types::Value;
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
-use failure::{bail, Error};
+use failure::bail;
 use serde_json::json;
 
 use sha2::Sha256;
@@ -20,6 +20,8 @@ use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
+use crate::error::Result;
+
 /// Validates an Avro key schema for use as a source.
 ///
 /// An Avro key schema is valid for our purposes iff every field
@@ -27,10 +29,7 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, Scalar
 /// type with the same type. If the schema is valid, returns a
 /// vector describing the order and position of the primary key
 /// columns.
-pub fn validate_key_schema(
-    key_schema: &str,
-    value_desc: &RelationDesc,
-) -> Result<Vec<usize>, Error> {
+pub fn validate_key_schema(key_schema: &str, value_desc: &RelationDesc) -> Result<Vec<usize>> {
     let key_schema = parse_schema(key_schema)?;
     let key_desc = validate_schema_1(&key_schema)?;
     let mut indices = Vec::new();
@@ -53,7 +52,7 @@ pub fn validate_key_schema(
 }
 
 /// Converts an Apache Avro schema into a [`repr::RelationDesc`].
-pub fn validate_value_schema(schema: &str) -> Result<RelationDesc, Error> {
+pub fn validate_value_schema(schema: &str) -> Result<RelationDesc> {
     let schema = parse_schema(schema)?;
 
     // The top-level record needs to be a diff "envelope" that contains
@@ -110,7 +109,7 @@ pub fn validate_value_schema(schema: &str) -> Result<RelationDesc, Error> {
     validate_schema_1(row_schema)
 }
 
-fn validate_schema_1(schema: &Schema) -> Result<RelationDesc, Error> {
+fn validate_schema_1(schema: &Schema) -> Result<RelationDesc> {
     match schema {
         Schema::Record { fields, .. } => {
             let column_types = fields
@@ -121,7 +120,7 @@ fn validate_schema_1(schema: &Schema) -> Result<RelationDesc, Error> {
                         scalar_type: validate_schema_2(&f.schema)?,
                     })
                 })
-                .collect::<Result<Vec<_>, Error>>()?;
+                .collect::<Result<Vec<_>>>()?;
             let column_names = fields.iter().map(|f| Some(f.name.clone()));
             Ok(RelationDesc::new(
                 RelationType::new(column_types),
@@ -132,7 +131,7 @@ fn validate_schema_1(schema: &Schema) -> Result<RelationDesc, Error> {
     }
 }
 
-fn validate_schema_2(schema: &Schema) -> Result<ScalarType, Error> {
+fn validate_schema_2(schema: &Schema) -> Result<ScalarType> {
     Ok(match schema {
         Schema::Null => ScalarType::Null,
         Schema::Boolean => ScalarType::Bool,
@@ -171,7 +170,7 @@ fn validate_schema_2(schema: &Schema) -> Result<ScalarType, Error> {
                         scalar_type: validate_schema_2(s)?,
                     })
                 })
-                .collect::<Result<Vec<_>, Error>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             if utypes.len() == 1 {
                 utypes.into_element().scalar_type
@@ -186,7 +185,7 @@ fn validate_schema_2(schema: &Schema) -> Result<ScalarType, Error> {
     })
 }
 
-pub fn parse_schema(schema: &str) -> Result<Schema, Error> {
+pub fn parse_schema(schema: &str) -> Result<Schema> {
     // munge resolves named types in Avro schemas, which are not currently
     // supported by our Avro library. Follow [0] for details.
     //
@@ -371,7 +370,7 @@ impl Decoder {
     }
 
     /// Decodes Avro-encoded `bytes` into a `DiffPair`.
-    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair, failure::Error> {
+    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a big
         // endian 32-bit schema ID.
@@ -408,7 +407,7 @@ impl Decoder {
             None => (&self.reader_schema, None),
         };
 
-        fn value_to_datum(v: &Value) -> Result<Datum<'_>, failure::Error> {
+        fn value_to_datum(v: &Value) -> Result<Datum<'_>> {
             match v {
                 Value::Null => Ok(Datum::Null),
                 Value::Boolean(true) => Ok(Datum::True),
@@ -433,7 +432,7 @@ impl Decoder {
             }
         };
 
-        fn extract_row(v: Value) -> Result<Option<Row>, failure::Error> {
+        fn extract_row(v: Value) -> Result<Option<Row>> {
             let v = match v {
                 Value::Union(v) => *v,
                 _ => bail!("unsupported avro value: {:?}", v),
@@ -479,7 +478,7 @@ impl Decoder {
     }
 }
 
-pub fn encode_schema(desc: &RelationDesc) -> Result<serde_json::Value, Error> {
+pub fn encode_schema(desc: &RelationDesc) -> Result<serde_json::Value> {
     let mut fields = Vec::new();
     for (name, typ) in desc.iter() {
         let field_name = match name {
@@ -576,7 +575,7 @@ impl Encoder {
         buf
     }
 
-    fn row_to_avro(&self, row: &Row) -> Result<Vec<u8>, failure::Error> {
+    fn row_to_avro(&self, row: &Row) -> Result<Vec<u8>> {
         match &self.writer_schema {
             Schema::Record { fields, .. } => match fields.as_slice() {
                 [before, _after] => {
@@ -594,7 +593,7 @@ impl Encoder {
         }
     }
 
-    fn data_to_avro(record_schema: &Schema, data: &[Datum]) -> Result<Value, failure::Error> {
+    fn data_to_avro(record_schema: &Schema, data: &[Datum]) -> Result<Value> {
         Ok(match data {
             [] => bail!("Expected to convert Datum to type {:#?}, but no Datum found."),
             [datum] => {
@@ -672,10 +671,7 @@ impl Encoder {
         })
     }
 
-    fn convert_to_avro_record(
-        data: &[Datum],
-        fields: &[RecordField],
-    ) -> Result<Value, failure::Error> {
+    fn convert_to_avro_record(data: &[Datum], fields: &[RecordField]) -> Result<Value> {
         let mut vals = Vec::new();
         for (rf, datum) in fields.iter().zip(data) {
             match rf {
@@ -687,7 +683,7 @@ impl Encoder {
         Ok(Value::Record(vals))
     }
 
-    fn convert_to_avro_union(data: &[Datum], union: &UnionSchema) -> Result<Value, failure::Error> {
+    fn convert_to_avro_union(data: &[Datum], union: &UnionSchema) -> Result<Value> {
         let mut value = None;
         for s in union.variants() {
             if let Ok(v) = Self::data_to_avro(s, data) {
@@ -720,7 +716,7 @@ impl SchemaCache {
     /// Looks up the writer schema for ID. If the schema is literally identical
     /// to the reader schema, as determined by the reader schema fingerprint
     /// that this schema cache was initialized with, returns None.
-    fn get(&mut self, id: i32) -> Result<Option<&Schema>, failure::Error> {
+    fn get(&mut self, id: i32) -> Result<Option<&Schema>> {
         match self.cache.entry(id) {
             Entry::Occupied(o) => Ok(o.into_mut().as_ref()),
             Entry::Vacant(v) => {

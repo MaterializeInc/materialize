@@ -7,7 +7,7 @@
 
 use std::fs;
 
-use failure::{bail, format_err, Error};
+use failure::{bail, format_err};
 use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
 use serde::de::Deserialize;
@@ -21,6 +21,8 @@ use serde_value::Value as SerdeValue;
 use repr::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
+use crate::error::Result;
+
 pub mod test_util;
 
 pub fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
@@ -30,10 +32,7 @@ pub fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
     Descriptors::from_proto(&proto)
 }
 
-fn validate_proto_field(
-    field: &FieldDescriptor,
-    descriptors: &Descriptors,
-) -> Result<ScalarType, Error> {
+fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<ScalarType> {
     Ok(match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated => {
@@ -67,10 +66,7 @@ fn validate_proto_field(
     })
 }
 
-fn validate_proto_field_resolved(
-    field: &FieldDescriptor,
-    descriptors: &Descriptors,
-) -> Result<(), Error> {
+fn validate_proto_field_resolved(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<()> {
     match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated | FieldLabel::Optional => match field.field_type(descriptors) {
@@ -107,10 +103,7 @@ fn validate_proto_field_resolved(
     Ok(())
 }
 
-pub fn validate_proto_schema(
-    message_name: &str,
-    descriptor_file: &str,
-) -> Result<RelationDesc, Error> {
+pub fn validate_proto_schema(message_name: &str, descriptor_file: &str) -> Result<RelationDesc> {
     let descriptors = read_descriptors_from_file(descriptor_file);
     validate_proto_schema_with_descriptors(message_name, &descriptors)
 }
@@ -118,7 +111,7 @@ pub fn validate_proto_schema(
 pub fn validate_proto_schema_with_descriptors(
     message_name: &str,
     descriptors: &Descriptors,
-) -> Result<RelationDesc, Error> {
+) -> Result<RelationDesc> {
     let message = descriptors
         .message_by_name(message_name)
         .expect("Message not found in file descriptor set");
@@ -133,7 +126,7 @@ pub fn validate_proto_schema_with_descriptors(
                 scalar_type: validate_proto_field(&f, descriptors)?,
             })
         })
-        .collect::<Result<Vec<_>, Error>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     let column_names = message.fields().iter().map(|f| Some(f.name().to_string()));
     Ok(RelationDesc::new(
@@ -167,7 +160,7 @@ impl Decoder {
         Decoder::new(descriptors, message_name)
     }
 
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, failure::Error> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
         let mut deserializer =
             Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
@@ -191,7 +184,7 @@ impl Decoder {
 fn extract_row(
     deserialized_message: SerdeValue,
     message_descriptors: &MessageDescriptor,
-) -> Result<Option<Row>, failure::Error> {
+) -> Result<Option<Row>> {
     let deserialized_message = match deserialized_message {
         SerdeValue::Map(deserialized_message) => deserialized_message,
         _ => bail!("Deserialization failed with an unsupported top level object type"),
@@ -222,7 +215,7 @@ fn extract_row(
     Ok(Some(row.finish()))
 }
 
-fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>, failure::Error> {
+fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
     match val {
         ProtoValue::Bool(true) => Ok(Datum::True),
         ProtoValue::Bool(false) => Ok(Datum::False),
@@ -242,10 +235,7 @@ fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>, failure:
 ///
 /// Top-level values are converted to equivalent Datums, but in the case of a nested
 /// type, all numeric types will be converted to f64s (issue #1476)
-fn json_from_serde_value(
-    val: &SerdeValue,
-    mut packer: RowPacker,
-) -> Result<RowPacker, failure::Error> {
+fn json_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Result<RowPacker> {
     packer.push(match val {
         SerdeValue::Bool(true) => Datum::True,
         SerdeValue::Bool(false) => Datum::False,
@@ -274,11 +264,8 @@ fn json_from_serde_value(
     Ok(packer)
 }
 
-fn json_nested_from_serde_value(
-    val: &SerdeValue,
-    mut packer: RowPacker,
-) -> Result<RowPacker, Error> {
-    fn json_number<N: ToPrimitive + std::fmt::Display>(i: &N) -> Result<Datum<'static>, Error> {
+fn json_nested_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Result<RowPacker> {
+    fn json_number<N: ToPrimitive + std::fmt::Display>(i: &N) -> Result<Datum<'static>> {
         Ok(Datum::Float64(OrderedFloat::from(i.to_f64().ok_or_else(
             || format_err!("couldn't convert {} into an f64", i),
         )?)))
