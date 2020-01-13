@@ -314,9 +314,6 @@ fn format_row(
                         (*string).to_owned()
                     }
                 }
-                (Type::Text, Datum::Int32(chr)) => std::char::from_u32(chr as u32)
-                    .map(|chr| format!("{}", chr))
-                    .unwrap_or_else(|| format!("Invalid utf8 character: {}", chr)),
                 (Type::Bool, Datum::False) => "false".to_owned(),
                 (Type::Bool, Datum::True) => "true".to_owned(),
 
@@ -332,6 +329,7 @@ fn format_row(
                 (Type::Integer, Datum::True) => "1".to_owned(),
                 (Type::Real, Datum::Int32(i)) => format!("{:.3}", i),
                 (Type::Real, Datum::Int64(i)) => format!("{:.3}", i),
+                (Type::Text, Datum::Int32(i)) => format!("{}", i),
                 (Type::Text, Datum::Int64(i)) => format!("{}", i),
                 (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
                 (Type::Text, Datum::Date(d)) => d.to_string(),
