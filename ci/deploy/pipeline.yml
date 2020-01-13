@@ -18,8 +18,8 @@ steps:
           environment:
           - CARGO_HOME=/cargo
     concurrency: 1
-      concurrency_group: deploy/devsite
+    concurrency_group: deploy/devsite
   - command: ci/deploy/docker.sh
     timeout_in_minutes: 10
     concurrency: 1
-      concurrency_group: deploy/docker
+    concurrency_group: deploy/docker
