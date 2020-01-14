@@ -27,7 +27,7 @@ use dataflow_types::{
 };
 use expr as relationexpr;
 use interchange::{avro, protobuf};
-use relationexpr::{EvalEnv, Id};
+use relationexpr::{EvalEnv, GlobalId, Id};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr::like::build_like_regex_from_string;
@@ -121,14 +121,21 @@ pub fn describe_statement(
             vec![],
         ),
 
-        Statement::ShowObjects { object_type, .. } => (
-            Some(
-                RelationDesc::empty()
-                    .add_column(object_type_as_plural_str(object_type), ScalarType::String),
-            ),
-            vec![],
-        ),
-
+        Statement::ShowObjects {
+            object_type, full, ..
+        } => {
+            let col_name = object_type_as_plural_str(object_type);
+            (
+                Some(if full {
+                    RelationDesc::empty()
+                        .add_column(col_name, ScalarType::String)
+                        .add_column("TYPE", ScalarType::String)
+                } else {
+                    RelationDesc::empty().add_column(col_name, ScalarType::String)
+                }),
+                vec![],
+            )
+        }
         Statement::ShowVariable { variable, .. } => {
             if variable.value == unicase::Ascii::new("ALL") {
                 (
@@ -195,12 +202,16 @@ pub fn handle_statement(
         } => handle_set_variable(scx, local, variable, value),
         Statement::ShowVariable { variable } => handle_show_variable(scx, variable),
         Statement::ShowObjects {
+            extended,
+            full,
             object_type: ot,
             filter,
-        } => handle_show_objects(scx, ot, filter.as_ref()),
-        Statement::ShowIndexes { table_name, filter } => {
-            handle_show_indexes(scx, &table_name.try_into()?, filter.as_ref())
-        }
+        } => handle_show_objects(scx, extended, full, ot, filter.as_ref()),
+        Statement::ShowIndexes {
+            extended,
+            table_name,
+            filter,
+        } => handle_show_indexes(scx, extended, &table_name.try_into()?, filter.as_ref()),
         Statement::ShowColumns {
             extended,
             full,
@@ -288,9 +299,15 @@ fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
 
 fn handle_show_objects(
     scx: &StatementContext,
+    extended: bool,
+    full: bool,
     object_type: ObjectType,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
+    if extended {
+        bail!("SHOW EXTENDED ... is not supported ");
+    }
+
     let like_regex = match filter {
         Some(ShowStatementFilter::Like(like_string)) => {
             build_like_regex_from_string(like_string.as_ref())?
@@ -299,24 +316,39 @@ fn handle_show_objects(
         None => build_like_regex_from_string(&String::from("%"))?,
     };
 
-    let mut rows: Vec<Row> = scx
-        .catalog
-        .iter()
-        .filter(|entry| {
-            object_type_matches(object_type, entry.item())
-                && like_regex.is_match(&entry.name().to_string())
+    let rows = scx.catalog.iter().filter(|entry| {
+        object_type_matches(object_type, entry.item())
+            && like_regex.is_match(&entry.name().to_string())
+    });
+    let mut rows: Vec<Row> = if full {
+        rows.map(|entry| {
+            let object_type = match entry.id() {
+                GlobalId::System(_) => "SYSTEM",
+                GlobalId::User(_) => "USER",
+            };
+            Row::pack(&[
+                Datum::from(&*entry.name().to_string()),
+                Datum::from(object_type),
+            ])
         })
-        .map(|entry| Row::pack(&[Datum::from(&*entry.name().to_string())]))
-        .collect();
+        .collect()
+    } else {
+        rows.map(|entry| Row::pack(&[Datum::from(&*entry.name().to_string())]))
+            .collect()
+    };
     rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
     Ok(Plan::SendRows(rows))
 }
 
 fn handle_show_indexes(
     scx: &StatementContext,
+    extended: bool,
     from_name: &QualName,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
+    if extended {
+        bail!("SHOW EXTENDED INDEXES is not supported")
+    }
     if filter.is_some() {
         bail!("SHOW INDEXES ... WHERE is not supported");
     }
@@ -385,7 +417,7 @@ fn handle_show_columns(
             Row::pack(&[
                 Datum::String(name.as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
-                Datum::String(&postgres_type_name(&typ.scalar_type)),
+                Datum::String(pgrepr::Type::from(typ.scalar_type).name()),
             ])
         })
         .collect();
@@ -555,6 +587,7 @@ fn handle_create_dataflow(
                                 format = Some(match &with_op.value {
                                     Value::SingleQuotedString(s) => match s.as_ref() {
                                         "csv" => SourceFileFormat::Csv,
+                                        "text" => SourceFileFormat::Regex("(?P<line>.*)".into()),
                                         _ => bail!("Unrecognized file format: {}", s),
                                     },
                                     _ => bail!("File format must be a string, e.g. 'csv'."),
@@ -610,23 +643,23 @@ fn handle_create_dataflow(
                                 Ok(r) => r,
                                 Err(e) => bail!("Error compiling regex: {}", e),
                             };
-                            let unnamed_idx = &mut 0;
                             let names: Vec<_> = regex
                                 .capture_names()
+                                .enumerate()
                                 // The first capture is the entire matched string.
                                 // This will often not be useful, so skip it.
                                 // If people want it they can just surround their
                                 // entire regex in an explicit capture group.
                                 .skip(1)
-                                .map(|ocn| {
-                                    ocn.map(String::from).unwrap_or_else(|| {
-                                        *unnamed_idx += 1;
-                                        format!("unnamed{}", unnamed_idx)
-                                    })
+                                .map(|(i, ocn)| match ocn {
+                                    None => Some(format!("column{}", i)),
+                                    Some(ocn) => Some(String::from(ocn)),
                                 })
-                                .map(|x| Some(x))
                                 .collect();
                             let n_cols = names.len();
+                            if n_cols == 0 {
+                                bail!("source regex must contain at least one capture group to be useful");
+                            }
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)
                                 .collect();
@@ -1132,28 +1165,6 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
         ObjectType::View => "VIEWS",
         ObjectType::Source => "SOURCES",
         ObjectType::Sink => "SINKS",
-    }
-}
-
-/// Returns the name that PostgreSQL would use for this `ScalarType`. Note that
-/// PostgreSQL does not have an explicit NULL type, so this function panics if
-/// called with `ScalarType::Null`.
-fn postgres_type_name(typ: &ScalarType) -> String {
-    match typ {
-        ScalarType::Null => panic!("postgres_type_name called on ScalarType::Null"),
-        ScalarType::Bool => "bool".to_owned(),
-        ScalarType::Int32 => "int4".to_owned(),
-        ScalarType::Int64 => "int8".to_owned(),
-        ScalarType::Float32 => "float4".to_owned(),
-        ScalarType::Float64 => "float8".to_owned(),
-        ScalarType::Decimal(_, _) => "numeric".to_owned(),
-        ScalarType::Date => "date".to_owned(),
-        ScalarType::Timestamp => "timestamp".to_owned(),
-        ScalarType::TimestampTz => "timestamptz".to_owned(),
-        ScalarType::Interval => "interval".to_owned(),
-        ScalarType::Bytes => "bytea".to_owned(),
-        ScalarType::String => "text".to_owned(),
-        ScalarType::Jsonb => "jsonb".to_owned(),
     }
 }
 

@@ -19,14 +19,14 @@ statement ok
 INSERT INTO "t" VALUES
     (3)
 
-query T
+query I
 SELECT * FROM "t" ORDER BY v
 ----
 1
 2
 3
 
-query T
+query I
 SELECT * FROM t ORDER BY "v"
 ----
 1
@@ -64,14 +64,14 @@ statement ok
 INSERT INTO "q" VALUES
     (3)
 
-query T
+query I
 SELECT * FROM "q" ORDER BY p
 ----
 1
 2
 3
 
-query T
+query I
 SELECT * FROM q ORDER BY "p"
 ----
 1

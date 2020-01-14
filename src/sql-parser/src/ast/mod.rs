@@ -625,12 +625,14 @@ pub enum Statement {
     ///
     /// ```sql
     /// SHOW TABLES;
-    /// SHOW VIEWS;
     /// SHOW SOURCES;
+    /// SHOW VIEWS;
     /// SHOW SINKS;
     /// ```
     ShowObjects {
         object_type: ObjectType,
+        extended: bool,
+        full: bool,
         filter: Option<ShowStatementFilter>,
     },
     /// `SHOW INDEX|INDEXES|KEYS`
@@ -638,6 +640,7 @@ pub enum Statement {
     /// Note: this is a MySQL-specific statement
     ShowIndexes {
         table_name: ObjectName,
+        extended: bool,
         filter: Option<ShowStatementFilter>,
     },
     /// `SHOW COLUMNS`
@@ -898,11 +901,20 @@ impl fmt::Display for Statement {
             Statement::ShowObjects {
                 object_type,
                 filter,
+                full,
+                extended,
             } => {
                 use ObjectType::*;
+                f.write_str("SHOW")?;
+                if *extended {
+                    f.write_str(" EXTENDED")?;
+                }
+                if *full {
+                    f.write_str(" FULL")?;
+                }
                 write!(
                     f,
-                    "SHOW {}",
+                    " {}",
                     match object_type {
                         Table => "TABLES",
                         View => "VIEWS",
@@ -916,8 +928,16 @@ impl fmt::Display for Statement {
                 }
                 Ok(())
             }
-            Statement::ShowIndexes { table_name, filter } => {
-                write!(f, "SHOW INDEXES FROM {}", table_name)?;
+            Statement::ShowIndexes {
+                table_name,
+                extended,
+                filter,
+            } => {
+                write!(f, "SHOW ")?;
+                if *extended {
+                    f.write_str("EXTENDED ")?;
+                }
+                write!(f, "INDEXES FROM {}", table_name)?;
                 if let Some(filter) = filter {
                     write!(f, " {}", filter)?;
                 }

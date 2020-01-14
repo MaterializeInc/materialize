@@ -29,6 +29,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem;
 use std::ops;
 use std::path::Path;
+use std::str;
 use std::thread;
 
 use failure::{bail, ResultExt};
@@ -41,6 +42,7 @@ use coord::ExecuteResponse;
 use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
+use repr::jsonb::Jsonb;
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use sql::{Session, Statement};
 use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -287,7 +289,7 @@ fn format_row(
         if let Datum::Null = datum {
             "NULL".to_owned()
         } else if let ScalarType::Jsonb = col_typ.scalar_type {
-            expr::datum_to_serde(datum).to_string()
+            Jsonb::from_datum(datum).to_string()
         } else {
             match (slt_typ, datum) {
                 // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
@@ -312,9 +314,6 @@ fn format_row(
                         (*string).to_owned()
                     }
                 }
-                (Type::Text, Datum::Int32(chr)) => std::char::from_u32(chr as u32)
-                    .map(|chr| format!("{}", chr))
-                    .unwrap_or_else(|| format!("Invalid utf8 character: {}", chr)),
                 (Type::Bool, Datum::False) => "false".to_owned(),
                 (Type::Bool, Datum::True) => "true".to_owned(),
 
@@ -328,13 +327,24 @@ fn format_row(
                 (Type::Integer, Datum::String(_)) => "0".to_owned(),
                 (Type::Integer, Datum::False) => "0".to_owned(),
                 (Type::Integer, Datum::True) => "1".to_owned(),
+                (Type::Real, Datum::Int32(i)) => format!("{:.3}", i),
                 (Type::Real, Datum::Int64(i)) => format!("{:.3}", i),
+                (Type::Text, Datum::Int32(i)) => format!("{}", i),
                 (Type::Text, Datum::Int64(i)) => format!("{}", i),
                 (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
                 (Type::Text, Datum::Date(d)) => d.to_string(),
                 (Type::Text, Datum::Timestamp(d)) => d.to_string(),
                 (Type::Text, Datum::TimestampTz(d)) => d.to_string(),
                 (Type::Text, Datum::Interval(iv)) => iv.to_string(),
+                // Bytes are printed as text iff they are valid UTF-8. This
+                // seems guaranteed to confuse everyone, but it is required for
+                // compliance with the CockroachDB sqllogictest runner. [0]
+                //
+                // [0]: https://github.com/cockroachdb/cockroach/blob/970782487/pkg/sql/logictest/logic.go#L2038-L2043
+                (Type::Text, Datum::Bytes(buf)) => match str::from_utf8(buf) {
+                    Ok(s) => s.to_owned(),
+                    Err(_) => format!("{:?}", buf),
+                },
                 other => panic!("Don't know how to format {:?}", other),
             }
         }

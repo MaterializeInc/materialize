@@ -305,6 +305,18 @@ fn parse_column_aliases() {
 }
 
 #[test]
+fn parse_concat_function() {
+    let sql = "SELECT CONCAT('CONCAT', ' ', 'function')";
+    let _select = verified_only_select(sql);
+    let sql = "SELECT CONCAT(first_name, ' ', last_name) FROM customer";
+    let _select = verified_only_select(sql);
+    let sql = "SELECT CONCAT('Concat with ', NULL) AS result_string";
+    let _select = verified_only_select(sql);
+    let sql = "SELECT first_name, concat('A', 3, 'chars') FROM customer";
+    let _select = verified_only_select(sql);
+}
+
+#[test]
 fn test_eof_after_as() {
     let res = parse_sql_statements("SELECT foo AS");
     assert_eq!(
@@ -1966,6 +1978,8 @@ fn parse_show_objects() {
             verified_stmt(&sql),
             Statement::ShowObjects {
                 object_type: *ot,
+                extended: false,
+                full: false,
                 filter: None
             }
         )
@@ -1978,6 +1992,8 @@ fn parse_show_objects_with_like_regex() {
     match verified_stmt(sql) {
         Statement::ShowObjects {
             object_type,
+            extended: false,
+            full: false,
             filter,
         } => {
             assert_eq!(filter.unwrap(), ShowStatementFilter::Like("%foo%".into()));
@@ -1988,12 +2004,37 @@ fn parse_show_objects_with_like_regex() {
 }
 
 #[test]
+fn parse_show_objects_with_full() {
+    let canonical_sql = "SHOW FULL VIEWS";
+    assert_eq!(
+        verified_stmt(&canonical_sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::View,
+            extended: false,
+            full: true,
+            filter: None,
+        }
+    );
+    let canonical_sql = "SHOW FULL TABLES";
+    assert_eq!(
+        verified_stmt(&canonical_sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::Table,
+            extended: false,
+            full: true,
+            filter: None,
+        }
+    );
+}
+
+#[test]
 fn parse_show_indexes() {
     let canonical_sql = "SHOW INDEXES FROM foo";
     assert_eq!(
         verified_stmt(&canonical_sql),
         Statement::ShowIndexes {
             table_name: ObjectName(vec!["foo".into()]),
+            extended: false,
             filter: None,
         }
     );
@@ -2009,10 +2050,27 @@ fn parse_show_indexes() {
 }
 
 #[test]
+fn parse_show_indexes_with_extended() {
+    let canonical_sql = "SHOW EXTENDED INDEXES FROM foo";
+    assert_eq!(
+        verified_stmt(&canonical_sql),
+        Statement::ShowIndexes {
+            table_name: ObjectName(vec!["foo".into()]),
+            extended: true,
+            filter: None,
+        }
+    );
+}
+
+#[test]
 fn parse_show_indexes_with_where_expr() {
     let canonical_sql = "SHOW INDEXES FROM foo WHERE index_name = 'bar'";
     match verified_stmt(canonical_sql) {
-        Statement::ShowIndexes { table_name, filter } => {
+        Statement::ShowIndexes {
+            table_name,
+            extended: _,
+            filter,
+        } => {
             assert_eq!(
                 filter.unwrap(),
                 ShowStatementFilter::Where(Expr::BinaryOp {
@@ -3210,6 +3268,38 @@ fn parse_offset() {
 }
 
 #[test]
+fn parse_offset_no_row() {
+    // Use unverified_query as the Query formatter is set to print ROWS by default
+    let ast = unverified_query("SELECT foo FROM bar OFFSET 2");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+
+    let ast = unverified_query("SELECT foo FROM bar WHERE foo = 4 OFFSET 2");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+
+    let ast = unverified_query("SELECT foo FROM bar ORDER BY baz OFFSET 2 ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    let ast = unverified_query("SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    let ast = unverified_query("SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2 ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    let ast = unverified_query("SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    let ast = unverified_query("SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2 ROWS ");
+    assert_eq!(ast.offset, Some(Expr::Value(number("2"))));
+    match ast.body {
+        SetExpr::Select(s) => match only(s.from).relation {
+            TableFactor::Derived { subquery, .. } => {
+                assert_eq!(subquery.offset, Some(Expr::Value(number("2"))));
+            }
+            _ => panic!("Test broke"),
+        },
+        _ => panic!("Test broke"),
+    }
+    let ast = unverified_query("SELECT 'foo' OFFSET 0");
+    assert_eq!(ast.offset, Some(Expr::Value(number("0"))));
+}
+
+#[test]
 fn parse_singular_row_offset() {
     one_statement_parses_to(
         "SELECT foo FROM bar OFFSET 1 ROW",
@@ -3562,6 +3652,15 @@ fn parse_show_columns() {
         verified_stmt("SHOW FULL COLUMNS FROM mytable"),
         Statement::ShowColumns {
             extended: false,
+            full: true,
+            table_name: table_name.clone(),
+            filter: None,
+        }
+    );
+    assert_eq!(
+        verified_stmt("SHOW EXTENDED FULL COLUMNS FROM mytable"),
+        Statement::ShowColumns {
+            extended: true,
             full: true,
             table_name: table_name.clone(),
             filter: None,

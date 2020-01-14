@@ -13,6 +13,7 @@
 
 pub mod cast;
 pub mod collections;
+pub mod fmt;
 pub mod future;
 pub mod hash;
 pub mod iter;

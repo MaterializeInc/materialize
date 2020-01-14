@@ -3,25 +3,70 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-statement error
+mode cockroach
+
+statement ok
+CREATE TABLE bools (b text)
+
+statement ok
+INSERT INTO bools VALUES
+    ('t'), ('tr'), ('tR'), ('tRuE'), ('TRUE'), ('    tr    '),
+    ('f'), ('fa'), ('faL'), ('fAlsE'), ('FALSE'), ('           fal '),
+    ('on'), ('off'), ('On'), ('Off'), ('ON'), ('oFf'),
+    ('1'), ('0'), ('               1'), ('0        ')
+
+query TB rowsort
+SELECT replace(b, ' ', 'x'), b::bool FROM bools
+----
+xxxxxxxxxxxxxxx1  true
+xxxxxxxxxxxfalx   false
+xxxxtrxxxx        true
+0xxxxxxxx         false
+0                 false
+1                 true
+f                 false
+fa                false
+faL               false
+fAlsE             false
+FALSE             false
+off               false
+oFf               false
+Off               false
+on                true
+On                true
+ON                true
+t                 true
+tr                true
+tR                true
+tRuE              true
+TRUE              true
+
+# TODO(benesch): this should return an error, not null, when we support
+# runtime errors.
+query B
+SELECT 'blah'::bool
+----
+NULL
+
+query error Cannot apply operator Not to non-boolean type Int32
 SELECT NOT 1
 
-statement error
+query error Cannot apply operator And to non-boolean type Int32
 SELECT 1 AND 1
 
-statement error
+query error Cannot apply operator Or to non-boolean type Int32
 SELECT 1 OR 1
 
-statement error
+query error Cannot apply operator Or to non-boolean type Int32
 SELECT 1 OR FALSE
 
-statement error
+query error Cannot apply operator Or to non-boolean type Int32
 SELECT FALSE OR 1
 
-statement error
+query error Cannot apply operator And to non-boolean type Int32
 SELECT 1 AND FALSE
 
-statement error
+query error Cannot apply operator And to non-boolean type Int32
 SELECT FALSE AND 1
 
 query B

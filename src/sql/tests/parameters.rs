@@ -33,7 +33,7 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
             vec![Type::Text, Type::Text, Type::Text],
         ),
         ("SELECT ($1), (((($2))))", vec![Type::Text, Type::Text]),
-        ("SELECT $1::int", vec![Type::Int8]),
+        ("SELECT $1::int", vec![Type::Int4]),
         ("SELECT 1 WHERE $1", vec![Type::Bool]),
         ("SELECT 1 HAVING $1", vec![Type::Bool]),
         (
@@ -45,14 +45,14 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
             "SELECT CASE WHEN true THEN $1 ELSE $2 END",
             vec![Type::Text, Type::Text],
         ),
-        ("SELECT CASE WHEN true THEN $1 ELSE 1 END", vec![Type::Int8]),
+        ("SELECT CASE WHEN true THEN $1 ELSE 1 END", vec![Type::Int4]),
         ("SELECT abs($1)", vec![Type::Float8]),
         ("SELECT ascii($1)", vec![Type::Text]),
         (
             "SELECT coalesce($1, $2, $3)",
             vec![Type::Text, Type::Text, Type::Text],
         ),
-        ("SELECT coalesce($1, 1)", vec![Type::Int8]),
+        ("SELECT coalesce($1, 1)", vec![Type::Int4]),
         ("SELECT substr($1, $2)", vec![Type::Text, Type::Int8]),
         ("SELECT substring($1, $2)", vec![Type::Text, Type::Int8]),
         ("SELECT $1 LIKE $2", vec![Type::Text, Type::Text]),
@@ -61,9 +61,9 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ("SELECT $1 OR $2", vec![Type::Bool, Type::Bool]),
         ("SELECT +$1", vec![Type::Float8]),
         ("SELECT -$1", vec![Type::Float8]),
-        ("SELECT $1 < 1", vec![Type::Int8]),
+        ("SELECT $1 < 1", vec![Type::Int4]),
         ("SELECT $1 < $2", vec![Type::Text, Type::Text]),
-        ("SELECT $1 + 1", vec![Type::Int8]),
+        ("SELECT $1 + 1", vec![Type::Int4]),
         ("SELECT $1 + 1.0", vec![Type::Numeric]),
         ("SELECT DATE '1970-01-01' + $1", vec![Type::Interval]),
         (
@@ -75,7 +75,7 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
             "SELECT $1 + TIMESTAMP '1970-01-01 00:00:00'",
             vec![Type::Interval],
         ),
-        ("SELECT $1::int, $1 + $2", vec![Type::Int8, Type::Int8]),
+        ("SELECT $1::int, $1 + $2", vec![Type::Int4, Type::Int4]),
         ("SELECT '[0, 1, 2]'::jsonb - $1", vec![Type::Text]),
     ];
     for (sql, types) in test_cases {

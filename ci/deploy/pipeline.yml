@@ -10,12 +10,16 @@ steps:
       queue: builder
     plugins:
       - docker#v3.1.0:
-          image: materialize/ci-builder:nightly-20191216-171848
+          image: materialize/ci-builder:nightly-20200113-111211
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
           - "$HOME/.cargo:/cargo"
           environment:
           - CARGO_HOME=/cargo
+    concurrency: 1
+    concurrency_group: deploy/devsite
   - command: ci/deploy/docker.sh
     timeout_in_minutes: 10
+    concurrency: 1
+    concurrency_group: deploy/docker

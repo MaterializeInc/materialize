@@ -58,6 +58,11 @@ impl Type {
         }
     }
 
+    /// Returns the name that PostgreSQL uses for this type.
+    pub fn name(self) -> &'static str {
+        self.inner().name()
+    }
+
     /// Returns the [OID] of this type.
     ///
     /// [OID]: https://www.postgresql.org/docs/current/datatype-oid.html

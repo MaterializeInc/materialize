@@ -46,8 +46,14 @@ type WatcherType = notify::PollWatcher;
 #[cfg(not(target_os = "macos"))]
 type WatcherType = notify::RecommendedWatcher;
 
+#[cfg(target_os = "macos")]
 fn get_watcher(tx: std::sync::mpsc::Sender<RawEvent>) -> notify::Result<WatcherType> {
-    Watcher::new_raw(tx)
+    WatcherType::with_delay_ms(tx, 100 /* poll every 100ms */)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_watcher(tx: std::sync::mpsc::Sender<RawEvent>) -> notify::Result<WatcherType> {
+    WatcherType::new_raw(tx)
 }
 
 /// Wraps a Tokio file, producing a stream that is tailed forever.

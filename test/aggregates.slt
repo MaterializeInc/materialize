@@ -36,8 +36,8 @@ query TTT colnames
 SHOW COLUMNS FROM t
 ----
 Field  Nullable  Type
- a     YES       int8
- b     YES       int8
+ a     YES       int4
+ b     YES       int4
 
 # avg on an integer column should return a decimal with the default decimal
 # division scale increase.

@@ -306,4 +306,4 @@ Amélie Amélie
 query T
 SELECT AsCIi('abc')
 ----
-a
+97

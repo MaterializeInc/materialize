@@ -12,6 +12,16 @@ SELECT length('a'), ascii('a'), substr('a', 1) LIMIT 0
 ----
 length  ascii  substr
 
+query T colnames
+SELECT length(column1) FROM (VALUES ('a')) GROUP BY length(column1) LIMIT 0
+----
+length
+
+query T colnames
+SELECT column1::text FROM (VALUES ('a')) LIMIT 0
+----
+column1
+
 ### ascii ###
 
 statement ok
@@ -435,3 +445,91 @@ query T
 SELECT 'hello'::bytea::text
 ----
 \x68656c6c6f
+
+
+### coalesce ###
+
+query T
+SELECT concat('CONCAT', 'function')
+----
+CONCATfunction
+
+query T
+SELECT concat('CONCAT', ' ', 'function')
+----
+CONCAT function
+
+query T
+SELECT concat('CONCAT', NULL , 'function')
+----
+CONCATfunction
+
+query I
+SELECT length(concat(''))
+----
+0
+
+query I
+SELECT length(concat(NULL))
+----
+0
+
+query I
+SELECT length(concat(' '))
+----
+1
+
+query T
+SELECT concat('CONCAT', 3 , 'function')
+----
+CONCAT3function
+
+query T
+SELECT concat('CONCAT', length('abc') , 'function')
+----
+CONCAT3function
+
+query T
+SELECT concat(3.32::float)
+----
+3.32
+
+query T
+SELECT concat(3.32::double precision)
+----
+3.32
+
+query T
+SELECT concat(3.32::int)
+----
+3
+
+query T
+SELECT concat(3.32)
+----
+3.32
+
+query T
+SELECT concat(3.32::decimal, 3)
+----
+33
+
+query T
+SELECT concat(3.32::float, 3)
+----
+3.323
+
+query T
+SELECT concat(3.32::float, '3')
+----
+3.323
+
+query T
+SELECT concat(true, false, 'function')
+----
+tffunction
+
+query T
+SELECT concat('你好')
+----
+你好

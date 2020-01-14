@@ -734,14 +734,14 @@ Project {
       variables: [],
       Reduce {
         group_key: [#0],
-        aggregates: [sum(#3 * (i64todec #2 * 100dec))],
+        aggregates: [sum(#3 * (i32todec #2 * 100dec))],
         Get { l0 }
       },
       Map {
         scalars: [#0 * 1dec],
         Reduce {
           group_key: [],
-          aggregates: [sum(#3 * (i64todec #2 * 100dec))],
+          aggregates: [sum(#3 * (i32todec #2 * 100dec))],
           Get { l0 }
         }
       }
@@ -1453,7 +1453,7 @@ Project {
       group_key: [#0],
       aggregates: [any(true)],
       Filter {
-        predicates: [(i64todec #3 * 1000dec) > #11],
+        predicates: [(i32todec #3 * 1000dec) > #11],
         Join {
           variables: [[(0, 1), (1, 0)], [(0, 2), (1, 1)]],
           Filter { predicates: [#0 = #2], Get { l3 } },
