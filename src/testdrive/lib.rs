@@ -101,6 +101,11 @@ fn run_line_reader(config: &Config, line_reader: &mut LineReader) -> Result<(), 
     // connections until after parsing.
     let mut state = action::create_state(config)?;
     let actions = action::build(cmds, &state)?;
+    for a in actions.iter().rev() {
+        a.action
+            .undo(&mut state)
+            .map_err(|e| InputError { msg: e, pos: a.pos })?;
+    }
     let mut ddl = Ddl::new(&mut state.pgclient())?;
 
     for a in &actions {
