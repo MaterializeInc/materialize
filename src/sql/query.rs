@@ -3136,10 +3136,6 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
     // NOTE this needs to stay in sync with symbiosis::push_column
     Ok(match data_type {
         DataType::Boolean => ScalarType::Bool,
-        DataType::Custom(name) if QualName::name_equals(name.clone(), "bool") => ScalarType::Bool,
-        DataType::Custom(name) if QualName::name_equals(name.clone(), "string") => {
-            ScalarType::String
-        }
         DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
         DataType::SmallInt | DataType::Int => ScalarType::Int32,
         DataType::BigInt => ScalarType::Int64,
@@ -3164,17 +3160,11 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::TimestampTz => ScalarType::TimestampTz,
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
-        DataType::Custom(name)
-            if name.to_string().to_lowercase() == "jsonb"
-                || name.to_string().to_lowercase() == "json" =>
-        {
-            ScalarType::Jsonb
-        }
+        DataType::Jsonb => ScalarType::Jsonb,
         other @ DataType::Array(_)
         | other @ DataType::Binary(..)
         | other @ DataType::Blob(_)
         | other @ DataType::Clob(_)
-        | other @ DataType::Custom(_)
         | other @ DataType::Regclass
         | other @ DataType::Time
         | other @ DataType::TimeTz

@@ -290,15 +290,7 @@ fn push_column(
             let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
             row.push(bool.into());
         }
-        DataType::Custom(name) if QualName::name_equals(name.clone(), "bool") => {
-            let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
-            row.push(bool.into());
-        }
         DataType::Char(_) | DataType::Varchar(_) | DataType::Text => {
-            let string = get_column_inner::<String>(postgres_row, i, nullable)?;
-            row.push(string.as_deref().into());
-        }
-        DataType::Custom(name) if QualName::name_equals(name.clone(), "string") => {
             let string = get_column_inner::<String>(postgres_row, i, nullable)?;
             row.push(string.as_deref().into());
         }
@@ -377,7 +369,7 @@ fn push_column(
             let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
             row.push(bytes.as_deref().into());
         }
-        DataType::Custom(name) if name.to_string().to_lowercase() == "jsonb" => {
+        DataType::Jsonb => {
             let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
             if let Some(serde) = serde {
                 row = Jsonb::new(serde)?.pack_into(row)
