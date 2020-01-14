@@ -60,9 +60,9 @@ fn no_block() {
             result,
             mut session,
         } = oneshot_rx.await.unwrap();
-        let _ = result.unwrap();
+        result.unwrap();
 
-        let stmt = session.get_prepared_statement("hang".into()).unwrap();
+        let stmt = session.get_prepared_statement("hang").unwrap();
         let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
         session
             .set_portal("hang".into(), "hang".into(), vec![], result_formats)
@@ -97,9 +97,9 @@ fn no_block() {
             result,
             mut session,
         } = oneshot_rx.await.unwrap();
-        let _ = result.unwrap();
+        result.unwrap();
 
-        let stmt = session.get_prepared_statement("math".into()).unwrap();
+        let stmt = session.get_prepared_statement("math").unwrap();
         let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
         session
             .set_portal("math".into(), "math".into(), vec![], result_formats)
