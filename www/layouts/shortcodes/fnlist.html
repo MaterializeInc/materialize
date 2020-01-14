@@ -1,5 +1,8 @@
 {{/*  Converts www/data/sql_funcs.json into table. */}}
 {{ range $.Site.Data.sql_funcs }}
+
+{{ if not (isset $.Params 0) }}
+
 <h3>
   <a class="headline-hash" href="#{{ lower .type }}-func">
     {{.type}}
@@ -8,6 +11,10 @@
 </h3>
 
 <p>{{ if .description }} {{ .description | markdownify }} {{ end }}</p>
+
+{{end}}
+
+{{ if or (eq ($.Get 0) .type) (not (isset $.Params 0)) }}
 
 <table>
   <tr>
@@ -36,5 +43,7 @@
   </tr>
   {{ end }} {{/*  {{ range .functions }} */}}
 </table>
+
+{{end}}
 
 {{ end }}{{/*  {{ range $.Site.Data.sql_funcs }} */}}

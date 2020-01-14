@@ -48,3 +48,7 @@ Operator | Computes
  `*` | Multiplication
  `/` | Division
  `%` | Modulo
+
+### JSON
+
+{{% json-operators %}}
