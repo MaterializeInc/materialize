@@ -114,12 +114,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 {"before": null, "after": null}
 
-# TODO@jldlaughlin: Add this back when we can drop sinks
-# > CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = 'http://localhost:8081');
+> CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = 'http://localhost:8081');
 
 # Test that sinks cannot be depended upon.
-# ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
-# catalog item 's1' is a sink and so cannot be depended upon
+! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
+catalog item 's1' is a sink and so cannot be depended upon
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT X from s;
 
@@ -227,6 +226,6 @@ catalog item 'i4' does not exist
 #cleanup
 > DROP VIEW v2;
 
-# TODO(@jldlaughlin): Implement DROP SINK and add these back
-#> DROP SINK s1;
-#> DROP SOURCE s;
+> DROP SINK s1;
+
+> DROP SOURCE s;
