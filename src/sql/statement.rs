@@ -1098,7 +1098,9 @@ fn build_kafka_protobuf_source(
 ) -> Result<Source, failure::Error> {
     let schema = match schema {
         SourceSchema::RawOrPath(s) => s.to_owned(),
-        _ => bail!("Invalid schema type. Schema must be a path to a file"),
+        _ => bail!(
+            "Invalid schema type. Schema must be a path to a file or a base64 encoded descriptor"
+        ),
     };
 
     let desc = protobuf::validate_proto_schema(&message_name, &schema)?;

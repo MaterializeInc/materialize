@@ -3,12 +3,10 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-$ set outfile=${testdrive.data_dir}/billing.protospec
-
-$ compile-protoc source=${testdrive.data_dir}/billing.proto dest=${outfile}
+$ compile-protoc source=${testdrive.data_dir}/billing.proto var=billing
 
 > CREATE SOURCE billing_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
-  USING SCHEMA '${outfile}'
+  USING SCHEMA '${billing}'
   WITH (format='protobuf-descriptor', message_name='.Batch')
 > CREATE VIEW billing AS SELECT * FROM billing_source
 

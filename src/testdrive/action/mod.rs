@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use crate::error::{Error, InputError};
 use crate::parser::{Command, PosCommand};
-use compile_proto::compile_protoc;
+use compile_proto::compile_and_encode;
 
 mod compile_proto;
 mod kafka;
@@ -99,10 +99,11 @@ pub fn build(
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
                     "compile-protoc" => {
-                        Box::new(compile_protoc(builtin).map_err(|e| InputError {
-                            msg: e.to_string(),
-                            pos,
-                        })?)
+                        let b64_encoded =
+                            compile_and_encode(builtin.args.string("source").map_err(wrap_err)?)
+                                .map_err(wrap_err)?;
+                        vars.insert(builtin.args.string("var").map_err(wrap_err)?, b64_encoded);
+                        continue;
                     }
                     "set" => {
                         vars.extend(builtin.args);

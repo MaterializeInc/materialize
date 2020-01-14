@@ -25,6 +25,19 @@ use crate::error::Result;
 
 pub mod test_util;
 
+pub fn read_descriptors(descriptor_source: &str) -> Result<Descriptors> {
+    match base64::decode(descriptor_source) {
+        Ok(decoded) => parse_descriptors_from_reader(&mut std::io::Cursor::new(decoded)),
+        Err(_) => read_descriptors_from_file(descriptor_source),
+    }
+}
+
+pub fn validate_proto_schema(message_name: &str, descriptor_source: &str) -> Result<RelationDesc> {
+    let descriptors = read_descriptors(descriptor_source)?;
+
+    validate_proto_schema_with_descriptors(message_name, &descriptors)
+}
+
 pub fn read_descriptors_from_file(descriptor_file: &str) -> Result<Descriptors> {
     let abs = fs::canonicalize(descriptor_file)?;
     let mut file = fs::File::open(&abs).map_err(|e| {
@@ -34,7 +47,11 @@ pub fn read_descriptors_from_file(descriptor_file: &str) -> Result<Descriptors> 
             e
         )
     })?;
-    let proto = protobuf::parse_from_reader(&mut file).context("Parsing descriptor set failed")?;
+    parse_descriptors_from_reader(&mut file)
+}
+
+fn parse_descriptors_from_reader(r: &mut impl std::io::Read) -> Result<Descriptors> {
+    let proto = protobuf::parse_from_reader(r).context("Parsing descriptor set failed")?;
     Ok(Descriptors::from_proto(&proto))
 }
 
@@ -109,11 +126,6 @@ fn validate_proto_field_resolved(field: &FieldDescriptor, descriptors: &Descript
     Ok(())
 }
 
-pub fn validate_proto_schema(message_name: &str, descriptor_file: &str) -> Result<RelationDesc> {
-    let descriptors = read_descriptors_from_file(descriptor_file)?;
-    validate_proto_schema_with_descriptors(message_name, &descriptors)
-}
-
 pub fn validate_proto_schema_with_descriptors(
     message_name: &str,
     descriptors: &Descriptors,
@@ -161,7 +173,7 @@ impl Decoder {
     }
 
     pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Result<Decoder> {
-        let descriptors = read_descriptors_from_file(descriptor_file_name)?;
+        let descriptors = read_descriptors(descriptor_file_name)?;
         // TODO: should we validate message exists in descriptor?
         Ok(Decoder::new(descriptors, message_name))
     }

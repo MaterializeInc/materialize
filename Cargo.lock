@@ -1271,6 +1271,7 @@ name = "interchange"
 version = "0.1.0"
 dependencies = [
  "avro-rs",
+ "base64",
  "byteorder",
  "ccsr",
  "chrono",
@@ -3041,6 +3042,7 @@ dependencies = [
  "atty",
  "avro-rs",
  "backoff",
+ "base64",
  "byteorder",
  "ccsr",
  "chrono",

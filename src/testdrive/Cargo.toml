@@ -39,6 +39,7 @@ serde_json = { version = "1.0.44", features = ["preserve_order"] }
 sql-parser = { path = "../sql-parser" }
 termcolor = "1.1.0"
 tokio = "0.2"
+base64 = "0.11.0"
 
 [build-dependencies]
 protoc-rust = "2.8"

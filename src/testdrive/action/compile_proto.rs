@@ -5,6 +5,7 @@
 
 //! Tools for manipulating proto in testdrive
 
+use std::fs;
 use std::path::Path;
 
 use protoc::Protoc;
@@ -12,45 +13,28 @@ use serde_protobuf::descriptor::Descriptors;
 
 use interchange::protobuf::read_descriptors_from_file;
 
-use crate::action::{Action, State};
 use crate::error::Error;
-use crate::parser::BuiltinCommand;
 
-/// Testrive Action to Compile a `.proto` file into [`Descriptors`] for use by interchange
-pub struct CompileProto {
-    source: String,
-    dest: String,
-}
-
-pub fn compile_protoc(mut cmd: BuiltinCommand) -> Result<CompileProto, Error> {
-    Ok(CompileProto {
-        source: cmd.args.string("source")?,
-        dest: cmd.args.string("dest")?,
-    })
-}
-
-impl Action for CompileProto {
-    // Don't undo anything
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn redo(&self, _state: &mut State) -> Result<(), String> {
-        match generate_descriptors(&self.source, &self.dest) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                if Path::new(&self.dest).exists() {
-                    // Don't worry about recreating the proto file if it's checked in
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "couldn't generator proto descriptor file {}: {}",
-                        self.dest, e
-                    ))
-                }
+pub fn compile_and_encode(source: String) -> Result<String, String> {
+    let dest = source.clone() + "spec";
+    Ok(match generate_descriptors(&source, &dest) {
+        Ok(_) => base64::encode(
+            &fs::read(&dest).map_err(|e| format!("reading descriptor for var: {}", e))?,
+        ),
+        Err(e) => {
+            if Path::new(&dest).exists() {
+                // Don't worry about recreating the proto file if it's checked in
+                base64::encode(
+                    &fs::read(&dest).map_err(|e| format!("reading descriptor for var: {}", e))?,
+                )
+            } else {
+                return Err(format!(
+                    "couldn't generator proto descriptor file {}: {}",
+                    dest, e
+                ));
             }
         }
-    }
+    })
 }
 
 /// Takes a path to a .proto spec and attempts to generate a binary file
