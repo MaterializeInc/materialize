@@ -12,7 +12,8 @@ use std::iter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use failure::{bail, ResultExt};
+use failure::{bail, format_err, ResultExt};
+use futures::future::join_all;
 use sql_parser::ast::{
     Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
     Stage, Statement, Value,
@@ -27,6 +28,7 @@ use dataflow_types::{
 };
 use expr as relationexpr;
 use interchange::{avro, protobuf};
+use ore::future::MaybeFuture;
 use relationexpr::{EvalEnv, GlobalId, Id};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
@@ -174,25 +176,21 @@ pub fn describe_statement(
     })
 }
 
-/// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
-pub fn handle_statement(
-    catalog: &Catalog,
-    session: &Session,
+fn handle_sync_statement(
     stmt: Statement,
     params: &Params,
+    scx: &StatementContext,
 ) -> Result<Plan, failure::Error> {
-    let scx = &StatementContext { catalog, session };
     match stmt {
+        Statement::CreateSource { .. } | Statement::CreateSources { .. } => unreachable!(),
         Statement::Peek { name, immediate } => handle_peek(scx, name.try_into()?, immediate),
         Statement::Tail { name } => handle_tail(scx, &name.try_into()?),
         Statement::StartTransaction { .. } => handle_start_transaction(),
         Statement::Commit { .. } => handle_commit_transaction(),
+        Statement::CreateView { .. } => handle_create_view(scx, stmt, params),
         Statement::Rollback { .. } => handle_rollback_transaction(),
-        Statement::CreateSource { .. }
-        | Statement::CreateSink { .. }
-        | Statement::CreateView { .. }
-        | Statement::CreateSources { .. }
-        | Statement::CreateIndex { .. } => handle_create_dataflow(scx, stmt, params),
+        Statement::CreateSink { .. } => handle_create_sink(scx, stmt),
+        Statement::CreateIndex { .. } => handle_create_index(scx, stmt),
         Statement::Drop { .. } => handle_drop_dataflow(scx, stmt),
         Statement::Query(query) => handle_select(scx, *query, params),
         Statement::SetVariable {
@@ -231,6 +229,22 @@ pub fn handle_statement(
         Statement::Explain { stage, query } => handle_explain(scx, stage, *query, params),
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
+    }
+}
+
+/// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
+pub fn handle_statement(
+    catalog: &Catalog,
+    session: &Session,
+    stmt: Statement,
+    params: &Params,
+) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
+    let scx = &StatementContext { catalog, session };
+    match stmt {
+        Statement::CreateSource { .. } | Statement::CreateSources { .. } => {
+            MaybeFuture::Future(Box::pin(handle_create_dataflow(stmt)))
+        }
+        _ => handle_sync_statement(stmt, params, &scx).into(),
     }
 }
 
@@ -466,60 +480,147 @@ fn handle_show_create_source(
     ])]))
 }
 
-fn handle_create_dataflow(
+fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+    let (name, from, url, with_options) = match stmt {
+        Statement::CreateSink {
+            name,
+            from,
+            url,
+            with_options,
+        } => (name, from, url, with_options),
+        _ => unreachable!(),
+    };
+    if with_options.is_empty() {
+        bail!("Sink requires a `schema_registry_url` WITH option.")
+    } else if with_options.len() > 1 {
+        bail!("WITH options other than `schema_registry_url` are not yet supported")
+    }
+
+    let with_op = &with_options[0];
+    let schema_registry_url = match with_op.name.value.as_str() {
+        "schema_registry_url" => match &with_op.value {
+            Value::SingleQuotedString(s) => s,
+            _ => bail!("Schema registry URL must be a string, e.g. 'kafka://localhost/{schema}'."),
+        },
+        _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
+    };
+
+    let name = name.try_into()?;
+    let from = from.try_into()?;
+    let catalog_entry = scx.catalog.get(&from)?;
+    let (addr, topic) = parse_kafka_topic_url(&url)?;
+
+    let relation_desc = catalog_entry.desc()?.clone();
+    let schema = interchange::avro::encode_schema(&relation_desc)?;
+
+    // Send new schema to registry, get back the schema id for the sink
+    let url: Url = schema_registry_url.clone().parse().unwrap();
+    let ccsr_client = ccsr::Client::new(url);
+    let schema_id = ccsr_client
+        .publish_schema(&topic, &schema.to_string())
+        .unwrap();
+
+    let sink = Sink {
+        from: (catalog_entry.id(), relation_desc),
+        connector: SinkConnector::Kafka(KafkaSinkConnector {
+            addr,
+            topic,
+            schema_id,
+        }),
+    };
+
+    Ok(Plan::CreateSink(name, sink))
+}
+
+fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+    let (name, on_name, key_parts) = match stmt {
+        Statement::CreateIndex {
+            name,
+            on_name,
+            key_parts,
+        } => (name, on_name, key_parts),
+        _ => unreachable!(),
+    };
+    let on_name = on_name.try_into()?;
+    let (catalog_entry, keys) = query::plan_index(scx, &on_name, &key_parts)?;
+    if !object_type_matches(ObjectType::View, catalog_entry.item()) {
+        bail!("{} is not a view", on_name);
+    }
+    let name = QualName::new_normalized(iter::once(name))?;
+    let keys = keys
+        .into_iter()
+        .map(|x| x.lower_uncorrelated())
+        .collect::<Vec<_>>();
+    Ok(Plan::CreateIndex(
+        name,
+        Index::new(
+            catalog_entry.id(),
+            keys,
+            key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+            catalog_entry.desc()?,
+        ),
+    ))
+}
+
+fn handle_create_view(
     scx: &StatementContext,
     mut stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    match &mut stmt {
+    let (name, columns, query, materialized, with_options) = match &mut stmt {
         Statement::CreateView {
             name,
             columns,
             query,
             materialized,
             with_options,
-        } => {
-            if !with_options.is_empty() {
-                bail!("WITH options are not yet supported");
-            }
-            let (mut relation_expr, mut desc, finishing) =
-                handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
-            if !finishing.is_trivial() {
-                //TODO: materialize#724 - persist finishing information with the view?
-                relation_expr = relationexpr::RelationExpr::Project {
-                    input: Box::new(relationexpr::RelationExpr::TopK {
-                        input: Box::new(relation_expr),
-                        group_key: vec![],
-                        order_key: finishing.order_by,
-                        limit: finishing.limit,
-                        offset: finishing.offset,
-                    }),
-                    outputs: finishing.project,
-                }
-            }
-            *materialized = false; // Normalize for `raw_sql` below.
-            let typ = desc.typ();
-            if !columns.is_empty() {
-                if columns.len() != typ.column_types.len() {
-                    bail!(
-                        "VIEW definition has {} columns, but query has {} columns",
-                        columns.len(),
-                        typ.column_types.len()
-                    )
-                }
-                for (i, name) in columns.iter().enumerate() {
-                    desc.set_name(i, Some(names::ident_to_col_name(name.clone())));
-                }
-            }
-            let name = QualName::try_from(&*name)?;
-            let view = View {
-                raw_sql: stmt.to_string(),
-                relation_expr,
-                desc,
-                eval_env: EvalEnv::default(),
-            };
-            Ok(Plan::CreateView(name, view))
+        } => (name, columns, query, materialized, with_options),
+        _ => unreachable!(),
+    };
+    if !with_options.is_empty() {
+        bail!("WITH options are not yet supported");
+    }
+    let (mut relation_expr, mut desc, finishing) =
+        handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
+    if !finishing.is_trivial() {
+        //TODO: materialize#724 - persist finishing information with the view?
+        relation_expr = relationexpr::RelationExpr::Project {
+            input: Box::new(relationexpr::RelationExpr::TopK {
+                input: Box::new(relation_expr),
+                group_key: vec![],
+                order_key: finishing.order_by,
+                limit: finishing.limit,
+                offset: finishing.offset,
+            }),
+            outputs: finishing.project,
         }
+    }
+    let typ = desc.typ();
+    if !columns.is_empty() {
+        if columns.len() != typ.column_types.len() {
+            bail!(
+                "VIEW definition has {} columns, but query has {} columns",
+                columns.len(),
+                typ.column_types.len()
+            )
+        }
+        for (i, name) in columns.iter().enumerate() {
+            desc.set_name(i, Some(names::ident_to_col_name(name.clone())));
+        }
+    }
+    let name = QualName::try_from(name)?;
+    *materialized = false; // Normalize for `raw_sql` below.
+    let view = View {
+        raw_sql: stmt.to_string(),
+        relation_expr,
+        desc,
+        eval_env: EvalEnv::default(),
+    };
+    Ok(Plan::CreateView(name, view))
+}
+
+async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Error> {
+    match &mut stmt {
         Statement::CreateSource {
             name,
             url,
@@ -558,7 +659,8 @@ fn handle_create_dataflow(
                     if let Some(topic) = topic {
                         if let Some(schema) = schema {
                             let source =
-                                build_kafka_source(schema, addr, topic, format, message_name)?;
+                                build_kafka_source(schema, addr, topic, format, message_name)
+                                    .await?;
                             Ok(Plan::CreateSource(name, source))
                         } else {
                             bail!("Kafka sources require a schema.");
@@ -692,31 +794,26 @@ fn handle_create_dataflow(
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
             }
-            // TODO(brennan): This shouldn't be synchronous either (see CreateSource above),
-            // but for now we just want it working for demo purposes...
             let schema_registry_url: Url = schema_registry.parse()?;
-            let ccsr_client = ccsr::Client::new(schema_registry_url);
-            let mut subjects = ccsr_client.list_subjects()?;
+            let ccsr_client = ccsr::AsyncClient::new(schema_registry_url);
+            let mut subjects = ccsr_client.list_subjects().await?;
             if let Some(value) = like {
                 let like_regex = build_like_regex_from_string(value)?;
                 subjects.retain(|a| like_regex.is_match(a))
             }
 
-            let names = subjects
-                .iter()
-                .filter_map(|s| {
-                    let parts: Vec<&str> = s.rsplitn(2, '-').collect();
-                    if parts.len() == 2 && parts[0] == "value" {
-                        let topic_name = parts[1];
-                        let sql_name = sanitize_kafka_topic_name(parts[1])
-                            .parse()
-                            .expect("sanitized kafka topic names should always be valid qualnames");
-                        Some((topic_name, sql_name))
-                    } else {
-                        None
-                    }
-                })
-                .filter(|(_tn, sn)| scx.catalog.try_get(sn).is_none());
+            let names = subjects.iter().filter_map(|s| {
+                let parts: Vec<&str> = s.rsplitn(2, '-').collect();
+                if parts.len() == 2 && parts[0] == "value" {
+                    let topic_name = parts[1];
+                    let sql_name = sanitize_kafka_topic_name(parts[1])
+                        .parse()
+                        .expect("sanitized kafka topic names should always be valid qualnames");
+                    Some((topic_name, sql_name))
+                } else {
+                    None
+                }
+            });
             let url: Url = url.parse()?;
             let (addr, topic) = parse_kafka_url(&url)?;
             if let Some(s) = topic {
@@ -725,93 +822,29 @@ fn handle_create_dataflow(
                     s
                 );
             }
-            let sources = names
-                .map(|(topic_name, sql_name)| {
-                    Ok((
-                        sql_name,
-                        build_kafka_avro_source(
-                            &SourceSchema::Registry(schema_registry.to_owned()),
-                            addr,
-                            topic_name.to_owned(),
-                        )?,
-                    ))
-                })
-                .collect::<Result<Vec<_>, failure::Error>>()?;
-            Ok(Plan::CreateSources(sources))
-        }
-        Statement::CreateSink {
-            name,
-            from,
-            url,
-            with_options,
-        } => {
-            if with_options.is_empty() {
-                bail!("Sink requires a `schema_registry_url` WITH option.")
-            } else if with_options.len() > 1 {
-                bail!("WITH options other than `schema_registry_url` are not yet supported")
+            async fn make_source(
+                topic_name: &str,
+                sql_name: QualName,
+                addr: SocketAddr,
+                schema_registry: &str,
+            ) -> Result<(QualName, Source), failure::Error> {
+                Ok((
+                    sql_name,
+                    build_kafka_avro_source(
+                        &SourceSchema::Registry(schema_registry.to_owned()),
+                        addr,
+                        topic_name.to_owned(),
+                    )
+                    .await?,
+                ))
             }
-
-            let with_op = &with_options[0];
-            let schema_registry_url = match with_op.name.value.as_str() {
-                "schema_registry_url" => match &with_op.value {
-                    Value::SingleQuotedString(s) => s,
-                    _ => bail!(
-                        "Schema registry URL must be a string, e.g. 'kafka://localhost/{schema}'."
-                    ),
-                },
-                _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
-            };
-
-            let name = name.try_into()?;
-            let from = from.try_into()?;
-            let catalog_entry = scx.catalog.get(&from)?;
-            let (addr, topic) = parse_kafka_topic_url(url)?;
-
-            let relation_desc = catalog_entry.desc()?.clone();
-            let schema = interchange::avro::encode_schema(&relation_desc)?;
-
-            // Send new schema to registry, get back the schema id for the sink
-            let url: Url = schema_registry_url.clone().parse().unwrap();
-            let ccsr_client = ccsr::Client::new(url);
-            let schema_id = ccsr_client
-                .publish_schema(&topic, &schema.to_string())
-                .unwrap();
-
-            let sink = Sink {
-                from: (catalog_entry.id(), relation_desc),
-                connector: SinkConnector::Kafka(KafkaSinkConnector {
-                    addr,
-                    topic,
-                    schema_id,
-                }),
-            };
-
-            Ok(Plan::CreateSink(name, sink))
-        }
-        Statement::CreateIndex {
-            name,
-            on_name,
-            key_parts,
-        } => {
-            let on_name = on_name.try_into()?;
-            let (catalog_entry, keys) = query::plan_index(scx, &on_name, key_parts)?;
-            if !object_type_matches(ObjectType::View, catalog_entry.item()) {
-                bail!("{} is not a view", on_name);
-            }
-            let name = QualName::new_normalized(iter::once(name.clone()))?;
-            let keys = keys
-                .into_iter()
-                .map(|x| x.lower_uncorrelated())
-                .collect::<Vec<_>>();
-            Ok(Plan::CreateIndex(
-                name,
-                Index::new(
-                    catalog_entry.id(),
-                    keys,
-                    key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
-                    catalog_entry.desc()?,
-                ),
-            ))
+            let sources = join_all(names.map(|(topic_name, sql_name)| {
+                make_source(topic_name, sql_name, addr, &*schema_registry)
+            }))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>();
+            Ok(Plan::CreateSources(sources?))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
@@ -950,72 +983,106 @@ fn build_kafka_source(
     topic: String,
     format: KafkaSchemaFormat,
     message_name: Option<String>,
-) -> Result<Source, failure::Error> {
+) -> MaybeFuture<Result<Source, failure::Error>> {
     match (format, message_name) {
         (KafkaSchemaFormat::Avro, None) => build_kafka_avro_source(schema, kafka_addr, topic),
         (KafkaSchemaFormat::Protobuf, Some(m)) => {
-            build_kafka_protobuf_source(schema, kafka_addr, topic, m)
+            build_kafka_protobuf_source(schema, kafka_addr, topic, m).into()
         }
-        (KafkaSchemaFormat::Avro, Some(s)) => bail!(
+        (KafkaSchemaFormat::Avro, Some(s)) => Err(format_err!(
             "Invalid parameter message name {} provided for Avro source",
             s
-        ),
-        (KafkaSchemaFormat::Protobuf, None) => {
-            bail!("Missing message name parameter for a Protobuf source")
-        }
+        ))
+        .into(),
+        (KafkaSchemaFormat::Protobuf, None) => Err(format_err!(
+            "Missing message name parameter for a Protobuf source"
+        ))
+        .into(),
     }
+}
+
+#[derive(Debug)]
+struct Schema {
+    key_schema: Option<String>,
+    value_schema: String,
+    schema_registry_url: Option<Url>,
+}
+
+async fn get_remote_avro_schema(url: Url, topic: String) -> Result<Schema, failure::Error> {
+    let ccsr_client = ccsr::AsyncClient::new(url.clone());
+
+    let value_schema_name = format!("{}-value", topic);
+    let value_schema = ccsr_client
+        .get_schema_by_subject(&value_schema_name)
+        .await
+        .with_context(|err| {
+            format!(
+                "fetching latest schema for subject '{}' from registry: {}",
+                value_schema_name, err
+            )
+        })?;
+    let subject = format!("{}-key", topic);
+    let key_schema = ccsr_client.get_schema_by_subject(&subject).await.ok();
+    Ok(Schema {
+        key_schema: key_schema.map(|s| s.raw),
+        value_schema: value_schema.raw,
+        schema_registry_url: Some(url),
+    })
 }
 
 fn build_kafka_avro_source(
     schema: &SourceSchema,
     kafka_addr: SocketAddr,
     topic: String,
-) -> Result<Source, failure::Error> {
-    let (key_schema, value_schema, schema_registry_url) = match schema {
+) -> MaybeFuture<Result<Source, failure::Error>> {
+    let schema = match schema {
         // TODO(jldlaughlin): we need a way to pass in primary key information
         // when building a source from a string
-        SourceSchema::RawOrPath(schema) => (None, schema.to_owned(), None),
-
+        SourceSchema::RawOrPath(schema) => Ok(Schema {
+            key_schema: None,
+            value_schema: schema.to_owned(),
+            schema_registry_url: None,
+        })
+        .into(),
         SourceSchema::Registry(url) => {
-            // TODO(benesch): we need to fetch this schema asynchronously to
-            // avoid blocking the command processing thread.
-            let url: Url = url.parse()?;
-            let ccsr_client = ccsr::Client::new(url.clone());
-
-            let value_schema_name = format!("{}-value", topic);
-            let value_schema = ccsr_client
-                .get_schema_by_subject(&value_schema_name)
-                .with_context(|err| {
-                    format!(
-                        "fetching latest schema for subject '{}' from registry: {}",
-                        value_schema_name, err
-                    )
-                })?;
-            let key_schema = ccsr_client
-                .get_schema_by_subject(&format!("{}-key", topic))
-                .ok();
-            (key_schema.map(|s| s.raw), value_schema.raw, Some(url))
+            let url: Result<Url, _> = url.parse();
+            match url {
+                Err(err) => Err(err.into()).into(),
+                Ok(url) => {
+                    MaybeFuture::Future(Box::pin(get_remote_avro_schema(url, topic.clone())))
+                }
+            }
         }
     };
 
-    let mut desc = avro::validate_value_schema(&value_schema)?;
-    if let Some(key_schema) = key_schema {
-        let keys = avro::validate_key_schema(&key_schema, &desc)?;
-        desc = desc.add_keys(keys);
-    }
-
-    Ok(Source {
-        connector: SourceConnector {
-            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                addr: kafka_addr,
-                topic,
-            }),
-            encoding: DataEncoding::Avro(AvroEncoding {
-                raw_schema: value_schema,
+    schema.map(move |schema| {
+        schema.and_then(|schema| {
+            let Schema {
+                key_schema,
+                value_schema,
                 schema_registry_url,
-            }),
-        },
-        desc,
+            } = schema;
+
+            let mut desc = avro::validate_value_schema(&value_schema)?;
+            if let Some(key_schema) = key_schema {
+                let keys = avro::validate_key_schema(&key_schema, &desc)?;
+                desc = desc.add_keys(keys);
+            }
+
+            Ok(Source {
+                connector: SourceConnector {
+                    connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                        addr: kafka_addr,
+                        topic,
+                    }),
+                    encoding: DataEncoding::Avro(AvroEncoding {
+                        raw_schema: value_schema,
+                        schema_registry_url,
+                    }),
+                },
+                desc,
+            })
+        })
     })
 }
 

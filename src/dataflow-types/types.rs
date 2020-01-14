@@ -42,7 +42,7 @@ pub enum PeekWhen {
 }
 
 /// The response from a `Peek`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
     Rows(Vec<Row>),
     Canceled,

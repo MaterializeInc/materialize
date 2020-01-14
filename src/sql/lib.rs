@@ -11,6 +11,7 @@ use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
 use ::expr::GlobalId;
 use catalog::{Catalog, CatalogEntry, QualName};
+use ore::future::MaybeFuture;
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
@@ -103,7 +104,7 @@ pub fn plan(
     session: &Session,
     stmt: Statement,
     params: &Params,
-) -> Result<Plan, failure::Error> {
+) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
     statement::handle_statement(catalog, session, stmt, params)
 }
 

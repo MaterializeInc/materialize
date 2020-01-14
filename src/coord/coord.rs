@@ -24,6 +24,7 @@ use std::str::FromStr;
 
 use failure::bail;
 use futures::executor::block_on;
+use futures::future::FutureExt;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -39,16 +40,20 @@ use dataflow_types::{
     Timestamp, Update, View,
 };
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr};
-use ore::collections::CollectionExt;
+use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
 
 use crate::{Command, ExecuteResponse, Response};
+use futures::Stream;
+
+type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 
 enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
+    PlanReady(Session, ClientTx, Result<Plan, failure::Error>, u32),
     Shutdown,
 }
 
@@ -224,8 +229,7 @@ where
                 // single transaction, so that we don't leave the catalog in a
                 // partially-bootstrapped state if one fails.
                 for stmt in sql::parse(bootstrap_sql)? {
-                    coord
-                        .handle_statement(&session, stmt, &params)
+                    block_on(coord.handle_statement(&session, stmt, &params))
                         .and_then(|plan| coord.sequence_plan(&mut session, plan, conn_id))?;
                 }
             }
@@ -275,22 +279,56 @@ where
             .expect("serve called twice on coordinator")
             .enter(|| {
                 let feedback_rx = self.enable_feedback();
-                let mut messages = stream::select(
-                    cmd_rx
-                        .map(Message::Command)
-                        .chain(stream::once(future::ready(Message::Shutdown)))
-                        .map(Ok),
-                    feedback_rx.map_ok(Message::Worker),
-                );
+                let streams: Vec<Box<dyn Stream<Item = Result<Message, comm::Error>> + Unpin>> = vec![
+                    Box::new(
+                        cmd_rx
+                            .map(Message::Command)
+                            .chain(stream::once(future::ready(Message::Shutdown)))
+                            .map(Ok),
+                    ),
+                    Box::new(feedback_rx.map_ok(Message::Worker)),
+                ];
+
+                let mut messages = stream::select_all(streams);
                 while let Some(msg) = block_on(messages.next()) {
                     match msg.expect("coordinator message receiver failed") {
                         Message::Command(Command::Execute {
                             portal_name,
-                            mut session,
+                            session,
                             conn_id,
                             tx,
                         }) => {
-                            let result = self.handle_execute(&mut session, portal_name, conn_id);
+                            let result = self.handle_begin_execute(session, portal_name, tx);
+                            match result {
+                                MaybeFuture::Immediate(val) => {
+                                    let (mut session, tx, result) = val.unwrap();
+                                    let result = result.and_then(|plan| {
+                                        self.sequence_plan(&mut session, plan, conn_id)
+                                    });
+                                    let _ = tx.send(Response { result, session });
+                                }
+                                MaybeFuture::Future(fut) => {
+                                    let (self_tx, self_rx) = futures::channel::oneshot::channel();
+                                    let self_rx = stream::once(self_rx.map(|res| res.unwrap()));
+                                    messages.push(Box::new(self_rx));
+                                    let fut = async move {
+                                        let (session, tx, result) = fut.await;
+                                        self_tx
+                                            .send(Ok(Message::PlanReady(
+                                                session, tx, result, conn_id,
+                                            )))
+                                            .map_err(|_e| "(comm error)")
+                                            .expect("Unexpected coordinator communication failure");
+                                    };
+                                    tokio::spawn(fut);
+                                }
+                            }
+                        }
+
+                        Message::PlanReady(mut session, tx, result, conn_id) => {
+                            let result = result
+                                .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
+
                             let _ = tx.send(Response { result, session });
                         }
 
@@ -330,7 +368,7 @@ where
                 while let Some(msg) = block_on(messages.next()) {
                     match msg.expect("coordinator message receiver failed") {
                         Message::Command(_) | Message::Shutdown => unreachable!(),
-                        Message::Worker(_) => (),
+                        Message::Worker(_) | Message::PlanReady(_, _, _, _) => (),
                     }
                 }
             })
@@ -398,7 +436,8 @@ where
                 ExecuteResponse::CreatedSource
             }
 
-            Plan::CreateSources(sources) => {
+            Plan::CreateSources(mut sources) => {
+                sources.retain(|(name, _)| self.catalog.get(name).is_err());
                 for (name, source) in sources.iter() {
                     let source_id = self.register_source(&name, source)?;
                     self.sources.insert(source_id, source.clone());
@@ -1355,42 +1394,58 @@ where
         session: &Session,
         stmt: sql::Statement,
         params: &sql::Params,
-    ) -> Result<sql::Plan, failure::Error> {
-        sql::plan(&self.catalog, session, stmt.clone(), params).or_else(|err| {
-            // Executing the query failed. If we're running in symbiosis with
-            // Postgres, see if Postgres can handle it.
+    ) -> MaybeFuture<'static, Result<sql::Plan, failure::Error>> {
+        let plan_result = sql::plan(&self.catalog, session, stmt.clone(), params);
+        // Try Postgres if we realize synchronously that we failed.
+        if let MaybeFuture::Immediate(Some(Err(err))) = plan_result {
             match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
                     block_on(postgres.execute(&self.catalog, &stmt))
                 }
                 _ => Err(err),
             }
-        })
+            .into()
+        // Otherwise, just return the future.
+        // Nothing that we do asynchronously could
+        // possibly work in Postgres anyway, so don't bother
+        // piping through the logic to try in symbiosis mode in this case.
+        } else {
+            plan_result
+        }
     }
 
-    fn handle_execute(
+    fn handle_begin_execute(
         &mut self,
-        session: &mut Session,
+        session: Session,
         portal_name: String,
-        conn_id: u32,
-    ) -> Result<ExecuteResponse, failure::Error> {
-        let portal = session
+        tx: ClientTx,
+    ) -> MaybeFuture<'static, (Session, ClientTx, Result<Plan, failure::Error>)> {
+        let res = session
             .get_portal(&portal_name)
-            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
-        let prepared = session
-            .get_prepared_statement(&portal.statement_name)
-            .ok_or_else(|| {
-                failure::format_err!(
-                    "statement for portal does not exist portal={:?} statement={:?}",
-                    portal_name,
-                    portal.statement_name
-                )
-            })?;
+            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))
+            .and_then(|portal| {
+                session
+                    .get_prepared_statement(&portal.statement_name)
+                    .ok_or_else(|| {
+                        failure::format_err!(
+                            "statement for portal does not exist portal={:?} statement={:?}",
+                            portal_name,
+                            portal.statement_name
+                        )
+                    })
+                    .map(|ps| (portal, ps))
+            });
+        let (portal, prepared) = match res {
+            Ok((portal, prepared)) => (portal, prepared),
+            Err(e) => {
+                return (session, tx, Err(e)).into();
+            }
+        };
         match prepared.sql() {
             Some(stmt) => self
-                .handle_statement(session, stmt.clone(), &portal.parameters)
-                .and_then(|plan| self.sequence_plan(session, plan, conn_id)),
-            None => Ok(ExecuteResponse::EmptyQuery),
+                .handle_statement(&session, stmt.clone(), &portal.parameters)
+                .map(|res| (session, tx, res)),
+            None => (session, tx, Ok(Plan::EmptyQuery)).into(),
         }
     }
 
