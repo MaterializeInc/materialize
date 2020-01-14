@@ -129,14 +129,11 @@ fn no_block() {
             PeekResponse::Rows(vec![Row::pack(&[Datum::Int32(4)])]),
             rows
         );
-
     };
 
-    let res = tokio::runtime::Runtime::new().unwrap().enter(|| {
-        block_on(
-            tokio::time::timeout(Duration::from_secs(10), fut),
-        )
-    });
+    let res = tokio::runtime::Runtime::new()
+        .unwrap()
+        .enter(|| block_on(tokio::time::timeout(Duration::from_secs(10), fut)));
     std::mem::forget(dataflow_workers);
     res.unwrap();
 }

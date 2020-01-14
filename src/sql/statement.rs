@@ -11,7 +11,6 @@ use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::pin::Pin;
 
 use failure::{bail, format_err, ResultExt};
 use futures::future::join_all;
@@ -1048,10 +1047,9 @@ fn build_kafka_avro_source(
             let url: Result<Url, _> = url.parse();
             match url {
                 Err(err) => Err(err.into()).into(),
-                Ok(url) => MaybeFuture::Future(Box::pin(get_remote_avro_schema(
-                    url,
-                    topic.clone(),
-                ))),
+                Ok(url) => {
+                    MaybeFuture::Future(Box::pin(get_remote_avro_schema(url, topic.clone())))
+                }
             }
         }
     };
