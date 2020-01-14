@@ -243,7 +243,7 @@ pub fn handle_statement(
     let scx = &StatementContext { catalog, session };
     match stmt {
         Statement::CreateSource { .. } | Statement::CreateSources { .. } => {
-            MaybeFuture::Future(Pin::from(Box::new(handle_create_dataflow(stmt))))
+            MaybeFuture::Future(Box::pin(handle_create_dataflow(stmt)))
         }
         _ => handle_sync_statement(stmt, params, &scx).into(),
     }
@@ -1048,10 +1048,10 @@ fn build_kafka_avro_source(
             let url: Result<Url, _> = url.parse();
             match url {
                 Err(err) => Err(err.into()).into(),
-                Ok(url) => MaybeFuture::Future(Pin::from(Box::new(get_remote_avro_schema(
+                Ok(url) => MaybeFuture::Future(Box::pin(get_remote_avro_schema(
                     url,
                     topic.clone(),
-                )))),
+                ))),
             }
         }
     };

@@ -8,8 +8,7 @@
 //! This module provides future and stream combinators that are missing from
 //! the [`futures`](futures) crate.
 
-use fmt::Debug;
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -370,7 +369,7 @@ impl<'a, T: Unpin + Debug + 'a> MaybeFuture<'a, T> {
         match self {
             MaybeFuture::Immediate(t) => MaybeFuture::Immediate(t.map(f)),
             MaybeFuture::Future(fut) => {
-                let fut = Pin::from(Box::new(fut.map(f)));
+                let fut = Box::pin(fut.map(f));
                 MaybeFuture::Future(fut)
             }
         }
