@@ -189,7 +189,7 @@ SELECT extract(hour FROM INTERVAL '123' MINUTE)
 query I
 SELECT extract(minute FROM INTERVAL '123:10' MINUTE TO SECOND)
 ----
-3
+10
 
 query R
 SELECT extract(second FROM INTERVAL '10:20.30' MINUTE TO SECOND)

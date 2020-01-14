@@ -1,0 +1,589 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc
+
+mode cockroach
+
+query T
+SELECT INTERVAL '1';
+----
+00:00:01
+
+## SQL Standard
+query T
+SELECT INTERVAL '1:';
+----
+01:00:00
+
+query T
+SELECT INTERVAL '1-';
+----
+1 year
+
+query T
+SELECT INTERVAL '1 2:';
+----
+1 day 02:00:00
+
+# Parse Y-M H:M.
+query T
+SELECT INTERVAL '1-2 3:4';
+----
+1 year 2 months 03:04:00
+
+# Parse Y-M D H:M.
+query T
+SELECT INTERVAL '1-2 3 4:5';
+----
+1 year 2 months 3 days 04:05:00
+
+# Parse Y- D H:
+query T
+SELECT INTERVAL '1- 2 3:';
+----
+1 year 2 days 03:00:00
+
+# Allow parts in any order
+query T
+SELECT INTERVAL '1:2:3.4 5-6';
+----
+5 years 6 months 01:02:03.4
+
+# Implicit SECOND for ambiguous part.
+query T
+SELECT INTERVAL '1-2 3';
+----
+1 year 2 months 00:00:03
+
+# Explicitly set ambiguous part.
+query T
+SELECT INTERVAL '1-2 3' HOUR;
+----
+1 year 2 months 03:00:00
+
+# Disallow components to be set twice.
+statement error sql parser error: Invalid INTERVAL '1 year 2 years': YEAR field set twice
+SELECT INTERVAL '1 year 2 years'
+
+statement error sql parser error: Invalid INTERVAL '1-2 3-4': YEAR or MONTH field set twice
+SELECT INTERVAL '1-2 3-4'
+
+statement error sql parser error: Invalid INTERVAL '1-2 3 year': YEAR field set twice
+SELECT INTERVAL '1-2 3 year'
+
+statement error sql parser error: Invalid INTERVAL '1-2 3': MONTH field set twice
+SELECT INTERVAL '1-2 3' MONTH;
+
+# 5 would be parsed as second, but the H:M:S.NS
+# group was already set by 3:4/
+statement error sql parser error: Invalid INTERVAL '1-2 3:4 5': SECOND field set twice
+SELECT INTERVAL '1-2 3:4 5';
+
+# Treat trailing TimeUnit as terminating range.
+query T
+SELECT INTERVAL '1-2 3 4:5:6.7' YEAR;
+----
+1 year
+
+query T
+SELECT INTERVAL '1-2 3 4:5:6.7' MONTH;
+----
+1 year 2 months
+
+query T
+SELECT INTERVAL '1-2 3 4:5:6.7' DAY;
+----
+1 year 2 months 3 days
+
+query T
+SELECT INTERVAL '1-2 3 4:5:6.7' HOUR;
+----
+1 year 2 months 3 days 04:00:00
+
+query T
+SELECT INTERVAL '1-2 3 4:5:6.7' MINUTE;
+----
+1 year 2 months 3 days 04:05:00
+
+query T
+SELECT INTERVAL '1-2 3 4:5:6.7' SECOND;
+----
+1 year 2 months 3 days 04:05:06.7
+
+# Treat trailing DateTimeFields as range of components to process.
+query T
+SELECT INTERVAL '1-2 3 4:5:6.7' MONTH TO MINUTE;
+----
+2 months 3 days 04:05:00
+
+query T
+SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO HOUR;
+----
+3 days 04:00:00
+
+# Disallow ranges where trailing element is greater than lead.
+statement error
+SELECT INTERVAL '1-2 3 4:5:6.7' MINUTE TO MONTH;
+
+# Disallow ranges where elements are explicitly equal.
+statement error
+SELECT INTERVAL '1-2 3 4:5:6.7' SECOND TO SECOND;
+
+# Disambiguate component (DAY), and treat as range.
+query T
+SELECT INTERVAL '1:2:3.4 5-6 7' DAY;
+----
+5 years 6 months 7 days
+
+# Disambiguate component (YEAR), but disallow because
+# the group it's in has been closed.
+statement error sql parser error: Invalid INTERVAL '1:2:3.4 5-6 7': YEAR field set twice
+SELECT INTERVAL '1:2:3.4 5-6 7' YEAR;
+
+# Negative components
+query T
+SELECT INTERVAL '-1-2 -3 -4:5:6.7';
+----
+-1 year -2 months -3 days -04:05:06.7
+
+# Mixed signs
+query T
+SELECT INTERVAL '-1-2 3 -4:5:6.7';
+----
+-1 year -2 months +2 days +19:54:53.3
+
+# Allow skipping components.
+query T
+SELECT INTERVAL '1-2 3 4::.5';
+----
+1 year 2 months 3 days 04:00:00.5
+
+# Mix negatives and missing components.
+query T
+SELECT INTERVAL '-1-2 -3 4::.5';
+----
+-1 year -2 months -2 days -19:59:59.5
+
+query T
+SELECT INTERVAL '-1-2 -3 -4::.5';
+----
+-1 year -2 months -3 days -04:00:00.5
+
+# Parse - and infer second value.
+query T
+SELECT INTERVAL '-::1.27';
+----
+-00:00:01.27
+
+# Trim all leading colons.
+query T
+SELECT INTERVAL ':::::1.27';
+----
+00:00:01.27
+
+query T
+SELECT INTERVAL ':::1- ::2 ::::3:';
+----
+1 year 2 days 03:00:00
+
+# Only trim leading colons if they are not preceded by any
+# other characters.
+statement error
+SELECT INTERVAL '-:::::1.27';
+
+# Disallow multiple ambiguous parts; the second part is ambiguous
+# because the leading colons are trimmed.
+statement error
+SELECT INTERVAL '-1 ::.27';
+
+# Negative time total with negative nanoseconds.
+query T
+SELECT INTERVAL '-1 -:.27';
+----
+-1 day -00:00:00.27
+
+# Positive total time with positive nanoseconds.
+query T
+SELECT INTERVAL '1 0:.27';
+----
+1 day 00:00:00.27
+
+# Zero value
+query T
+SELECT INTERVAL '0-0 0 0:0:0.0';
+----
+00:00:00
+
+# Oversized components in SQL standard-style variables
+statement error sql parser error: Invalid INTERVAL '100-13': MONTH field out range; must be < 12, have 13
+SELECT INTERVAL '100-13';
+
+statement error sql parser error: Invalid INTERVAL '100-11 366 250:61': MINUTE field out range; must be < 60, have 61
+SELECT INTERVAL '100-11 366 250:61';
+
+statement error sql parser error: Invalid INTERVAL '100-11 366 250:59:61': SECOND field out range; must be < 60, have 61
+SELECT INTERVAL '100-11 366 250:59:61';
+
+# Invalid syntax
+statement error sql parser error: Invalid INTERVAL '1:2:3.4.5': Invalid syntax at offset 7: provided Dot but expected None
+SELECT INTERVAL '1:2:3.4.5';
+
+statement error
+SELECT INTERVAL '1+2:3.4';
+
+statement error sql parser error: invalid DateTimeField: X
+SELECT INTERVAL '1x2:3.4';
+
+## PostgreSQL format
+
+query T
+SELECT INTERVAL '1 year 2 month 3 day 4 hour 5 minute 6.7 second';
+----
+1 year 2 months 3 days 04:05:06.7
+
+# Plural TimeUnits.
+query T
+SELECT INTERVAL '1 years 2 months 3 days 4 hours 5 minutes 6.7 seconds';
+----
+1 year 2 months 3 days 04:05:06.7
+
+# Shorthand.
+query T
+SELECT INTERVAL '1y 2mon 3d 4h 5m 6.7s';
+----
+1 year 2 months 3 days 04:05:06.7
+
+# Commutative expressions.
+query T
+SELECT INTERVAL '6.7 seconds 5 minutes 3 days 4 hours 1 year 2 month';
+----
+1 year 2 months 3 days 04:05:06.7
+
+# Allow mix of positive and negative components.
+query T
+SELECT INTERVAL '-6.7 seconds 5 minutes -3 days 4 hours -1 year 2 month';
+----
+-10 months -2 days -19:55:06.7
+
+# Allow fractional components.
+query T
+SELECT INTERVAL '1y 2.3mon 4.5d';
+----
+1 year 2 months 13 days 12:00:00
+
+query T
+SELECT INTERVAL '-6.7 seconds 5.6 minutes -3.4 days 4.5 hours -1.2 year 2.3 month';
+----
+-1 year +5 days +18:59:29.3
+
+# Positive total time with negative nanoseconds.
+query T
+SELECT INTERVAL '1 day -0.27 seconds';
+----
+23:59:59.73
+
+# Negative total time with positive nanoseconds.
+query T
+SELECT INTERVAL '-1 day 0.27 seconds';
+----
+-23:59:59.73
+
+# Fractional year expands down to months.
+query T
+SELECT INTERVAL '10.333 years';
+----
+10 years 3 months
+
+# Fractional part wtih ambiguity and range.
+query T
+SELECT INTERVAL '10.333' years;
+----
+10 years
+
+# Fractional month, includes nanoseconds.
+query T
+SELECT INTERVAL '1.5555555 month';
+----
+1 month 16 days 15:59:59.856
+
+# Fractional day, includes nanoseconds.
+query T
+SELECT INTERVAL '1.5555555 day';
+----
+1 day 13:19:59.9952
+
+# Fractional minute, includes nanoseconds
+query T
+SELECT INTERVAL '1.5555555 minute';
+----
+00:01:33.33333
+
+# Print leading 0s in nanoseconds
+query T
+SELECT INTERVAL '.001 second';
+----
+00:00:00.001
+
+# Carry over nanoseconds into seconds.
+query T
+SELECT INTERVAL '.33333 minute .1 second';
+----
+00:00:20.0998
+
+# PostgreSQL-style without spaces.
+query T
+SELECT INTERVAL '1year 2months 3.4days';
+----
+1 year 2 months 3 days 09:36:00
+
+# Zero values.
+query T
+SELECT INTERVAL '0 year 0 month 0 day 0 hour 0 minute 0.0 second';
+----
+00:00:00
+
+# Fails any non-DateTimeField string.
+statement error sql parser error: invalid DateTimeField: FOO
+SELECT INTERVAL '0 foo';
+
+## Misc.
+# Mix SQL standard- and PostgreSQL-style.
+query T
+SELECT INTERVAL '1-2 3:4 5 day';
+----
+1 year 2 months 5 days 03:04:00
+
+# Parse + signs.
+query T
+SELECT INTERVAL '+1 year +2 days +3:4:5.6';
+----
+1 year 2 days 03:04:05.6
+
+# Differentiate between trailing DateTimeField name and
+# PostgreSQL TimeUnit.
+query T
+SELECT INTERVAL '1-2' MONTH;
+----
+1 year 2 months
+
+statement error
+SELECT INTERVAL '1-2 month';
+
+statement error
+SELECT INTERVAL '1-2month';
+
+query T
+SELECT INTERVAL '1-2' HOUR;
+----
+1 year 2 months
+
+statement error sql parser error: Invalid INTERVAL '1-2 hour': Hour must be preceeded by a number, e.g. '1Hour'
+SELECT INTERVAL '1-2 hour';
+
+statement error
+SELECT INTERVAL '1-2hour';
+
+# Use larger numbers.
+query T
+SELECT INTERVAL '-13-10 15 -16::.27';
+----
+-13 years -10 months +14 days +07:59:59.73
+
+query T
+SELECT INTERVAL '-13-10 -15 -16::.27';
+----
+-13 years -10 months -15 days -16:00:00.27
+
+# Parsing output as input.
+query T
+SELECT INTERVAL '-13 years -10 months -15 days -16:00:00.27';
+----
+-13 years -10 months -15 days -16:00:00.27
+
+query T
+SELECT INTERVAL '-13 years -10 months +14 days +07:59:59.73';
+----
+-13 years -10 months +14 days +07:59:59.73
+
+# Commutative mixed expressions.
+query T
+SELECT INTERVAL '5 day 3:4 1-2';
+----
+1 year 2 months 5 days 03:04:00
+
+query T
+SELECT INTERVAL '1-2 3:4 5 day';
+----
+1 year 2 months 5 days 03:04:00
+
+# Mix style allowed, but cannot assigning to closed group.
+statement error sql parser error: Invalid INTERVAL '1-2 3:4 5 second': SECOND field set twice
+SELECT INTERVAL '1-2 3:4 5 second';
+
+# Commutativity means this is also not allowed.
+statement error sql parser error: Invalid INTERVAL '1-2 5 second 3:4': HOUR, MINUTE, SECOND field set twice
+SELECT INTERVAL '1-2 5 second 3:4';
+
+# Fractional month in addition to other fields.
+query T
+SELECT INTERVAL '1.5555 month 2 3:4:5.6';
+----
+1 month 18 days 19:01:41.6
+
+# Fractional month with terminating range. Truncation should
+# only happen after computation.
+query T
+SELECT INTERVAL '1.5555 month 2 3:4:5.6' HOUR;
+----
+1 month 18 days 19:00:00
+
+# Fractional month with leading and terminating range.
+# Again, truncation should only happen after
+# computation.
+query T
+SELECT INTERVAL '1.5555 month 2 3:4:5.6' DAY TO HOUR;
+----
+18 days 19:00:00
+
+# Only allow disambiguation if ambiguous element
+# is final element of interval string.
+statement error
+SELECT INTERVAL '1 2-3 4:5' DAY
+
+## Nanosecond precision
+
+# Default nanosecond precision of 6, rounded.
+query T
+SELECT INTERVAL '1.23456789' SECOND
+----
+00:00:01.234568
+
+# Allow specific nanosecond precision, which rounds.
+query T
+SELECT INTERVAL '1.23456789' SECOND(5);
+----
+00:00:01.23457
+
+# Ensure doesn't round when rounded digit is < 5.
+query T
+SELECT INTERVAL '1.23456789' SECOND(2);
+----
+00:00:01.23
+
+# Allow precision as second element in range.
+query T
+SELECT INTERVAL '1:2:31.23456789' MINUTE TO SECOND(2);
+----
+00:02:31.23
+
+# Do not allow more than 9 places of precision
+query T
+SELECT INTERVAL '1.999999999999999999 days'
+----
+1 day 23:59:59.999914
+
+# Do not allow more than 9 places of precision,
+# and properly convert TimeStrToken::Num() to
+# nanos.
+query T
+SELECT INTERVAL '1.999999999999999999days'
+----
+1 day 23:59:59.999914
+
+# Precision must be (0, 6)
+statement error SECOND precision must be \(0, 6\), have SECOND\(7\)
+SELECT INTERVAL '1 day 2-3 4' SECOND(7);
+
+# Only allow precision notation for trailing SECOND .
+statement error sql parser error: Expected end of statement, found: SECOND
+SELECT INTERVAL '2-3 3:4' SECOND(1) to SECOND
+
+statement error sql parser error: Expected end of statement, found: \(
+SELECT INTERVAL '2-3 3:4' DAY(1)
+
+# Only allow positive integer nanosecond precision
+statement error sql parser error: Expected literal int, found: -
+SELECT INTERVAL '1 day 2-3 4' SECOND(-1);
+
+## Math
+
+# Support negating interval
+query T
+SELECT - INTERVAL '1-2 3 4:5:6.7';
+----
+-1 year -2 months -3 days -04:05:06.7
+
+query T
+SELECT - INTERVAL '-1 year -2 months -3 days -04:05:06.7';
+----
+1 year 2 months 3 days 04:05:06.7
+
+query T
+SELECT - INTERVAL '1 year 2 months -3 days -04:05:06.7';
+----
+-1 year -2 months +3 days +04:05:06.7
+
+query T
+SELECT - INTERVAL '-1 year -2 months 3 days 04:05:06.7';
+----
+1 year 2 months -3 days -04:05:06.7
+
+## Largest values
+
+query T
+SELECT INTERVAL '9223372036854775807 months 9223372036854775807 seconds';
+----
+768614336404564650 years 7 months 106751991167300 days 15:30:07
+
+query T
+SELECT INTERVAL '-9223372036854775807 months -9223372036854775807 seconds';
+----
+-768614336404564650 years -7 months -106751991167300 days -15:30:07
+
+# Largest number of cumulative nanoseconds
+query T
+SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.999999999 minutes 0.999999999 seconds';
+----
+31 days 01:00:56.702350704
+
+## Overflows
+
+statement error INTERVAL '768614336404564651 year' overflows maximum months; cannot exceed 9223372036854775807 months
+SELECT INTERVAL '768614336404564651 year';
+
+statement error INTERVAL '768614336404564650.7 year' overflows maximum months; cannot exceed 9223372036854775807 months
+SELECT INTERVAL '768614336404564650.7 year';
+
+statement error sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type
+SELECT INTERVAL '9223372036854775808 months';
+
+statement error sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type
+SELECT INTERVAL '-9223372036854775808 months';
+
+statement error INTERVAL '106751991167300 days .1 month' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+SELECT INTERVAL '106751991167300 days .1 month';
+
+statement error INTERVAL '106751991167301 days' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+SELECT INTERVAL '106751991167301 days';
+
+statement error INTERVAL '106751991167300.9 days' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+SELECT INTERVAL '106751991167300.9 days';
+
+statement error INTERVAL '9223372036854775807 seconds 1 hour' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+SELECT INTERVAL '9223372036854775807 seconds 1 hour';
+
+statement error INTERVAL '9223372036854771807 seconds 1.9 hour' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+SELECT INTERVAL '9223372036854771807 seconds 1.9 hour';
+
+statement error INTERVAL '9223372036854775807 seconds 1 minute' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+SELECT INTERVAL '9223372036854775807 seconds 1 minute';
+
+statement error INTERVAL '9223372036854775707 seconds 1.9 minute' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
+
+statement error sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type
+SELECT INTERVAL '9223372036854775808 seconds';
+
+statement error sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type
+SELECT INTERVAL '-9223372036854775808 seconds';

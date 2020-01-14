@@ -226,22 +226,17 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let t = read_copy::<DateTime<Utc>>(data, offset);
             Datum::TimestampTz(t)
         }
-        Tag::Interval => match read_copy::<u8>(data, offset) {
-            0 => {
-                let i = read_copy::<i64>(data, offset);
-                Datum::Interval(Interval::Months(i))
-            }
-            1 => {
-                let is_positive = read_copy::<bool>(data, offset);
-                let secs = read_copy::<u64>(data, offset);
-                let nanosecs = read_copy::<u32>(data, offset);
-                Datum::Interval(Interval::Duration {
-                    is_positive,
-                    duration: std::time::Duration::new(secs, nanosecs),
-                })
-            }
-            other => panic!("Bad interval tag: {}", other),
-        },
+        Tag::Interval => {
+            let months = read_copy::<i64>(data, offset);
+            let secs = read_copy::<u64>(data, offset);
+            let nanosecs = read_copy::<u32>(data, offset);
+            let is_positive_dur = read_copy::<bool>(data, offset);
+            Datum::Interval(Interval {
+                months,
+                duration: std::time::Duration::new(secs, nanosecs),
+                is_positive_dur,
+            })
+        }
         Tag::Decimal => {
             let s = read_copy::<Significand>(data, offset);
             Datum::Decimal(s)
@@ -324,21 +319,10 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval as u8);
-            match i {
-                Interval::Months(months) => {
-                    data.push(0);
-                    push_copy!(data, months, i64);
-                }
-                Interval::Duration {
-                    is_positive,
-                    duration,
-                } => {
-                    data.push(1);
-                    push_copy!(data, is_positive, bool);
-                    push_copy!(data, duration.as_secs(), u64);
-                    push_copy!(data, duration.subsec_nanos(), u32);
-                }
-            }
+            push_copy!(data, i.months, i64);
+            push_copy!(data, i.duration.as_secs(), u64);
+            push_copy!(data, i.duration.subsec_nanos(), u32);
+            push_copy!(data, i.is_positive_dur, bool);
         }
         Datum::Decimal(s) => {
             data.push(Tag::Decimal as u8);
@@ -795,7 +779,10 @@ mod tests {
         let row = Row::pack(&[
             Datum::Null,
             Datum::Int32(-42),
-            Datum::Interval(Interval::Months(312)),
+            Datum::Interval(Interval {
+                months: 312,
+                ..Default::default()
+            }),
         ]);
         assert_eq!(arena.push_row(row.clone()).unpack(), row.unpack());
     }
@@ -833,10 +820,13 @@ mod tests {
                 NaiveDateTime::from_timestamp(61, 0),
                 Utc,
             )),
-            Datum::Interval(Interval::Months(312)),
-            Datum::Interval(Interval::Duration {
-                is_positive: true,
+            Datum::Interval(Interval {
+                months: 312,
+                ..Default::default()
+            }),
+            Datum::Interval(Interval {
                 duration: std::time::Duration::from_nanos(1_012_312),
+                ..Default::default()
             }),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1, 255]),

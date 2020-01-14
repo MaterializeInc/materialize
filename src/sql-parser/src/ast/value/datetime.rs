@@ -18,129 +18,270 @@ use std::time::Duration;
 
 use super::ValueError;
 
+/// An intermediate value for Intervals, which tracks all data from
+/// the user, as well as the computed ParsedDateTime.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IntervalValue {
     /// The raw `[value]` that was present in `INTERVAL '[value]'`
     pub value: String,
     /// the fully parsed date time
     pub parsed: ParsedDateTime,
-    /// The unit of the first field in the interval. `INTERVAL 'T' MINUTE`
-    /// means `T` is in minutes
-    pub leading_field: DateTimeField,
-    /// How many digits the leading field is allowed to occupy.
-    ///
-    /// The interval `INTERVAL '1234' MINUTE(3)` is **illegal**, but `INTERVAL
-    /// '123' MINUTE(3)` is fine.
-    ///
-    /// This parser does not do any validation that fields fit.
-    pub leading_precision: Option<u64>,
-    /// How much precision to keep track of
-    ///
-    /// If this is ommitted, then you are supposed to ignore all of the
-    /// non-lead fields. If it is less precise than the final field, you
-    /// are supposed to ignore the final field.
-    ///
-    /// For the following specifications:
-    ///
-    /// * `INTERVAL '1:1:1' HOURS TO SECONDS` the `last_field` gets
-    ///   `Some(DateTimeField::Second)` and interpreters should generate an
-    ///   interval equivalent to `3661` seconds.
-    /// * In `INTERVAL '1:1:1' HOURS` the `last_field` gets `None` and
-    ///   interpreters should generate an interval equivalent to `3600`
-    ///   seconds.
-    /// * In `INTERVAL '1:1:1' HOURS TO MINUTES` the interval should be
-    ///   equivalent to `3660` seconds.
-    pub last_field: Option<DateTimeField>,
-    /// The seconds precision can be specified in SQL source as
-    /// `INTERVAL '__' SECOND(_, x)` (in which case the `leading_field`
-    /// will be `Second` and the `last_field` will be `None`),
-    /// or as `__ TO SECOND(x)`.
-    pub fractional_seconds_precision: Option<u64>,
+    /// The most significant DateTimeField to propagate to Interval in
+    /// compute_interval.
+    pub precision_high: DateTimeField,
+    /// The least significant DateTimeField to propagate to Interval in
+    /// compute_interval.
+    /// precision_low is also used to provide a TimeUnit if the final
+    /// part of `value` is ambiguous, e.g. INTERVAL '1-2 3' DAY uses
+    /// 'day' as the TimeUnit for 3.
+    pub precision_low: DateTimeField,
+    /// Maximum nanosecond precision can be specified in SQL source as
+    /// `INTERVAL '__' SECOND(_)`.
+    pub fsec_max_precision: Option<u64>,
+}
+
+impl Default for IntervalValue {
+    fn default() -> Self {
+        Self {
+            value: String::default(),
+            parsed: ParsedDateTime::default(),
+            precision_high: DateTimeField::Year,
+            precision_low: DateTimeField::Second,
+            fsec_max_precision: None,
+        }
+    }
 }
 
 impl IntervalValue {
-    /// Get Either the number of Months or the Duration specified by this interval
-    ///
-    /// This computes the fiels permissively: it assumes that the leading field
-    /// (i.e. the lead in `INTERVAL 'str' LEAD [TO LAST]`) is valid and parses
-    /// all field in the `str` starting at the leading field, ignoring the
-    /// truncation that should be specified by `LAST`.
-    ///
-    /// See also the related [`fields_match_precision`] function that will give
-    /// an error if the interval string does not exactly match the `FROM TO
-    /// LAST` spec.
+    /// Compute an Interval from an IntervalValue. This could be adapted
+    /// to `impl TryFrom<IntervalValue> for Interval` but is slightly more
+    /// ergononmic because it doesn't require exposing all of the private
+    /// functions this method calls.
     ///
     /// # Errors
-    ///
-    /// If a required field is missing (i.e. there is no value) or the `TO
-    /// LAST` field is larger than the `LEAD`.
-    pub fn computed_permissive(&self) -> Result<Interval, ValueError> {
+    /// - If any component overflows a parameter (i.e. i64).
+    pub fn compute_interval(&self) -> Result<Interval, ValueError> {
         use DateTimeField::*;
-        match &self.leading_field {
-            Year => match &self.last_field {
-                Some(Month) => Ok(Interval::Months(
-                    self.parsed.positivity() * self.parsed.year.unwrap_or(0) as i64 * 12
-                        + self.parsed.month.unwrap_or(0) as i64,
-                )),
-                Some(Year) | None => self
-                    .parsed
-                    .year
-                    .ok_or_else(|| ValueError("No YEAR provided".into()))
-                    .map(|year| Interval::Months(self.parsed.positivity() * year as i64 * 12)),
-                Some(invalid) => Err(ValueError(format!(
-                    "Invalid specifier for YEAR precision: {}",
-                    &invalid
-                ))),
-            },
-            Month => match &self.last_field {
-                Some(Month) | None => self
-                    .parsed
-                    .month
-                    .ok_or_else(|| ValueError("No MONTH provided".into()))
-                    .map(|m| Interval::Months(self.parsed.positivity() * m as i64)),
-                Some(invalid) => Err(ValueError(format!(
-                    "Invalid specifier for MONTH precision: {}",
-                    &invalid
-                ))),
-            },
-            durationlike_field => {
-                let mut seconds = 0u64;
-                match self.units_of(&durationlike_field) {
-                    Some(time) => seconds += time * seconds_multiplier(&durationlike_field),
-                    None => {
-                        return Err(ValueError(format!(
-                            "No {} provided in value string for {}",
-                            durationlike_field, self.value
-                        )))
-                    }
-                }
-                let min_field = &self
-                    .last_field
-                    .clone()
-                    .unwrap_or_else(|| durationlike_field.clone());
-                for field in durationlike_field
-                    .clone()
-                    .into_iter()
-                    .take_while(|f| f <= min_field)
-                {
-                    if let Some(time) = self.units_of(&field) {
-                        seconds += time * seconds_multiplier(&field);
-                    }
-                }
-                let duration = match (min_field, self.parsed.nano) {
-                    (DateTimeField::Second, Some(nanos)) => Duration::new(seconds, nanos),
-                    (_, _) => Duration::from_secs(seconds),
+        let mut months = 0i64;
+        let mut seconds = 0i64;
+        let mut nanos = 0i64;
+
+        // Add all DateTimeFields, from Year to Seconds.
+        self.add_field(Year, &mut months, &mut seconds, &mut nanos)?;
+
+        for field in Year.into_iter().take_while(|f| *f <= Second) {
+            self.add_field(field, &mut months, &mut seconds, &mut nanos)?;
+        }
+
+        self.truncate_high_fields(&mut months, &mut seconds);
+        self.truncate_low_fields(&mut months, &mut seconds, &mut nanos)?;
+
+        // Handle negative seconds with positive nanos or vice versa.
+        if nanos < 0 && seconds > 0 {
+            nanos += 1_000_000_000_i64;
+            seconds -= 1;
+        } else if nanos > 0 && seconds < 0 {
+            nanos -= 1_000_000_000_i64;
+            seconds += 1;
+        }
+
+        Ok(Interval {
+            months,
+            duration: Duration::new(seconds.abs() as u64, nanos.abs() as u32),
+            is_positive_dur: seconds >= 0 && nanos >= 0,
+        })
+    }
+    /// Adds the appropriate values from self's ParsedDateTime to the i64 params.
+    ///
+    /// # Errors
+    /// - If any component overflows a parameter (i.e. i64).
+    /// - If the specified precision is not within (0,6).
+    fn add_field(
+        &self,
+        d: DateTimeField,
+        months: &mut i64,
+        seconds: &mut i64,
+        nanos: &mut i64,
+    ) -> Result<(), ValueError> {
+        use DateTimeField::*;
+        match d {
+            Year => {
+                let (y, y_f) = match self.units_of(Year) {
+                    Some(y) => (y.unit, y.fraction),
+                    None => return Ok(()),
                 };
-                Ok(Interval::Duration {
-                    is_positive: self.parsed.is_positive,
-                    duration,
-                })
+                // months += y * 12
+                *months = y
+                    .checked_mul(12)
+                    .and_then(|y_m| months.checked_add(y_m))
+                    .ok_or_else(|| {
+                        ValueError(format!(
+                            "INTERVAL '{}' overflows maximum months; \
+                             cannot exceed {} months",
+                            self.value,
+                            std::i64::MAX
+                        ))
+                    })?;
+
+                // months += y_f * 12 / 1_000_000_000
+                *months = y_f
+                    .checked_mul(12)
+                    .and_then(|y_f_m| months.checked_add(y_f_m / 1_000_000_000))
+                    .ok_or_else(|| {
+                        ValueError(format!(
+                            "INTERVAL '{}' overflows maximum months; \
+                             cannot exceed {} months",
+                            self.value,
+                            std::i64::MAX
+                        ))
+                    })?;
+                Ok(())
+            }
+            Month => {
+                let (m, m_f) = match self.units_of(Month) {
+                    Some(m) => (m.unit, m.fraction),
+                    None => return Ok(()),
+                };
+
+                *months = m.checked_add(*months).ok_or_else(|| {
+                    ValueError(format!(
+                        "INTERVAL '{}' overflows maximum months; \
+                         cannot exceed {} months",
+                        self.value,
+                        std::i64::MAX
+                    ))
+                })?;
+
+                let m_f_ns = m_f
+                    .checked_mul(30 * seconds_multiplier(Day))
+                    .ok_or_else(|| {
+                        ValueError("Intermediate overflow in MONTH fraction".to_string())
+                    })?;
+
+                // seconds += m_f * 30 * seconds_multiplier(Day) / 1_000_000_000
+                *seconds = seconds.checked_add(m_f_ns / 1_000_000_000).ok_or_else(|| {
+                    ValueError(format!(
+                        "INTERVAL '{}' overflows maximum seconds; \
+                         cannot exceed {} seconds",
+                        self.value,
+                        std::i64::MAX
+                    ))
+                })?;
+
+                *nanos += m_f_ns % 1_000_000_000;
+                Ok(())
+            }
+            dhms => {
+                let (t, t_f) = match self.units_of(dhms) {
+                    Some(t) => (t.unit, t.fraction),
+                    None => return Ok(()),
+                };
+
+                *seconds = t
+                    .checked_mul(seconds_multiplier(d))
+                    .and_then(|t_s| seconds.checked_add(t_s))
+                    .ok_or_else(|| {
+                        ValueError(format!(
+                            "INTERVAL '{}' overflows maximum seconds; \
+                             cannot exceed {} seconds",
+                            self.value,
+                            std::i64::MAX
+                        ))
+                    })?;
+
+                let t_f_ns = t_f.checked_mul(seconds_multiplier(dhms)).ok_or_else(|| {
+                    ValueError(format!("Intermediate overflow in {} fraction", dhms))
+                })?;
+
+                // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000
+                *seconds = seconds.checked_add(t_f_ns / 1_000_000_000).ok_or_else(|| {
+                    ValueError(format!(
+                        "INTERVAL '{}' overflows maximum seconds; \
+                         cannot exceed {} seconds",
+                        self.value,
+                        std::i64::MAX
+                    ))
+                })?;
+
+                *nanos += t_f_ns % 1_000_000_000;
+                Ok(())
             }
         }
     }
 
-    /// Retrieve the number that we parsed out of the literal string for the `field`
-    fn units_of(&self, field: &DateTimeField) -> Option<u64> {
+    /// Truncate parameters' values that are more significant than self.precision_high.
+    fn truncate_high_fields(&self, months: &mut i64, seconds: &mut i64) {
+        use DateTimeField::*;
+        match self.precision_high {
+            Year => {}
+            Month => {
+                *months %= 12;
+            }
+            Day => {
+                *months = 0;
+            }
+            hms => {
+                *months = 0;
+                *seconds %= seconds_multiplier(hms.next_largest());
+            }
+        }
+    }
+
+    /// Truncate parameters' values that are less significant than self.precision_low.
+    ///
+    /// # Errors
+    /// - If the specified precision is not within (0,6).
+    fn truncate_low_fields(
+        &self,
+        months: &mut i64,
+        seconds: &mut i64,
+        nanos: &mut i64,
+    ) -> Result<(), ValueError> {
+        use DateTimeField::*;
+        match self.precision_low {
+            Year => {
+                *months -= *months % 12;
+                *seconds = 0;
+                *nanos = 0;
+            }
+            Month => {
+                *seconds = 0;
+                *nanos = 0;
+            }
+            // Round nanoseconds.
+            Second => {
+                let default_precision = 6;
+                let precision = match self.fsec_max_precision {
+                    Some(p) => p,
+                    None => default_precision,
+                };
+
+                if precision > default_precision {
+                    return Err(ValueError(format!(
+                        "SECOND precision must be (0, 6), have SECOND({})",
+                        precision
+                    )));
+                }
+
+                // Check if value should round up to nearest fractional place.
+                let remainder = *nanos % 10_i64.pow(9 - precision as u32);
+                if remainder / 10_i64.pow(8 - precision as u32) > 4 {
+                    *nanos += 10_i64.pow(9 - precision as u32);
+                }
+
+                *nanos -= remainder;
+            }
+            dhm => {
+                *seconds -= *seconds % seconds_multiplier(dhm);
+                *nanos = 0;
+            }
+        }
+        Ok(())
+    }
+
+    /// Retrieve any value that we parsed out of the literal string for the
+    /// `field`.
+    fn units_of(&self, field: DateTimeField) -> Option<DateTimeFieldValue> {
         match field {
             DateTimeField::Year => self.parsed.year,
             DateTimeField::Month => self.parsed.month,
@@ -150,99 +291,10 @@ impl IntervalValue {
             DateTimeField::Second => self.parsed.second,
         }
     }
-
-    /// Verify that the fields in me make sense
-    ///
-    /// Returns Ok if the fields are fully specified, otherwise an error
-    ///
-    /// # Examples
-    ///
-    /// ```sql
-    /// INTERVAL '1 5' DAY TO HOUR -- Ok
-    /// INTERVAL '1 5' DAY         -- Err
-    /// INTERVAL '1:2:3' HOUR TO SECOND   -- Ok
-    /// INTERVAL '1:2:3' HOUR TO MINUTE   -- Err
-    /// INTERVAL '1:2:3' MINUTE TO SECOND -- Err
-    /// INTERVAL '1:2:3' DAY TO SECOND    -- Err
-    /// ```
-    pub fn fields_match_precision(&self) -> Result<(), ValueError> {
-        let mut errors = vec![];
-        let last_field = self
-            .last_field
-            .as_ref()
-            .unwrap_or_else(|| &self.leading_field);
-        let mut extra_leading_fields = vec![];
-        let mut extra_trailing_fields = vec![];
-        // check for more data in the input string than was requested in <FIELD> TO <FIELD>
-        for field in std::iter::once(DateTimeField::Year).chain(DateTimeField::Year.into_iter()) {
-            if self.units_of(&field).is_none() {
-                continue;
-            }
-
-            if field < self.leading_field {
-                extra_leading_fields.push(field.clone());
-            }
-            if field > *last_field {
-                extra_trailing_fields.push(field.clone());
-            }
-        }
-
-        if !extra_leading_fields.is_empty() {
-            errors.push(format!(
-                "The interval string '{}' specifies {}s but the significance requested is {}",
-                self.value,
-                fields_msg(extra_leading_fields.into_iter()),
-                self.leading_field
-            ));
-        }
-        if !extra_trailing_fields.is_empty() {
-            errors.push(format!(
-                "The interval string '{}' specifies {}s but the requested precision would truncate to {}",
-                self.value, fields_msg(extra_trailing_fields.into_iter()), last_field
-            ));
-        }
-
-        // check for data requested by the <FIELD> TO <FIELD> that does not exist in the data
-        let missing_fields = match (
-            self.units_of(&self.leading_field),
-            self.units_of(&last_field),
-        ) {
-            (Some(_), Some(_)) => vec![],
-            (None, Some(_)) => vec![&self.leading_field],
-            (Some(_), None) => vec![last_field],
-            (None, None) => vec![&self.leading_field, last_field],
-        };
-
-        if !missing_fields.is_empty() {
-            errors.push(format!(
-                "The interval string '{}' provides {} - which does not include the requested field(s) {}",
-                self.value, self.present_fields(), fields_msg(missing_fields.into_iter().cloned())));
-        }
-
-        if !errors.is_empty() {
-            Err(ValueError(errors.join("; ")))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn present_fields(&self) -> String {
-        fields_msg(
-            std::iter::once(DateTimeField::Year)
-                .chain(DateTimeField::Year.into_iter())
-                .filter(|field| self.units_of(&field).is_some()),
-        )
-    }
 }
 
-fn fields_msg(fields: impl Iterator<Item = DateTimeField>) -> String {
-    fields
-        .map(|field: DateTimeField| field.to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn seconds_multiplier(field: &DateTimeField) -> u64 {
+/// Returns the number of seconds in a single unit of `field`.
+fn seconds_multiplier(field: DateTimeField) -> i64 {
     match field {
         DateTimeField::Day => 60 * 60 * 24,
         DateTimeField::Hour => 60 * 60,
@@ -252,23 +304,26 @@ fn seconds_multiplier(field: &DateTimeField) -> u64 {
     }
 }
 
-/// The result of parsing an `INTERVAL '<value>' <unit> [TO <precision>]`
-///
-/// Units of type `YEAR` or `MONTH` are semantically some multiple of months,
-/// which are not well defined, and this parser normalizes them to some number
-/// of months.
-///
-/// Intervals of unit [`DateTimeField::Day`] or smaller are semantically a
-/// multiple of seconds.
+/// An interval of time meant to express SQL intervals. Obtained by parsing an
+/// `INTERVAL '<value>' <unit> [TO <precision>]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Interval {
+pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
-    Months(i64),
-    /// An actual timespan, possibly negative, because why not
-    Duration {
-        is_positive: bool,
-        duration: Duration,
-    },
+    pub months: i64,
+    /// An actual timespan, possibly negative
+    pub duration: Duration,
+    /// Whether or not `duration` is positive
+    pub is_positive_dur: bool,
+}
+
+impl Default for Interval {
+    fn default() -> Self {
+        Self {
+            months: 0,
+            duration: Duration::default(),
+            is_positive_dur: true,
+        }
+    }
 }
 
 /// The fields of a Date
@@ -284,6 +339,7 @@ pub struct ParsedDate {
 /// The fields in a `Timestamp`
 ///
 /// Similar to a [`ParsedDateTime`], except that all the fields are required.
+/// `nano` is equivalent to `ParsedDateTime.second.fraction`.
 ///
 /// This is not guaranteed to be a valid date
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -298,51 +354,99 @@ pub struct ParsedTimestamp {
     pub timezone_offset_second: i64,
 }
 
-/// All of the fields that can appear in a literal `DATE`, `TIMESTAMP` or `INTERVAL` string
+/// Tracks a unit and a fraction from a parsed time-like string, e.g. INTERVAL
+/// '1.2' DAYS.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct DateTimeFieldValue {
+    /// Integer part of the value.
+    pub unit: i64,
+    /// Fractional part of value, padded to billions/has 9 digits of precision,
+    /// e.g. `.5` is represented as `500000000`.
+    pub fraction: i64,
+}
+
+impl Default for DateTimeFieldValue {
+    fn default() -> Self {
+        DateTimeFieldValue {
+            unit: 0,
+            fraction: 0,
+        }
+    }
+}
+
+impl DateTimeFieldValue {
+    /// Construct DateTimeFieldValue { unit, fraction }.
+    pub fn new(unit: i64, fraction: i64) -> Self {
+        DateTimeFieldValue { unit, fraction }
+    }
+}
+/// All of the fields that can appear in a literal `DATE`, `TIMESTAMP` or `INTERVAL` string.
 ///
 /// This is only used in an `Interval`, which can have any contiguous set of
 /// fields set, otherwise you are probably looking for [`ParsedDate`] or
 /// [`ParsedTimestamp`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParsedDateTime {
-    pub is_positive: bool,
-    pub year: Option<u64>,
-    pub month: Option<u64>,
-    pub day: Option<u64>,
-    pub hour: Option<u64>,
-    pub minute: Option<u64>,
-    pub second: Option<u64>,
-    pub nano: Option<u32>,
+    pub year: Option<DateTimeFieldValue>,
+    pub month: Option<DateTimeFieldValue>,
+    pub day: Option<DateTimeFieldValue>,
+    pub hour: Option<DateTimeFieldValue>,
+    pub minute: Option<DateTimeFieldValue>,
+    // second.fraction is equivalent to nanoseconds.
+    pub second: Option<DateTimeFieldValue>,
     pub timezone_offset_second: Option<i64>,
 }
 
-impl ParsedDateTime {
-    /// `1` if is_positive, else `-1`
-    pub(crate) fn positivity(&self) -> i64 {
-        match self.is_positive {
-            true => 1,
-            false => -1,
-        }
-    }
-}
-
 impl Default for ParsedDateTime {
-    fn default() -> ParsedDateTime {
+    fn default() -> Self {
         ParsedDateTime {
-            is_positive: true,
             year: None,
             month: None,
             day: None,
             hour: None,
             minute: None,
             second: None,
-            nano: None,
             timezone_offset_second: None,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+impl ParsedDateTime {
+    /// Write to the specified field of a ParsedDateTime iff it is currently set
+    /// to None; otherwise generate an error to propagate to the user.
+    pub fn write_field_iff_none(
+        &mut self,
+        f: DateTimeField,
+        u: Option<DateTimeFieldValue>,
+    ) -> Result<(), failure::Error> {
+        use DateTimeField::*;
+
+        match f {
+            Year if self.year.is_none() => {
+                self.year = u;
+            }
+            Month if self.month.is_none() => {
+                self.month = u;
+            }
+            Day if self.day.is_none() => {
+                self.day = u;
+            }
+            Hour if self.hour.is_none() => {
+                self.hour = u;
+            }
+            Minute if self.minute.is_none() => {
+                self.minute = u;
+            }
+            Second if self.second.is_none() => {
+                self.second = u;
+            }
+            _ => failure::bail!("{} field set twice", f),
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
     Year,
     Month,
@@ -374,6 +478,41 @@ impl IntoIterator for DateTimeField {
     }
 }
 
+impl FromStr for DateTimeField {
+    type Err = failure::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_ref() {
+            "YEAR" | "YEARS" | "Y" => Ok(Self::Year),
+            "MONTH" | "MONTHS" | "MON" | "MONS" => Ok(Self::Month),
+            "DAY" | "DAYS" | "D" => Ok(Self::Day),
+            "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
+            "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
+            "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
+            _ => failure::bail!("invalid DateTimeField: {}", s),
+        }
+    }
+}
+
+impl DateTimeField {
+    /// Iterate the DateTimeField to the next value.
+    /// # Panics
+    /// - When called on Second
+    pub fn next_smallest(self) -> Self {
+        self.into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("Cannot get smaller DateTimeField than {}", self))
+    }
+    /// Iterate the DateTimeField to the prior value.
+    /// # Panics
+    /// - When called on Year
+    pub fn next_largest(self) -> Self {
+        self.into_iter()
+            .next_back()
+            .unwrap_or_else(|| panic!("Cannot get larger DateTimeField than {}", self))
+    }
+}
+
 /// An iterator over DateTimeFields
 ///
 /// Always starts with the value smaller than the current one.
@@ -399,6 +538,22 @@ impl Iterator for DateTimeFieldIterator {
             Some(Hour) => Some(Minute),
             Some(Minute) => Some(Second),
             Some(Second) => None,
+            None => None,
+        };
+        self.0.clone()
+    }
+}
+
+impl DoubleEndedIterator for DateTimeFieldIterator {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        use DateTimeField::*;
+        self.0 = match self.0 {
+            Some(Year) => None,
+            Some(Month) => Some(Year),
+            Some(Day) => Some(Month),
+            Some(Hour) => Some(Day),
+            Some(Minute) => Some(Hour),
+            Some(Second) => Some(Minute),
             None => None,
         };
         self.0.clone()
@@ -501,5 +656,559 @@ impl FromStr for ExtractField {
             "EPOCH" => ExtractField::Epoch,
             _ => return Err(ValueError(format!("invalid EXTRACT specifier: {}", s))),
         })
+    }
+}
+
+#[test]
+fn test_interval_value_truncate_low_fields() {
+    use DateTimeField::*;
+
+    let mut test_cases = [
+        (
+            IntervalValue {
+                precision_low: Year,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (26 * 12, 0, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Month,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 0, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Day,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 7 * 60 * 60 * 24, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Hour,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 181 * 60 * 60, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Minute,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 10905 * 60, 0),
+        ),
+        (
+            IntervalValue {
+                precision_low: Second,
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 654_321, 321_000_000),
+        ),
+        (
+            IntervalValue {
+                precision_low: Second,
+                fsec_max_precision: Some(1),
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 654_321, 300_000_000),
+        ),
+        (
+            IntervalValue {
+                precision_low: Second,
+                fsec_max_precision: Some(0),
+                ..Default::default()
+            },
+            (321, 654_321, 321_000_000),
+            (321, 654_321, 0),
+        ),
+    ];
+
+    for test in test_cases.iter_mut() {
+        test.0
+            .truncate_low_fields(&mut (test.1).0, &mut (test.1).1, &mut (test.1).2)
+            .unwrap();
+        if (test.1).0 != (test.2).0 || (test.1).1 != (test.2).1 || (test.1).2 != (test.2).2 {
+            panic!(
+                "test_interval_value_truncate_low_fields failed \n actual: {:?} \n expected: {:?}",
+                test.1, test.2
+            );
+        }
+    }
+}
+
+#[test]
+fn test_interval_value_truncate_high_fields() {
+    use DateTimeField::*;
+
+    let mut test_cases = [
+        (
+            IntervalValue {
+                precision_high: Year,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (321, 654_321),
+        ),
+        (
+            IntervalValue {
+                precision_high: Month,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (321 % 12, 654_321),
+        ),
+        (
+            IntervalValue {
+                precision_high: Day,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (0, 654_321),
+        ),
+        (
+            IntervalValue {
+                precision_high: Hour,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (0, 654_321 % (60 * 60 * 24)),
+        ),
+        (
+            IntervalValue {
+                precision_high: Minute,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (0, 654_321 % (60 * 60)),
+        ),
+        (
+            IntervalValue {
+                precision_high: Second,
+                ..Default::default()
+            },
+            (321, 654_321),
+            (0, 654_321 % 60),
+        ),
+    ];
+
+    for test in test_cases.iter_mut() {
+        test.0
+            .truncate_high_fields(&mut (test.1).0, &mut (test.1).1);
+        if (test.1).0 != (test.2).0 || (test.1).1 != (test.2).1 {
+            panic!(
+                "test_interval_value_truncate_high_fields failed \n actual: {:?} \n expected: {:?}",
+                test.1, test.2
+            );
+        }
+    }
+}
+
+#[test]
+fn test_interval_value_add_field() {
+    use DateTimeField::*;
+    let iv_unit = IntervalValue {
+        parsed: ParsedDateTime {
+            year: Some(DateTimeFieldValue::new(1, 0)),
+            month: Some(DateTimeFieldValue::new(2, 0)),
+            day: Some(DateTimeFieldValue::new(2, 0)),
+            hour: Some(DateTimeFieldValue::new(3, 0)),
+            minute: Some(DateTimeFieldValue::new(4, 0)),
+            second: Some(DateTimeFieldValue::new(5, 0)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let iv_frac = IntervalValue {
+        parsed: ParsedDateTime {
+            year: Some(DateTimeFieldValue::new(1, 555_555_555)),
+            month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+            day: Some(DateTimeFieldValue::new(2, 555_555_555)),
+            hour: Some(DateTimeFieldValue::new(3, 555_555_555)),
+            minute: Some(DateTimeFieldValue::new(4, 555_555_555)),
+            second: Some(DateTimeFieldValue::new(5, 555_555_555)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let iv_frac_neg = IntervalValue {
+        parsed: ParsedDateTime {
+            year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+            month: Some(DateTimeFieldValue::new(-2, -555_555_555)),
+            day: Some(DateTimeFieldValue::new(-2, -555_555_555)),
+            hour: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+            minute: Some(DateTimeFieldValue::new(-4, -555_555_555)),
+            second: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    run_test_interval_value_add_field(iv_unit.clone(), Year, (12, 0, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Month, (2, 0, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Day, (0, 2 * 60 * 60 * 24, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Hour, (0, 3 * 60 * 60, 0));
+    run_test_interval_value_add_field(iv_unit.clone(), Minute, (0, 4 * 60, 0));
+    run_test_interval_value_add_field(iv_unit, Second, (0, 5, 0));
+    run_test_interval_value_add_field(iv_frac.clone(), Year, (18, 0, 0));
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Month,
+        (
+            2,
+            // 16 days 15:59:59.99856
+            16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59,
+            998_560_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Day,
+        (
+            0,
+            // 2 days 13:19:59.999952
+            2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59,
+            999_952_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Hour,
+        (
+            0,
+            // 03:33:19.999998
+            3 * 60 * 60 + 33 * 60 + 19,
+            999_998_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac.clone(),
+        Minute,
+        (
+            0,
+            // 00:04:33.333333
+            4 * 60 + 33,
+            333_333_300,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac,
+        Second,
+        (
+            0,
+            // 00:00:05.555556
+            5,
+            555_555_555,
+        ),
+    );
+    run_test_interval_value_add_field(iv_frac_neg.clone(), Year, (-18, 0, 0));
+    run_test_interval_value_add_field(
+        iv_frac_neg.clone(),
+        Month,
+        (
+            -2,
+            // -16 days -15:59:59.99856
+            -(16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59),
+            -998_560_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac_neg.clone(),
+        Day,
+        (
+            0,
+            // -2 days 13:19:59.999952
+            -(2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59),
+            -999_952_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac_neg.clone(),
+        Hour,
+        (
+            0,
+            // -03:33:19.999998
+            -(3 * 60 * 60 + 33 * 60 + 19),
+            -999_998_000,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac_neg.clone(),
+        Minute,
+        (
+            0,
+            // -00:04:33.333333
+            -(4 * 60 + 33),
+            -333_333_300,
+        ),
+    );
+    run_test_interval_value_add_field(
+        iv_frac_neg,
+        Second,
+        (
+            0,
+            // -00:00:05.555556
+            -5,
+            -555_555_555,
+        ),
+    );
+
+    fn run_test_interval_value_add_field(
+        iv: IntervalValue,
+        f: DateTimeField,
+        expected: (i64, i64, i64),
+    ) {
+        let mut res = (0, 0, 0);
+
+        iv.add_field(f, &mut res.0, &mut res.1, &mut res.2).unwrap();
+
+        if res.0 != expected.0 || res.1 != expected.1 || res.2 != expected.2 {
+            panic!(
+                "test_interval_value_add_field failed \n actual: {:?} \n expected: {:?}",
+                res, expected
+            );
+        }
+    }
+}
+
+#[test]
+fn test_interval_value_compute_interval() {
+    use DateTimeField::*;
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(1, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: 13,
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(1, 0)),
+                month: Some(DateTimeFieldValue::new(-1, 0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: 11,
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-1, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Interval {
+            months: -11,
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                day: Some(DateTimeFieldValue::new(1, 0)),
+                hour: Some(DateTimeFieldValue::new(-2, 0)),
+                minute: Some(DateTimeFieldValue::new(-3, 0)),
+                second: Some(DateTimeFieldValue::new(-4, -500_000_000)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // 21:56:55.5
+        Interval {
+            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                day: Some(DateTimeFieldValue::new(-1, 0)),
+                hour: Some(DateTimeFieldValue::new(2, 0)),
+                minute: Some(DateTimeFieldValue::new(3, 0)),
+                second: Some(DateTimeFieldValue::new(4, 500_000_000)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // -21:56:55.5
+        Interval {
+            is_positive_dur: false,
+            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                day: Some(DateTimeFieldValue::new(1, 0)),
+                second: Some(DateTimeFieldValue::new(0, -270_000_000)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // 23:59:59.73
+        Interval {
+            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                day: Some(DateTimeFieldValue::new(-1, 0)),
+                second: Some(DateTimeFieldValue::new(0, 270_000_000)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // -23:59:59.73
+        Interval {
+            months: 0,
+            is_positive_dur: false,
+            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        // -1 year -4 months +13 days +07:07:53.220828
+        Interval {
+            months: -16,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 220_828_000),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            fsec_max_precision: Some(1),
+            ..Default::default()
+        },
+        // -1 year -4 months +13 days +07:07:53.2
+        Interval {
+            months: -16,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 200_000_000),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            precision_high: Month,
+            precision_low: Minute,
+            ..Default::default()
+        },
+        // -4 months +13 days +07:07:00
+        Interval {
+            months: -4,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60, 0),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            parsed: ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            precision_high: Day,
+            precision_low: Hour,
+            ..Default::default()
+        },
+        // 13 days 07:00:00
+        Interval {
+            months: 0,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60, 0),
+        },
+    );
+    run_test_interval_value_compute_interval(
+        IntervalValue {
+            value: "".to_string(),
+            parsed: ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+                month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+                day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+                hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+                minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+                second: Some(DateTimeFieldValue::new(6, 555_555_555)),
+                ..Default::default()
+            },
+            precision_high: Day,
+            precision_low: Hour,
+            fsec_max_precision: Some(1),
+        },
+        // 13 days 07:00:00
+        Interval {
+            months: 0,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60, 0),
+        },
+    );
+
+    fn run_test_interval_value_compute_interval(iv: IntervalValue, expected: Interval) {
+        let actual = iv.compute_interval().unwrap();
+
+        if actual != expected {
+            panic!(
+                "test_interval_compute_interval failed\n input {:?}\nactual {:?}\nexpected {:?}",
+                iv, actual, expected
+            )
+        }
     }
 }

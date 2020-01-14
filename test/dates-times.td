@@ -63,16 +63,16 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 9
 
 > SELECT INTERVAL '1' SECOND
-"01"
+"00:00:01"
 
 > SELECT INTERVAL '2' MINUTE
-"02:00"
+"00:02:00"
 
 > SELECT INTERVAL '3' HOUR
 "03:00:00"
 
 > SELECT INTERVAL '1' DAY
-"1 day 00:00:00"
+"1 day"
 
 > SELECT INTERVAL '6' MONTH
 "6 months"

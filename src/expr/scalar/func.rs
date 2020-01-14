@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
 use repr::regex::Regex;
-use repr::{strconv, ColumnType, Datum, Interval, RowArena, ScalarType};
+use repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 
 use self::format::DateTimeFormat;
 pub use crate::like::build_like_regex_from_string;
@@ -485,11 +485,10 @@ fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let dt = a.unwrap_timestamp();
     Datum::Timestamp(match b {
-        Datum::Interval(Interval::Months(months)) => add_timestamp_months(dt, months),
-        Datum::Interval(Interval::Duration {
-            is_positive,
-            duration,
-        }) => add_timestamp_duration(dt, is_positive, duration),
+        Datum::Interval(i) => {
+            let dt = add_timestamp_months(dt, i.months);
+            add_timestamp_duration(dt, i.is_positive_dur, i.duration)
+        }
         _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     })
 }
@@ -498,11 +497,10 @@ fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let dt = a.unwrap_timestamptz().naive_utc();
 
     let new_ndt = match b {
-        Datum::Interval(Interval::Months(months)) => add_timestamp_months(dt, months),
-        Datum::Interval(Interval::Duration {
-            is_positive,
-            duration,
-        }) => add_timestamp_duration(dt, is_positive, duration),
+        Datum::Interval(i) => {
+            let dt = add_timestamp_months(dt, i.months);
+            add_timestamp_duration(dt, i.is_positive_dur, i.duration)
+        }
         _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     };
 
@@ -537,14 +535,12 @@ fn floor_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
 
 fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let inverse = match b {
-        Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
-        Datum::Interval(Interval::Duration {
-            is_positive,
-            duration,
-        }) => Datum::Interval(Interval::Duration {
-            is_positive: !is_positive,
-            duration,
-        }),
+        Datum::Interval(i) => {
+            let mut res = i;
+            res.months = -res.months;
+            res.is_positive_dur = !res.is_positive_dur;
+            Datum::Interval(res)
+        }
         _ => panic!(
             "Tried to do timestamptz subtraction with non-interval: {:?}",
             b
@@ -555,14 +551,12 @@ fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
 fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let inverse = match b {
-        Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
-        Datum::Interval(Interval::Duration {
-            is_positive,
-            duration,
-        }) => Datum::Interval(Interval::Duration {
-            is_positive: !is_positive,
-            duration,
-        }),
+        Datum::Interval(i) => {
+            let mut res = i;
+            res.months = -res.months;
+            res.is_positive_dur = !res.is_positive_dur;
+            Datum::Interval(res)
+        }
         _ => panic!(
             "Tried to do timestamptz subtraction with non-interval: {:?}",
             b
@@ -782,6 +776,13 @@ fn neg_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn neg_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_decimal())
+}
+
+pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
+    let mut i = a.unwrap_interval();
+    i.is_positive_dur = !i.is_positive_dur;
+    i.months = -i.months;
+    Datum::from(i)
 }
 
 fn sqrt_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1705,6 +1706,7 @@ pub enum UnaryFunc {
     NegFloat32,
     NegFloat64,
     NegDecimal,
+    NegInterval,
     SqrtFloat32,
     SqrtFloat64,
     AbsInt32,
@@ -1823,6 +1825,7 @@ impl UnaryFunc {
             UnaryFunc::NegFloat32 => neg_float32(a),
             UnaryFunc::NegFloat64 => neg_float64(a),
             UnaryFunc::NegDecimal => neg_decimal(a),
+            UnaryFunc::NegInterval => neg_interval(a),
             UnaryFunc::AbsInt32 => abs_int32(a),
             UnaryFunc::AbsInt64 => abs_int64(a),
             UnaryFunc::AbsFloat32 => abs_float32(a),
@@ -1953,7 +1956,8 @@ impl UnaryFunc {
             | UnaryFunc::NegInt64
             | UnaryFunc::NegFloat32
             | UnaryFunc::NegFloat64
-            | UnaryFunc::NegDecimal => true,
+            | UnaryFunc::NegDecimal
+            | UnaryFunc::NegInterval => true,
             _ => false,
         };
         // This debug assertion is an attempt to ensure that this function
@@ -2065,8 +2069,8 @@ impl UnaryFunc {
             SqrtFloat32 => ColumnType::new(ScalarType::Float32).nullable(true),
             SqrtFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
 
-            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | AbsInt32
-            | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
+            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
+            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
 
             ExtractIntervalYear
             | ExtractIntervalMonth
@@ -2156,6 +2160,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::NegFloat32 => f.write_str("-"),
             UnaryFunc::NegFloat64 => f.write_str("-"),
             UnaryFunc::NegDecimal => f.write_str("-"),
+            UnaryFunc::NegInterval => f.write_str("-"),
             UnaryFunc::AbsInt32 => f.write_str("abs"),
             UnaryFunc::AbsInt64 => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),

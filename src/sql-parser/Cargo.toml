@@ -5,6 +5,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+failure = "0.1.6"
 log = "0.4.5"
 
 [dev-dependencies]
