@@ -615,6 +615,7 @@ where
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
             ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
+            ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
             ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
             ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
             ExecuteResponse::EmptyQuery => {

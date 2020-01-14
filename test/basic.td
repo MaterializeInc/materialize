@@ -162,9 +162,15 @@ catalog item 'idx1' is an index and so cannot be depended upon
 ! SELECT * from idx1
 catalog item 'idx1' is an index and so cannot be depended upon
 
-# TODO@jldlaughlin: Investigate below failures. Write more source tests.
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 
-#> CREATE SINK data_sink FROM data INTO 'kafka://${testdrive.kafka-addr}/data-sink'
-#> CREATE SINK test1_sink FROM data INTO 'kafka://${testdrive.kafka-addr}/test1-sink'
+# Depends on source.
+> CREATE SINK source_sink FROM data INTO 'kafka://${testdrive.kafka-addr}/data-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+
+# Depends on view.
+> CREATE SINK view_sink FROM test5 INTO 'kafka://${testdrive.kafka-addr}/test1-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+
+> DROP SINK source_sink
+
+> DROP SINK view_sink

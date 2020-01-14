@@ -437,6 +437,21 @@ where
             }
 
             Plan::DropItems(ids, item_type) => {
+                let mut sources_to_drop: Vec<GlobalId> = Vec::new();
+                let mut views_to_drop: Vec<GlobalId> = Vec::new();
+                let mut sinks_to_drop: Vec<GlobalId> = Vec::new();
+                let mut indexes_to_drop: Vec<GlobalId> = Vec::new();
+                // Sort ids to be dropped ~before~ removing them from the
+                // Coordinator's Catalog below.
+                for id in &ids {
+                    match self.catalog.get_by_id(id).item() {
+                        CatalogItem::Source(_s) => sources_to_drop.push(*id),
+                        CatalogItem::View(_v) => views_to_drop.push(*id),
+                        CatalogItem::Sink(_s) => sinks_to_drop.push(*id),
+                        CatalogItem::Index(_i) => indexes_to_drop.push(*id),
+                    }
+                }
+
                 for id in &ids {
                     self.report_catalog_update(
                         *id,
@@ -445,18 +460,7 @@ where
                     );
                     self.catalog.remove(*id);
                 }
-                let mut sources_to_drop = Vec::new();
-                let mut views_to_drop: Vec<GlobalId> = Vec::new();
-                let mut indexes_to_drop = Vec::new();
-                for id in ids {
-                    if self.sources.remove(&id).is_some() {
-                        sources_to_drop.push(id);
-                    } else if self.views.contains_key(&id) {
-                        views_to_drop.push(id);
-                    } else {
-                        indexes_to_drop.push(id);
-                    }
-                }
+
                 if !sources_to_drop.is_empty() {
                     broadcast(
                         &mut self.broadcast_tx,
@@ -468,6 +472,13 @@ where
                     self.drop_views(views_to_drop);
                 }
 
+                if !sinks_to_drop.is_empty() {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::DropSinks(sinks_to_drop),
+                    );
+                }
+
                 if !indexes_to_drop.is_empty() {
                     self.drop_indexes(indexes_to_drop, item_type != ObjectType::Index);
                 }
@@ -476,8 +487,8 @@ where
                     ObjectType::Source => ExecuteResponse::DroppedSource,
                     ObjectType::View => ExecuteResponse::DroppedView,
                     ObjectType::Table => ExecuteResponse::DroppedTable,
+                    ObjectType::Sink => ExecuteResponse::DroppedSink,
                     ObjectType::Index => ExecuteResponse::DroppedIndex,
-                    ObjectType::Sink => unreachable!(),
                 }
             }
 
