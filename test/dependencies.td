@@ -114,7 +114,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 {"before": null, "after": null}
 
-> CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = 'http://localhost:8081');
+> CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
 
 # Test that sinks cannot be depended upon.
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
