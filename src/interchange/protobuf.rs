@@ -26,9 +26,14 @@ use crate::error::Result;
 pub mod test_util;
 
 pub fn read_descriptors_from_file(descriptor_file: &str) -> Result<Descriptors> {
-    // TODO: turn this into a result/remove panics
-    let mut file = fs::File::open(descriptor_file)
-        .with_context(|_| format!("Opening descriptor set file failed: {}", descriptor_file))?;
+    let abs = fs::canonicalize(descriptor_file)?;
+    let mut file = fs::File::open(&abs).map_err(|e| {
+        format_err!(
+            "Opening descriptor set file {} failed: {}",
+            abs.display(),
+            e
+        )
+    })?;
     let proto = protobuf::parse_from_reader(&mut file).context("Parsing descriptor set failed")?;
     Ok(Descriptors::from_proto(&proto))
 }

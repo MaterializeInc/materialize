@@ -5,6 +5,8 @@
 
 //! Tools for manipulating proto in testdrive
 
+use std::path::Path;
+
 use protoc::Protoc;
 use serde_protobuf::descriptor::Descriptors;
 
@@ -34,8 +36,20 @@ impl Action for CompileProto {
     }
 
     fn redo(&self, _state: &mut State) -> Result<(), String> {
-        let _ = generate_descriptors(&self.source, &self.dest)?;
-        Ok(())
+        match generate_descriptors(&self.source, &self.dest) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                if Path::new(&self.dest).exists() {
+                    // Don't worry about recreating the proto file if it's checked in
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "couldn't generator proto descriptor file {}: {}",
+                        self.dest, e
+                    ))
+                }
+            }
+        }
     }
 }
 
@@ -53,6 +67,7 @@ pub fn generate_descriptors(proto_path: &str, out: &str) -> Result<Descriptors, 
 
     protoc
         .write_descriptor_set(descriptor_set_out_args)
-        .expect("protoc write descriptor set failed");
-    Ok(read_descriptors_from_file(out).map_err(|e| format!("{}", e))?)
+        .map_err(|e| format!("protoc write descriptor set failed for {}: {}", out, e))?;
+    Ok(read_descriptors_from_file(out)
+        .map_err(|e| format!("unable to read descriptors for {}: {}", out, e))?)
 }
