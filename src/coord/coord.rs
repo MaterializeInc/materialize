@@ -25,7 +25,7 @@ use std::str::FromStr;
 use failure::bail;
 use futures::executor::block_on;
 use futures::future::FutureExt;
-use futures::future::{self, Either, TryFutureExt};
+use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
@@ -46,6 +46,7 @@ use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
 
 use crate::{Command, ExecuteResponse, Response};
+use futures::Stream;
 
 type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 
@@ -278,15 +279,17 @@ where
             .expect("serve called twice on coordinator")
             .enter(|| {
                 let feedback_rx = self.enable_feedback();
-                let mut messages = stream::select_all(vec![
-                    Either::Left(
+                let streams: Vec<Box<dyn Stream<Item = Result<Message, comm::Error>> + Unpin>> = vec![
+                    Box::new(
                         cmd_rx
                             .map(Message::Command)
                             .chain(stream::once(future::ready(Message::Shutdown)))
                             .map(Ok),
                     ),
-                    Either::Right(Either::Left(feedback_rx.map_ok(Message::Worker))),
-                ]);
+                    Box::new(feedback_rx.map_ok(Message::Worker)),
+                ];
+
+                let mut messages = stream::select_all(streams);
                 while let Some(msg) = block_on(messages.next()) {
                     match msg.expect("coordinator message receiver failed") {
                         Message::Command(Command::Execute {
@@ -307,7 +310,7 @@ where
                                 MaybeFuture::Future(fut) => {
                                     let (self_tx, self_rx) = futures::channel::oneshot::channel();
                                     let self_rx = stream::once(self_rx.map(|res| res.unwrap()));
-                                    messages.push(Either::Right(Either::Right(self_rx)));
+                                    messages.push(Box::new(self_rx));
                                     let fut = async move {
                                         let (session, tx, result) = fut.await;
                                         self_tx
