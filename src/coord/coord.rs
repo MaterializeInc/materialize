@@ -1124,31 +1124,6 @@ where
         }
     }
 
-    // /// Collects frontiers from the earliest views.
-    // ///
-    // /// This method recursively traverses views and discovers other views on which
-    // /// they depend, collecting the frontiers of views that depend directly on sources.
-    // /// The `reached` input allows us to deduplicate views, and avoid e.g. recursion.
-    // fn sources_frontier(
-    //     &self,
-    //     id: GlobalId,
-    //     sources: &mut HashSet<GlobalId>,
-    //     reached: &mut HashSet<GlobalId>,
-    // ) {
-    //     reached.insert(id);
-    //     if let Some(view) = self.views.get(&id) {
-    //         if view.depends_on_source {
-    //             sources.insert(id);
-    //         } else {
-    //             for id in view.uses.iter() {
-    //                 if !reached.contains(id) {
-    //                     self.sources_frontier(*id, sources, reached);
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-
     /// Updates the upper frontier of a named view.
     pub fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
         if let Some(entry) = self.views.get_mut(name) {
