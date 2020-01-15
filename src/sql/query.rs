@@ -710,7 +710,7 @@ fn plan_table_function(
                     let column_names: &[&str] = match ident {
                         "jsonb_each" | "jsonb_each_text" => &["key", "value"],
                         "jsonb_object_keys" => &["jsonb_object_keys"],
-                        "jsonb_array_elements" => &["value"],
+                        "jsonb_array_elements" | "jsonb_array_elements_text" => &["value"],
                         _ => unreachable!(),
                     };
                     let scope = Scope::from_source(
@@ -2007,7 +2007,10 @@ fn plan_to_jsonb(
         ScalarType::String | ScalarType::Float64 | ScalarType::Bool | ScalarType::Null => {
             arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
         }
-        ScalarType::Int32 | ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
+        ScalarType::Int32 => arg
+            .call_unary(UnaryFunc::CastInt32ToFloat64)
+            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
             // TODO(jamii) this is awaiting a decision about how to represent numbers in jsonb
             bail!(
                 "{}() doesn't currently support {} arguments, try adding ::float to the argument for now",

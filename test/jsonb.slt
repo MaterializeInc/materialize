@@ -1,0 +1,1735 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/json_builtins
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+# These tests came from cockroack/postgres_jsonb.slt, cockroach/json.slt and cockroach/json_builtins.slt
+# but are modified for the subset of json we support
+
+mode cockroach
+
+query T
+SELECT '[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]'::jsonb
+----
+[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+
+statement ok
+CREATE TABLE test_jsonb (
+    json_type text,
+    test_json jsonb
+)
+
+statement ok
+INSERT INTO test_jsonb VALUES
+ ('scalar','"a scalar"'),
+ ('array','["zero", "one","two",null,"four","five", [1,2,3],{"f1":9}]'),
+ ('object','{"field1":"val1","field2":"val2","field3":null, "field4": 4, "field5": [1,2,3], "field6": {"f1":9}}')
+
+query T
+SELECT test_json -> 'x' FROM test_jsonb WHERE json_type = 'scalar'
+----
+NULL
+
+query T
+SELECT test_json -> 'x' FROM test_jsonb WHERE json_type = 'array'
+----
+NULL
+
+query T
+SELECT test_json -> 'x' FROM test_jsonb WHERE json_type = 'object'
+----
+NULL
+
+query T
+SELECT test_json -> 'field2' FROM test_jsonb WHERE json_type = 'object'
+----
+"val2"
+
+query T
+SELECT test_json ->> 'field2' FROM test_jsonb WHERE json_type = 'scalar'
+----
+NULL
+
+query T
+SELECT test_json ->> 'field2' FROM test_jsonb WHERE json_type = 'array'
+----
+NULL
+
+query T
+SELECT test_json ->> 'field2' FROM test_jsonb WHERE json_type = 'object'
+----
+val2
+
+query T
+SELECT test_json -> 2 FROM test_jsonb WHERE json_type = 'scalar'
+----
+NULL
+
+query T
+SELECT test_json -> 2 FROM test_jsonb WHERE json_type = 'array'
+----
+"two"
+
+query T
+SELECT test_json -> 9 FROM test_jsonb WHERE json_type = 'array'
+----
+NULL
+
+query T
+SELECT test_json -> 2 FROM test_jsonb WHERE json_type = 'object'
+----
+NULL
+
+query T
+SELECT test_json ->> 6 FROM test_jsonb WHERE json_type = 'array'
+----
+[1.0,2.0,3.0]
+
+query T
+SELECT test_json ->> 7 FROM test_jsonb WHERE json_type = 'array'
+----
+{"f1":9.0}
+
+query T
+SELECT test_json ->> 'field4' FROM test_jsonb WHERE json_type = 'object'
+----
+4.0
+
+query T
+SELECT test_json ->> 'field5' FROM test_jsonb WHERE json_type = 'object'
+----
+[1.0,2.0,3.0]
+
+query T
+SELECT test_json ->> 'field6' FROM test_jsonb WHERE json_type = 'object'
+----
+{"f1":9.0}
+
+query T
+SELECT test_json ->> 2 FROM test_jsonb WHERE json_type = 'scalar'
+----
+NULL
+
+query T
+SELECT test_json ->> 2 FROM test_jsonb WHERE json_type = 'array'
+----
+two
+
+query T
+SELECT test_json ->> 2 FROM test_jsonb WHERE json_type = 'object'
+----
+NULL
+
+# nulls
+
+query B
+SELECT (test_json->'field3') IS NULL AS expect_false FROM test_jsonb WHERE json_type = 'object'
+----
+false
+
+query T
+SELECT (test_json->>'field3') FROM test_jsonb WHERE json_type = 'object';
+----
+NULL
+
+query B
+SELECT (test_json->>'field3') IS NULL AS expect_true FROM test_jsonb WHERE json_type = 'object';
+----
+true
+
+query B
+SELECT (test_json->3) IS NULL AS expect_false FROM test_jsonb WHERE json_type = 'array';
+----
+false
+
+query B
+SELECT (test_json->>3) IS NULL AS expect_true FROM test_jsonb WHERE json_type = 'array';
+----
+true
+
+# corner cases
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb -> null::text;
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb -> null::int;
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb -> 1;
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb -> 'z';
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb -> '';
+----
+NULL
+
+query T
+SELECT '[{"b": "c"}, {"b": "cc"}]'::jsonb -> 1;
+----
+{"b":"cc"}
+
+query T
+SELECT '[{"b": "c"}, {"b": "cc"}]'::jsonb -> 3;
+----
+NULL
+
+query T
+SELECT '[{"b": "c"}, {"b": "cc"}]'::jsonb -> 'z';
+----
+NULL
+
+query T
+SELECT '{"a": "c", "b": null}'::jsonb -> 'b';
+----
+null
+
+query T
+SELECT '"foo"'::jsonb -> 1;
+----
+NULL
+
+query T
+SELECT '"foo"'::jsonb -> 'z';
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb ->> null::text;
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb ->> null::int;
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb ->> 1;
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb ->> 'z';
+----
+NULL
+
+query T
+SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb ->> '';
+----
+NULL
+
+query T
+SELECT '[{"b": "c"}, {"b": "cc"}]'::jsonb ->> 1;
+----
+{"b":"cc"}
+
+query T
+SELECT '[{"b": "c"}, {"b": "cc"}]'::jsonb ->> 3;
+----
+NULL
+
+query T
+SELECT '[{"b": "c"}, {"b": "cc"}]'::jsonb ->> 'z';
+----
+NULL
+
+query T
+SELECT '{"a": "c", "b": null}'::jsonb ->> 'b';
+----
+NULL
+
+query T
+SELECT '"foo"'::jsonb ->> 1;
+----
+NULL
+
+query T
+SELECT '"foo"'::jsonb ->> 'z';
+----
+NULL
+
+# equality and inequality
+
+query B
+SELECT '{"x":"y"}'::jsonb = '{"x":"y"}'::jsonb;
+----
+true
+
+query B
+SELECT '{"x":"y"}'::jsonb = '{"x":"z"}'::jsonb;
+----
+false
+
+query B
+SELECT '{"x":"y"}'::jsonb <> '{"x":"y"}'::jsonb;
+----
+false
+
+query B
+SELECT '{"x":"y"}'::jsonb <> '{"x":"z"}'::jsonb;
+----
+true
+
+# containment
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b"}'
+----
+true
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b", "c":null}'
+----
+true
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b", "g":null}'
+----
+false
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"g":null}'
+----
+false
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"c"}'
+----
+false
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b"}'
+----
+true
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b", "c":"q"}'
+----
+false
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b"}'
+----
+true
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b", "c":null}'
+----
+true
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b", "g":null}'
+----
+false
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"g":null}'
+----
+false
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"c"}'
+----
+false
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b"}'
+----
+true
+
+query B
+SELECT '{"a":"b", "b":1, "c":null}'::JSONB @> '{"a":"b", "c":"q"}'
+----
+false
+
+query B
+SELECT '[1,2]'::JSONB @> '[1,2,2]'::jsonb
+----
+true
+
+query B
+SELECT '[1,1,2]'::JSONB @> '[1,2,2]'::jsonb
+----
+true
+
+query B
+SELECT '[[1,2]]'::JSONB @> '[[1,2,2]]'::jsonb
+----
+true
+
+query B
+SELECT '[1,2,2]'::JSONB <@ '[1,2]'::jsonb
+----
+true
+
+query B
+SELECT '[1,2,2]'::JSONB <@ '[1,1,2]'::jsonb
+----
+true
+
+query B
+SELECT '[[1,2,2]]'::JSONB <@ '[[1,2]]'::jsonb
+----
+true
+
+query B
+SELECT '{"a":"b"}'::JSONB <@ '{"a":"b", "b":1, "c":null}'
+----
+true
+
+query B
+SELECT '{"a":"b", "c":null}'::JSONB <@ '{"a":"b", "b":1, "c":null}'
+----
+true
+
+query B
+SELECT '{"a":"b", "g":null}'::JSONB <@ '{"a":"b", "b":1, "c":null}'
+----
+false
+
+query B
+SELECT '{"g":null}'::JSONB <@ '{"a":"b", "b":1, "c":null}'
+----
+false
+
+query B
+SELECT '{"a":"c"}'::JSONB <@ '{"a":"b", "b":1, "c":null}'
+----
+false
+
+query B
+SELECT '{"a":"b"}'::JSONB <@ '{"a":"b", "b":1, "c":null}'
+----
+true
+
+query B
+SELECT '{"a":"b", "c":"q"}'::JSONB <@ '{"a":"b", "b":1, "c":null}'
+----
+false
+
+# Raw scalar may contain another raw scalar, array may contain a raw scalar
+query B
+SELECT '[5]'::JSONB @> '[5]'
+----
+true
+
+query B
+SELECT '5'::JSONB @> '5'
+----
+true
+
+query B
+SELECT '[5]'::JSONB @> '5'
+----
+true
+
+# -- But a raw scalar cannot contain an array
+query B
+SELECT '5'::JSONB @> '[5]'
+----
+false
+
+# -- In general, one thing should always contain itself. Test array containment:
+query B
+SELECT '["9", ["7", "3"], 1]'::JSONB @> '["9", ["7", "3"], 1]'::jsonb
+----
+true
+
+query B
+SELECT '["9", ["7", "3"], ["1"]]'::JSONB @> '["9", ["7", "3"], ["1"]]'::jsonb
+----
+true
+
+# -- array containment string matching confusion bug
+query B
+SELECT '{ "name": "Bob", "tags": [ "enim", "qui"]}'::JSONB @> '{"tags":["qu"]}'
+----
+false
+
+query T
+SELECT '1'::JSONB
+----
+1.0
+
+# query T
+# SELECT pg_typeof('1'::JSONB)
+# ----
+# jsonb
+
+query T
+SELECT '{'::JSONB
+----
+NULL
+
+query T
+SELECT '{"a":1}'::JSONB->'a'
+----
+1.0
+
+# query T
+# SELECT pg_typeof('{"a":1}'::JSONB->'a')
+# ----
+# jsonb
+
+query T
+SELECT '{"a":1,"b":2}'::JSONB->'b'
+----
+2.0
+
+query T
+SELECT '{"a":1,"b":{"c":3}}'::JSONB->'b'->'c'
+----
+3.0
+
+query TT
+SELECT '{"a":1,"b":2}'::JSONB->'c','{"c":1}'::JSONB->'a'
+----
+NULL NULL
+
+query TT
+SELECT '2'::JSONB->'b','[1,2,3]'::JSONB->'0'
+----
+NULL NULL
+
+query T
+SELECT '[1,2,3]'::JSONB->0
+----
+1.0
+
+query T
+SELECT '[1,2,3]'::JSONB->3
+----
+NULL
+
+query T
+SELECT '{"a":"b"}'::JSONB->>'a'
+----
+b
+
+query T
+SELECT '[null]'::JSONB->>0
+----
+NULL
+
+query T
+SELECT '{"a":null}'::JSONB->>'a'
+----
+NULL
+
+# query T
+# SELECT pg_typeof('{"a":1}'::JSONB->>'a')
+# ----
+# string
+
+query T
+SELECT '{"a":1,"b":2}'::JSONB->>'b'
+----
+2.0
+
+query TT
+SELECT '{"a":1,"b":2}'::JSONB->>'c','{"c":1}'::JSONB->>'a'
+----
+NULL NULL
+
+query TT
+SELECT '2'::JSONB->>'b','[1,2,3]'::JSONB->>'0'
+----
+NULL NULL
+
+query T
+SELECT '[1,2,3]'::JSONB->>0
+----
+1.0
+
+query T
+SELECT '[1,2,3]'::JSONB->>3
+----
+NULL
+
+# query T
+# SELECT '{"a":1}'::JSONB#>'{a}'::STRING[]
+# ----
+# 1.0
+
+# query T
+# SELECT '{"a":{"b":"c"}}'::JSONB#>'{a,b}'::STRING[]
+# ----
+# "c"
+
+# query T
+# SELECT '{"a":["b"]}'::JSONB#>'{a,b}'::STRING[]
+# ----
+# NULL
+
+# query T
+# SELECT '{"a":["b"]}'::JSONB#>'{a,0}'::STRING[]
+# ----
+# "b"
+
+# query T
+# SELECT '{"a":1}'::JSONB#>>ARRAY['foo',null]
+# ----
+# NULL
+
+# query T
+# SELECT '{"a":1}'::JSONB#>>'{a}'::STRING[]
+# ----
+# 1.0
+
+# query T
+# SELECT '{"a":{"b":"c"}}'::JSONB#>>'{a,b}'::STRING[]
+# ----
+# c
+
+# query T
+# SELECT '{"a":["b"]}'::JSONB#>>'{a,b}'::STRING[]
+# ----
+# NULL
+
+# query T
+# SELECT '{"a":["b"]}'::JSONB#>>'{a,0}'::STRING[]
+# ----
+# b
+
+# query T
+# SELECT '{"a":[null]}'::JSONB#>>'{a,0}'::STRING[]
+# ----
+# NULL
+
+query BB
+SELECT '{"a":1}'::JSONB ? 'a','{"a":1}'::JSONB ? 'b'
+----
+true false
+
+query BB
+SELECT '{"a":1,"b":1}'::JSONB ? 'a','{"a":1,"b":1}'::JSONB ? 'b'
+----
+true true
+
+# query BB
+# SELECT '{"a":1}'::JSONB ?| ARRAY['a','b'],'{"b":1}'::JSONB ?| ARRAY['a','b']
+# ----
+# true true
+
+# query B
+# SELECT '{"c":1}'::JSONB ?| ARRAY['a','b']
+# ----
+# false
+
+# query BB
+# SELECT '{"a":1}'::JSONB ?& ARRAY['a','b'],'{"b":1}'::JSONB ?& ARRAY['a','b']
+# ----
+# false false
+
+# query B
+# SELECT '{"a":1,"b":1,"c":1}'::JSONB ?& ARRAY['a','b']
+# ----
+# true
+
+## Arrays do not `?` their stringified indices.
+query B
+SELECT '[1,2,3]'::JSONB ? '0'
+----
+false
+
+## Arrays `?` string elements.
+query B
+SELECT '["foo","bar","baz"]'::JSONB ? 'foo'
+----
+true
+
+query B
+SELECT '["foo","bar","baz"]'::JSONB ? 'baz'
+----
+true
+
+query B
+SELECT '["foo","bar","baz"]'::JSONB ? 'gup'
+----
+false
+
+# query B
+# SELECT '["foo","bar","baz"]'::JSONB ?| ARRAY['foo','gup']
+# ----
+# true
+
+# query B
+# SELECT '["foo","bar","baz"]'::JSONB ?| ARRAY['buh','gup']
+# ----
+# false
+
+# query B
+# SELECT '["foo","bar","baz"]'::JSONB ?& ARRAY['foo','bar']
+# ----
+# true
+
+# query B
+# SELECT '["foo","bar","baz"]'::JSONB ?& ARRAY['foo','buh']
+# ----
+# false
+
+query T
+SELECT '{"a":1}'::JSONB - 'a'
+----
+{}
+
+query T
+SELECT '{"a":1}'::JSONB - 'b'
+----
+{"a":1.0}
+
+# `-` is one of the very few cases that PG errors in a JSON type mismatch with operators.
+query T
+SELECT '[1,2,3]'::JSONB - 0
+----
+[2.0,3.0]
+
+query T
+SELECT '[1,2,3]'::JSONB - 1
+----
+[1.0,3.0]
+
+query T
+SELECT '3'::JSONB - 'b'
+----
+NULL
+
+query T
+SELECT '{}'::JSONB - 1
+----
+NULL
+
+query B
+SELECT '[1,2,3]'::JSONB <@ '[1,2]'::JSONB
+----
+false
+
+query B
+SELECT '[1,2]'::JSONB <@ '[1,2,3]'::JSONB
+----
+true
+
+query B
+SELECT '[1,2]'::JSONB @> '[1,2,3]'::JSONB
+----
+false
+
+query B
+SELECT '[1,2,3]'::JSONB @> '[1,2]'::JSONB
+----
+true
+
+query B
+SELECT '{"a":[1,2,3]}'::JSONB->'a' @> '2'::JSONB
+----
+true
+
+statement ok
+CREATE TABLE x (j JSONB)
+
+statement ok
+INSERT INTO x VALUES ('{"a":[1,2,3]}')
+
+query B
+SELECT true FROM x WHERE j->'a' @> '2'::JSONB
+----
+true
+
+query B
+SELECT true FROM x WHERE j->'a' @> '2'::JSONB
+----
+true
+
+# query T
+# SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['foo','bar']
+# ----
+# {"foo":{}}
+
+# statement error path element at position 1 is null
+# SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY[null,'foo']
+
+# statement error path element at position 2 is null
+# SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['foo',null]
+
+# query T
+# SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['foo']
+# ----
+# {}
+
+# query T
+# SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['bar']
+# ----
+# {"foo":{"bar":1.0}}
+
+# query T
+# SELECT '{"foo":{"bar":1},"one":1,"two":2}'::JSONB #- ARRAY['one']
+# ----
+# {"foo":{"bar":1.0},"two":2.0}
+
+# query T
+# SELECT '{}'::JSONB #- ARRAY['foo']
+# ----
+# {}
+
+# query T
+# SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['']
+# ----
+# {"foo":{"bar":1.0}}
+
+query T
+SELECT '{"a":"b"}'::JSONB::STRING
+----
+{"a":"b"}
+
+query T
+SELECT CAST('{"a":"b"}'::JSONB AS STRING)
+----
+{"a":"b"}
+
+query T
+SELECT '["1","2","3"]'::JSONB - '1'
+----
+["2","3"]
+
+query T
+SELECT '["1","2","1","2","3"]'::JSONB - '2'
+----
+["1","1","3"]
+
+query T
+SELECT '["1","2","3"]'::JSONB - '4'
+----
+["1","2","3"]
+
+query T
+SELECT '[]'::JSONB - '1'
+----
+[]
+
+query T
+SELECT '["1","2","3"]'::JSONB - ''
+----
+["1","2","3"]
+
+query T
+SELECT '[1,"1",1.0]'::JSONB - '1'
+----
+[1.0,1.0]
+
+# query T
+# SELECT '[1,2,3]'::JSONB #- ARRAY['0']
+# ----
+# [2.0,3.0]
+
+# query T
+# SELECT '[1,2,3]'::JSONB #- ARRAY['3']
+# ----
+# [1.0,2.0,3.0]
+
+# query T
+# SELECT '[]'::JSONB #- ARRAY['0']
+# ----
+# []
+
+# statement error pgcode 22P02 a path element is not an integer:foo
+# SELECT '["foo"]'::JSONB #- ARRAY['foo']
+
+# query T
+# SELECT '{"a":["foo"]}'::JSONB #- ARRAY['a','0']
+# ----
+# {"a":[]}
+
+# query T
+# SELECT '{"a":["foo","bar"]}'::JSONB #- ARRAY['a','1']
+# ----
+# {"a":["foo"]}
+
+# query T
+# SELECT '{"a":[]}'::JSONB #- ARRAY['a','0']
+# ----
+# {"a":[]}
+
+# query T
+# SELECT '{"a":123,"b":456,"c":567}'::JSONB - array[]:::text[];
+# ----
+# {"a":123.0,"b":456.0,"c":567.0}
+
+# query T
+# SELECT '{"a":123,"b":456,"c":567}'::JSONB - array['a','c'];
+# ----
+# {"b":456.0}
+
+# query T
+# SELECT '{"a":123,"c":"asdf"}'::JSONB - array['a','c'];
+# ----
+# {}
+
+# query T
+# SELECT '{}'::JSONB - array['a','c'];
+# ----
+# {}
+
+# query T
+# SELECT '{"b":[],"c":{"a":"b"}}'::JSONB - array['a'];
+# ----
+# {"b":[],"c":{"a":"b"}}
+
+# # Regression test for #34756.
+# query T
+# SELECT '{"b":[],"c":{"a":"b"}}'::JSONB - array['foo',NULL]
+# ----
+# {"b":[],"c":{"a":"b"}}
+
+# statement error pgcode 22P02 a path element is not an integer:foo
+# SELECT '{"a":{"b":["foo"]}}'::JSONB #- ARRAY['a','b','foo']
+
+statement ok
+CREATE TABLE json_family (a INT,b JSONB)
+
+statement ok
+INSERT INTO json_family VALUES(0,'{}')
+
+statement ok
+INSERT INTO json_family VALUES(1,'{"a":123,"c":"asdf"}')
+
+query IT colnames
+SELECT a,b FROM json_family ORDER BY a
+----
+a    b
+0  {}
+1  {"a":123.0,"c":"asdf"}
+
+statement ok
+DROP TABLE json_family
+
+query T
+SELECT jsonb_typeof('-123.4'::JSON)
+----
+number
+
+query T
+SELECT jsonb_typeof('"-123.4"'::JSON)
+----
+string
+
+query T
+SELECT jsonb_typeof('{"1":{"2":3}}'::JSON)
+----
+object
+
+query T
+SELECT jsonb_typeof('[1, 2, [3]]'::JSON)
+----
+array
+
+query T
+SELECT jsonb_typeof('true'::JSON)
+----
+boolean
+
+query T
+SELECT jsonb_typeof('false'::JSON)
+----
+boolean
+
+query T
+SELECT jsonb_typeof('null'::JSON)
+----
+null
+
+## to_jsonb
+
+query T
+SELECT to_jsonb(123::INT)
+----
+123.0
+
+query T
+SELECT to_jsonb('\a'::TEXT)
+----
+"\\a"
+
+# query T
+# SELECT to_jsonb('\a'::TEXT COLLATE "fr_FR")
+# ----
+# "\\a"
+
+# query T
+# SELECT to_jsonb(3::OID::INT::OID)
+# ----
+# "3"
+
+# query T
+# SELECT to_jsonb('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::UUID);
+# ----
+# "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+
+query T
+SELECT to_jsonb('\x0001'::BYTEA)
+----
+"\\x0001"
+
+query T
+SELECT to_jsonb(true::BOOL)
+----
+true
+
+query T
+SELECT to_jsonb(false::BOOL)
+----
+false
+
+query T
+SELECT to_jsonb('"a"'::JSON)
+----
+"a"
+
+query T
+SELECT to_jsonb(1.234::FLOAT)
+----
+1.234
+
+# query T
+# SELECT to_jsonb(1.234::DECIMAL)
+# ----
+# 1.234
+
+# query T
+# SELECT to_jsonb('10.1.0.0/16'::INET)
+# ----
+# "10.1.0.0/16"
+
+# query T
+# SELECT to_jsonb(ARRAY[[1,2],[3,4]])
+# ----
+# [[1.0,2.0],[3.0,4.0]]
+
+# query T
+# SELECT to_jsonb('2014-05-28 12:22:35.614298'::TIMESTAMP)
+# ----
+# "2014-05-28T12:22:35.614298"
+
+# query T
+# SELECT to_jsonb('2014-05-28 12:22:35.614298-04'::TIMESTAMPTZ)
+# ----
+# "2014-05-28T12:22:35.614298-04:00"
+
+# query T
+# SELECT to_jsonb('2014-05-28 12:22:35.614298-04'::TIMESTAMP)
+# ----
+# "2014-05-28T12:22:35.614298"
+
+# query T
+# SELECT to_jsonb('2014-05-28'::DATE)
+# ----
+# "2014-05-28"
+
+# query T
+# SELECT to_jsonb('00:00:00'::TIME)
+# ----
+# "00:00:00"
+
+# query T
+# SELECT to_jsonb('2h45m2s234ms'::INTERVAL)
+# ----
+# "02:45:02.234"
+
+# query T
+# SELECT to_jsonb((1,2,'hello',NULL,NULL))
+# ----
+# {"f1":1.0,"f2":2.0,"f3":"hello","f4":null,"f5":null}
+
+## jsonb_array_elements
+
+query T rowsort
+SELECT * FROM jsonb_array_elements('[1,2,3]'::JSONB)
+----
+1.0
+2.0
+3.0
+
+query T rowsort
+SELECT * FROM jsonb_array_elements('[1,true,null,"text",-1.234,{"2":3,"4":"5"},[1,2,3]]'::JSONB)
+----
+1.0
+true
+null
+"text"
+-1.234
+{"2":3.0,"4":"5"}
+[1.0,2.0,3.0]
+
+query T
+SELECT * FROM jsonb_array_elements('[]'::JSONB)
+----
+
+query T
+SELECT * FROM jsonb_array_elements('{"1":2}'::JSONB)
+----
+
+## jsonb_array_elements_text
+
+query T rowsort
+SELECT * FROM jsonb_array_elements_text('[1,2,3]'::JSONB)
+----
+1.0
+2.0
+3.0
+
+query T rowsort
+SELECT * FROM jsonb_array_elements_text('[1,2,3]'::JSONB)
+----
+1.0
+2.0
+3.0
+
+query T rowsort
+SELECT * FROM jsonb_array_elements_text('[1,true,null,"text",-1.234,{"2":3,"4":"5"},[1,2,3]]'::JSONB)
+----
+1.0
+true
+NULL
+text
+-1.234
+{"2":3.0,"4":"5"}
+[1.0,2.0,3.0]
+
+query T
+SELECT * FROM jsonb_array_elements('[]'::JSONB)
+----
+
+query T
+SELECT * FROM jsonb_array_elements_text('{"1":2}'::JSONB)
+----
+
+query T
+SELECT * FROM jsonb_array_elements_text('{"1":2}'::JSONB)
+----
+
+## jsonb_object_keys
+
+query T
+SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB)
+----
+1
+3
+
+query T
+SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB)
+----
+1
+3
+
+query T
+SELECT * FROM jsonb_object_keys('{}'::JSONB)
+----
+
+query T
+SELECT * FROM jsonb_object_keys('{"\"1\"":2}'::JSONB)
+----
+"1"
+
+# Keys are sorted.
+query T
+SELECT * FROM jsonb_object_keys('{"a":1,"1":2,"3":{"4":5,"6":7}}'::JSONB)
+----
+1
+3
+a
+
+query T
+SELECT * FROM jsonb_object_keys('null'::JSONB)
+----
+
+query T
+SELECT * FROM jsonb_object_keys('[1,2,3]'::JSONB)
+----
+
+## jsonb_build_object
+
+query T
+SELECT jsonb_build_object()
+----
+{}
+
+query T
+SELECT jsonb_build_object('a',2,'b',4)
+----
+{"a":2.0,"b":4.0}
+
+query T
+SELECT jsonb_build_object(true,'val',1,0,1.3,2,date '2019-02-03' - date '2019-01-01',4)
+----
+{"1":0.0,"1.3":2.0,"33 days":4.0,"true":"val"}
+
+query T
+SELECT jsonb_build_object('a',1,'b',1.2::float,'c',true,'d',null,'e','{"x":3,"y":[1,2,3]}'::JSONB)
+----
+{"a":1.0,"b":1.2,"c":true,"d":null,"e":{"x":3.0,"y":[1.0,2.0,3.0]}}
+
+query T
+SELECT jsonb_build_object(
+       'a',jsonb_build_object('b',false,'c',99),
+       'd',jsonb_build_object('e',jsonb_build_array(9,8,7))
+)
+----
+{"a":{"b":false,"c":99.0},"d":{"e":[9.0,8.0,7.0]}}
+
+query T
+SELECT jsonb_build_object(a,3) FROM (SELECT 1 AS a,2 AS b) r
+----
+{"1":3.0}
+
+# query T
+# SELECT jsonb_build_object('\a'::TEXT COLLATE "fr_FR",1)
+# ----
+# {"\\a":1.0}
+
+query T
+SELECT jsonb_build_object('\a',1)
+----
+{"\\a":1.0}
+
+# query T
+# SELECT jsonb_build_object(jsonb_object_keys('{"x":3,"y":4}'::JSONB),2)
+# ----
+# {"x":2.0}
+# {"y":2.0}
+
+# # Regression for panic when bit array is passed as argument.
+# query T
+# SELECT jsonb_build_object('a','0100110'::varbit)
+# ----
+# {"a":"0100110"}
+
+# even number of arguments
+query error
+SELECT jsonb_build_object(1,2,3)
+
+# # keys must be scalar and not null
+# query error
+# SELECT jsonb_build_object(null,2)
+
+# query error
+# SELECT jsonb_build_object((1,2),3)
+
+# query error
+# SELECT jsonb_build_object('{"a":1,"b":2}'::JSON,3)
+
+# query T
+# SELECT jsonb_build_object('{1,2,3}'::int[],3)
+
+# query T
+# SELECT json_extract_path('{"a":1}','a')
+# ----
+# 1
+
+# query T
+# SELECT json_extract_path('{"a":1}','a',NULL)
+# ----
+# NULL
+
+# query T
+# SELECT json_extract_path('{"a":1}')
+# ----
+# {"a":1}
+
+# query T
+# SELECT json_extract_path('{"a":{"b":2}}','a')
+# ----
+# {"b":2}
+
+# query T
+# SELECT json_extract_path('{"a":{"b":2}}','a','b')
+# ----
+# 2
+
+# query T
+# SELECT jsonb_extract_path('{"a":{"b":2}}','a','b')
+# ----
+# 2
+
+# query T
+# SELECT json_extract_path('{"a":{"b":2}}','a','b','c')
+# ----
+# NULL
+
+# query T
+# SELECT jsonb_pretty('{"a":1}'::JSONB)
+# ----
+# {
+#     "a":1.0
+# }
+
+query T
+SELECT '[1,2,3]'::JSONB || '[4,5,6]'::JSONB
+----
+[1.0,2.0,3.0,4.0,5.0,6.0]
+
+query T
+SELECT '{"a":1,"b":2}'::JSONB || '{"b":3,"c":4}'::JSONB
+----
+{"a":1.0,"b":3.0,"c":4.0}
+
+query T
+SELECT '{"a":1,"b":2}'::JSONB || '"c"'::JSONB
+----
+NULL
+
+query T
+SELECT jsonb_build_array()
+----
+[]
+
+query T
+SELECT jsonb_build_array('\x0001'::BYTEA)
+----
+["\\x0001"]
+
+# query T
+# SELECT jsonb_build_array(1,'1'::JSON,1.2::FLOAT,NULL,ARRAY['x','y'])
+# ----
+# [1,1,1.2,null,["x","y"]]
+
+# # Regression for #37318
+# query T
+# SELECT jsonb_build_array('+Inf'::FLOAT,'-Inf'::FLOAT,'NaN'::FLOAT)::STRING::JSONB
+# ----
+# ["Infinity","-Infinity","NaN"]
+
+# query error pq:json_object\(\):array must have even number of elements
+# SELECT json_object('{a,b,c}'::TEXT[])
+
+# query error pq:json_object\(\):null value not allowed for object key
+# SELECT json_object('{NULL,a}'::TEXT[])
+
+# query error pq:json_object\(\):null value not allowed for object key
+# SELECT json_object('{a,b,NULL,"d e f"}'::TEXT[],'{1,2,3,"a b c"}'::TEXT[])
+
+# query error pq:json_object\(\):mismatched array dimensions
+# SELECT json_object('{a,b,c,"d e f",g}'::TEXT[],'{1,2,3,"a b c"}'::TEXT[])
+
+# query error pq:json_object\(\):mismatched array dimensions
+# SELECT json_object('{a,b,c,"d e f"}'::TEXT[],'{1,2,3,"a b c",g}'::TEXT[])
+
+# query error pq:unknown signature:json_object\(collatedstring\{fr_FR\}\[\]\)
+# SELECT json_object(ARRAY['a'::TEXT COLLATE "fr_FR"])
+
+# query T
+# SELECT json_object('{}'::TEXT[])
+# ----
+# {}
+
+# query T
+# SELECT json_object('{}'::TEXT[],'{}'::TEXT[])
+# ----
+# {}
+
+# query T
+# SELECT json_object('{b,3,a,1,b,4,a,2}'::TEXT[])
+# ----
+# {"a":"2","b":"4"}
+
+# query T
+# SELECT json_object('{b,b,a,a}'::TEXT[],'{1,2,3,4}'::TEXT[])
+# ----
+# {"a":"4","b":"2"}
+
+# query T
+# SELECT json_object('{a,1,b,2,3,NULL,"d e f","a b c"}'::TEXT[])
+# ----
+# {"3":null,"a":"1","b":"2","d e f":"a b c"}
+
+# query T
+# SELECT json_object('{a,b,"","d e f"}'::TEXT[],'{1,2,3,"a b c"}'::TEXT[])
+# ----
+# {"":"3","a":"1","b":"2","d e f":"a b c"}
+
+# query T
+# SELECT json_object('{a,b,c,"d e f"}'::TEXT[],'{1,2,3,"a b c"}'::TEXT[])
+# ----
+# {"a":"1","b":"2","c":"3","d e f":"a b c"}
+
+# query error pq:jsonb_object\(\):array must have even number of elements
+# SELECT jsonb_object('{a,b,c}'::TEXT[])
+
+# query error pq:jsonb_object\(\):null value not allowed for object key
+# SELECT jsonb_object('{NULL,a}'::TEXT[])
+
+# query error pq:jsonb_object\(\):null value not allowed for object key
+# SELECT jsonb_object('{a,b,NULL,"d e f"}'::TEXT[],'{1,2,3,"a b c"}'::TEXT[])
+
+# query error pq:jsonb_object\(\):mismatched array dimensions
+# SELECT jsonb_object('{a,b,c,"d e f",g}'::TEXT[],'{1,2,3,"a b c"}'::TEXT[])
+
+# query error pq:jsonb_object\(\):mismatched array dimensions
+# SELECT jsonb_object('{a,b,c,"d e f"}'::TEXT[],'{1,2,3,"a b c",g}'::TEXT[])
+
+# query error pq:unknown signature:jsonb_object\(collatedstring\{fr_FR\}\[\]\)
+# SELECT jsonb_object(ARRAY['a'::TEXT COLLATE "fr_FR"])
+
+# query T
+# SELECT jsonb_object('{}'::TEXT[])
+# ----
+# {}
+
+# query T
+# SELECT jsonb_object('{}'::TEXT[],'{}'::TEXT[])
+# ----
+# {}
+
+# query T
+# SELECT jsonb_object('{b,3,a,1,b,4,a,2}'::TEXT[])
+# ----
+# {"a":"2","b":"4"}
+
+# query T
+# SELECT jsonb_object('{b,b,a,a}'::TEXT[],'{1,2,3,4}'::TEXT[])
+# ----
+# {"a":"4","b":"2"}
+
+# query T
+# SELECT jsonb_object('{a,1,b,2,3,NULL,"d e f","a b c"}'::TEXT[])
+# ----
+# {"3":null,"a":"1","b":"2","d e f":"a b c"}
+
+# query T
+# SELECT jsonb_object('{a,b,"","d e f"}'::TEXT[],'{1,2,3,"a b c"}'::TEXT[])
+# ----
+# {"":"3","a":"1","b":"2","d e f":"a b c"}
+
+# query T
+# SELECT jsonb_object('{a,b,c,"d e f"}'::TEXT[],'{1,2,3,"a b c"}'::TEXT[])
+# ----
+# {"a":"1","b":"2","c":"3","d e f":"a b c"}
+
+query TT
+SELECT * FROM jsonb_each('[1]'::JSONB)
+----
+
+query TT
+SELECT * FROM jsonb_each('null'::JSONB)
+----
+
+query TT
+SELECT * from jsonb_each('{}'::JSONB) q
+----
+
+query TT colnames
+SELECT * from jsonb_each('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
+----
+key  value
+f1   [1.0,2.0,3.0]
+f2   {"f3":1.0}
+f4   null
+f5   99.0
+f6   "stringy"
+
+query TT
+SELECT * FROM jsonb_each('[1]'::JSONB)
+----
+
+query TT
+SELECT * FROM jsonb_each('null'::JSONB)
+----
+
+query TT
+SELECT * from jsonb_each('{}'::JSONB) q
+----
+
+query TT colnames
+SELECT * from jsonb_each('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
+----
+key  value
+f1   [1.0,2.0,3.0]
+f2   {"f3":1.0}
+f4   null
+f5   99.0
+f6   "stringy"
+
+query TT
+SELECT * FROM jsonb_each_text('[1]'::JSONB)
+----
+
+query TT
+SELECT * FROM jsonb_each_text('null'::JSONB)
+----
+
+query TT
+SELECT * from jsonb_each_text('{}'::JSONB) q
+----
+
+query TT
+SELECT * from jsonb_each_text('{}'::JSONB) q
+----
+
+query TT colnames
+SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
+----
+key  value
+f1   [1.0,2.0,3.0]
+f2   {"f3":1.0}
+f4   NULL
+f5   99.0
+f6   stringy
+
+query TT
+SELECT * FROM jsonb_each_text('[1]'::JSONB)
+----
+
+query TT
+SELECT * FROM jsonb_each_text('null'::JSONB)
+----
+
+query TT
+SELECT * from jsonb_each_text('{}'::JSONB) q
+----
+
+query TT
+SELECT * from jsonb_each_text('{}'::JSONB) q
+----
+
+query TT colnames
+SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
+----
+key  value
+f1   [1.0,2.0,3.0]
+f2   {"f3":1.0}
+f4   NULL
+f5   99.0
+f6   stringy
+
+# query T
+# SELECT json_set('{"a":1}','{a}'::STRING[],'2')
+# ----
+# {"a":2}
+
+# query T
+# SELECT jsonb_set('{"a":1}','{b}'::STRING[],'2')
+# ----
+# {"a":1,"b":2}
+
+# statement error path element at position 1 is null
+# SELECT jsonb_set('{"a":1}',ARRAY[null,'foo']::STRING[],'2')
+
+# statement error path element at position 1 is null
+# SELECT jsonb_set('{"a":1}','{null,foo}'::STRING[],'2',true)
+
+# statement error path element at position 2 is null
+# SELECT jsonb_set('{"a":1}','{foo,null}'::STRING[],'2',true)
+
+# query T
+# SELECT jsonb_set('{"a":1}','{b}'::STRING[],'2',true)
+# ----
+# {"a":1,"b":2}
+
+# query T
+# SELECT jsonb_set('{"a":1}','{b}'::STRING[],'2',false)
+# ----
+# {"a":1}
+
+# query T
+# SELECT jsonb_set('[{"f1":1,"f2":null},2,null,3]','{0,f1}'::STRING[],'[2,3,4]',false)
+# ----
+# [{"f1":[2,3,4],"f2":null},2,null,3]
+
+# query T
+# SELECT jsonb_set('[{"f1":1,"f2":null},2]','{0,f3}'::STRING[],'[2,3,4]')
+# ----
+# [{"f1":1,"f2":null,"f3":[2,3,4]},2]
+
+# query T
+# SELECT jsonb_insert('{"a":[0,1,2]}','{a,1}'::STRING[],'"new_value"');
+# ----
+# {"a":[0,"new_value",1,2]}
+
+# query T
+# SELECT jsonb_insert('[0,1,2,{"a":["a","b","d"]},4]','{3,a,2}'::STRING[],'"c"')
+# ----
+# [0,1,2,{"a":["a","b","c","d"]},4]
+
+# query T
+# SELECT jsonb_insert('{"a":"foo"}','{b}'::STRING[],'"bar"')
+# ----
+# {"a":"foo","b":"bar"}
+
+# query T
+# SELECT jsonb_insert(NULL,'{a}',NULL,false)
+# ----
+# NULL
+
+# query T
+# SELECT jsonb_insert('{"a":[0,1,2]}','{a,1}'::STRING[],'"new_value"',true)
+# ----
+# {"a":[0,1,"new_value",2]}
+
+# query T
+# SELECT jsonb_insert('{"a":[0,1,2]}','{a,-1}'::STRING[],'"new_value"',true)
+# ----
+# {"a":[0,1,2,"new_value"]}
+
+# query error pq:jsonb_insert\(\):cannot replace existing key
+# SELECT jsonb_insert('{"a":"foo"}','{a}'::STRING[],'"new_value"',false)
+
+# query T
+# SELECT jsonb_insert('{"a":"foo"}','{a,0}'::STRING[],'"new_value"',false)
+# ----
+# {"a":"foo"}
+
+# query T
+# SELECT jsonb_insert('[0,1,2,3]','{3}'::STRING[],'10',true)
+# ----
+# [0,1,2,3,10]
+
+# statement error cannot set path in scalar
+# SELECT jsonb_insert('1','{a}'::STRING[],'10',true)
+
+# query T
+# SELECT jsonb_insert('1',NULL,'10')
+# ----
+# NULL
+
+# statement error path element at position 1 is null
+# SELECT jsonb_insert('{"a":[0,1,2],"b":"hello","c":"world"}','{NULL,a,0}'::STRING[],'"new_val"')
+
+# statement error path element at position 2 is null
+# SELECT jsonb_insert('{"a":[0,1,2],"b":"hello","c":"world"}','{a,NULL,0}'::STRING[],'"new_val"')
+
+query T
+SELECT jsonb_strip_nulls(NULL)
+----
+NULL
+
+query T
+SELECT jsonb_strip_nulls('1'::JSONB)
+----
+1.0
+
+query T
+SELECT jsonb_strip_nulls('"a string"'::JSONB)
+----
+"a string"
+
+query T
+SELECT jsonb_strip_nulls('null'::JSONB)
+----
+null
+
+query T
+SELECT jsonb_strip_nulls('[1,2,null,3,4]'::JSONB)
+----
+[1.0,2.0,null,3.0,4.0]
+
+query T
+SELECT jsonb_strip_nulls('{"a":1,"b":null,"c":[2,null,3],"d":{"e":4,"f":null}}'::JSONB)
+----
+{"a":1.0,"c":[2.0,null,3.0],"d":{"e":4.0}}
+
+query T
+SELECT jsonb_strip_nulls('[1,{"a":1,"b":null,"c":2},3]'::JSONB)
+----
+[1.0,{"a":1.0,"c":2.0},3.0]
+
+query T
+SELECT jsonb_strip_nulls('{"a":{"b":null,"c":null},"d":{}}'::JSONB)
+----
+{"a":{},"d":{}}
+
+query T
+SELECT jsonb_strip_nulls(NULL)
+----
+NULL
+
+query T
+SELECT jsonb_strip_nulls('1'::JSONB)
+----
+1.0
+
+query T
+SELECT jsonb_strip_nulls('"a string"'::JSONB)
+----
+"a string"
+
+query T
+SELECT jsonb_strip_nulls('null'::JSONB)
+----
+null
+
+query T
+SELECT jsonb_strip_nulls('[1,2,null,3,4]'::JSONB)
+----
+[1.0,2.0,null,3.0,4.0]
+
+query T
+SELECT jsonb_strip_nulls('{"a":1,"b":null,"c":[2,null,3],"d":{"e":4,"f":null}}'::JSONB)
+----
+{"a":1.0,"c":[2.0,null,3.0],"d":{"e":4.0}}
+
+query T
+SELECT jsonb_strip_nulls('[1,{"a":1,"b":null,"c":2},3]'::JSONB)
+----
+[1.0,{"a":1.0,"c":2.0},3.0]
+
+query T
+SELECT jsonb_strip_nulls('{"a":{"b":null,"c":null},"d":{}}'::JSONB)
+----
+{"a":{},"d":{}}
+
+query T
+SELECT jsonb_array_length('{"f1":1,"f2":[5,6]}'::JSONB)
+----
+NULL
+
+query T
+SELECT jsonb_array_length('4'::JSONB)
+----
+NULL
+
+query I
+SELECT jsonb_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]'::JSONB)
+----
+5
+
+query I
+SELECT jsonb_array_length('[]'::JSONB)
+----
+0
+
+query T
+SELECT jsonb_array_length('{"f1":1,"f2":[5,6]}'::JSONB)
+----
+NULL
+
+query T
+SELECT jsonb_array_length('4'::JSONB)
+----
+NULL
+
+query I
+SELECT jsonb_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]'::JSONB)
+----
+5
+
+query I
+SELECT jsonb_array_length('[]'::JSONB)
+----
+0

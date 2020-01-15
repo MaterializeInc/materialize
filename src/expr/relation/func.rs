@@ -586,7 +586,7 @@ impl UnaryTableFunc {
     pub fn output_type(&self, _input_type: &ColumnType) -> RelationType {
         RelationType::new(match self {
             UnaryTableFunc::JsonbEach => vec![
-                ColumnType::new(ScalarType::Jsonb),
+                ColumnType::new(ScalarType::String),
                 ColumnType::new(ScalarType::Jsonb),
             ],
             UnaryTableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],

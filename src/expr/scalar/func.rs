@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
 use repr::regex::Regex;
-use repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
+use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
 use self::format::DateTimeFormat;
 pub use crate::like::build_like_regex_from_string;
@@ -443,9 +443,12 @@ fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
         Datum::Float64(f) => {
             if f.is_finite() {
                 a
+            } else if f.is_nan() {
+                Datum::String("NaN")
+            } else if f.is_sign_positive() {
+                Datum::String("Infinity")
             } else {
-                // invalid json float
-                Datum::Null
+                Datum::String("-Infinity")
             }
         }
         _ => a,
@@ -1330,15 +1333,28 @@ fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match a {
-        Datum::Dict(dict) => temp_storage.make_datum(|packer| {
-            packer.push_dict(dict.iter().filter(|(_, v)| match v {
-                Datum::JsonNull => false,
-                _ => true,
-            }))
-        }),
-        _ => Datum::Null,
+    fn strip_nulls(a: Datum, packer: &mut RowPacker) {
+        match a {
+            Datum::Dict(dict) => packer.push_dict_with(|packer| {
+                for (k, v) in dict.iter() {
+                    match v {
+                        Datum::JsonNull => (),
+                        _ => {
+                            packer.push(Datum::String(k));
+                            strip_nulls(v, packer);
+                        }
+                    }
+                }
+            }),
+            Datum::List(list) => packer.push_list_with(|packer| {
+                for elem in list.iter() {
+                    strip_nulls(elem, packer);
+                }
+            }),
+            _ => packer.push(a),
+        }
     }
+    temp_storage.make_datum(|packer| strip_nulls(a, packer))
 }
 
 fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -2385,8 +2401,11 @@ fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> D
         // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
         Datum::Null
     } else {
+        let mut kvs = datums.chunks(2).collect::<Vec<_>>();
+        kvs.sort_by(|kv1, kv2| kv1[0].cmp(&kv2[0]));
+        kvs.dedup_by(|kv1, kv2| kv1[0] == kv2[0]);
         temp_storage.make_datum(|packer| {
-            packer.push_dict(datums.chunks(2).map(|kv| (kv[0].unwrap_str(), kv[1])))
+            packer.push_dict(kvs.into_iter().map(|kv| (kv[0].unwrap_str(), kv[1])))
         })
     }
 }
@@ -2474,9 +2493,7 @@ impl VariadicFunc {
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
-            JsonbBuildArray | JsonbBuildObject => {
-                ColumnType::new(ScalarType::Jsonb).nullable(false)
-            }
+            JsonbBuildArray | JsonbBuildObject => ColumnType::new(ScalarType::Jsonb).nullable(true),
         }
     }
 
