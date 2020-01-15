@@ -411,12 +411,21 @@ where
                     // TODO: We could add filtered traces in principle, but the trace wrapper types are problematic.
                 }
 
-                RelationExpr::Join { .. } => {
-                    self.render_delta_join(relation_expr, env, scope, worker_index, |t| {
-                        t.saturating_sub(1)
-                    });
-                    // self.render_join(relation_expr, env, scope, worker_index);
-                }
+                RelationExpr::Join { implementation, .. } => match implementation {
+                    expr::JoinImplementation::Differential => {
+                        self.render_join(relation_expr, env, scope, worker_index);
+                    }
+                    expr::JoinImplementation::DeltaQuery(orders) => {
+                        self.render_delta_join(
+                            relation_expr,
+                            orders,
+                            env,
+                            scope,
+                            worker_index,
+                            |t| t.saturating_sub(1),
+                        );
+                    }
+                },
 
                 RelationExpr::Reduce { .. } => {
                     self.render_reduce(relation_expr, env, scope, worker_index);
@@ -512,6 +521,7 @@ where
             inputs,
             variables,
             demand,
+            implementation: _,
         } = relation_expr
         {
             // For the moment, assert that each relation participates at most

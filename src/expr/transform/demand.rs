@@ -114,6 +114,7 @@ impl Demand {
                 inputs,
                 variables,
                 demand,
+                implementation: _,
             } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let input_arities = input_types

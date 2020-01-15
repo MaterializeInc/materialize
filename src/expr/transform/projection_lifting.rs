@@ -136,6 +136,7 @@ impl ProjectionLifting {
                 inputs,
                 variables,
                 demand,
+                implementation,
             } => {
                 for input in inputs.iter_mut() {
                     self.action(input, gets);
@@ -171,6 +172,8 @@ impl ProjectionLifting {
                         temp_arity += arity;
                     }
                 }
+
+                *implementation = crate::relation::JoinImplementation::Differential;
 
                 if projection.len() != temp_arity || (0..temp_arity).any(|i| projection[i] != i) {
                     *relation = relation.take_dangerous().project(projection);

@@ -98,6 +98,8 @@ pub enum RelationExpr {
         /// dummy values at the end of its computation, avoiding the maintenance of values
         /// not present in this list (when it is non-None).
         demand: Option<Vec<Vec<usize>>>,
+        /// Join implementation information.
+        implementation: JoinImplementation,
     },
     /// Group a dataflow by some columns and aggregate over each group
     Reduce {
@@ -496,6 +498,7 @@ impl RelationExpr {
             inputs,
             variables,
             demand: None,
+            implementation: JoinImplementation::Differential,
         }
     }
 
@@ -1409,4 +1412,14 @@ Constant [[665]]"#
 }",
         );
     }
+}
+
+/// Describe a join implementation in dataflow.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum JoinImplementation {
+    /// Perform a sequence of binary differential dataflow joins in the input order.
+    Differential,
+    /// Perform independent delta query dataflows for each input, with each joined
+    /// in the order specified in its respective vector.
+    DeltaQuery(Vec<Vec<usize>>),
 }

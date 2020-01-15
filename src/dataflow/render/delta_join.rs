@@ -25,6 +25,7 @@ where
     pub fn render_delta_join<F>(
         &mut self,
         relation_expr: &RelationExpr,
+        orders: &[Vec<usize>],
         env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
@@ -36,6 +37,7 @@ where
             inputs,
             variables,
             demand: _,
+            implementation: _,
         } = relation_expr
         {
             // For the moment, assert that each relation participates at most
@@ -92,16 +94,7 @@ where
 
                                 // We must determine an order to join the other relations, starting from
                                 // `relation`, and ideally maximizing the number of arrangements used.
-                                let arrange_keys = inputs
-                                    .iter()
-                                    .map(|i| self.available_keys(i))
-                                    .collect::<Vec<_>>();
-                                let order = order_delta_join(
-                                    inputs.len(),
-                                    relation,
-                                    variables,
-                                    &arrange_keys,
-                                );
+                                let order = &orders[relation];
 
                                 // Repeatedly update `update_stream` to reflect joins with more and more
                                 // other relations, in the specified order.
@@ -243,66 +236,6 @@ where
             self.collections.insert(relation_expr.clone(), results);
         }
     }
-}
-
-/// Orders `0 .. relations` starting with `start` so that arrangement use is maximized.
-///
-/// The ordering starts from `start` and attempts to add relations if we have access to an
-/// arrangement with keys that could be used for the join with the relations thus far. This
-/// reasoning does not know about uniqueness (yet) and may make bad decisions that inflate
-/// the number of updates flowing through the system (but not the arranged footprint).
-fn order_delta_join(
-    relations: usize,
-    start: usize,
-    constraints: &[Vec<(usize, usize)>],
-    arrange_keys: &[Vec<Vec<expr::ScalarExpr>>],
-) -> Vec<usize> {
-    let mut order = vec![start];
-    while order.len() < relations {
-        // Attempt to find a next relation, not yet in `order` and whose unique keys are all bound
-        // by columns of relations that are present in `order`.
-        let mut candidate = (0..relations).filter(|i| !order.contains(i)).find(|i| {
-            arrange_keys[*i].iter().any(|keys| {
-                keys.iter().all(|key| {
-                    if let expr::ScalarExpr::Column(key) = key {
-                        constraints.iter().any(|variables| {
-                            let contains_key = variables.contains(&(*i, *key));
-                            let contains_bound =
-                                variables.iter().any(|(idx, _)| order.contains(idx));
-                            contains_key && contains_bound
-                        })
-                    } else {
-                        false
-                    }
-                })
-            })
-        });
-
-        // Perhaps we found no relation with a key; we should find a relation with some constraint.
-        if candidate.is_none() {
-            let mut candidates = (0..relations)
-                .filter(|i| !order.contains(i))
-                .map(|i| {
-                    (
-                        constraints
-                            .iter()
-                            .filter(|vars| {
-                                vars.iter().any(|(idx, _)| &i == idx)
-                                    && vars.iter().any(|(idx, _)| order.contains(idx))
-                            })
-                            .count(),
-                        i,
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            candidates.sort();
-            candidate = candidates.pop().map(|(_count, index)| index);
-        }
-
-        order.push(candidate.expect("No candidate found!"));
-    }
-    order
 }
 
 use differential_dataflow::operators::arrange::Arranged;
