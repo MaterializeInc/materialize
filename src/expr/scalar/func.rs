@@ -2493,9 +2493,7 @@ impl VariadicFunc {
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
-            JsonbBuildArray | JsonbBuildObject => {
-                ColumnType::new(ScalarType::Jsonb).nullable(false)
-            }
+            JsonbBuildArray | JsonbBuildObject => ColumnType::new(ScalarType::Jsonb).nullable(true),
         }
     }
 
