@@ -1078,6 +1078,13 @@ null
 {"2":3.0,"4":"5"}
 [1.0,2.0,3.0]
 
+query T rowsort
+SELECT js.value->>'a' FROM jsonb_array_elements('[{"a":1},{"a":2},{"a":3}]'::JSONB) js
+----
+1.0
+2.0
+3.0
+
 query T
 SELECT * FROM jsonb_array_elements('[]'::JSONB)
 ----

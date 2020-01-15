@@ -40,5 +40,22 @@ records         YES jsonb
 > SELECT records->0->>'meter', records->1->>'meter' FROM billing WHERE id = 2
 user user
 
-> SELECT records->0->'measurements'->0->>'resource', records->1->'measurements'->1->>'resource' FROM billing WHERE id = 2
-CPU MEM
+# Do some destructuring over the nested records
+
+> SELECT r.value->>'meter' FROM billing, jsonb_array_elements(records) AS r
+user
+user
+
+> CREATE VIEW billing_records AS SELECT billing.id, r.value->>'interval_start' interval_start, r.value->>'interval_end' interval_end, r.value->>'meter' meter, (r.value->'value')::float::int value, r.value->'measurements' measurements FROM billing, jsonb_array_elements(records) AS r
+
+> SHOW COLUMNS FROM billing_records
+id              YES text
+interval_end    YES text
+interval_start  YES text
+measurements    YES jsonb
+meter           YES text
+value           YES int4
+
+> SELECT id, interval_start, interval_end, value, meter FROM billing_records br
+2 2020-01-01_00:00:10 2020-01-01_00:00:15 25  user
+2 2020-01-01_00:00:16 2020-01-01_00:00:19 125 user
