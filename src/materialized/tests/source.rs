@@ -28,7 +28,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
         thread::sleep(Duration::from_secs(1));
         Ok(client
-            .query(&*format!("SELECT * FROM {} ORDER BY 1", source), &[])?
+            .query(&*format!("SELECT * FROM {} ORDER BY mz_line_no", source), &[])?
             .into_iter()
             .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
             .collect::<Vec<(String, String, String, i64)>>())
@@ -59,14 +59,14 @@ New York,NY,10004
 ",
     )?;
 
-    let line1 = ("New York".into(), "NY".into(), "10004".into(), 2);
-    let line2 = (
+    let line1 = ("Rochester".into(), "NY".into(), "14618".into(), 1);
+    let line2 = ("New York".into(), "NY".into(), "10004".into(), 2);
+    let line3 = (
         "Rancho Santa Margarita".into(),
         "CA".into(),
         "92679".into(),
         3,
     );
-    let line3 = ("Rochester".into(), "NY".into(), "14618".into(), 1);
 
     client.batch_execute(&*format!(
         "CREATE SOURCE static_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3)",
@@ -81,29 +81,19 @@ New York,NY,10004
 
     append(&dynamic_path, b"")?;
 
-    let (line1, line2, line3) = {
-        let mut line1 = line1;
-        let mut line2 = line2;
-        let mut line3 = line3;
-        line1.3 = 1;
-        line2.3 = 3;
-        line3.3 = 2;
-        (line1, line2, line3)
-    };
-
     client.batch_execute(&*format!(
         "CREATE SOURCE dynamic_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
         dynamic_path.display()
     ))?;
     client.batch_execute("CREATE VIEW dynamic_csv AS SELECT * FROM dynamic_csv_source")?;
 
-    append(&dynamic_path, b"New York,NY,10004\n")?;
+    append(&dynamic_path, b"Rochester,NY,14618\n")?;
     assert_eq!(fetch_rows(&mut client, "dynamic_csv")?, &[line1.clone()]);
 
-    append(&dynamic_path, b"Rochester,NY,14618\n")?;
+    append(&dynamic_path, b"New York,NY,10004\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
-        &[line1.clone(), line3.clone()]
+        &[line1.clone(), line2.clone()]
     );
 
     append(&dynamic_path, b"\"Rancho Santa Margarita\",CA,92679\n")?;
