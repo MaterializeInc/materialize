@@ -1111,20 +1111,33 @@ where
             }
 
             let mut collection = input;
-            for shift in [
-                60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0u64,
-            ]
-            .iter()
-            {
-                collection = build_topk_stage(
-                    collection,
-                    group_key,
-                    order_key,
-                    1u64 << shift,
-                    *offset,
-                    *limit,
-                );
+            // This sequence of numbers defines the shifts that happen to the 64 bit hash
+            // of the record, and has the properties that 1. there are not too many of them,
+            // and 2. each has a modest difference to the next.
+            //
+            // These two properties mean that there should be no reductions on groups that
+            // are substantially larger than `offset + limit` (the largest factor should be
+            // bounded by two raised to the difference between subsequent numbers);
+            if let Some(limit) = limit {
+                for shift in [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter() {
+                    // here we do not apply `offset`, but instead restrict ourself with a limit
+                    // that includes the offset. We cannot apply `offset` until we perform the
+                    // final, complete reduction.
+                    collection = build_topk_stage(
+                        collection,
+                        group_key,
+                        order_key,
+                        1u64 << shift,
+                        0,
+                        Some(*offset + *limit),
+                    );
+                }
             }
+
+            // We do a final step, both to make sure that we complete the reduction, and to correctly
+            // apply `offset` to the final group, as we have not yet been applying it to the partially
+            // formed groups.
+            collection = build_topk_stage(collection, group_key, order_key, 1u64, *offset, *limit);
 
             self.collections.insert(relation_expr.clone(), collection);
         }
