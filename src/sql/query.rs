@@ -2007,7 +2007,10 @@ fn plan_to_jsonb(
         ScalarType::String | ScalarType::Float64 | ScalarType::Bool | ScalarType::Null => {
             arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
         }
-        ScalarType::Int32 | ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
+        ScalarType::Int32 => arg
+            .call_unary(UnaryFunc::CastInt32ToFloat64)
+            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
             // TODO(jamii) this is awaiting a decision about how to represent numbers in jsonb
             bail!(
                 "{}() doesn't currently support {} arguments, try adding ::float to the argument for now",
