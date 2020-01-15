@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
 use repr::regex::Regex;
-use repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
+use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
 use self::format::DateTimeFormat;
 pub use crate::like::build_like_regex_from_string;
@@ -1330,15 +1330,28 @@ fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match a {
-        Datum::Dict(dict) => temp_storage.make_datum(|packer| {
-            packer.push_dict(dict.iter().filter(|(_, v)| match v {
-                Datum::JsonNull => false,
-                _ => true,
-            }))
-        }),
-        _ => Datum::Null,
+    fn strip_nulls(a: Datum, packer: &mut RowPacker) {
+        match a {
+            Datum::Dict(dict) => packer.push_dict_with(|packer| {
+                for (k, v) in dict.iter() {
+                    match v {
+                        Datum::JsonNull => (),
+                        _ => {
+                            packer.push(Datum::String(k));
+                            strip_nulls(v, packer);
+                        }
+                    }
+                }
+            }),
+            Datum::List(list) => packer.push_list_with(|packer| {
+                for elem in list.iter() {
+                    strip_nulls(elem, packer);
+                }
+            }),
+            _ => packer.push(a),
+        }
     }
+    temp_storage.make_datum(|packer| strip_nulls(a, packer))
 }
 
 fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
