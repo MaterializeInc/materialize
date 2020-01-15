@@ -39,7 +39,7 @@ use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 ///     vec![vec![(0, 0), (2, 0)]],
 /// );
 ///
-/// JoinOrder.transform(&mut expr);
+/// JoinOrder.transform(&mut expr, &std::collections::HashMap::new());
 ///
 /// if let RelationExpr::Project { input, outputs } = expr {
 ///     assert_eq!(outputs, vec![0, 1, 2]);
