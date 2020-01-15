@@ -28,7 +28,10 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
         thread::sleep(Duration::from_secs(1));
         Ok(client
-            .query(&*format!("SELECT * FROM {} ORDER BY mz_line_no", source), &[])?
+            .query(
+                &*format!("SELECT * FROM {} ORDER BY mz_line_no", source),
+                &[],
+            )?
             .into_iter()
             .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
             .collect::<Vec<(String, String, String, i64)>>())
@@ -55,18 +58,13 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
         &static_path,
         "Rochester,NY,14618
 New York,NY,10004
-\"Rancho Santa Margarita\",CA,92679
+\"bad,place\"\"\",CA,92679
 ",
     )?;
 
     let line1 = ("Rochester".into(), "NY".into(), "14618".into(), 1);
     let line2 = ("New York".into(), "NY".into(), "10004".into(), 2);
-    let line3 = (
-        "Rancho Santa Margarita".into(),
-        "CA".into(),
-        "92679".into(),
-        3,
-    );
+    let line3 = ("bad,place\"".into(), "CA".into(), "92679".into(), 3);
 
     client.batch_execute(&*format!(
         "CREATE SOURCE static_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3)",
@@ -96,7 +94,7 @@ New York,NY,10004
         &[line1.clone(), line2.clone()]
     );
 
-    append(&dynamic_path, b"\"Rancho Santa Margarita\",CA,92679\n")?;
+    append(&dynamic_path, b"\"bad,place\"\"\",CA,92679\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
         &[line1, line2, line3]
@@ -113,12 +111,16 @@ New York,NY,10004
         let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv").await?);
 
         append(&dynamic_path, b"City 1,ST,00001\n")?;
-        assert!(tail_reader.try_next().await?
+        assert!(tail_reader
+            .try_next()
+            .await?
             .unwrap()
             .starts_with(&b"City 1\tST\t00001\t4\tDiff: 1 at "[..]));
 
         append(&dynamic_path, b"City 2,ST,00002\n")?;
-        assert!(tail_reader.try_next().await?
+        assert!(tail_reader
+            .try_next()
+            .await?
             .unwrap()
             .starts_with(&b"City 2\tST\t00002\t5\tDiff: 1 at "[..]));
 

@@ -75,7 +75,7 @@ where
             // run out of data, sleep until `notify` wakes us up again.
             match ready!(self.inner_pin().poll_read(cx, buf))? {
                 0 => {
-                    if let Some(_) = ready!(self.rx_pin().poll_next(cx)) {
+                    if ready!(self.rx_pin().poll_next(cx)).is_some() {
                         // Notify thinks there might be new data. Go around
                         // the loop again to check.
                     } else {
