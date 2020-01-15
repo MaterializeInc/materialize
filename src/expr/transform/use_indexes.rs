@@ -25,6 +25,8 @@ use crate::{BinaryFunc, EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
 ///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
 ///   <constant>
 /// }
+/// TODO (wangandi): materialize#616 consider a general case when there exists in an index on an
+/// expression of column i
 #[derive(Debug)]
 pub struct FilterEqualLiteral;
 
@@ -107,12 +109,10 @@ impl FilterEqualLiteral {
                                 _ => unreachable!(),
                             })
                             .collect::<Vec<_>>();
-                        let mut pred_to_remove = Vec::new();
                         let mut constant_row = Vec::new();
                         let mut constant_col_types = Vec::new();
                         let mut variables = Vec::new();
                         for (new_idx, old_idx) in column_order.into_iter().enumerate() {
-                            pred_to_remove.push(predinfo[old_idx].2);
                             variables.push(vec![(0, columns[old_idx]), (1, new_idx)]);
                             constant_row.extend(predinfo[old_idx].0.unpack());
                             constant_col_types.push(predinfo[old_idx].1.clone());
@@ -120,10 +120,6 @@ impl FilterEqualLiteral {
                         let mut constant_type = RelationType::new(constant_col_types);
                         for i in 0..keys.len() {
                             constant_type = constant_type.add_keys(vec![i]);
-                        }
-                        pred_to_remove.sort();
-                        for pred_idx in pred_to_remove.iter().rev() {
-                            predicates.remove(*pred_idx);
                         }
                         let arity = input.arity();
                         let converted_join = RelationExpr::join(
@@ -134,11 +130,7 @@ impl FilterEqualLiteral {
                             variables,
                         )
                         .project((0..arity).collect::<Vec<_>>());
-                        if predicates.is_empty() {
-                            *relation = converted_join;
-                        } else {
-                            *input = Box::new(converted_join);
-                        }
+                        *input = Box::new(converted_join);
                     }
                 }
             }

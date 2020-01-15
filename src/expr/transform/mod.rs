@@ -146,12 +146,18 @@ impl Default for Optimizer {
                     Box::new(crate::transform::redundant_join::RedundantJoin),
                 ],
             }),
+            // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
+            // exists but is currently objectively suboptimal because JoinOrder will put
+            // the ArrangeBy input as first input and the constant as second
+            // uncomment this section and associated tests when FilterEqualLiteral
+            // becomes an improvement
             /*Box::new(crate::transform::use_indexes::FilterEqualLiteral),
             Box::new(crate::transform::projection_lifting::ProjectionLifting),
             Box::new(crate::transform::column_knowledge::ColumnKnowledge),
-            Box::new(crate::transform::reduction::FoldConstants),*/
+            Box::new(crate::transform::reduction::FoldConstants),
+            Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
             Box::new(crate::transform::fusion::join::Join),
-            Box::new(crate::transform::redundant_join::RedundantJoin),
+            Box::new(crate::transform::redundant_join::RedundantJoin),*/
             Box::new(crate::transform::demand::Demand),
             // JoinOrder adds Projects, hence need project fusion again.
             Box::new(crate::transform::join_order::JoinOrder),
