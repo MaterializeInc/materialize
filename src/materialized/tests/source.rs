@@ -7,7 +7,6 @@ use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -47,18 +46,17 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<(String, String, String, i64)>>())
     };
 
-    // macOS doesn't send filesystem events to the process that caused them, so
-    // this function appends data to a file via a `tee` child process so that
-    // the dataflow layer actually gets notified of the changes.
     let append = |path, data| -> Result<_, Box<dyn Error>> {
-        let mut child = Command::new("tee")
-            .arg("-a")
-            .arg(path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .spawn()?;
-        child.stdin.as_mut().unwrap().write_all(data)?;
-        child.wait()?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        // We currently have to poll for changes on macOS every 100ms, so sleep
+        // for 200ms to be sure that the new data has been noticed and accepted
+        // by materialize.
+        thread::sleep(Duration::from_millis(200));
         Ok(())
     };
 
