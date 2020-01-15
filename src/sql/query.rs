@@ -656,6 +656,7 @@ fn plan_table_function(
     alias: Option<QualName>,
     args: &[Expr],
 ) -> Result<(RelationExpr, Scope), failure::Error> {
+    assert!(is_table_func(name)); // so we don't forget to add names over there
     let ident = &*name.to_string();
     match (ident, args) {
         ("jsonb_each", [expr])
@@ -1991,7 +1992,16 @@ fn plan_function<'a>(
                 Ok(expr.call_unary(UnaryFunc::ToTimestamp))
             }
 
-            _ => bail!("unsupported function: {}", ident),
+            _ => {
+                if is_table_func(&name) {
+                    bail!(
+                        "table functions in scalar position are not supported: {}",
+                        ident
+                    )
+                } else {
+                    bail!("unsupported function: {}", ident)
+                }
+            }
         }
     }
 }
@@ -3322,10 +3332,21 @@ impl<'a> ExprContext<'a> {
     }
 }
 
+fn is_table_func(name: &QualName) -> bool {
+    match name.as_ident_str().unwrap_or("") {
+        "jsonb_each"
+        | "jsonb_object_keys"
+        | "jsonb_array_elements"
+        | "jsonb_each_text"
+        | "jsonb_array_elements_text" => true,
+        _ => false,
+    }
+}
+
 fn is_aggregate_func(name: &QualName) -> bool {
-    match name.as_ident_str() {
+    match name.as_ident_str().unwrap_or("") {
         // avg is handled by transform::AvgFuncRewriter.
-        Ok("max") | Ok("min") | Ok("sum") | Ok("count") => true,
+        "max" | "min" | "sum" | "count" => true,
         _ => false,
     }
 }
