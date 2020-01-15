@@ -16,7 +16,7 @@
 // may become non-copy in the future.
 #![allow(clippy::clone_on_copy)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::iter;
 use std::path::Path;
@@ -1102,34 +1102,16 @@ where
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::EarliestSource | PeekWhen::Immediately => {
-                // Collect global identifiers in `source`.
-                let mut sources = HashSet::new();
-                let mut reached = HashSet::new();
-
-                match when {
-                    PeekWhen::EarliestSource => {
-                        for id in uses_ids.iter() {
-                            self.sources_frontier(*id, &mut sources, &mut reached);
-                        }
-                    }
-                    PeekWhen::Immediately => {
-                        for id in uses_ids.iter().cloned() {
-                            sources.insert(id);
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-
                 // Form lower bound on available times.
                 let mut upper = Antichain::new();
-                for id in sources {
-                    if let Some(view_upper) = self.upper_of(&id) {
+                for id in uses_ids.iter() {
+                    if let Some(view_upper) = self.upper_of(id) {
                         // To track the meet of `upper` we just extend with the upper frontier.
                         upper.extend(view_upper.iter().cloned());
                     } else {
                         bail!(
-                            "{} is not materialized",
-                            self.catalog.humanize_id(expr::Id::Global(id)).unwrap()
+                            "Query input {} is not materialized",
+                            self.catalog.humanize_id(expr::Id::Global(*id)).unwrap()
                         )
                     }
                 }
@@ -1146,6 +1128,7 @@ where
                     }
                 } else {
                     // A complete trace can be read in its final form with this time.
+                    println!("Surprising, but...");
                     Timestamp::max_value()
                 }
             }
@@ -1177,31 +1160,6 @@ where
                 "Latest available timestamp ({}) is not valid for all inputs",
                 timestamp
             );
-        }
-    }
-
-    /// Collects frontiers from the earliest views.
-    ///
-    /// This method recursively traverses views and discovers other views on which
-    /// they depend, collecting the frontiers of views that depend directly on sources.
-    /// The `reached` input allows us to deduplicate views, and avoid e.g. recursion.
-    fn sources_frontier(
-        &self,
-        id: GlobalId,
-        sources: &mut HashSet<GlobalId>,
-        reached: &mut HashSet<GlobalId>,
-    ) {
-        reached.insert(id);
-        if let Some(view) = self.views.get(&id) {
-            if view.depends_on_source {
-                sources.insert(id);
-            } else {
-                for id in view.uses.iter() {
-                    if !reached.contains(id) {
-                        self.sources_frontier(*id, sources, reached);
-                    }
-                }
-            }
         }
     }
 
