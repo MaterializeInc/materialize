@@ -201,7 +201,7 @@ where
                         coord.sources.insert(id, source);
                     }
                     CatalogItem::View(view) => {
-                        coord.insert_view(id, view, None);
+                        coord.insert_view(id, &view, None);
                     }
                     CatalogItem::Sink(sink) => {
                         coord.create_sink_dataflow(name.to_string(), id, sink);
@@ -413,7 +413,7 @@ where
                     desc,
                 };
                 let view_id = self.register_view(&name, &view)?;
-                self.insert_view(view_id, view.clone(), Some(true));
+                self.insert_view(view_id, &view, Some(true));
                 let index_name = name.with_trailing_string("_PRIMARY_IDX");
                 let index = view.auto_generate_primary_idx(view_id);
                 let index_id = self.register_index(&index_name, &index)?;
@@ -901,7 +901,7 @@ where
         view: dataflow_types::View,
         as_of: Option<Vec<Timestamp>>,
     ) -> Result<(), failure::Error> {
-        self.insert_view(id, view.clone(), None);
+        self.insert_view(id, &view, None);
         let mut dataflow = DataflowDesc::new(view_name.clone());
         self.build_view_collection(&id, &view, &mut dataflow);
         let index_name = QualName::from_str(&view_name)?.with_trailing_string("_PRIMARY_IDX");
@@ -1301,7 +1301,7 @@ where
     fn insert_view(
         &mut self,
         view_id: GlobalId,
-        view: dataflow_types::View,
+        view: &dataflow_types::View,
         known_source_contain: Option<bool>,
     ) {
         let contains_sources = if let Some(contains_sources) = known_source_contain {
@@ -1325,7 +1325,7 @@ where
             contains_sources
         };
         self.remove_view(&view_id);
-        let mut viewstate = ViewState::from_view(&view);
+        let mut viewstate = ViewState::from_view(view);
         viewstate.depends_on_source = contains_sources;
         self.views.insert(view_id, viewstate);
     }
