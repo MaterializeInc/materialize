@@ -13,7 +13,7 @@ use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::{Fuse, Stream, StreamExt};
 use log::error;
-use notify::{RawEvent, RecursiveMode, Watcher};
+use notify::{RecursiveMode, Watcher};
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 use tokio::fs::File;
@@ -34,52 +34,23 @@ pub enum FileReadStyle {
     // TODO: TailFollowName,
 }
 
-// FSEvents doesn't raise events until you close the file, making it useless for
-// tailing log files that are kept open by the daemon writing to them.
-//
-// Avoid this issue by using PollWatcher instead on macOS
-//
-// https://github.com/notify-rs/notify/issues/240
-#[cfg(target_os = "macos")]
-type WatcherType = notify::PollWatcher;
-
-#[cfg(not(target_os = "macos"))]
-type WatcherType = notify::RecommendedWatcher;
-
-#[cfg(target_os = "macos")]
-fn get_watcher(tx: std::sync::mpsc::Sender<RawEvent>) -> notify::Result<WatcherType> {
-    WatcherType::with_delay_ms(tx, 100 /* poll every 100ms */)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn get_watcher(tx: std::sync::mpsc::Sender<RawEvent>) -> notify::Result<WatcherType> {
-    WatcherType::new_raw(tx)
-}
-
 /// Wraps a Tokio file, producing a stream that is tailed forever.
 ///
 /// This involves silently swallowing EOFs,
 /// and waiting on a Notify handle for more data to be written.
-struct ForeverTailedAsyncFile {
-    rx: Fuse<futures::channel::mpsc::UnboundedReceiver<RawEvent>>,
+struct ForeverTailedAsyncFile<S> {
+    rx: Fuse<S>,
     inner: tokio::fs::File,
-    // this field only exists to keep the watcher alive
-    _w: WatcherType,
+    // This field only exists to keep the watcher alive, if we're using a
+    // watcher on this platform.
+    _w: Option<notify::RecommendedWatcher>,
 }
 
-impl ForeverTailedAsyncFile {
-    fn check_notify_event(event: RawEvent) -> Result<(), io::Error> {
-        match event {
-            RawEvent { op: Ok(_), .. } => Ok(()),
-            RawEvent {
-                op: Err(notify::Error::Io(err)),
-                ..
-            } => Err(err),
-            RawEvent { op: Err(err), .. } => Err(io::Error::new(io::ErrorKind::Other, err)),
-        }
-    }
-
-    fn rx_pin(&mut self) -> Pin<&mut Fuse<futures::channel::mpsc::UnboundedReceiver<RawEvent>>> {
+impl<S> ForeverTailedAsyncFile<S>
+where
+    S: Stream + Unpin,
+{
+    fn rx_pin(&mut self) -> Pin<&mut Fuse<S>> {
         Pin::new(&mut self.rx)
     }
 
@@ -88,7 +59,10 @@ impl ForeverTailedAsyncFile {
     }
 }
 
-impl AsyncRead for ForeverTailedAsyncFile {
+impl<S> AsyncRead for ForeverTailedAsyncFile<S>
+where
+    S: Stream + Unpin,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context,
@@ -96,19 +70,19 @@ impl AsyncRead for ForeverTailedAsyncFile {
     ) -> Poll<Result<usize, io::Error>> {
         loop {
             // First drain the buffer of pending events from notify.
-            while let Poll::Ready(Some(event)) = self.rx_pin().poll_next(cx) {
-                Self::check_notify_event(event)?;
-            }
+            while let Poll::Ready(Some(_)) = self.rx_pin().poll_next(cx) {}
             // After draining all the events, try reading the file. If we
             // run out of data, sleep until `notify` wakes us up again.
             match ready!(self.inner_pin().poll_read(cx, buf))? {
-                0 => match ready!(self.rx_pin().poll_next(cx)) {
-                    Some(event) => Self::check_notify_event(event)?,
-                    None => {
+                0 => {
+                    if let Some(_) = ready!(self.rx_pin().poll_next(cx)) {
+                        // Notify thinks there might be new data. Go around
+                        // the loop again to check.
+                    } else {
                         error!("notify hung up while tailing file");
                         return Poll::Ready(Ok(0));
                     }
-                },
+                }
                 n => return Poll::Ready(Ok(n)),
             }
         }
@@ -160,30 +134,54 @@ async fn read_file_task(
         FileReadStyle::None => unreachable!(),
         FileReadStyle::ReadOnce => send_lines(file, tx, activator).await,
         FileReadStyle::TailFollowFd => {
-            let (notice_tx, notice_rx) = std::sync::mpsc::channel();
-            let mut w = match get_watcher(notice_tx) {
-                Ok(w) => w,
-                Err(err) => {
-                    error!("file source: failed to create notify watcher: {}", err);
+            // FSEvents doesn't raise events until you close the file, making it
+            // useless for tailing log files that are kept open by the daemon
+            // writing to them.
+            //
+            // Avoid this issue by just waking up and polling the file on macOS
+            // every 100ms. We don't want to use notify::PollWatcher, since that
+            // occasionally misses updates if the file is changed twice within
+            // one second (it uses an mtime granularity of 1s). Plus it's not
+            // actually more efficient; our call to poll_read will be as fast as
+            // the PollWatcher's call to stat, and it actually saves a syscall
+            // if the file has data available.
+            //
+            // https://github.com/notify-rs/notify/issues/240
+            #[cfg(target = "macos")]
+            let (stream, watcher) = {
+                let interval = tokio::time::interval(Duration::from_millis(100));
+                (interval, None)
+            };
+
+            #[cfg(not(target = "macos"))]
+            let (stream, watcher) = {
+                let (notice_tx, notice_rx) = std::sync::mpsc::channel();
+                let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
+                    Ok(w) => w,
+                    Err(err) => {
+                        error!("file source: failed to create notify watcher: {}", err);
+                        return;
+                    }
+                };
+                if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
+                    error!("file source: failed to add watch: {}", err);
                     return;
                 }
-            };
-            if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
-                error!("file source: failed to add watch: {}", err);
-                return;
-            }
-            let (async_tx, async_rx) = futures::channel::mpsc::unbounded();
-            task::spawn_blocking(move || {
-                for msg in notice_rx {
-                    if async_tx.unbounded_send(msg).is_err() {
-                        break;
+                let (async_tx, async_rx) = futures::channel::mpsc::unbounded();
+                task::spawn_blocking(move || {
+                    for msg in notice_rx {
+                        if async_tx.unbounded_send(msg).is_err() {
+                            break;
+                        }
                     }
-                }
-            });
+                });
+                (async_rx, Some(w))
+            };
+
             let file = ForeverTailedAsyncFile {
-                rx: async_rx.fuse(),
+                rx: stream.fuse(),
                 inner: file,
-                _w: w,
+                _w: watcher,
             };
             send_lines(file, tx, activator).await
         }
