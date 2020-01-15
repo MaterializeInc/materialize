@@ -1019,9 +1019,6 @@ where
             self.ensure_rendered(input, env, scope, worker_index);
             let input = self.collection(input).unwrap();
 
-            fn test<T: differential_dataflow::Data>() {}
-            test::<(Row, u64)>();
-
             // To provide a robust incremental orderby-limit experience, we want to avoid grouping
             // *all* records (or even large groups) and then applying the ordering and limit. Instead,
             // a more robust approach forms groups of bounded size (here, 16) and applies the offset
