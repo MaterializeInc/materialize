@@ -33,7 +33,7 @@ pub fn kafka<G>(
     name: String,
     connector: KafkaSourceConnector,
     read_kafka: bool,
-) -> (Stream<G, Vec<u8>>, Option<SourceToken>)
+) -> (Stream<G, (Vec<u8>, Option<i64>)>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -110,7 +110,7 @@ where
 
                             let out = payload.to_vec();
                             BYTES_READ_COUNTER.inc_by(out.len() as i64);
-                            output.session(&cap).give(out);
+                            output.session(&cap).give((out, Some(message.offset())));
                         }
                         Err(err) => error!("kafka error: {}: {}", name, err),
                     }

@@ -40,7 +40,7 @@ lazy_static! {
 }
 
 pub fn decode<G>(
-    stream: &Stream<G, Vec<u8>>,
+    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     encoding: DataEncoding,
     name: &str,
 ) -> Stream<G, (Row, Timestamp, Diff)>

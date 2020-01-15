@@ -15,7 +15,7 @@ use dataflow_types::{Diff, Timestamp};
 use repr::Row;
 
 pub fn avro<G>(
-    stream: &Stream<G, Vec<u8>>,
+    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     raw_schema: &str,
     schema_registry: Option<Url>,
 ) -> Stream<G, (Row, Timestamp, Diff)>
@@ -23,14 +23,14 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     stream.unary(
-        Exchange::new(|x: &Vec<u8>| x.hashed()),
+        Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
         "AvroDecode",
         move |_, _| {
             let mut decoder = interchange::avro::Decoder::new(raw_schema, schema_registry);
             move |input, output| {
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
-                    for payload in data.iter() {
+                    for (payload, _) in data.iter() {
                         match decoder.decode(payload) {
                             Ok(diff_pair) => {
                                 EVENTS_COUNTER.avro.success.inc();

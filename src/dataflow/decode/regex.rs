@@ -9,13 +9,14 @@ use log::warn;
 use regex::Regex;
 use repr::{Datum, Row};
 use std::cmp::max;
+use std::iter;
 use std::str;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
 pub fn regex<G>(
-    stream: &Stream<G, Vec<u8>>,
+    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     regex: Regex,
     name: &str,
 ) -> Stream<G, (Row, Timestamp, Diff)>
@@ -24,13 +25,13 @@ where
 {
     let name = String::from(name);
     stream.unary(
-        Exchange::new(|x: &Vec<u8>| x.hashed()),
+        Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
         "RegexDecode",
         |_, _| {
             move |input, output| {
                 input.for_each(|cap, lines| {
                     let mut session = output.session(&cap);
-                    for line in &*lines {
+                    for (line, line_no) in &*lines {
                         let line = match str::from_utf8(&line) {
                             Ok(line) => line,
                             _ => {
@@ -49,10 +50,11 @@ where
                             None => continue,
                         };
                         session.give((
-                            Row::pack(captures.iter().skip(1).map(|m| match m {
-                                None => Datum::Null,
-                                Some(m) => Datum::String(m.as_str()),
-                            })),
+                            Row::pack(captures.iter().skip(1).map(
+                                |m| Into::<Datum>::into( m.map(
+                                    |m| Datum::String(m.as_str()))
+                                )
+                            ).chain(iter::once(line_no.map(Datum::Int64).into()))),
                             *cap.time(),
                             1,
                         ));
