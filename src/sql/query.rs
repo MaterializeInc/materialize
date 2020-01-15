@@ -710,7 +710,7 @@ fn plan_table_function(
                     let column_names: &[&str] = match ident {
                         "jsonb_each" | "jsonb_each_text" => &["key", "value"],
                         "jsonb_object_keys" => &["jsonb_object_keys"],
-                        "jsonb_array_elements" => &["value"],
+                        "jsonb_array_elements" | "jsonb_array_elements_text" => &["value"],
                         _ => unreachable!(),
                     };
                     let scope = Scope::from_source(
