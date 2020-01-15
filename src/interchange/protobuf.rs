@@ -315,7 +315,7 @@ fn json_nested_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Resu
             });
         }
         SerdeValue::Map(m) => {
-            let mut kvs = m.into_iter().collect::<Vec<_>>();
+            let mut kvs = m.iter().collect::<Vec<_>>();
             kvs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
             kvs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
             return packer.try_push_dict_with(|mut packer| {
