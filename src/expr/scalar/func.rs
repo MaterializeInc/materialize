@@ -443,9 +443,12 @@ fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
         Datum::Float64(f) => {
             if f.is_finite() {
                 a
+            } else if f.is_nan() {
+                Datum::String("NaN")
+            } else if f.is_sign_positive() {
+                Datum::String("Infinity")
             } else {
-                // invalid json float
-                Datum::Null
+                Datum::String("-Infinity")
             }
         }
         _ => a,
