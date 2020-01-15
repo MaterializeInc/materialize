@@ -3,13 +3,20 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{EvalEnv, RelationExpr};
+use std::collections::HashMap;
+
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct Join;
 
 impl crate::transform::Transform for Join {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }
@@ -93,7 +100,13 @@ impl Join {
                 variable.sort();
                 variable.dedup();
             }
-            variables.sort();
+            //disable variable sort if any indexes are being used
+            if !inputs.iter().any(|input| match input {
+                RelationExpr::ArrangeBy { .. } => true,
+                _ => false,
+            }) {
+                variables.sort();
+            }
         }
     }
 }

@@ -7,13 +7,18 @@ use std::collections::HashMap;
 
 use repr::RelationType;
 
-use crate::{EvalEnv, Id, RelationExpr};
+use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct UpdateLet;
 
 impl super::Transform for UpdateLet {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

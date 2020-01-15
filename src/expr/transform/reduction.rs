@@ -5,11 +5,11 @@
 
 #![allow(clippy::cognitive_complexity)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use repr::{Datum, Row, RowArena};
 
-use crate::{EvalEnv, RelationExpr};
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
@@ -18,7 +18,12 @@ pub use undistribute_and::UndistributeAnd;
 pub struct FoldConstants;
 
 impl super::Transform for FoldConstants {
-    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        env: &EvalEnv,
+    ) {
         self.transform(relation, env)
     }
 }
@@ -355,12 +360,18 @@ impl FoldConstants {
 }
 
 pub mod demorgans {
-    use crate::{BinaryFunc, EvalEnv, RelationExpr, ScalarExpr, UnaryFunc};
+    use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
+    use std::collections::HashMap;
 
     #[derive(Debug)]
     pub struct DeMorgans;
     impl crate::transform::Transform for DeMorgans {
-        fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+        fn transform(
+            &self,
+            relation: &mut RelationExpr,
+            _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+            _: &EvalEnv,
+        ) {
             self.transform(relation)
         }
     }
@@ -431,15 +442,22 @@ pub mod demorgans {
 }
 
 pub mod undistribute_and {
+    use std::collections::HashMap;
+
     use repr::{ColumnType, Datum, ScalarType};
 
-    use crate::{BinaryFunc, EvalEnv, RelationExpr, ScalarExpr};
+    use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
     #[derive(Debug)]
     pub struct UndistributeAnd;
 
     impl crate::transform::Transform for UndistributeAnd {
-        fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+        fn transform(
+            &self,
+            relation: &mut RelationExpr,
+            _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+            _: &EvalEnv,
+        ) {
             self.transform(relation)
         }
     }

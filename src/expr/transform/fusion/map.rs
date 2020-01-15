@@ -3,14 +3,21 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{EvalEnv, RelationExpr};
+use std::collections::HashMap;
 use std::mem;
+
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct Map;
 
 impl crate::transform::Transform for Map {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

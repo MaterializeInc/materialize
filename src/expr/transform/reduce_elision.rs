@@ -5,8 +5,9 @@
 
 // Whatever clippy...
 #![allow(clippy::clone_on_copy)]
+use std::collections::HashMap;
 
-use crate::{EvalEnv, RelationExpr};
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 /// Removes `Reduce` when the input has (compatible) keys.
 ///
@@ -17,7 +18,12 @@ use crate::{EvalEnv, RelationExpr};
 pub struct ReduceElision;
 
 impl super::Transform for ReduceElision {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }
@@ -40,7 +46,7 @@ impl ReduceElision {
                 keys.iter()
                     .all(|k| group_key.contains(&crate::ScalarExpr::Column(*k)))
             }) {
-                use crate::{AggregateFunc, ScalarExpr, UnaryFunc};
+                use crate::{AggregateFunc, UnaryFunc};
                 use repr::Datum;
                 let map_scalars = aggregates
                     .iter()

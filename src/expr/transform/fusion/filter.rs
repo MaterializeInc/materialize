@@ -33,13 +33,20 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::{EvalEnv, RelationExpr, ScalarExpr};
+use std::collections::HashMap;
+
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct Filter;
 
 impl crate::transform::Transform for Filter {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

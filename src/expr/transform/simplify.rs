@@ -56,15 +56,21 @@
 //! assert_eq!(relation, expected_relation);
 //! ```
 
+use std::collections::HashMap;
 use std::mem;
 
-use crate::{BinaryFunc, EvalEnv, RelationExpr, ScalarExpr};
+use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct SimplifyFilterPredicates;
 
 impl super::Transform for SimplifyFilterPredicates {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation);
     }
 }

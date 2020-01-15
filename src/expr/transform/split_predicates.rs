@@ -3,13 +3,20 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{BinaryFunc, EvalEnv, RelationExpr, ScalarExpr};
+use std::collections::HashMap;
+
+use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct SplitPredicates;
 
 impl super::Transform for SplitPredicates {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         relation.visit_mut(&mut |expr| {
             if let RelationExpr::Filter { predicates, .. } = expr {
                 let mut pending_predicates = predicates.drain(..).collect::<Vec<_>>();

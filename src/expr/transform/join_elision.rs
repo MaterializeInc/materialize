@@ -3,9 +3,11 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::collections::HashMap;
+
 use repr::RelationType;
 
-use crate::{EvalEnv, RelationExpr};
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 /// Removes singleton constants from joins, and removes joins with
 /// single input relations.
@@ -13,7 +15,12 @@ use crate::{EvalEnv, RelationExpr};
 pub struct JoinElision;
 
 impl super::Transform for JoinElision {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

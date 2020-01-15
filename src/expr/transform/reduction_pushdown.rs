@@ -6,13 +6,20 @@
 // Using references ensures code doesn't break if the other argument
 // ceases to be Copy.
 #![allow(clippy::op_ref)]
-use crate::{EvalEnv, RelationExpr};
+use std::collections::HashMap;
+
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct ReductionPushdown;
 
 impl super::Transform for ReductionPushdown {
-    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        env: &EvalEnv,
+    ) {
         self.transform(relation, env)
     }
 }

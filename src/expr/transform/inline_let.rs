@@ -3,13 +3,20 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{EvalEnv, Id, LocalId, RelationExpr};
+use std::collections::HashMap;
+
+use crate::{EvalEnv, GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct InlineLet;
 
 impl super::Transform for InlineLet {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

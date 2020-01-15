@@ -46,15 +46,22 @@
 //! PredicatePushdown.transform(&mut expr);
 //! ```
 
+use std::collections::HashMap;
+
 use repr::{ColumnType, Datum, ScalarType};
 
-use crate::{AggregateFunc, EvalEnv, RelationExpr, ScalarExpr};
+use crate::{AggregateFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct PredicatePushdown;
 
 impl super::Transform for PredicatePushdown {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }
@@ -102,7 +109,10 @@ impl PredicatePushdown {
                         let mut pushed = false;
                         // Attempt to push down each predicate to each input.
                         for (index, push_down) in push_downs.iter_mut().enumerate() {
-                            if let Some(localized) = localize_predicate(
+                            if let RelationExpr::ArrangeBy { .. } = inputs[index] {
+                                // do nothing. We do not want to push down a filter and block
+                                // usage of an index
+                            } else if let Some(localized) = localize_predicate(
                                 &predicate,
                                 index,
                                 &input_relation[..],

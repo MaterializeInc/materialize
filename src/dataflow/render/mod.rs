@@ -59,7 +59,7 @@ pub(crate) fn build_local_input<A: Allocate>(
                 .collections
                 .insert(get_expr.clone(), stream.as_collection());
             context.render_arranged(
-                &get_expr.clone().arrange_by(&index.desc.keys),
+                &get_expr.clone().arrange_by(&[index.desc.keys.clone()]),
                 &EvalEnv::default(),
                 region,
                 worker_index,
@@ -451,26 +451,39 @@ where
         id: Option<&str>,
     ) {
         if let RelationExpr::ArrangeBy { input, keys } = relation_expr {
-            if self.arrangement(&input, &keys).is_none() {
-                self.ensure_rendered(input, env, scope, worker_index);
-                let built = self.collection(input).unwrap();
-                let keys2 = keys.clone();
-                let env = env.clone();
-                let name = if let Some(id) = id {
-                    format!("Arrange: {}", id)
-                } else {
-                    "Arrange".to_string()
-                };
-                let keyed = built
-                    .map(move |row| {
-                        let datums = row.unpack();
-                        let temp_storage = RowArena::new();
-                        let key_row =
-                            Row::pack(keys2.iter().map(|k| k.eval(&datums, &env, &temp_storage)));
-                        (key_row, row)
-                    })
-                    .arrange_named::<OrdValSpine<_, _, _, _>>(&name);
-                self.set_local(&input, &keys, keyed);
+            for key_set in keys {
+                if self.arrangement(&input, &key_set).is_none() {
+                    self.ensure_rendered(input, env, scope, worker_index);
+                    let built = self.collection(input).unwrap();
+                    let keys2 = key_set.clone();
+                    let env = env.clone();
+                    let name = if let Some(id) = id {
+                        format!("Arrange: {}", id)
+                    } else {
+                        "Arrange".to_string()
+                    };
+                    let keyed = built
+                        .map(move |row| {
+                            let datums = row.unpack();
+                            let temp_storage = RowArena::new();
+                            let key_row = Row::pack(
+                                keys2.iter().map(|k| k.eval(&datums, &env, &temp_storage)),
+                            );
+                            (key_row, row)
+                        })
+                        .arrange_named::<OrdValSpine<_, _, _, _>>(&name);
+                    self.set_local(&input, key_set, keyed);
+                }
+                if self.arrangement(relation_expr, key_set).is_none() {
+                    match self.arrangement(&input, key_set).unwrap() {
+                        ArrangementFlavor::Local(local) => {
+                            self.set_local(relation_expr, key_set, local);
+                        }
+                        ArrangementFlavor::Trace(trace) => {
+                            self.set_trace(relation_expr, key_set, trace);
+                        }
+                    }
+                }
             }
         }
     }

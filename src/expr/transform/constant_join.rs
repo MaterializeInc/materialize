@@ -3,7 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{EvalEnv, RelationExpr, ScalarExpr};
+use std::collections::HashMap;
+
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct InsertConstantJoin;
@@ -12,7 +14,12 @@ pub struct InsertConstantJoin;
 pub struct RemoveConstantJoin;
 
 impl super::Transform for InsertConstantJoin {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }
@@ -57,7 +64,12 @@ impl InsertConstantJoin {
 }
 
 impl super::Transform for RemoveConstantJoin {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }

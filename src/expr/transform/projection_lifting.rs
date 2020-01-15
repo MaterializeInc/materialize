@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, Id, RelationExpr};
+use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Hoist projections wherever possible, in order to minimize structural limitations on transformations.
 /// Projections can be re-introduced in the physical planning stage.
@@ -13,7 +13,12 @@ use crate::{EvalEnv, Id, RelationExpr};
 pub struct ProjectionLifting;
 
 impl crate::transform::Transform for ProjectionLifting {
-    fn transform(&self, relation: &mut RelationExpr, _: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &EvalEnv,
+    ) {
         self.transform(relation)
     }
 }
@@ -270,8 +275,10 @@ impl ProjectionLifting {
                     outputs,
                 } = &mut **input
                 {
-                    for key in keys.iter_mut() {
-                        key.permute(outputs);
+                    for key_set in keys.iter_mut() {
+                        for key in key_set.iter_mut() {
+                            key.permute(outputs);
+                        }
                     }
                     *relation = inner
                         .take_dangerous()

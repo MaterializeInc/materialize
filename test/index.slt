@@ -3,8 +3,6 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-mode cockroach
-
 statement ok
 CREATE TABLE foo (
     a int NOT NULL,
@@ -16,13 +14,13 @@ statement ok
 INSERT INTO foo (a, b, c) VALUES (5, 'this', -4.4), (3, 'just', 11.32), (-45, 'it', 10.28)
 
 statement ok
-CREATE INDEX foo_idx on foo(ascii(b));
+CREATE INDEX foo_idx on foo(a + c);
 
 statement ok
 CREATE INDEX edge_columns on foo(a, floor(c));
 
 statement ok
-CREATE TABLE bar(x float, z char(5))
+CREATE TABLE bar(x float, z char(5), primary key(z))
 
 statement ok
 INSERT into bar VALUES (1.3, 'onix'), (0, 'coop');
@@ -30,19 +28,68 @@ INSERT into bar VALUES (1.3, 'onix'), (0, 'coop');
 statement ok
 CREATE INDEX bar_idx on bar(substr(z, 3))
 
+query TTTTBI colnames
+SHOW INDEX in bar;
+----
+View Key_name Column_name Expression Null Seq_in_index
+bar
+"bar_PRIMARY_IDX"
+z
+NULL
+false
+1
+bar
+bar_idx
+NULL
+substr(z, 3)
+true
+1
+
 query TTTTBI colnames rowsort
 SHOW INDEX from foo;
 ----
-View Key_name          Column_name Expression Null  Seq_in_index
-foo  "foo_PRIMARY_IDX" a           NULL       false 1
-foo  "foo_PRIMARY_IDX" b           NULL       true  2
-foo  "foo_PRIMARY_IDX" c           NULL       true  3
-foo  foo_idx           NULL        ascii(b)   true  1
-foo  edge_columns      a           NULL       false 1
-foo  edge_columns      NULL        floor(c)   true  2
+View Key_name Column_name Expression Null Seq_in_index
+foo
+"foo_PRIMARY_IDX"
+a
+NULL
+false
+1
+foo
+"foo_PRIMARY_IDX"
+b
+NULL
+true
+2
+foo
+"foo_PRIMARY_IDX"
+c
+NULL
+true
+3
+foo
+foo_idx
+NULL
+a + c
+true
+1
+foo
+edge_columns
+a
+NULL
+false
+1
+foo
+edge_columns
+NULL
+floor(c)
+true
+2
 
 statement ok
 DROP INDEX foo_idx;
+
+mode cockroach
 
 query TTTTBI colnames rowsort
 SHOW INDEX in foo;
@@ -53,3 +100,20 @@ foo  "foo_PRIMARY_IDX" b           NULL       true  2
 foo  "foo_PRIMARY_IDX" c           NULL       true  3
 foo  edge_columns      a           NULL       false 1
 foo  edge_columns      NULL        floor(c)   true  2
+
+statement ok
+DROP INDEX edge_columns;
+
+query TTTTBI colnames rowsort
+SHOW INDEX in foo;
+----
+View Key_name     Column_name Expression Null  Seq_in_index
+foo  "foo_PRIMARY_IDX" a           NULL       false 1
+foo  "foo_PRIMARY_IDX" b           NULL       true  2
+foo  "foo_PRIMARY_IDX" c           NULL       true  3
+
+query error catalog item 'nonexistent' does not exist
+SHOW INDEX from nonexistent;
+
+query error bar_idx is not a view
+SHOW INDEX from bar_idx;

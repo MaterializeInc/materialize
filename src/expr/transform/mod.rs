@@ -4,9 +4,9 @@
 // distributed without the express permission of Materialize, Inc.
 
 #![deny(missing_debug_implementations)]
+use std::collections::HashMap;
 
-use crate::EvalEnv;
-use crate::RelationExpr;
+use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 pub mod binding;
 pub mod column_knowledge;
@@ -30,11 +30,17 @@ pub mod redundant_join;
 pub mod simplify;
 pub mod split_predicates;
 pub mod update_let;
+pub mod use_indexes;
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
-    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv);
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        env: &EvalEnv,
+    );
 }
 
 #[derive(Debug)]
@@ -43,11 +49,16 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
-    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        env: &EvalEnv,
+    ) {
         for _ in 0..100 {
             let original = relation.clone();
             for transform in self.transforms.iter() {
-                transform.transform(relation, env);
+                transform.transform(relation, indexes, env);
             }
             if *relation == original {
                 return;
@@ -70,9 +81,14 @@ pub struct Optimizer {
 
 impl Transform for Optimizer {
     /// Optimizes the supplied relation expression.
-    fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
+    fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        env: &EvalEnv,
+    ) {
         for transform in self.transforms.iter() {
-            transform.transform(relation, env);
+            transform.transform(relation, indexes, env);
         }
     }
 }
@@ -130,10 +146,23 @@ impl Default for Optimizer {
                     Box::new(crate::transform::redundant_join::RedundantJoin),
                 ],
             }),
-            // JoinOrder adds Projects, hence need project fusion again.
+            // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
+            // exists but is currently objectively suboptimal because JoinOrder will put
+            // the ArrangeBy input as first input and the constant as second
+            // uncomment this section and associated tests when FilterEqualLiteral
+            // becomes an improvement
+            /*Box::new(crate::transform::use_indexes::FilterEqualLiteral),
+            Box::new(crate::transform::projection_lifting::ProjectionLifting),
+            Box::new(crate::transform::column_knowledge::ColumnKnowledge),
+            Box::new(crate::transform::reduction::FoldConstants),
+            Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
+            Box::new(crate::transform::fusion::join::Join),
+            Box::new(crate::transform::redundant_join::RedundantJoin),*/
             Box::new(crate::transform::demand::Demand),
+            // JoinOrder adds Projects, hence need project fusion again.
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
+            Box::new(crate::transform::use_indexes::FilterLifting),
             Box::new(crate::transform::projection_lifting::ProjectionLifting),
             Box::new(crate::transform::fusion::project::Project),
             Box::new(crate::transform::constant_join::RemoveConstantJoin),
@@ -145,8 +174,13 @@ impl Default for Optimizer {
 
 impl Optimizer {
     /// Optimizes the supplied relation expression.
-    pub fn optimize(&mut self, relation: &mut RelationExpr, env: &EvalEnv) {
-        self.transform(relation, env);
+    pub fn optimize(
+        &mut self,
+        relation: &mut RelationExpr,
+        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        env: &EvalEnv,
+    ) {
+        self.transform(relation, indexes, env);
     }
 
     /// Simple fusion and elision transformations to render the query readable.
