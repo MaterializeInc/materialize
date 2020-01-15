@@ -196,7 +196,10 @@ pub fn file<G>(
     path: PathBuf,
     executor: &tokio::runtime::Handle,
     read_style: FileReadStyle,
-) -> (timely::dataflow::Stream<G, Vec<u8>>, Option<SourceToken>)
+) -> (
+    timely::dataflow::Stream<G, (Vec<u8>, Option<i64>)>,
+    Option<SourceToken>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -211,6 +214,7 @@ where
             let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
             executor.spawn(read_file_task(path, tx, activator, read_style));
         }
+        let mut total_lines_read = 0;
         move |cap, output| {
             // We need to make sure we always downgrade the capability.
             // Otherwise, the system will be stuck forever waiting for the timestamp
@@ -262,11 +266,12 @@ where
             let mut session = output.session(cap);
             while lines_read < MAX_LINES_PER_INVOCATION {
                 if let Ok(line) = rx.try_next() {
+                    lines_read += 1;
+                    total_lines_read += 1;
                     match line {
-                        Some(line) => session.give(line.into_bytes()),
+                        Some(line) => session.give((line.into_bytes(), Some(total_lines_read))),
                         None => return SourceStatus::Done,
                     }
-                    lines_read += 1;
                 } else {
                     break;
                 }

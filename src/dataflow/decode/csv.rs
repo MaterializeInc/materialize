@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::iter;
+
 use differential_dataflow::Hashable;
 use log::error;
 use timely::dataflow::channels::pact::Exchange;
@@ -13,12 +15,15 @@ use super::EVENTS_COUNTER;
 use dataflow_types::{Diff, Timestamp};
 use repr::{Datum, Row};
 
-pub fn csv<G>(stream: &Stream<G, Vec<u8>>, n_cols: usize) -> Stream<G, (Row, Timestamp, Diff)>
+pub fn csv<G>(
+    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
+    n_cols: usize,
+) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     stream.unary(
-        Exchange::new(|x: &Vec<u8>| x.hashed()),
+        Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
         "CsvDecode",
         |_, _| {
             move |input, output| {
@@ -29,7 +34,7 @@ where
                     // but the CsvReader *itself* searches for line breaks.
                     // This is mainly an aesthetic/performance-golfing
                     // issue as I doubt it will ever be a bottleneck.
-                    for line in &*lines {
+                    for (line, line_no) in &*lines {
                         let mut csv_reader = csv::ReaderBuilder::new()
                             .has_headers(false)
                             .from_reader(line.as_slice());
@@ -46,7 +51,12 @@ where
                             }
                             EVENTS_COUNTER.csv.success.inc();
                             session.give((
-                                Row::pack(record.iter().map(|s| Datum::String(s))),
+                                Row::pack(
+                                    record
+                                        .iter()
+                                        .map(|s| Datum::String(s))
+                                        .chain(iter::once(line_no.map(Datum::Int64).into())),
+                                ),
                                 *cap.time(),
                                 1,
                             ));

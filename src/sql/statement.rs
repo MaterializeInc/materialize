@@ -737,8 +737,11 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
                             };
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)
+                                .chain(iter::once(ColumnType::new(ScalarType::Int64)))
                                 .collect();
-                            let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
+                            let names = (1..=n_cols)
+                                .map(|i| Some(format!("column{}", i)))
+                                .chain(iter::once(Some("mz_line_no".into())));
                             (
                                 DataEncoding::Csv(CsvEncoding { n_cols }),
                                 RelationDesc::new(RelationType::new(cols), names),
@@ -761,13 +764,15 @@ async fn handle_create_dataflow(mut stmt: Statement) -> Result<Plan, failure::Er
                                     None => Some(format!("column{}", i)),
                                     Some(ocn) => Some(String::from(ocn)),
                                 })
+                                .chain(iter::once(Some("mz_line_no".into())))
                                 .collect();
-                            let n_cols = names.len();
+                            let n_cols = names.len() - 1;
                             if n_cols == 0 {
                                 bail!("source regex must contain at least one capture group to be useful");
                             }
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
                                 .take(n_cols)
+                                .chain(iter::once(ColumnType::new(ScalarType::Int64)))
                                 .collect();
                             (
                                 DataEncoding::Regex { regex },

@@ -16,7 +16,7 @@ use repr::Row;
 use super::EVENTS_COUNTER;
 
 pub fn protobuf<G>(
-    stream: &Stream<G, Vec<u8>>,
+    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     descriptor_file: &str,
     message_name: &str,
 ) -> Stream<G, (Row, Timestamp, Diff)>
@@ -27,7 +27,7 @@ where
     let message_name = message_name.to_owned();
 
     stream.unary(
-        Exchange::new(|x: &Vec<u8>| x.hashed()),
+        Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
         "ProtobufDecode",
         move |_, _| {
             move |input, output| {
@@ -45,7 +45,7 @@ where
                     };
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
-                    for payload in data.iter() {
+                    for (payload, _) in data.iter() {
                         match decoder.decode(payload) {
                             Ok(row) => {
                                 EVENTS_COUNTER.protobuf.success.inc();

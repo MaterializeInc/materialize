@@ -43,8 +43,8 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
                 &[],
             )?
             .into_iter()
-            .map(|row| (row.get(0), row.get(1), row.get(2)))
-            .collect::<Vec<(String, String, String)>>())
+            .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
+            .collect::<Vec<(String, String, String, i64)>>())
     };
 
     // macOS doesn't send filesystem events to the process that caused them, so
@@ -73,9 +73,14 @@ New York,NY,10004
 ",
     )?;
 
-    let line1 = ("New York".into(), "NY".into(), "10004".into());
-    let line2 = ("Rancho Santa Margarita".into(), "CA".into(), "92679".into());
-    let line3 = ("Rochester".into(), "NY".into(), "14618".into());
+    let line1 = ("New York".into(), "NY".into(), "10004".into(), 2);
+    let line2 = (
+        "Rancho Santa Margarita".into(),
+        "CA".into(),
+        "92679".into(),
+        3,
+    );
+    let line3 = ("Rochester".into(), "NY".into(), "14618".into(), 1);
 
     client.execute(
         &*format!(
@@ -91,6 +96,16 @@ New York,NY,10004
     );
 
     append(&dynamic_path, b"")?;
+
+    let (line1, line2, line3) = {
+        let mut line1 = line1;
+        let mut line2 = line2;
+        let mut line3 = line3;
+        line1.3 = 1;
+        line2.3 = 3;
+        line3.3 = 2;
+        (line1, line2, line3)
+    };
 
     client.execute(&*format!(
         "CREATE SOURCE dynamic_csv FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
@@ -127,14 +142,14 @@ New York,NY,10004
             .try_next()
             .await?
             .unwrap()
-            .starts_with(&b"City 1\tST\t00001\tDiff: 1 at "[..]));
+            .starts_with(&b"City 1\tST\t00001\t4\tDiff: 1 at "[..]));
 
         append(&dynamic_path, b"City 2,ST,00002\n")?;
         assert!(tail_reader
             .try_next()
             .await?
             .unwrap()
-            .starts_with(&b"City 2\tST\t00002\tDiff: 1 at "[..]));
+            .starts_with(&b"City 2\tST\t00002\t5\tDiff: 1 at "[..]));
 
         // The tail won't end until a cancellation request is sent.
         client.cancel_query(tokio_postgres::NoTls).await?;
