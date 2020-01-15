@@ -7,7 +7,6 @@ use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -27,19 +26,10 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
 
     let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
-        client.execute(
-            &*format!("DROP VIEW IF EXISTS {0}_{1}", source, "mirror"),
-            &[],
-        )?;
-        thread::sleep(Duration::from_secs(1));
-        client.execute(
-            &*format!("CREATE VIEW {0}_{1} AS SELECT * FROM {0}", source, "mirror"),
-            &[],
-        )?;
         thread::sleep(Duration::from_secs(1));
         Ok(client
             .query(
-                &*format!("SELECT * FROM {}_{} ORDER BY 1", source, "mirror"),
+                &*format!("SELECT * FROM {} ORDER BY mz_line_no", source),
                 &[],
             )?
             .into_iter()
@@ -47,18 +37,17 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<(String, String, String, i64)>>())
     };
 
-    // macOS doesn't send filesystem events to the process that caused them, so
-    // this function appends data to a file via a `tee` child process so that
-    // the dataflow layer actually gets notified of the changes.
     let append = |path, data| -> Result<_, Box<dyn Error>> {
-        let mut child = Command::new("tee")
-            .arg("-a")
-            .arg(path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .spawn()?;
-        child.stdin.as_mut().unwrap().write_all(data)?;
-        child.wait()?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        // We currently have to poll for changes on macOS every 100ms, so sleep
+        // for 200ms to be sure that the new data has been noticed and accepted
+        // by materialize.
+        thread::sleep(Duration::from_millis(200));
         Ok(())
     };
 
@@ -69,26 +58,19 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
         &static_path,
         "Rochester,NY,14618
 New York,NY,10004
-\"Rancho Santa Margarita\",CA,92679
+\"bad,place\"\"\",CA,92679
 ",
     )?;
 
-    let line1 = ("New York".into(), "NY".into(), "10004".into(), 2);
-    let line2 = (
-        "Rancho Santa Margarita".into(),
-        "CA".into(),
-        "92679".into(),
-        3,
-    );
-    let line3 = ("Rochester".into(), "NY".into(), "14618".into(), 1);
+    let line1 = ("Rochester".into(), "NY".into(), "14618".into(), 1);
+    let line2 = ("New York".into(), "NY".into(), "10004".into(), 2);
+    let line3 = ("bad,place\"".into(), "CA".into(), "92679".into(), 3);
 
-    client.execute(
-        &*format!(
-            "CREATE SOURCE static_csv FROM 'file://{}' WITH (format = 'csv', columns = 3)",
-            static_path.display(),
-        ),
-        &[],
-    )?;
+    client.batch_execute(&*format!(
+        "CREATE SOURCE static_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3)",
+        static_path.display(),
+    ))?;
+    client.batch_execute("CREATE VIEW static_csv AS SELECT * FROM static_csv_source")?;
 
     assert_eq!(
         fetch_rows(&mut client, "static_csv")?,
@@ -97,31 +79,22 @@ New York,NY,10004
 
     append(&dynamic_path, b"")?;
 
-    let (line1, line2, line3) = {
-        let mut line1 = line1;
-        let mut line2 = line2;
-        let mut line3 = line3;
-        line1.3 = 1;
-        line2.3 = 3;
-        line3.3 = 2;
-        (line1, line2, line3)
-    };
-
-    client.execute(&*format!(
-        "CREATE SOURCE dynamic_csv FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
+    client.batch_execute(&*format!(
+        "CREATE SOURCE dynamic_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
         dynamic_path.display()
-    ), &[])?;
-
-    append(&dynamic_path, b"New York,NY,10004\n")?;
-    assert_eq!(fetch_rows(&mut client, "dynamic_csv")?, &[line1.clone()]);
+    ))?;
+    client.batch_execute("CREATE VIEW dynamic_csv AS SELECT * FROM dynamic_csv_source")?;
 
     append(&dynamic_path, b"Rochester,NY,14618\n")?;
+    assert_eq!(fetch_rows(&mut client, "dynamic_csv")?, &[line1.clone()]);
+
+    append(&dynamic_path, b"New York,NY,10004\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
-        &[line1.clone(), line3.clone()]
+        &[line1.clone(), line2.clone()]
     );
 
-    append(&dynamic_path, b"\"Rancho Santa Margarita\",CA,92679\n")?;
+    append(&dynamic_path, b"\"bad,place\"\"\",CA,92679\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
         &[line1, line2, line3]
@@ -135,7 +108,7 @@ New York,NY,10004
     // https://github.com/sfackler/rust-postgres/pull/531 gets fixed.
     Runtime::new()?.block_on(async {
         let client = server.connect_async().await?;
-        let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv_mirror").await?);
+        let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv").await?);
 
         append(&dynamic_path, b"City 1,ST,00001\n")?;
         assert!(tail_reader
@@ -158,10 +131,10 @@ New York,NY,10004
         Ok::<_, Box<dyn Error>>(())
     })?;
 
-    // Check that writing to the tailed file after the view and source are dropped doesn't
-    // cause a crash (#1361).
-    client.execute("DROP VIEW dynamic_csv_mirror", &[])?;
-    client.execute("DROP SOURCE dynamic_csv", &[])?;
+    // Check that writing to the tailed file after the view and source are
+    // dropped doesn't cause a crash (#1361).
+    client.execute("DROP VIEW dynamic_csv", &[])?;
+    client.execute("DROP SOURCE dynamic_csv_source", &[])?;
     thread::sleep(Duration::from_millis(100));
     append(&dynamic_path, b"Glendale,AZ,85310\n")?;
     thread::sleep(Duration::from_millis(100));
