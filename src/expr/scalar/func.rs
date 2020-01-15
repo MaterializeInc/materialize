@@ -2385,8 +2385,11 @@ fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> D
         // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
         Datum::Null
     } else {
+        let mut kvs = datums.chunks(2).collect::<Vec<_>>();
+        kvs.sort_by(|kv1, kv2| kv1[0].cmp(&kv2[0]));
+        kvs.dedup_by(|kv1, kv2| kv1[0] == kv2[0]);
         temp_storage.make_datum(|packer| {
-            packer.push_dict(datums.chunks(2).map(|kv| (kv[0].unwrap_str(), kv[1])))
+            packer.push_dict(kvs.into_iter().map(|kv| (kv[0].unwrap_str(), kv[1])))
         })
     }
 }
