@@ -26,21 +26,9 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
 
     let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
-        client.execute(
-            &*format!("DROP VIEW IF EXISTS {0}_{1}", source, "mirror"),
-            &[],
-        )?;
-        thread::sleep(Duration::from_secs(1));
-        client.execute(
-            &*format!("CREATE VIEW {0}_{1} AS SELECT * FROM {0}", source, "mirror"),
-            &[],
-        )?;
         thread::sleep(Duration::from_secs(1));
         Ok(client
-            .query(
-                &*format!("SELECT * FROM {}_{} ORDER BY 1", source, "mirror"),
-                &[],
-            )?
+            .query(&*format!("SELECT * FROM {} ORDER BY 1", source), &[])?
             .into_iter()
             .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
             .collect::<Vec<(String, String, String, i64)>>())
@@ -80,13 +68,11 @@ New York,NY,10004
     );
     let line3 = ("Rochester".into(), "NY".into(), "14618".into(), 1);
 
-    client.execute(
-        &*format!(
-            "CREATE SOURCE static_csv FROM 'file://{}' WITH (format = 'csv', columns = 3)",
-            static_path.display(),
-        ),
-        &[],
-    )?;
+    client.batch_execute(&*format!(
+        "CREATE SOURCE static_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3)",
+        static_path.display(),
+    ))?;
+    client.batch_execute("CREATE VIEW static_csv AS SELECT * FROM static_csv_source")?;
 
     assert_eq!(
         fetch_rows(&mut client, "static_csv")?,
@@ -105,10 +91,11 @@ New York,NY,10004
         (line1, line2, line3)
     };
 
-    client.execute(&*format!(
-        "CREATE SOURCE dynamic_csv FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
+    client.batch_execute(&*format!(
+        "CREATE SOURCE dynamic_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
         dynamic_path.display()
-    ), &[])?;
+    ))?;
+    client.batch_execute("CREATE VIEW dynamic_csv AS SELECT * FROM dynamic_csv_source")?;
 
     append(&dynamic_path, b"New York,NY,10004\n")?;
     assert_eq!(fetch_rows(&mut client, "dynamic_csv")?, &[line1.clone()]);
@@ -133,19 +120,15 @@ New York,NY,10004
     // https://github.com/sfackler/rust-postgres/pull/531 gets fixed.
     Runtime::new()?.block_on(async {
         let client = server.connect_async().await?;
-        let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv_mirror").await?);
+        let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv").await?);
 
         append(&dynamic_path, b"City 1,ST,00001\n")?;
-        assert!(tail_reader
-            .try_next()
-            .await?
+        assert!(tail_reader.try_next().await?
             .unwrap()
             .starts_with(&b"City 1\tST\t00001\t4\tDiff: 1 at "[..]));
 
         append(&dynamic_path, b"City 2,ST,00002\n")?;
-        assert!(tail_reader
-            .try_next()
-            .await?
+        assert!(tail_reader.try_next().await?
             .unwrap()
             .starts_with(&b"City 2\tST\t00002\t5\tDiff: 1 at "[..]));
 
@@ -156,10 +139,10 @@ New York,NY,10004
         Ok::<_, Box<dyn Error>>(())
     })?;
 
-    // Check that writing to the tailed file after the view and source are dropped doesn't
-    // cause a crash (#1361).
-    client.execute("DROP VIEW dynamic_csv_mirror", &[])?;
-    client.execute("DROP SOURCE dynamic_csv", &[])?;
+    // Check that writing to the tailed file after the view and source are
+    // dropped doesn't cause a crash (#1361).
+    client.execute("DROP VIEW dynamic_csv", &[])?;
+    client.execute("DROP SOURCE dynamic_csv_source", &[])?;
     thread::sleep(Duration::from_millis(100));
     append(&dynamic_path, b"Glendale,AZ,85310\n")?;
     thread::sleep(Duration::from_millis(100));
