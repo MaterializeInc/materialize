@@ -1271,11 +1271,13 @@ name = "interchange"
 version = "0.1.0"
 dependencies = [
  "avro-rs",
+ "base64",
  "byteorder",
  "ccsr",
  "chrono",
  "criterion",
  "failure",
+ "num-traits",
  "ordered-float",
  "ore",
  "pretty_assertions",
@@ -1729,9 +1731,9 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.8"
+version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ba9a427cfca2be13aa6f6403b0b7e7368fe982bfa16fccc450ce74c46cd9b32"
+checksum = "d4c81ffc11c212fa327657cb19dd85eb7419e163b5b076bede2bdb5c974c07e4"
 dependencies = [
  "autocfg",
 ]
@@ -3040,6 +3042,7 @@ dependencies = [
  "atty",
  "avro-rs",
  "backoff",
+ "base64",
  "byteorder",
  "ccsr",
  "chrono",
@@ -3052,10 +3055,15 @@ dependencies = [
  "pgrepr",
  "postgres",
  "predicates",
+ "protobuf",
+ "protoc",
+ "protoc-rust",
  "rand 0.7.3",
  "rdkafka",
  "regex",
  "reqwest",
+ "serde",
+ "serde-protobuf",
  "serde_json",
  "sql-parser",
  "termcolor",

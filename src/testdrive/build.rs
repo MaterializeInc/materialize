@@ -10,8 +10,9 @@ use std::env;
 use std::fs;
 
 fn main() {
-    let out_dir = "protobuf/test_util/gen";
-    let input = &["testdata/fuzz.proto"];
+    let out_dir = "protobuf/gen";
+    let input = &["resources/simple.proto", "resources/billing.proto"];
+
     for fname in input {
         println!("cargo:rerun-if-changed={}", fname);
     }

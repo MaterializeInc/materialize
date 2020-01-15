@@ -541,7 +541,11 @@ impl RowPacker {
         }
     }
 
-    /// Start packing a `DatumList`. Returns the starting offset, which needs to be passed to `finish_list`.
+    /// Start packing a `DatumList`.
+    ///
+    /// Returns the starting offset, which needs to be passed to `finish_list`.
+    ///
+    /// See also [`push_list`] and [`push_list_with`] for a more convenient api.
     ///
     /// # Safety
     /// You must finish the list (or throw away self).
@@ -555,7 +559,7 @@ impl RowPacker {
         start
     }
 
-    /// Finish packing a `DatumList`
+    /// Finish packing a [`DatumList`]
     ///
     /// # Safety
     /// See `start_list`
@@ -565,7 +569,11 @@ impl RowPacker {
         self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
     }
 
-    /// Start packing a `DatumDict`. Returns the starting offset, which needs to be passed to `finish_dict`.
+    /// Start packing a [`DatumDict`].
+    ///
+    /// Returns the starting offset, which needs to be passed to `finish_dict`.
+    ///
+    /// See also [`push_dict`] and [`push_dict_with`] for a more convenient api.
     ///
     /// # Safety
     /// You must finish the dict (or throw away self).
@@ -589,7 +597,9 @@ impl RowPacker {
         self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
     }
 
-    /// Pack a `DatumList`.
+    /// Pack a [`DatumList`] with an arbitrary closure
+    ///
+    /// See [`try_push_list_with`] for a version that can handle errors.
     ///
     /// ```
     /// # use repr::{Row, Datum, RowPacker};
@@ -611,10 +621,48 @@ impl RowPacker {
         unsafe { self.finish_list(start) };
     }
 
-    /// Pack a `DatumDict`.
+    /// Pack a [`DatumList`] with an arbitrary closure
     ///
-    /// You must alternate pushing string keys and arbitary values, otherwise reading the dict will cause a panic.
-    /// You must push keys in ascending order, otherwise equality checks on the resulting `Row` may be wrong and reading the dict IN DEBUG MODE will cause a panic.
+    /// Any error returned from the closure will be forwarded from this method. This owns
+    /// the rowpacker and has the same api as [`try_push_dict_with`] so that they can be
+    /// used recursively, unlike `try_push_dict_with` the ownership doesn't maintain any
+    /// safety properties.
+    ///
+    /// ```
+    /// # use repr::{Row, Datum, RowPacker};
+    /// let mut packer = RowPacker::new();
+    /// packer.push_list_with(|packer| {
+    ///     packer.push(Datum::String("age"));
+    ///     packer.push(Datum::Int64(42));
+    /// });
+    /// let row = packer.finish();
+    ///
+    /// assert_eq!(row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(), vec![Datum::String("age"), Datum::Int64(42)])
+    /// ```
+    pub fn try_push_list_with<F>(mut self, f: F) -> Result<RowPacker, failure::Error>
+    where
+        F: FnOnce(RowPacker) -> Result<RowPacker, failure::Error>,
+    {
+        let start = unsafe { self.start_list() };
+        f(self).map(|mut packer| {
+            unsafe { packer.finish_list(start) };
+            packer
+        })
+    }
+
+    /// Pack a [`DatumDict`].
+    ///
+    /// See also [`try_push_dict_with`] if you need to be able to handle errors.
+    ///
+    /// # Panics
+    ///
+    /// You *must* alternate pushing string keys and arbitary values, otherwise reading
+    /// the dict will cause a panic.
+    ///
+    /// You must push keys in ascending order, otherwise equality checks on the resulting
+    /// `Row` may be wrong and reading the dict IN DEBUG MODE will cause a panic.
+    ///
+    /// # Example
     ///
     /// ```
     /// # use repr::{Row, Datum, RowPacker};
@@ -633,7 +681,10 @@ impl RowPacker {
     /// });
     /// let row = packer.finish();
     ///
-    /// assert_eq!(row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(), vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))])
+    /// assert_eq!(
+    ///     row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(),
+    ///     vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))]
+    /// );
     /// ```
     pub fn push_dict_with<F>(&mut self, f: F)
     where
@@ -644,7 +695,46 @@ impl RowPacker {
         unsafe { self.finish_dict(start) };
     }
 
+    /// Pack a [`DatumDict`] with a closure that may have errors.
+    ///
+    /// Any error in the closure will be forwarded from this method, and you will lose
+    /// access to the `RowPacker`, because it is no longer safe to use.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use repr::{Row, Datum, RowPacker};
+    /// let mut packer = RowPacker::new();
+    /// let packer = packer.try_push_dict_with(|mut packer| {
+    ///     // key
+    ///     packer.push(Datum::String("age"));
+    ///     // value
+    ///     packer.push(Datum::Int64(42));
+    ///     Ok(packer)
+    /// }).unwrap();
+    /// let row = packer.finish();
+    ///
+    /// assert_eq!(
+    ///     row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(),
+    ///     vec![("age", Datum::Int64(42))]
+    /// );
+    /// ```
+    pub fn try_push_dict_with<F>(mut self, f: F) -> Result<Self, failure::Error>
+    where
+        F: FnOnce(RowPacker) -> Result<RowPacker, failure::Error>,
+    {
+        let start = unsafe { self.start_dict() };
+        f(self).map(|mut packer| {
+            unsafe {
+                packer.finish_dict(start);
+            };
+            packer
+        })
+    }
+
     /// Convenience function to push a `DatumList` from an iter of `Datum`s
+    ///
+    /// See [`push_dict_with`] if you need to be able to handle errors
     pub fn push_list<'a, I, D>(&mut self, iter: I)
     where
         I: IntoIterator<Item = D>,
@@ -654,10 +744,12 @@ impl RowPacker {
             for elem in iter {
                 packer.push(*elem.borrow())
             }
-        })
+        });
     }
 
     /// Convenience function to push a `DatumDict` from an iter of `(&str, Datum)` pairs
+    ///
+    /// See [`try_push_dict_with`] if you need to be able to handle errors
     pub fn push_dict<'a, I, D>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (&'a str, D)>,
@@ -866,5 +958,18 @@ mod tests {
         let (k, v) = iter.next().unwrap();
         assert_eq!(k, "name");
         assert_eq!(v, Datum::String("bob"));
+    }
+
+    #[test]
+    fn test_dict_errors() -> Result<(), Box<dyn std::error::Error>> {
+        let packer = RowPacker::new();
+        let packer = packer.try_push_dict_with(|packer| Ok(packer))?;
+        let _ = packer.finish();
+
+        assert!(RowPacker::new()
+            .try_push_dict_with(|_| Err(failure::format_err!("oops")))
+            .is_err());
+
+        Ok(())
     }
 }

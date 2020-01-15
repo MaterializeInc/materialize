@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use postgres::error::DbError;
 use postgres::row::Row;
-use postgres::types::Type;
+use postgres::types::{Json, Type};
+use serde_json::Value;
 use sql_parser::ast::Statement;
 use sql_parser::parser::Parser as SqlParser;
 
@@ -227,6 +228,9 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
                     .get::<_, Option<chrono::NaiveDate>>(i)
                     .map(|x| x.to_string()),
                 Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
+                Type::JSONB => row
+                    .get::<_, Option<Json<Value>>>(i)
+                    .and_then(|v| serde_json::to_string(&v.0).ok()),
                 _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
             }
             .unwrap_or_else(|| "<null>".into()),

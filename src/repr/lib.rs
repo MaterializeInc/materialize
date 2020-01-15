@@ -10,7 +10,11 @@
 //! individual layers may use different representations internally, but they all
 //! agree to use this representation at their boundaries.
 //!
-//! The core type is the [`Datum`] enum, which represents a literal value.
+//! * The core value type is the [`Datum`] enum, which represents a literal value.
+//! * [`Row`] extends a `Datum` horizontally, and has features for efficiently doing so,
+//!   and can be built via a [`RowPacker`].
+//! * [`RelationDesc`] describes what it takes to extend a `Row` vertically, and
+//!   corresponds most closely to what is returned from querying our dataflows
 
 #![deny(missing_debug_implementations)]
 
@@ -20,8 +24,5 @@ mod scalar;
 
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{DatumDict, DatumList, Row, RowArena, RowPacker};
-pub use scalar::decimal;
-pub use scalar::jsonb;
-pub use scalar::regex;
-pub use scalar::strconv;
+pub use scalar::{decimal, jsonb, regex, strconv};
 pub use scalar::{Datum, Interval, ScalarType};

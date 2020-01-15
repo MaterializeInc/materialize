@@ -2,56 +2,60 @@
 //
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
-//
-// Protobuf source connector
+
+//! Protobuf source connector
 
 use std::fs;
 
-use failure::{bail, Error};
+use failure::{bail, format_err, ResultExt};
+use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
-use protoc::Protoc;
 use serde::de::Deserialize;
 use serde_protobuf::de::Deserializer;
 use serde_protobuf::descriptor::{
     Descriptors, FieldDescriptor, FieldLabel, FieldType, MessageDescriptor,
 };
-use serde_protobuf::value;
-use serde_value::Value;
+use serde_protobuf::value::Value as ProtoValue;
+use serde_value::Value as SerdeValue;
 
 use repr::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
-pub mod test;
+use crate::error::Result;
 
-fn read_descriptors_from_file(descriptor_file: &str) -> Descriptors {
-    let mut file = fs::File::open(descriptor_file).expect("Opening descriptor set file failed");
-    let proto = protobuf::parse_from_reader(&mut file).expect("Parsing descriptor set failed");
-    Descriptors::from_proto(&proto)
+pub mod test_util;
+
+pub fn read_descriptors(descriptor_source: &str) -> Result<Descriptors> {
+    match base64::decode(descriptor_source) {
+        Ok(decoded) => parse_descriptors_from_reader(&mut std::io::Cursor::new(decoded)),
+        Err(_) => read_descriptors_from_file(descriptor_source),
+    }
 }
 
-// Takes a path to a .proto spec and attempts to generate a binary file
-// containing a set of descriptors for the message (and any nested messages)
-// defined in the spec. Only useful for test purposes and currently unused
-#[allow(dead_code)]
-fn generate_descriptors(proto_path: &str, out: &str) -> Descriptors {
-    let protoc = Protoc::from_env_path();
-    let descriptor_set_out_args = protoc::DescriptorSetOutArgs {
-        out,
-        includes: &[],
-        input: &[proto_path],
-        include_imports: false,
-    };
+pub fn validate_proto_schema(message_name: &str, descriptor_source: &str) -> Result<RelationDesc> {
+    let descriptors = read_descriptors(descriptor_source)?;
 
-    protoc
-        .write_descriptor_set(descriptor_set_out_args)
-        .expect("protoc write descriptor set failed");
-    read_descriptors_from_file(out)
+    validate_proto_schema_with_descriptors(message_name, &descriptors)
 }
 
-fn validate_proto_field(
-    field: &FieldDescriptor,
-    descriptors: &Descriptors,
-) -> Result<ScalarType, Error> {
+pub fn read_descriptors_from_file(descriptor_file: &str) -> Result<Descriptors> {
+    let abs = fs::canonicalize(descriptor_file)?;
+    let mut file = fs::File::open(&abs).map_err(|e| {
+        format_err!(
+            "Opening descriptor set file {} failed: {}",
+            abs.display(),
+            e
+        )
+    })?;
+    parse_descriptors_from_reader(&mut file)
+}
+
+fn parse_descriptors_from_reader(r: &mut impl std::io::Read) -> Result<Descriptors> {
+    let proto = protobuf::parse_from_reader(r).context("Parsing descriptor set failed")?;
+    Ok(Descriptors::from_proto(&proto))
+}
+
+fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<ScalarType> {
     Ok(match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated => {
@@ -85,10 +89,7 @@ fn validate_proto_field(
     })
 }
 
-fn validate_proto_field_resolved(
-    field: &FieldDescriptor,
-    descriptors: &Descriptors,
-) -> Result<(), Error> {
+fn validate_proto_field_resolved(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<()> {
     match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated | FieldLabel::Optional => match field.field_type(descriptors) {
@@ -125,18 +126,10 @@ fn validate_proto_field_resolved(
     Ok(())
 }
 
-pub fn validate_proto_schema(
-    message_name: &str,
-    descriptor_file: &str,
-) -> Result<RelationDesc, Error> {
-    let descriptors = read_descriptors_from_file(descriptor_file);
-    validate_proto_schema_with_descriptors(message_name, &descriptors)
-}
-
 pub fn validate_proto_schema_with_descriptors(
     message_name: &str,
     descriptors: &Descriptors,
-) -> Result<RelationDesc, Error> {
+) -> Result<RelationDesc> {
     let message = descriptors
         .message_by_name(message_name)
         .expect("Message not found in file descriptor set");
@@ -151,7 +144,7 @@ pub fn validate_proto_schema_with_descriptors(
                 scalar_type: validate_proto_field(&f, descriptors)?,
             })
         })
-        .collect::<Result<Vec<_>, Error>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     let column_names = message.fields().iter().map(|f| Some(f.name().to_string()));
     Ok(RelationDesc::new(
@@ -160,7 +153,7 @@ pub fn validate_proto_schema_with_descriptors(
     ))
 }
 
-// Manages required metadata to read protobuf
+/// Manages required metadata to read protobuf
 #[derive(Debug)]
 pub struct Decoder {
     descriptors: Descriptors,
@@ -168,159 +161,186 @@ pub struct Decoder {
 }
 
 impl Decoder {
+    /// Build a decoder from a pre-validated message
+    ///
+    /// The message `message_name` must exist in the descriptor set and be valid
     pub fn new(descriptors: Descriptors, message_name: &str) -> Decoder {
-        // It's assumed that we've already validated that the message exists in
-        // the descriptor set and is valid
-
+        // TODO: verify that name exists
         Decoder {
             descriptors,
             message_name: message_name.to_string(),
         }
     }
 
-    pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Decoder {
-        let descriptors = read_descriptors_from_file(descriptor_file_name);
-
-        Decoder::new(descriptors, message_name)
+    pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Result<Decoder> {
+        let descriptors = read_descriptors(descriptor_file_name)?;
+        // TODO: should we validate message exists in descriptor?
+        Ok(Decoder::new(descriptors, message_name))
     }
 
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, failure::Error> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
         let mut deserializer =
             Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
-                .expect("Creating a input stream to parse protobuf");
-        let deserialized_message =
-            Value::deserialize(&mut deserializer).expect("Deserializing into rust object");
+                .with_context(|e| format!("Creating a input stream to parse protobuf: {}", e))?;
+        let deserialized_message = SerdeValue::deserialize(&mut deserializer)
+            .with_context(|e| format!("Deserializing into rust object: {}", e))?;
 
-        fn value_into_row(v: &Value, mut packer: RowPacker) -> Result<RowPacker, failure::Error> {
-            match v {
-                Value::Bool(true) => packer.push(Datum::True),
-                Value::Bool(false) => packer.push(Datum::False),
-                Value::I32(i) => packer.push(Datum::Int32(*i)),
-                Value::I64(i) => packer.push(Datum::Int64(*i)),
-                Value::U32(u) => packer.push(Datum::Decimal(Significand::new(*u as i128))),
-                Value::U64(u) => packer.push(Datum::Decimal(Significand::new(*u as i128))),
-                Value::F32(f) => packer.push(Datum::Float32((*f).into())),
-                Value::F64(f) => packer.push(Datum::Float64((*f).into())),
-                Value::String(s) => packer.push(Datum::String(s)),
-                Value::Bytes(b) => packer.push(Datum::Bytes(b)),
-                Value::Map(_m) => packer = nested_value_into_row(v, packer)?,
-                _ => bail!("Unsupported types from serde_value"),
-            }
-            Ok(packer)
-        };
-
-        fn nested_value_into_row(
-            v: &Value,
-            mut packer: RowPacker,
-        ) -> Result<RowPacker, failure::Error> {
-            match v {
-                Value::Bool(true) => packer.push(Datum::True),
-                Value::Bool(false) => packer.push(Datum::False),
-                Value::I32(i) => packer.push(Datum::Float64(OrderedFloat::from(*i as f64))),
-                Value::I64(i) => packer.push(Datum::Float64(OrderedFloat::from(*i as f64))),
-                Value::U32(i) => packer.push(Datum::Float64(OrderedFloat::from(*i as f64))),
-                Value::U64(i) => packer.push(Datum::Float64(OrderedFloat::from(*i as f64))),
-                Value::F32(f) => packer.push(Datum::Float64((*f as f64).into())),
-                Value::F64(f) => packer.push(Datum::Float64((*f).into())),
-                Value::String(s) => packer.push(Datum::String(s)),
-                Value::Bytes(_) => {
-                    bail!("We don't currently support arrays or nested messages with bytes")
-                }
-                Value::Seq(s) => {
-                    let start = unsafe { packer.start_list() };
-                    for value in s {
-                        // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
-                        packer = nested_value_into_row(&value, packer)?;
-                    }
-                    unsafe { packer.finish_list(start) };
-                }
-                Value::Map(m) => {
-                    let start = unsafe { packer.start_dict() };
-                    for (k, v) in m {
-                        // if we bail here the packer might be in an invalid state, but we throw the packer away so it's safe
-                        match (k, v) {
-                            (Value::String(s), Value::Option(Some(val))) => {
-                                packer.push(Datum::String(s.as_str()));
-                                packer = nested_value_into_row(&val, packer)?;
-                            }
-                            (Value::String(_), Value::Option(None)) => (),
-                            (Value::String(s), Value::Seq(_seq)) => {
-                                packer.push(Datum::String(s.as_str()));
-                                packer = nested_value_into_row(&v, packer)?;
-                            }
-                            _ => bail!("Unrecognized value while trying to parse a nested message"),
-                        }
-                    }
-                    unsafe { packer.finish_dict(start) };
-                }
-                _ => bail!("Unsupported types from serde_value"),
-            }
-            Ok(packer)
-        };
-
-        fn default_to_datum(v: &value::Value) -> Result<Datum<'_>, failure::Error> {
-            match v {
-                value::Value::Bool(true) => Ok(Datum::True),
-                value::Value::Bool(false) => Ok(Datum::False),
-                value::Value::I32(i) => Ok(Datum::Int32(*i)),
-                value::Value::I64(i) => Ok(Datum::Int64(*i)),
-                value::Value::U32(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
-                value::Value::U64(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
-                value::Value::F32(f) => Ok(Datum::Float32((*f).into())),
-                value::Value::F64(f) => Ok(Datum::Float64((*f).into())),
-                value::Value::String(s) => Ok(Datum::String(s)),
-                value::Value::Bytes(b) => Ok(Datum::Bytes(b)),
-                _ => bail!("Unsupported types from serde_protobuf::value"),
-            }
-        };
-
-        fn extract_row(
-            deserialized_message: Value,
-            message_descriptors: &MessageDescriptor,
-        ) -> Result<Option<Row>, failure::Error> {
-            let deserialized_message = match deserialized_message {
-                Value::Map(deserialized_message) => deserialized_message,
-                _ => bail!("Deserialization failed with an unsupported top level object type"),
-            };
-
-            let mut row = RowPacker::new();
-
-            for f in message_descriptors.fields().iter() {
-                let key = Value::String(f.name().to_string());
-                let value = deserialized_message.get(&key);
-
-                if let Some(Value::Option(Some(value))) = value {
-                    row = value_into_row(&value, row)?;
-                } else if let Some(Value::Seq(_inner)) = value {
-                    // Note(rkhaitan) This control flow feels extremely weird to me
-                    // but the library gives different types in very different
-                    // 'packaging / wrapping' of Options so this seemed like the cleanest
-                    // thing to do
-                    row = nested_value_into_row(&value.unwrap(), row)?;
-                } else if let Some(default) = f.default_value() {
-                    row.push(default_to_datum(default)?);
-                } else {
-                    row.push(Datum::Null);
-                }
-            }
-
-            Ok(Some(row.finish()))
-        };
-
+        let msg_name = &self.message_name;
         extract_row(
             deserialized_message,
-            &self
-                .descriptors
-                .message_by_name(&self.message_name)
-                .expect("Message should be included in the descriptor set"),
+            self.descriptors.message_by_name(&msg_name).ok_or_else(|| {
+                format_err!(
+                    "Message should be included in the descriptor set {:?}",
+                    msg_name
+                )
+            })?,
         )
     }
 }
 
+fn extract_row(
+    deserialized_message: SerdeValue,
+    message_descriptors: &MessageDescriptor,
+) -> Result<Option<Row>> {
+    let deserialized_message = match deserialized_message {
+        SerdeValue::Map(deserialized_message) => deserialized_message,
+        _ => bail!("Deserialization failed with an unsupported top level object type"),
+    };
+
+    let mut row = RowPacker::new();
+
+    // TODO: This is actually unpacking a row, it should always return json
+    for f in message_descriptors.fields().iter() {
+        let key = SerdeValue::String(f.name().to_string());
+        let value = deserialized_message.get(&key);
+
+        if let Some(SerdeValue::Option(Some(value))) = value {
+            row = json_from_serde_value(&value, row)?;
+        } else if let Some(SerdeValue::Seq(_inner)) = value {
+            // Note(rkhaitan) This control flow feels extremely weird to me
+            // but the library gives different types in very different
+            // 'packaging / wrapping' of Options so this seemed like the cleanest
+            // thing to do
+            row = json_from_serde_value(&value.unwrap(), row)?;
+        } else if let Some(default) = f.default_value() {
+            row.push(datum_from_serde_proto(default)?);
+        } else {
+            row.push(Datum::Null);
+        }
+    }
+
+    Ok(Some(row.finish()))
+}
+
+fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
+    match val {
+        ProtoValue::Bool(true) => Ok(Datum::True),
+        ProtoValue::Bool(false) => Ok(Datum::False),
+        ProtoValue::I32(i) => Ok(Datum::Int32(*i)),
+        ProtoValue::I64(i) => Ok(Datum::Int64(*i)),
+        ProtoValue::U32(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
+        ProtoValue::U64(u) => Ok(Datum::Decimal(Significand::new(*u as i128))),
+        ProtoValue::F32(f) => Ok(Datum::Float32((*f).into())),
+        ProtoValue::F64(f) => Ok(Datum::Float64((*f).into())),
+        ProtoValue::String(s) => Ok(Datum::String(s)),
+        ProtoValue::Bytes(b) => Ok(Datum::Bytes(b)),
+        _ => bail!("Unsupported type for Datum from serde_protobuf::Value"),
+    }
+}
+
+/// Convert an arbitrary [`SerdeValue`] into a [`Datum`], possibly creating a jsonb value
+///
+/// Top-level values are converted to equivalent Datums, but in the case of a nested
+/// type, all numeric types will be converted to f64s (issue #1476)
+fn json_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Result<RowPacker> {
+    packer.push(match val {
+        SerdeValue::Bool(true) => Datum::True,
+        SerdeValue::Bool(false) => Datum::False,
+        SerdeValue::I8(i) => Datum::Int32(*i as i32),
+        SerdeValue::I16(i) => Datum::Int32(*i as i32),
+        SerdeValue::I32(i) => Datum::Int32(*i),
+        SerdeValue::I64(i) => Datum::Int64(*i),
+        SerdeValue::U8(i) => Datum::Int32(*i as i32),
+        SerdeValue::U16(i) => Datum::Int32(*i as i32),
+        SerdeValue::U32(u) => Datum::Decimal(Significand::new(*u as i128)),
+        SerdeValue::U64(u) => Datum::Decimal(Significand::new(*u as i128)),
+        SerdeValue::F32(f) => Datum::Float32((*f).into()),
+        SerdeValue::F64(f) => Datum::Float64((*f).into()),
+        SerdeValue::String(s) => Datum::String(s),
+        SerdeValue::Bytes(b) => Datum::Bytes(b),
+        SerdeValue::Seq(_) | SerdeValue::Map(_) => {
+            return json_nested_from_serde_value(val, packer);
+        }
+        SerdeValue::Char(_) | SerdeValue::Unit | SerdeValue::Option(_) | SerdeValue::Newtype(_) => {
+            bail!(
+                "Unsupported type for Datum from serde_value::Value: {:?}",
+                val
+            )
+        }
+    });
+    Ok(packer)
+}
+
+fn json_nested_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Result<RowPacker> {
+    fn json_number<N: ToPrimitive + std::fmt::Display>(i: &N) -> Result<Datum<'static>> {
+        Ok(Datum::Float64(OrderedFloat::from(i.to_f64().ok_or_else(
+            || format_err!("couldn't convert {} into an f64", i),
+        )?)))
+    }
+
+    packer.push(match val {
+        SerdeValue::Bool(true) => Datum::True,
+        SerdeValue::Bool(false) => Datum::False,
+        SerdeValue::I8(i) => json_number(i)?,
+        SerdeValue::I16(i) => json_number(i)?,
+        SerdeValue::I32(i) => json_number(i)?,
+        SerdeValue::I64(i) => json_number(i)?,
+        SerdeValue::U8(i) => json_number(i)?,
+        SerdeValue::U16(i) => json_number(i)?,
+        SerdeValue::U32(i) => json_number(i)?,
+        SerdeValue::U64(i) => json_number(i)?,
+        SerdeValue::F32(f) => json_number(f)?,
+        SerdeValue::F64(f) => json_number(f)?,
+        SerdeValue::String(s) => Datum::String(s),
+        SerdeValue::Bytes(_) => {
+            bail!("We don't currently support arrays or nested messages with bytes")
+        }
+        SerdeValue::Seq(s) => {
+            return packer.try_push_list_with(|mut packer| {
+                for value in s {
+                    packer = json_nested_from_serde_value(&value, packer)?;
+                }
+                Ok(packer)
+            });
+        }
+        SerdeValue::Map(m) => {
+            return packer.try_push_dict_with(|mut packer| {
+                for (k, v) in m {
+                    match (k, v) {
+                        (SerdeValue::String(s), SerdeValue::Option(Some(val))) => {
+                            packer.push(Datum::String(s.as_str()));
+                            packer = json_nested_from_serde_value(&val, packer)?;
+                        }
+                        (SerdeValue::String(_), SerdeValue::Option(None)) => (),
+                        (SerdeValue::String(s), SerdeValue::Seq(_seq)) => {
+                            packer.push(Datum::String(s.as_str()));
+                            packer = json_nested_from_serde_value(&v, packer)?;
+                        }
+                        _ => bail!("Unrecognized value while trying to parse a nested message"),
+                    }
+                }
+                Ok(packer)
+            });
+        }
+        _ => bail!("Unsupported types from serde_value"),
+    });
+    Ok(packer)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::test::test_proto_schemas::{
+    use super::test_util::gen::fuzz::{
         file_descriptor_proto, Color, TestNestedRecord, TestRecord, TestRepeatedNestedRecord,
         TestRepeatedRecord,
     };
@@ -467,7 +487,7 @@ mod tests {
         file_descriptor_set.set_file(repeated_field);
 
         let descriptors = Descriptors::from_proto(&file_descriptor_set);
-
+        // TODO: should we be validating that message_name exists?
         super::Decoder::new(descriptors, message_name)
     }
 

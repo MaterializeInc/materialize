@@ -3,10 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Translations for various data serialization formats.
+//! Module for all generated proto code
 
-#![deny(missing_debug_implementations)]
-
-pub mod avro;
-mod error;
-pub mod protobuf;
+pub mod fuzz;

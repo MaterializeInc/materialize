@@ -13,6 +13,9 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 #[derive(Debug)]
 pub enum Error {
+    Message {
+        s: String,
+    },
     Input {
         err: InputError,
         details: Option<InputDetails>,
@@ -24,6 +27,10 @@ pub enum Error {
         ctx: String,
         cause: Box<dyn StdError>,
         hints: Vec<String>,
+    },
+    Io {
+        msg: &'static str,
+        cause: io::Error,
     },
     Usage {
         details: String,
@@ -40,6 +47,7 @@ impl Error {
         };
         let mut stderr = StandardStream::stderr(color_choice);
         match self {
+            Error::Message { s } => writeln!(stderr, "{}", s),
             Error::Input {
                 err,
                 details: Some(details),
@@ -67,6 +75,10 @@ impl Error {
             }
             Error::Input { details: None, .. } => {
                 panic!("programming error: print_stderr called on InputError with no details")
+            }
+            Error::Io { msg, cause } => {
+                println!("ERROR: {} {}", msg, cause);
+                Ok(())
             }
             Error::General { ctx, cause, hints } => {
                 let color_spec = ColorSpec::new();
@@ -126,6 +138,12 @@ impl Error {
     }
 }
 
+impl From<String> for Error {
+    fn from(s: String) -> Error {
+        Error::Message { s }
+    }
+}
+
 impl From<InputError> for Error {
     fn from(err: InputError) -> Error {
         Error::Input { err, details: None }
@@ -135,6 +153,16 @@ impl From<InputError> for Error {
 impl From<postgres::Error> for Error {
     fn from(err: postgres::Error) -> Error {
         Error::Pg { cause: err }
+    }
+}
+
+pub trait ErrCtx<T> {
+    fn context(self, msg: &'static str) -> Result<T, Error>;
+}
+
+impl<T> ErrCtx<T> for std::result::Result<T, io::Error> {
+    fn context(self, msg: &'static str) -> Result<T, Error> {
+        self.map_err(|e| Error::Io { msg, cause: e })
     }
 }
 
@@ -161,9 +189,11 @@ fn write_error_heading(stream: &mut StandardStream, color_spec: &ColorSpec) -> i
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Error::Message { s } => write!(f, "{}", s),
             Error::Input { err, .. } => write!(f, "{}", err.msg),
             Error::Pg { cause } => write!(f, "{}", cause),
             Error::General { cause, .. } => cause.fmt(f),
+            Error::Io { msg, cause } => write!(f, "{}: {}", msg, cause),
             Error::Usage { details, .. } => write!(f, "usage error: {}", details),
         }
     }
@@ -208,5 +238,11 @@ where
             cause: Box::new(err),
             hints: Vec::new(),
         })
+    }
+}
+
+impl From<Error> for String {
+    fn from(e: Error) -> String {
+        e.to_string()
     }
 }

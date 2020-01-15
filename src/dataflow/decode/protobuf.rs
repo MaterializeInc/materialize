@@ -3,15 +3,17 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use dataflow_types::{Diff, Timestamp};
 use differential_dataflow::Hashable;
 use log::error;
-use repr::Row;
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
+use dataflow_types::{Diff, Timestamp};
+use interchange::protobuf::Decoder;
+use repr::Row;
+
 use super::EVENTS_COUNTER;
-use timely::dataflow::operators::Operator;
 
 pub fn protobuf<G>(
     stream: &Stream<G, Vec<u8>>,
@@ -21,13 +23,26 @@ pub fn protobuf<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let descriptor_file = descriptor_file.to_owned();
+    let message_name = message_name.to_owned();
+
     stream.unary(
         Exchange::new(|x: &Vec<u8>| x.hashed()),
         "ProtobufDecode",
         move |_, _| {
-            let mut decoder =
-                interchange::protobuf::Decoder::from_descriptor_file(descriptor_file, message_name);
             move |input, output| {
+                let mut decoder =
+                    match Decoder::from_descriptor_file(&descriptor_file, &message_name) {
+                        Ok(decoder) => decoder,
+                        Err(e) => {
+                            error!(
+                                "Unable to construct protobuf decoder \
+                                 descriptor_file={} message_name={} error: {}",
+                                descriptor_file, message_name, e
+                            );
+                            return;
+                        }
+                    };
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
                     for payload in data.iter() {
@@ -47,7 +62,7 @@ where
                             }
                         }
                     }
-                });
+                })
             }
         },
     )
