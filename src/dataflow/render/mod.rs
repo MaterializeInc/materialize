@@ -15,6 +15,7 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
+use differential_dataflow::Collection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::Scope;
@@ -1013,77 +1014,119 @@ where
             offset,
         } = relation_expr
         {
-            use differential_dataflow::operators::reduce::ReduceCore;
-
-            let group_clone = group_key.clone();
-            let order_clone = order_key.clone();
+            use differential_dataflow::operators::reduce::Reduce;
 
             self.ensure_rendered(input, env, scope, worker_index);
             let input = self.collection(input).unwrap();
 
-            let limit = *limit;
-            let offset = *offset;
-            let arrangement = input
-                .map({
-                    move |row| {
-                        let datums = row.unpack();
-                        let group_row = Row::pack(group_clone.iter().map(|i| datums[*i]));
-                        (group_row, row)
-                    }
-                })
-                .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("TopK", {
-                    move |_key, source, target| {
-                        target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
-                        if !order_clone.is_empty() {
-                            //todo: use arrangements or otherwise make the sort more performant?
-                            let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
-                                compare_columns(
-                                    &order_clone,
-                                    &left.0.unpack(),
-                                    &right.0.unpack(),
-                                    || left.cmp(right),
-                                )
-                            };
-                            target.sort_by(sort_by);
-                        }
+            fn test<T: differential_dataflow::Data>() {}
+            test::<(Row, u64)>();
 
-                        let mut skipped = 0; // Number of records offset so far
-                        let mut output = 0; // Number of produced output records.
-                        let mut cursor = 0; // Position of current input record.
+            // To provide a robust incremental orderby-limit experience, we want to avoid grouping
+            // *all* records (or even large groups) and then applying the ordering and limit. Instead,
+            // a more robust approach forms groups of bounded size (here, 16) and applies the offset
+            // and limit to each, and then increases the sizes of the groups.
 
-                        //skip forward until an offset number of records is reached
-                        while cursor < target.len() {
-                            if skipped + (target[cursor].1 as usize) > offset {
-                                break;
-                            }
-                            skipped += target[cursor].1 as usize;
-                            cursor += 1;
+            // Builds a "stage", which uses a finer grouping than is required to reduce the volume of
+            // updates, and to reduce the amount of work on the critical path for updates. The cost is
+            // a larger number of arrangements when this optimization does nothing beneficial.
+            fn build_topk_stage<G>(
+                collection: Collection<G, Row, Diff>,
+                group_key: &[usize],
+                order_key: &[expr::ColumnOrder],
+                modulus: u64,
+                offset: usize,
+                limit: Option<usize>,
+            ) -> Collection<G, Row, Diff>
+            where
+                G: Scope,
+                G::Timestamp: Lattice,
+            {
+                let group_clone = group_key.to_vec();
+                let order_clone = order_key.to_vec();
+
+                collection
+                    .map({
+                        move |row| {
+                            use differential_dataflow::hashable::Hashable;
+                            let row_hash = row.hashed() % modulus;
+                            let datums = row.unpack();
+                            let group_row = Row::pack(group_clone.iter().map(|i| datums[*i]));
+                            ((group_row, row_hash), row)
                         }
-                        let skip_cursor = cursor;
-                        if cursor < target.len() {
-                            if skipped < offset {
-                                //if offset only skips some members of a group of identical
-                                //records, return the rest
-                                target[skip_cursor].1 -= (offset - skipped) as isize;
+                    })
+                    .reduce_named("TopK", {
+                        move |_key, source, target| {
+                            target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
+                            if !order_clone.is_empty() {
+                                //todo: use arrangements or otherwise make the sort more performant?
+                                let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
+                                    compare_columns(
+                                        &order_clone,
+                                        &left.0.unpack(),
+                                        &right.0.unpack(),
+                                        || left.cmp(right),
+                                    )
+                                };
+                                target.sort_by(sort_by);
                             }
-                            //apply limit
-                            if let Some(limit) = limit {
-                                while output < limit && cursor < target.len() {
-                                    let to_emit =
-                                        std::cmp::min(limit - output, target[cursor].1 as usize);
-                                    target[cursor].1 = to_emit as isize;
-                                    output += to_emit;
-                                    cursor += 1;
+
+                            let mut skipped = 0; // Number of records offset so far
+                            let mut output = 0; // Number of produced output records.
+                            let mut cursor = 0; // Position of current input record.
+
+                            //skip forward until an offset number of records is reached
+                            while cursor < target.len() {
+                                if skipped + (target[cursor].1 as usize) > offset {
+                                    break;
                                 }
-                                target.truncate(cursor);
+                                skipped += target[cursor].1 as usize;
+                                cursor += 1;
                             }
+                            let skip_cursor = cursor;
+                            if cursor < target.len() {
+                                if skipped < offset {
+                                    //if offset only skips some members of a group of identical
+                                    //records, return the rest
+                                    target[skip_cursor].1 -= (offset - skipped) as isize;
+                                }
+                                //apply limit
+                                if let Some(limit) = limit {
+                                    while output < limit && cursor < target.len() {
+                                        let to_emit = std::cmp::min(
+                                            limit - output,
+                                            target[cursor].1 as usize,
+                                        );
+                                        target[cursor].1 = to_emit as isize;
+                                        output += to_emit;
+                                        cursor += 1;
+                                    }
+                                    target.truncate(cursor);
+                                }
+                            }
+                            target.drain(..skip_cursor);
                         }
-                        target.drain(..skip_cursor);
-                    }
-                });
+                    })
+                    .map(|((_key, _hash), row)| row)
+            }
 
-            let index = (0..group_key.len()).collect::<Vec<_>>();
-            self.set_local_columns(relation_expr, &index[..], arrangement);
+            let mut collection = input;
+            for shift in [
+                60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0u64,
+            ]
+            .iter()
+            {
+                collection = build_topk_stage(
+                    collection,
+                    group_key,
+                    order_key,
+                    1u64 << shift,
+                    *offset,
+                    *limit,
+                );
+            }
+
+            self.collections.insert(relation_expr.clone(), collection);
         }
     }
 
