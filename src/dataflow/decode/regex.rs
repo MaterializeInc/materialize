@@ -50,7 +50,11 @@ where
                             None => continue,
                         };
                         session.give((
-                            Row::pack(captures.iter().skip(1).map(|m| Into::<Datum>::into(m.map(|m| Datum::String(m.as_str())))).chain(iter::once(line_no.map(Datum::Int64).into()))),
+                            Row::pack(captures.iter().skip(1).map(
+                                |m| Into::<Datum>::into( m.map(
+                                    |m| Datum::String(m.as_str()))
+                                )
+                            ).chain(iter::once(line_no.map(Datum::Int64).into()))),
                             *cap.time(),
                             1,
                         ));
