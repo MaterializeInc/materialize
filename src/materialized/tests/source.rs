@@ -140,3 +140,33 @@ New York,NY,10004
     thread::sleep(Duration::from_millis(100));
     Ok(())
 }
+
+// Tests that a client that launches a non-terminating TAIL and disconnects
+// does not keep the server alive forever.
+#[test]
+fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
+    ore::log::init();
+
+    let temp_dir = tempfile::tempdir()?;
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+
+    // Create a tailing file source that never produces any data. This is the
+    // simplest way to cause a TAIL to never terminate.
+    let path = Path::join(temp_dir.path(), "file");
+    fs::write(&path, "")?;
+    client.batch_execute(&*format!(
+        "CREATE SOURCE s FROM 'file://{}' WITH (format = 'text', tail = true)",
+        path.display()
+    ))?;
+    client.batch_execute("CREATE VIEW v AS SELECT * FROM s")?;
+
+    // Launch the ill-fated tail.
+    client.copy_out("TAIL v")?;
+
+    // Drop order will first disconnect clients and then gracefully shut down
+    // the server. We previously had a bug where the server would fail to notice
+    // that the client running `TAIL v` had disconnected, and would hang forever
+    // waiting for data to be written to `path`, which in this test never comes.
+    // So if this function exits, things are working correctly.
+    Ok(())
+}
