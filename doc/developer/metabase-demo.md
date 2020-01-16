@@ -116,11 +116,6 @@ for the second query to work, either through your `psql` shell or
 the Metabase interactive SQL editor.
 
 - A Simple count:
-    - Basic query:
-      ```sql
-      SELECT count(*) AS "count"
-      FROM "mysql_tpcch_orderline";
-      ```
     - Create the view:
       ```sql
       CREATE VIEW orderline_count AS
@@ -132,20 +127,6 @@ the Metabase interactive SQL editor.
       ```
 
 - Q01:
-    - Basic query:
-      ```sql
-        SELECT
-            ol_number,
-            sum(ol_quantity) AS sum_qty,
-            sum(ol_amount) AS sum_amount,
-            avg(ol_quantity) AS avg_qty,
-            avg(ol_amount) AS avg_amount,
-            count(*) AS count_order
-        FROM mysql_tpcch_orderline
-        WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
-        GROUP BY ol_number
-        ORDER BY ol_number;
-      ```
     - Create the view:
       ```sql
         CREATE VIEW q01 AS
@@ -182,7 +163,7 @@ points:
 
 * We are a streaming data engine that is capable of supporting all of SQL, with strong
   consistency guarantees. The only thing left at this point is engineering effort to add
-  more features, we know that they are acheivable.
+  more features, we know that they are achievable.
 * To demonstrate where we are now we're going to walk through just using a regular BI
   tool in the way that a regular analyst would use it, but then show the power of
   materialize maintaining streaming views.
@@ -206,6 +187,7 @@ points:
 
 - Query 2
     ```sql
+    CREATE VIEW q02 AS
     SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
     FROM
         mysql_tpcch_item,
@@ -240,6 +222,7 @@ points:
     ```
 - Query 3
     ```sql
+    CREATE VIEW q03 AS
     SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d
     FROM
         mysql_tpcch_customer,
