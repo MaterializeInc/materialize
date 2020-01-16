@@ -11,6 +11,7 @@
 x-port-mappings:
   mz: &mz 6875:6875
   mysql: &mysql 3306:3306
+  kafka: &kafka 9092:9092
   kafka-control-center: &control-center 9021:9021
   grafana: &grafana 3000:3000
   metabase: &metabase 3030:3000
@@ -58,6 +59,8 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.3.0
+    ports:
+      - *kafka
     depends_on: [zookeeper]
     environment:
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
