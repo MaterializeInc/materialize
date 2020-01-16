@@ -104,8 +104,8 @@ $ kafka-ingest format=avro topic=db.sp_ec-ia.lc-ch._ars schema=${schema_v2} publ
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Topic
 ---
-testdrive_db_my_topic_${testdrive.seed}
-testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
+materialize.public.testdrive_db_my_topic_${testdrive.seed}
+materialize.public.testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
 
 # Verify that the sources created by CREATE SOURCES are usable from SQL without
 # quoting their names.
@@ -119,7 +119,7 @@ testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Topic
 ---
-testdrive_data_${testdrive.seed}
+materialize.public.testdrive_data_${testdrive.seed}
 
 > CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'

@@ -18,7 +18,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ObjectName;
 use std::fmt;
 
 /// SQL data types
@@ -72,10 +71,10 @@ pub enum DataType {
     Text,
     /// Bytea
     Bytea,
-    /// Custom type such as enums
-    Custom(ObjectName),
     /// Arrays
     Array(Box<DataType>),
+    /// Binary JSON
+    Jsonb,
 }
 
 impl fmt::Display for DataType {
@@ -114,7 +113,7 @@ impl fmt::Display for DataType {
             DataType::Text => write!(f, "text"),
             DataType::Bytea => write!(f, "bytea"),
             DataType::Array(ty) => write!(f, "{}[]", ty),
-            DataType::Custom(ty) => write!(f, "{}", ty),
+            DataType::Jsonb => write!(f, "jsonb"),
         }
     }
 }

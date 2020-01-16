@@ -1674,7 +1674,7 @@ impl Parser {
     pub fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
         let mut data_type = match self.next_token() {
             Some(Token::Word(k)) => match k.keyword.as_ref() {
-                "BOOLEAN" => DataType::Boolean,
+                "BOOL" | "BOOLEAN" => DataType::Boolean,
                 "FLOAT" => DataType::Float(self.parse_optional_precision()?),
                 "REAL" => DataType::Real,
                 "DOUBLE" => {
@@ -1722,17 +1722,14 @@ impl Parser {
                 // parse_interval_literal for a taste.
                 "INTERVAL" => DataType::Interval,
                 "REGCLASS" => DataType::Regclass,
-                "TEXT" => DataType::Text,
+                "TEXT" | "STRING" => DataType::Text,
                 "BYTEA" => DataType::Bytea,
                 "NUMERIC" | "DECIMAL" | "DEC" => {
                     let (precision, scale) = self.parse_optional_precision_scale()?;
                     DataType::Decimal(precision, scale)
                 }
-                _ => {
-                    self.prev_token();
-                    let type_name = self.parse_object_name()?;
-                    DataType::Custom(type_name)
-                }
+                "JSON" | "JSONB" => DataType::Jsonb,
+                _ => self.expected("a known data type", Some(Token::Word(k)))?,
             },
             other => self.expected("a data type name", other)?,
         };

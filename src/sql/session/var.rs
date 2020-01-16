@@ -30,7 +30,7 @@ pub(super) const CLIENT_ENCODING: ServerVar<&'static str> = ServerVar {
 
 pub(super) const DATABASE: ServerVar<&'static str> = ServerVar {
     name: unicase::Ascii::new("database"),
-    value: "default",
+    value: "materialize",
     description: "Sets the current database (CockroachDB).",
 };
 

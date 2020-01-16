@@ -28,7 +28,7 @@ explain plan for select b, c from foo where a = 5
 ----
 Project {
   outputs: [1, 2],
-  Filter { predicates: [#0 = 5], Get { foo (u1) } }
+  Filter { predicates: [#0 = 5], Get { materialize.public.foo (u1) } }
 }
 
 query TR

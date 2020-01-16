@@ -25,7 +25,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         // populated Kafka source here is too annoying.
         client.execute("CREATE VIEW constant AS SELECT 1", &[])?;
         client.execute(
-            "CREATE VIEW logging_derived AS SELECT * FROM mz_arrangement_sizes",
+            "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
             &[],
         )?;
     }
@@ -40,26 +40,26 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         assert_eq!(
             rows,
             &[
-                "bootstrap1",
-                "bootstrap2",
-                "constant",
-                "logging_derived",
-                "mz_arrangement_sharing",
-                "mz_arrangement_sizes",
-                "mz_catalog_names",
-                "mz_dataflow_channels",
-                "mz_dataflow_operator_addresses",
-                "mz_dataflow_operators",
-                "mz_materialization_dependencies",
-                "mz_materializations",
-                "mz_peek_active",
-                "mz_peek_durations",
-                "mz_scheduling_elapsed",
-                "mz_scheduling_histogram",
-                "mz_scheduling_parks",
-                "mz_view_foreign_keys",
-                "mz_view_frontiers",
-                "mz_view_keys",
+                "materialize.public.bootstrap1",
+                "materialize.public.bootstrap2",
+                "materialize.public.constant",
+                "materialize.public.logging_derived",
+                "mz_catalog.mz_arrangement_sharing",
+                "mz_catalog.mz_arrangement_sizes",
+                "mz_catalog.mz_catalog_names",
+                "mz_catalog.mz_dataflow_channels",
+                "mz_catalog.mz_dataflow_operator_addresses",
+                "mz_catalog.mz_dataflow_operators",
+                "mz_catalog.mz_materialization_dependencies",
+                "mz_catalog.mz_materializations",
+                "mz_catalog.mz_peek_active",
+                "mz_catalog.mz_peek_durations",
+                "mz_catalog.mz_scheduling_elapsed",
+                "mz_catalog.mz_scheduling_histogram",
+                "mz_catalog.mz_scheduling_parks",
+                "mz_catalog.mz_view_foreign_keys",
+                "mz_catalog.mz_view_frontiers",
+                "mz_catalog.mz_view_keys",
             ]
         );
     }

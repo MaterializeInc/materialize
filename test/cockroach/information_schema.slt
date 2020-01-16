@@ -130,7 +130,7 @@ TRUNCATE TABLE information_schema.tables
 query T
 SHOW DATABASES
 ----
-defaultdb
+materialize
 postgres
 system
 test

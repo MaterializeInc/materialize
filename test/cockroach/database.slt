@@ -35,7 +35,7 @@ SHOW DATABASES
 ----
 database_name
 a
-defaultdb
+materialize
 postgres
 system
 test
@@ -105,7 +105,7 @@ b4
 b5
 b6
 c
-defaultdb
+materialize
 postgres
 system
 test
@@ -154,7 +154,7 @@ SHOW DATABASES
 database_name
 a
 c
-defaultdb
+materialize
 postgres
 system
 test

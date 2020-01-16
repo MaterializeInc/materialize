@@ -2116,7 +2116,7 @@ fn parse_delimited_identifiers() {
         _ => panic!("Expected ExprWithAlias"),
     }
 
-    verified_stmt(r#"CREATE TABLE "foo" ("bar" "int")"#);
+    verified_stmt(r#"CREATE TABLE "foo" ("bar" int)"#);
     verified_stmt(r#"ALTER TABLE foo ADD CONSTRAINT "bar" PRIMARY KEY (baz)"#);
     //TODO verified_stmt(r#"UPDATE foo SET "bar" = 5"#);
 }
@@ -4088,7 +4088,6 @@ fn parse_create_table_from_pg_dump() {
             create_date date DEFAULT now()::date NOT NULL,
             create_date1 date DEFAULT 'now'::text::date NOT NULL,
             last_update timestamp without time zone DEFAULT now(),
-            release_year public.year,
             active integer
         )";
     one_statement_parses_to(sql, "CREATE TABLE public.customer (\
@@ -4102,7 +4101,6 @@ fn parse_create_table_from_pg_dump() {
             create_date date DEFAULT CAST(now() AS date) NOT NULL, \
             create_date1 date DEFAULT CAST(CAST('now' AS text) AS date) NOT NULL, \
             last_update timestamp DEFAULT now(), \
-            release_year public.year, \
             active int\
         )");
 }
