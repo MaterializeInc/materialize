@@ -1028,86 +1028,90 @@ where
             // updates, and to reduce the amount of work on the critical path for updates. The cost is
             // a larger number of arrangements when this optimization does nothing beneficial.
             fn build_topk_stage<G>(
-                collection: Collection<G, Row, Diff>,
-                group_key: &[usize],
+                collection: Collection<G, ((Row, u64), Row), Diff>,
                 order_key: &[expr::ColumnOrder],
                 modulus: u64,
                 offset: usize,
                 limit: Option<usize>,
-            ) -> Collection<G, Row, Diff>
+            ) -> Collection<G, ((Row, u64), Row), Diff>
             where
                 G: Scope,
                 G::Timestamp: Lattice,
             {
-                let group_clone = group_key.to_vec();
                 let order_clone = order_key.to_vec();
 
                 collection
-                    .map({
-                        move |row| {
-                            use differential_dataflow::hashable::Hashable;
-                            let row_hash = row.hashed() % modulus;
-                            let datums = row.unpack();
-                            let group_row = Row::pack(group_clone.iter().map(|i| datums[*i]));
-                            ((group_row, row_hash), row)
-                        }
-                    })
+                    .map(move |((key, hash), row)| ((key, hash % modulus), row))
                     .reduce_named("TopK", {
                         move |_key, source, target| {
                             target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
-                            if !order_clone.is_empty() {
-                                //todo: use arrangements or otherwise make the sort more performant?
-                                let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
-                                    compare_columns(
-                                        &order_clone,
-                                        &left.0.unpack(),
-                                        &right.0.unpack(),
-                                        || left.cmp(right),
-                                    )
-                                };
-                                target.sort_by(sort_by);
-                            }
-
-                            let mut skipped = 0; // Number of records offset so far
-                            let mut output = 0; // Number of produced output records.
-                            let mut cursor = 0; // Position of current input record.
-
-                            //skip forward until an offset number of records is reached
-                            while cursor < target.len() {
-                                if skipped + (target[cursor].1 as usize) > offset {
-                                    break;
+                            let must_shrink = offset > 0
+                                || limit
+                                    .map(|l| {
+                                        target.iter().map(|(_, d)| *d).sum::<isize>() as usize > l
+                                    })
+                                    .unwrap_or(false);
+                            if must_shrink {
+                                if !order_clone.is_empty() {
+                                    //todo: use arrangements or otherwise make the sort more performant?
+                                    let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
+                                        compare_columns(
+                                            &order_clone,
+                                            &left.0.unpack(),
+                                            &right.0.unpack(),
+                                            || left.cmp(right),
+                                        )
+                                    };
+                                    target.sort_by(sort_by);
                                 }
-                                skipped += target[cursor].1 as usize;
-                                cursor += 1;
-                            }
-                            let skip_cursor = cursor;
-                            if cursor < target.len() {
-                                if skipped < offset {
-                                    //if offset only skips some members of a group of identical
-                                    //records, return the rest
-                                    target[skip_cursor].1 -= (offset - skipped) as isize;
-                                }
-                                //apply limit
-                                if let Some(limit) = limit {
-                                    while output < limit && cursor < target.len() {
-                                        let to_emit = std::cmp::min(
-                                            limit - output,
-                                            target[cursor].1 as usize,
-                                        );
-                                        target[cursor].1 = to_emit as isize;
-                                        output += to_emit;
-                                        cursor += 1;
+
+                                let mut skipped = 0; // Number of records offset so far
+                                let mut output = 0; // Number of produced output records.
+                                let mut cursor = 0; // Position of current input record.
+
+                                //skip forward until an offset number of records is reached
+                                while cursor < target.len() {
+                                    if skipped + (target[cursor].1 as usize) > offset {
+                                        break;
                                     }
-                                    target.truncate(cursor);
+                                    skipped += target[cursor].1 as usize;
+                                    cursor += 1;
                                 }
+                                let skip_cursor = cursor;
+                                if cursor < target.len() {
+                                    if skipped < offset {
+                                        //if offset only skips some members of a group of identical
+                                        //records, return the rest
+                                        target[skip_cursor].1 -= (offset - skipped) as isize;
+                                    }
+                                    //apply limit
+                                    if let Some(limit) = limit {
+                                        while output < limit && cursor < target.len() {
+                                            let to_emit = std::cmp::min(
+                                                limit - output,
+                                                target[cursor].1 as usize,
+                                            );
+                                            target[cursor].1 = to_emit as isize;
+                                            output += to_emit;
+                                            cursor += 1;
+                                        }
+                                        target.truncate(cursor);
+                                    }
+                                }
+                                target.drain(..skip_cursor);
                             }
-                            target.drain(..skip_cursor);
                         }
                     })
-                    .map(|((_key, _hash), row)| row)
             }
 
-            let mut collection = input;
+            let group_clone = group_key.to_vec();
+            let mut collection = input.map(move |row| {
+                use differential_dataflow::hashable::Hashable;
+                let row_hash = row.hashed();
+                let datums = row.unpack();
+                let group_row = Row::pack(group_clone.iter().map(|i| datums[*i]));
+                ((group_row, row_hash), row)
+            });
             // This sequence of numbers defines the shifts that happen to the 64 bit hash
             // of the record, and has the properties that 1. there are not too many of them,
             // and 2. each has a modest difference to the next.
@@ -1116,15 +1120,16 @@ where
             // are substantially larger than `offset + limit` (the largest factor should be
             // bounded by two raised to the difference between subsequent numbers);
             if let Some(limit) = limit {
-                for shift in [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter() {
+                for log_modulus in
+                    [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter()
+                {
                     // here we do not apply `offset`, but instead restrict ourself with a limit
                     // that includes the offset. We cannot apply `offset` until we perform the
                     // final, complete reduction.
                     collection = build_topk_stage(
                         collection,
-                        group_key,
                         order_key,
-                        1u64 << shift,
+                        1u64 << log_modulus,
                         0,
                         Some(*offset + *limit),
                     );
@@ -1134,9 +1139,9 @@ where
             // We do a final step, both to make sure that we complete the reduction, and to correctly
             // apply `offset` to the final group, as we have not yet been applying it to the partially
             // formed groups.
-            collection = build_topk_stage(collection, group_key, order_key, 1u64, *offset, *limit);
-
-            self.collections.insert(relation_expr.clone(), collection);
+            let result = build_topk_stage(collection, order_key, 1u64, *offset, *limit)
+                .map(|((_key, _hash), row)| row);
+            self.collections.insert(relation_expr.clone(), result);
         }
     }
 
