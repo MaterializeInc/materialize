@@ -770,8 +770,7 @@ where
         let tag = format!("COPY {}", count);
         self.send(BackendMessage::CopyDone).await?;
         self.send(BackendMessage::CommandComplete { tag }).await?;
-
-        self.sync(session).await
+        Ok(State::Ready(session))
     }
 
     async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {
