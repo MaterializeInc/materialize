@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::env;
 use std::error::Error as _;
 use std::fmt::Write as _;
 use std::io::{self, Write};
@@ -66,7 +67,10 @@ impl Action for SqlAction {
         let max = match self.stmt {
             // TODO(benesch): this is horrible. PEEK needs to learn to wait
             // until it's up to date.
-            Statement::Peek { .. } | Statement::Query { .. } => 7,
+            Statement::Peek { .. } | Statement::Query { .. } => env::var("MZ_TD_MAX_RETRIES")
+                .unwrap_or_else(|_| "7".into())
+                .parse()
+                .map_err(|e| format!("invalid MZ_TD_MAX_RETRIES: {}", e))?,
             _ => 0,
         };
         let mut i = 0;
