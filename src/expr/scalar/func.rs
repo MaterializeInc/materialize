@@ -423,17 +423,17 @@ fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
 
 // TODO(jamii): it would be much more efficient to skip the intermediate
 // repr::jsonb::Jsonb.
-fn cast_jsonb_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
     strconv::format_jsonb(&mut buf, &Jsonb::from_datum(a));
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_jsonb_to_string_unless_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn jsonb_stringify_unless_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match a {
         Datum::JsonNull => Datum::Null,
         Datum::String(_) => a,
-        _ => cast_jsonb_to_string(a, temp_storage),
+        _ => jsonb_stringify(a, temp_storage),
     }
 }
 
@@ -455,9 +455,22 @@ fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn cast_jsonb_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::String(_) => a,
+        _ => Datum::Null,
+    }
+}
+
 fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
         Datum::Float64(_) => a,
+        Datum::String(s) => match s {
+            "NaN" => std::f64::NAN.into(),
+            "Infinity" => std::f64::INFINITY.into(),
+            "-Infinity" => std::f64::NEG_INFINITY.into(),
+            _ => Datum::Null,
+        },
         _ => Datum::Null,
     }
 }
@@ -1776,9 +1789,10 @@ pub enum UnaryFunc {
     CastIntervalToString,
     CastBytesToString,
     CastStringToJsonb,
-    CastJsonbToString,
-    CastJsonbToStringUnlessString,
+    JsonbStringify,
+    JsonbStringifyUnlessString,
     CastJsonbOrNullToJsonb,
+    CastJsonbToString,
     CastJsonbToFloat64,
     CastJsonbToBool,
     CeilFloat32,
@@ -1895,11 +1909,10 @@ impl UnaryFunc {
             UnaryFunc::CastIntervalToString => cast_interval_to_string(a, temp_storage),
             UnaryFunc::CastBytesToString => cast_bytes_to_string(a, temp_storage),
             UnaryFunc::CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
-            UnaryFunc::CastJsonbToString => cast_jsonb_to_string(a, temp_storage),
-            UnaryFunc::CastJsonbToStringUnlessString => {
-                cast_jsonb_to_string_unless_string(a, temp_storage)
-            }
+            UnaryFunc::JsonbStringify => jsonb_stringify(a, temp_storage),
+            UnaryFunc::JsonbStringifyUnlessString => jsonb_stringify_unless_string(a, temp_storage),
             UnaryFunc::CastJsonbOrNullToJsonb => cast_jsonb_or_null_to_jsonb(a),
+            UnaryFunc::CastJsonbToString => cast_jsonb_to_string(a),
             UnaryFunc::CastJsonbToFloat64 => cast_jsonb_to_float64(a),
             UnaryFunc::CastJsonbToBool => cast_jsonb_to_bool(a),
             UnaryFunc::CeilFloat32 => ceil_float32(a),
@@ -2056,15 +2069,17 @@ impl UnaryFunc {
 
             // can return null for invalid json
             CastStringToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
-            // can return null for nan/infinity
-            CastJsonbToString | CastJsonbToStringUnlessString => {
-                ColumnType::new(ScalarType::String).nullable(true)
-            }
 
-            // converts null to jsonnull but converts nan to null
-            CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
+            JsonbStringify => ColumnType::new(ScalarType::String).nullable(in_nullable),
+
+            // converts jsonnull to null
+            JsonbStringifyUnlessString => ColumnType::new(ScalarType::String).nullable(true),
+
+            // converts null to jsonnull
+            CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(false),
 
             // can return null for other jsonb types
+            CastJsonbToString => ColumnType::new(ScalarType::String).nullable(true),
             CastJsonbToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
             CastJsonbToBool => ColumnType::new(ScalarType::Bool).nullable(true),
 
@@ -2228,9 +2243,10 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
             UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
-            UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
-            UnaryFunc::CastJsonbToStringUnlessString => f.write_str("jsonbtostr?"),
+            UnaryFunc::JsonbStringify => f.write_str("jsonbtostr"),
+            UnaryFunc::JsonbStringifyUnlessString => f.write_str("jsonbtostr?"),
             UnaryFunc::CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
+            UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
             UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
             UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
