@@ -500,6 +500,7 @@ where
             inputs,
             variables,
             demand,
+            predicates,
         } = relation_expr
         {
             // For the moment, assert that each relation participates at most
@@ -538,6 +539,21 @@ where
                 prior_arities.push(offset);
                 offset += arities[input];
             }
+            let input_relation = arities
+                .iter()
+                .enumerate()
+                .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+                .collect::<Vec<_>>();
+
+            let pred_support = predicates
+                .iter()
+                .map(|predicate| {
+                    let support = predicate.support();
+                    assert!(!support.is_empty());
+                    let index = input_relation[*support.iter().max().unwrap()];
+                    (index, predicate.clone(), support)
+                })
+                .collect::<Vec<_>>();
 
             // Unwrap demand
             let demand = if let Some(demand) = demand {
@@ -610,6 +626,35 @@ where
                         }
                     }
 
+                    let mut filters_to_apply = Vec::new();
+
+                    // add to the outputs whatever is required to run future predicates
+                    for (pred_input_index, predicate, support) in pred_support.iter() {
+                        if *pred_input_index >= index {
+                            for column in support.iter() {
+                                if *column < prior_arities[index] {
+                                    let column_input_idx = input_relation[*column];
+                                    old_outputs.push(
+                                        columns
+                                            .iter()
+                                            .position(|c2| {
+                                                (
+                                                    column_input_idx,
+                                                    column - prior_arities[column_input_idx],
+                                                ) == *c2
+                                            })
+                                            .unwrap(),
+                                    );
+                                } else if *column < (prior_arities[index] + arities[index]) {
+                                    new_outputs.push(column - prior_arities[index]);
+                                }
+                            }
+                        }
+                        if pred_input_index == &index {
+                            filters_to_apply.push(predicate.clone());
+                        }
+                    }
+
                     // Dedup both sets of outputs
                     old_outputs.sort();
                     old_outputs.dedup();
@@ -676,6 +721,22 @@ where
                             panic!("Arrangement alarmingly absent!");
                         }
                     };
+
+                    // apply any filters that can be applied to the intermediate result
+                    let env = env.clone();
+                    if !filters_to_apply.is_empty() {
+                        joined = joined.filter(move |input_row| {
+                            let datums = input_row.unpack();
+                            let temp_storage = RowArena::new();
+                            filters_to_apply.iter().all(|predicate| {
+                                match predicate.eval(&datums, &env, &temp_storage) {
+                                    Datum::True => true,
+                                    Datum::False | Datum::Null => false,
+                                    _ => unreachable!(),
+                                }
+                            })
+                        });
+                    }
                 }
 
                 // Permute back to the original positions

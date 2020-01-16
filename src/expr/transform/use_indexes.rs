@@ -62,75 +62,78 @@ impl FilterEqualLiteral {
                 id: Id::Global(id), ..
             } = &mut **input
             {
-                // gather predicates of the form CallBinary{Binaryfunc::Eq, Column, Literal}
-                let (columns, predinfo): (Vec<_>, Vec<_>) = predicates
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, p)| {
-                        if let ScalarExpr::CallBinary {
-                            func: BinaryFunc::Eq,
-                            expr1,
-                            expr2,
-                        } = p
-                        {
-                            match (&**expr1, &**expr2) {
-                                (ScalarExpr::Literal(litrow, littyp), ScalarExpr::Column(c)) => {
-                                    Some((*c, (litrow.clone(), littyp.clone(), i)))
-                                }
-                                (ScalarExpr::Column(c), ScalarExpr::Literal(litrow, littyp)) => {
-                                    Some((*c, (litrow.clone(), littyp.clone(), i)))
-                                }
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .unzip();
-                if !columns.is_empty() {
-                    let key_set = &indexes[id];
-                    // find set of keys of the largest size that is a subset of columns
-                    let best_index = key_set
+                if let Some(key_set) = indexes.get(id) {
+                    // gather predicates of the form CallBinary{Binaryfunc::Eq, Column, Literal}
+                    let (columns, predinfo): (Vec<_>, Vec<_>) = predicates
                         .iter()
-                        .filter(|ks| {
-                            ks.iter().all(|k| match k {
-                                ScalarExpr::Column(c) => columns.contains(c),
-                                _ => false,
-                            })
-                        })
-                        .max_by_key(|ks| ks.len());
-                    if let Some(keys) = best_index {
-                        let column_order = keys
-                            .iter()
-                            .map(|k| match k {
-                                ScalarExpr::Column(c) => {
-                                    columns.iter().position(|d| c == d).unwrap()
+                        .enumerate()
+                        .filter_map(|(i, p)| {
+                            if let ScalarExpr::CallBinary {
+                                func: BinaryFunc::Eq,
+                                expr1,
+                                expr2,
+                            } = p
+                            {
+                                match (&**expr1, &**expr2) {
+                                    (
+                                        ScalarExpr::Literal(litrow, littyp),
+                                        ScalarExpr::Column(c),
+                                    ) => Some((*c, (litrow.clone(), littyp.clone(), i))),
+                                    (
+                                        ScalarExpr::Column(c),
+                                        ScalarExpr::Literal(litrow, littyp),
+                                    ) => Some((*c, (litrow.clone(), littyp.clone(), i))),
+                                    _ => None,
                                 }
-                                _ => unreachable!(),
+                            } else {
+                                None
+                            }
+                        })
+                        .unzip();
+                    if !columns.is_empty() {
+                        // find set of keys of the largest size that is a subset of columns
+                        let best_index = key_set
+                            .iter()
+                            .filter(|ks| {
+                                ks.iter().all(|k| match k {
+                                    ScalarExpr::Column(c) => columns.contains(c),
+                                    _ => false,
+                                })
                             })
-                            .collect::<Vec<_>>();
-                        let mut constant_row = Vec::new();
-                        let mut constant_col_types = Vec::new();
-                        let mut variables = Vec::new();
-                        for (new_idx, old_idx) in column_order.into_iter().enumerate() {
-                            variables.push(vec![(0, columns[old_idx]), (1, new_idx)]);
-                            constant_row.extend(predinfo[old_idx].0.unpack());
-                            constant_col_types.push(predinfo[old_idx].1.clone());
+                            .max_by_key(|ks| ks.len());
+                        if let Some(keys) = best_index {
+                            let column_order = keys
+                                .iter()
+                                .map(|k| match k {
+                                    ScalarExpr::Column(c) => {
+                                        columns.iter().position(|d| c == d).unwrap()
+                                    }
+                                    _ => unreachable!(),
+                                })
+                                .collect::<Vec<_>>();
+                            let mut constant_row = Vec::new();
+                            let mut constant_col_types = Vec::new();
+                            let mut variables = Vec::new();
+                            for (new_idx, old_idx) in column_order.into_iter().enumerate() {
+                                variables.push(vec![(0, columns[old_idx]), (1, new_idx)]);
+                                constant_row.extend(predinfo[old_idx].0.unpack());
+                                constant_col_types.push(predinfo[old_idx].1.clone());
+                            }
+                            let mut constant_type = RelationType::new(constant_col_types);
+                            for i in 0..keys.len() {
+                                constant_type = constant_type.add_keys(vec![i]);
+                            }
+                            let arity = input.arity();
+                            let converted_join = RelationExpr::join(
+                                vec![
+                                    input.take_dangerous().arrange_by(&[keys.clone()]),
+                                    RelationExpr::constant(vec![constant_row], constant_type),
+                                ],
+                                variables,
+                            )
+                            .project((0..arity).collect::<Vec<_>>());
+                            *input = Box::new(converted_join);
                         }
-                        let mut constant_type = RelationType::new(constant_col_types);
-                        for i in 0..keys.len() {
-                            constant_type = constant_type.add_keys(vec![i]);
-                        }
-                        let arity = input.arity();
-                        let converted_join = RelationExpr::join(
-                            vec![
-                                input.take_dangerous().arrange_by(&[keys.clone()]),
-                                RelationExpr::constant(vec![constant_row], constant_type),
-                            ],
-                            variables,
-                        )
-                        .project((0..arity).collect::<Vec<_>>());
-                        *input = Box::new(converted_join);
                     }
                 }
             }

@@ -37,6 +37,7 @@ impl RedundantJoin {
             inputs,
             variables,
             demand,
+            predicates,
         } = relation
         {
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -102,6 +103,9 @@ impl RedundantJoin {
                 *demand = None;
             }
             if projection.iter().enumerate().any(|(i, p)| i != *p) {
+                for predicate in predicates.iter_mut() {
+                    predicate.permute(&projection);
+                }
                 *relation = relation.take_dangerous().project(projection);
             }
         }

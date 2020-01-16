@@ -115,6 +115,7 @@ impl Demand {
                 inputs,
                 variables,
                 demand,
+                predicates,
             } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let input_arities = input_types
@@ -170,6 +171,16 @@ impl Demand {
                 for variable in variables.iter() {
                     for (rel, col) in variable {
                         new_columns[*rel].insert(*col);
+                    }
+                }
+
+                // Permute each predicate and add its support to the demand for each input
+                for predicate in predicates.iter_mut() {
+                    predicate.permute(&permutation);
+                    for pred_column in predicate.support() {
+                        let rel = input_relation[pred_column];
+                        let col = pred_column - prior_arities[rel];
+                        new_columns[rel].insert(col);
                     }
                 }
 

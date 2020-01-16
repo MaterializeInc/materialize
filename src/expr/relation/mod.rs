@@ -100,6 +100,9 @@ pub enum RelationExpr {
         /// dummy values at the end of its computation, avoiding the maintenance of values
         /// not present in this list (when it is non-None).
         demand: Option<Vec<Vec<usize>>>,
+        /// This field, which is potentially empty, lists filters that should be applied to the
+        /// intermediate result of the join as soon as the relevant columns exist.
+        predicates: Vec<ScalarExpr>,
     },
     /// Group a dataflow by some columns and aggregate over each group
     Reduce {
@@ -498,6 +501,7 @@ impl RelationExpr {
             inputs,
             variables,
             demand: None,
+            predicates: vec![],
         }
     }
 

@@ -70,6 +70,7 @@ impl JoinOrder {
             inputs,
             variables,
             demand,
+            predicates,
         } = relation
         {
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -126,6 +127,12 @@ impl JoinOrder {
             for variable in new_variables.iter_mut() {
                 variable.sort();
             }
+
+            // permute predicates
+            for predicate in predicates.iter_mut() {
+                predicate.permute(&projection);
+            }
+
             // disable variable sorting
             if !new_inputs.iter().any(|new_input| match new_input {
                 RelationExpr::ArrangeBy { .. } => true,
@@ -143,9 +150,15 @@ impl JoinOrder {
                     inputs: new_inputs,
                     variables: new_variables,
                     demand: Some(new_demand),
+                    predicates: predicates.to_vec(),
                 }
             } else {
-                RelationExpr::join(new_inputs, new_variables)
+                RelationExpr::Join {
+                    inputs: new_inputs,
+                    variables: new_variables,
+                    demand: None,
+                    predicates: predicates.to_vec(),
+                }
             };
 
             // Output projection

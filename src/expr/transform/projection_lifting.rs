@@ -136,6 +136,7 @@ impl ProjectionLifting {
                 inputs,
                 variables,
                 demand,
+                predicates,
             } => {
                 for input in inputs.iter_mut() {
                     self.action(input, gets);
@@ -173,6 +174,9 @@ impl ProjectionLifting {
                 }
 
                 if projection.len() != temp_arity || (0..temp_arity).any(|i| projection[i] != i) {
+                    for predicate in predicates.iter_mut() {
+                        predicate.permute(&projection);
+                    }
                     *relation = relation.take_dangerous().project(projection);
                 }
             }
