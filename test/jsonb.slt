@@ -1733,3 +1733,107 @@ query I
 SELECT jsonb_array_length('[]'::JSONB)
 ----
 0
+
+# Casts
+
+query T
+SELECT ('1'::jsonb)::float;
+----
+1.000
+
+query T
+SELECT ('"Infinity"'::jsonb)::float;
+----
+inf
+
+query T
+SELECT ('"-Infinity"'::jsonb)::float;
+----
+-inf
+
+query T
+SELECT ('"NaN"'::jsonb)::float;
+----
+NaN
+
+# not a number
+query T
+SELECT ('[1]'::jsonb)::float;
+----
+NULL
+
+# not a number
+query T
+SELECT ('"1"'::jsonb)::float;
+----
+NULL
+
+query T
+SELECT ('1'::jsonb)::int;
+----
+1
+
+# too big to fit in an int32
+query T
+SELECT ('9999999999999999999'::jsonb)::int;
+----
+NULL
+
+# not a number
+query T
+SELECT ('[1]'::jsonb)::int;
+----
+NULL
+
+# TODO https://github.com/MaterializeInc/materialize/issues/1378
+query T
+SELECT ('"2019-12-31"'::jsonb)::date;
+----
+NULL
+
+# TODO https://github.com/MaterializeInc/materialize/issues/1378
+query T
+SELECT ('"1969-06-01 10:10:10.410"'::jsonb)::timestamp;
+----
+NULL
+
+# TODO https://github.com/MaterializeInc/materialize/issues/1378
+query T
+SELECT ('"some interval"'::jsonb)::interval;
+----
+NULL
+
+query T
+SELECT ('["2019-12-31"]'::jsonb)::date;
+----
+NULL
+
+query T
+SELECT (null::jsonb)::text;
+----
+NULL
+
+query T
+SELECT (null::jsonb)->>0;
+----
+NULL
+
+query T
+SELECT ('null'::jsonb)::text;
+----
+null
+
+query T
+SELECT ('null'::jsonb)->>0;
+----
+NULL
+
+query T
+SELECT to_jsonb(DATE '2019-12-31');
+----
+"2019-12-31"
+
+query T
+SELECT to_jsonb(TIMESTAMP '1969-06-01 10:10:10.41');
+----
+"1969-06-01 10:10:10.41"

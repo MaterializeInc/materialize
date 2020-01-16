@@ -688,7 +688,7 @@ fn plan_table_function(
                             .map(vec![ScalarExpr::Column(ColumnRef::Inner(
                                 num_old_columns + 1,
                             ))
-                            .call_unary(UnaryFunc::CastJsonbToStringUnlessString)])
+                            .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
                             .project(
                                 (0..num_old_columns)
                                     .chain(vec![num_old_columns, num_old_columns + 2])
@@ -700,7 +700,7 @@ fn plan_table_function(
                         let num_old_columns = ecx.scope.len();
                         call = call
                             .map(vec![ScalarExpr::Column(ColumnRef::Inner(num_old_columns))
-                                .call_unary(UnaryFunc::CastJsonbToStringUnlessString)])
+                                .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
                             .project(
                                 (0..num_old_columns)
                                     .chain(vec![num_old_columns + 1])
@@ -2529,13 +2529,13 @@ fn plan_json_op(
                 rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
                 BinaryFunc::JsonbGetInt64,
             )
-            .call_unary(UnaryFunc::CastJsonbToStringUnlessString),
+            .call_unary(UnaryFunc::JsonbStringifyUnlessString),
         (GetAsText, Jsonb, Int64) => lexpr
             .call_binary(rexpr, BinaryFunc::JsonbGetInt64)
-            .call_unary(UnaryFunc::CastJsonbToStringUnlessString),
+            .call_unary(UnaryFunc::JsonbStringifyUnlessString),
         (GetAsText, Jsonb, String) => lexpr
             .call_binary(rexpr, BinaryFunc::JsonbGetString)
-            .call_unary(UnaryFunc::CastJsonbToStringUnlessString),
+            .call_unary(UnaryFunc::JsonbStringifyUnlessString),
         (GetAsText, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         (ContainsField, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsString),
@@ -3013,9 +3013,25 @@ where
         (TimestampTz, String) => expr.call_unary(CastTimestampTzToString),
         (Interval, String) => expr.call_unary(CastIntervalToString),
         (Bytes, String) => expr.call_unary(CastBytesToString),
-        (Jsonb, String) => expr.call_unary(CastJsonbToString),
+        (Jsonb, String) => expr.call_unary(JsonbStringify),
         (Jsonb, Float64) => expr.call_unary(CastJsonbToFloat64),
         (Jsonb, Bool) => expr.call_unary(CastJsonbToBool),
+        (Jsonb, Int32) | (Jsonb, Int64) | (Jsonb, Float32) | (Jsonb, Decimal(..)) => {
+            plan_cast_internal(
+                ecx,
+                name,
+                expr.call_unary(CastJsonbToFloat64),
+                to_scalar_type,
+            )?
+        }
+        (Jsonb, Date) | (Jsonb, Timestamp) | (Jsonb, TimestampTz) | (Jsonb, Interval) => {
+            plan_cast_internal(
+                ecx,
+                name,
+                expr.call_unary(CastJsonbToString),
+                to_scalar_type,
+            )?
+        }
         (String, Bool) => expr.call_unary(CastStringToBool),
         (String, Int32) => expr.call_unary(CastStringToInt32),
         (String, Int64) => expr.call_unary(CastStringToInt64),
