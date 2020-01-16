@@ -24,7 +24,7 @@
         "functions": [
             {
                 "signature": "count(x: T) -> int",
-                "description": "Number on non-_NULL_ inputs"
+                "description": "Number of non-_NULL_ inputs"
             },
             {
                 "signature": "max(x: T) -> T",
@@ -145,6 +145,71 @@
             {
                 "signature": "now() -> timestamptz",
                 "description": "The `timestamptz` representing the time at which this dataflow was created."
+            }
+        ]
+    },
+    {
+        "type": "JSON",
+        "functions": [
+            {
+                "signature": "jsonb_array_elements(j: jsonb) -> Col<jsonb>",
+                "description": "`j`'s elements if `j` is an array.",
+                "url": "/docs/sql/types/jsonb/#jsonb-array-elements"
+            },
+            {
+                "signature": "jsonb_array_elements_text(j: jsonb) -> Col<string>",
+                "description": "`j`'s elements if `j` is an array.",
+                "url": "/docs/sql/types/jsonb/#jsonb-array-elements-text"
+            },
+            {
+                "signature": "jsonb_array_length(j: jsonb) -> int",
+                "description": "Number of elements in `j`'s outermost array.",
+                "url": "/docs/sql/types/jsonb/#jsonb-array-length"
+            },
+            {
+                "signature": "jsonb_build_array(x: ...) -> jsonb",
+                "description": "The elements of `x` in a `jsonb` array. Elements can be of heterogenous types.",
+                "url": "/docs/sql/types/jsonb/#jsonb-build-array"
+            },
+            {
+                "signature": "jsonb_build_object(x: ...) -> jsonb",
+                "description": "The elements of x as a `jsonb` object. The argument list alternates between keys and values.",
+                "url": "/docs/sql/types/jsonb/#jsonb-build-object"
+            },
+            {
+                "signature": "jsonb_each(j: jsonb) -> Col<(key: string, value: jsonb)>",
+                "description": "`j`'s outermost elements if `j` is an object.",
+                "url": "/docs/sql/types/jsonb/#jsonb-each"
+            },
+            {
+                "signature": "jsonb_each_text(j: jsonb) -> Col<(key: string, value: string)>",
+                "description": "`j`'s outermost elements if `j` is an object.",
+                "url": "/docs/sql/types/jsonb/#jsonb-each-text"
+            },
+            {
+                "signature": "jsonb_object_keys(j: jsonb) -> Col<string>",
+                "description": "`j`'s outermost keys if `j` is an object.",
+                "url": "/docs/sql/types/jsonb/#jsonb-object-keys"
+            },
+            {
+                "signature": "jsonb_pretty(j: jsonb) -> string",
+                "description": "Pretty printed (i.e. indented) `j`.",
+                "url": "/docs/sql/types/jsonb/#jsonb-pretty"
+            },
+            {
+                "signature": "jsonb_typeof(j: jsonb) -> string",
+                "description": "Type of `j`'s outermost value. One of `object`, `array`, `string`, `number`, `boolean`, and `null`.",
+                "url": "/docs/sql/types/jsonb/#jsonb-typeof"
+            },
+            {
+                "signature": "jsonb_strip_nulls(j: jsonb) -> jsonb",
+                "description": "`j` with all object fields with a value of `null` removed. Other `null` values remain.",
+                "url": "/docs/sql/types/jsonb/#jsonb-strip-nulls"
+            },
+            {
+                "signature": "to_jsonb(v: T) -> jsonb",
+                "description": "`v` as `jsonb`",
+                "url": "/docs/sql/types/jsonb/#to-jsonb-1"
             }
         ]
     }

@@ -1,0 +1,2 @@
+type_jsonb ::=
+    "'" json_string "'" '::JSONB'
