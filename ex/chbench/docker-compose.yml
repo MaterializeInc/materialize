@@ -9,7 +9,7 @@
 # This mostly just shows all the ports that are available to the host system, if you want
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
-  mz: &mz 6875:6875
+  mz: &materialized 6875:6875
   mysql: &mysql 3306:3306
   kafka-control-center: &control-center 9021:9021
   grafana: &grafana 3000:3000
@@ -21,7 +21,7 @@ services:
   materialized:
     image: materialize/materialized:latest
     ports:
-     - *mz
+     - *materialized
     init: true
     command: -w1 --bootstrap-sql=/usr/local/etc/materialized/bootstrap.sql
     environment:
@@ -94,7 +94,6 @@ services:
     depends_on: [schema-registry, control-center, chbench-init]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.3.0
-    container_name: control-center
     restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:

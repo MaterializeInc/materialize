@@ -47,6 +47,8 @@ main() {
             else
                 dc_stop "$@"
             fi ;;
+        status)
+            dc_status;;
         logs)
             if [[ $# -eq 0 ]]; then
               usage
@@ -94,6 +96,7 @@ Possible COMMANDs:
                                  kafka containers with no grafana.
     `us down \[SERVICE..\]`         With args: Stop the list of services, without removing them
                              With no args: Stop the cluster, removing containers, volumes, etc
+    `us status`              Show cluster status
 
  Individual service commands:
 
@@ -181,6 +184,25 @@ dc_logs() {
   elif [[ $# -eq 2 ]]; then
     runv docker-compose logs --tail "$2" "$1"
   fi
+}
+
+dc_status() {
+    dc_status_inner | column -s ' ' -t
+}
+
+dc_status_inner() {
+    local procs
+    # shellcheck disable=SC2207
+    procs=($(docker ps --format '{{.Names}}' | grep '^chbench' | sed -e 's/^chbench_//' -e 's/_1$//' | tr $'\n' ' ' ))
+    echo "CONTAINER PORT"
+    echo "========= ===="
+    set +e
+    for proc in "${procs[@]}" ; do
+        local port
+        port="$(grep -o "&$proc.*" docker-compose.yml | sed -E -e "s/&$proc//" -e 's/:[0-9]+//')"
+        echo "$proc $port"
+    done
+    set -e
 }
 
 shut_down() {
