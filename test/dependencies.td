@@ -229,3 +229,31 @@ catalog item 'i4' does not exist
 > DROP SINK s1;
 
 > DROP SOURCE s;
+
+# Test CREATE OR REPLACE view.
+
+> CREATE OR REPLACE VIEW v3 AS SELECT 1
+> PEEK v3
+1
+
+> CREATE OR REPLACE VIEW v3 AS SELECT 2
+> PEEK v3
+2
+
+> CREATE OR REPLACE VIEW v4 AS SELECT * FROM v3
+> PEEK v4
+2
+
+! CREATE OR REPLACE VIEW v3 AS SELECT 3
+cannot delete materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
+
+> CREATE OR REPLACE VIEW v4 AS SELECT 3
+> PEEK v4
+3
+
+> PEEK v3
+2
+
+> CREATE OR REPLACE VIEW v3 AS SELECT 4
+> PEEK v3
+4

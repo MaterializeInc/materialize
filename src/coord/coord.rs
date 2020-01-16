@@ -474,7 +474,13 @@ where
                 ExecuteResponse::CreatedSink
             }
 
-            Plan::CreateView(name, view) => {
+            Plan::CreateView {
+                name,
+                view,
+                replace,
+            } => {
+                let cascaded = true;
+                self.drop_items(&replace, cascaded);
                 let view = self.optimize_view(view);
                 let id = self.register_view(&name, &view)?;
                 self.create_materialized_view_dataflow(&name, id, view, None)?;
@@ -488,52 +494,7 @@ where
             }
 
             Plan::DropItems(ids, item_type) => {
-                let mut sources_to_drop: Vec<GlobalId> = Vec::new();
-                let mut views_to_drop: Vec<GlobalId> = Vec::new();
-                let mut sinks_to_drop: Vec<GlobalId> = Vec::new();
-                let mut indexes_to_drop: Vec<GlobalId> = Vec::new();
-                // Sort ids to be dropped ~before~ removing them from the
-                // Coordinator's Catalog below.
-                for id in &ids {
-                    match self.catalog.get_by_id(id).item() {
-                        CatalogItem::Source(_s) => sources_to_drop.push(*id),
-                        CatalogItem::View(_v) => views_to_drop.push(*id),
-                        CatalogItem::Sink(_s) => sinks_to_drop.push(*id),
-                        CatalogItem::Index(_i) => indexes_to_drop.push(*id),
-                    }
-                }
-
-                for id in &ids {
-                    self.report_catalog_update(
-                        *id,
-                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
-                        false,
-                    );
-                    self.catalog.remove(*id);
-                }
-
-                if !sources_to_drop.is_empty() {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::DropSources(sources_to_drop),
-                    );
-                }
-
-                if !views_to_drop.is_empty() {
-                    self.drop_views(views_to_drop);
-                }
-
-                if !sinks_to_drop.is_empty() {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::DropSinks(sinks_to_drop),
-                    );
-                }
-
-                if !indexes_to_drop.is_empty() {
-                    self.drop_indexes(indexes_to_drop, item_type != ObjectType::Index);
-                }
-
+                self.drop_items(&ids, item_type != ObjectType::Index);
                 match item_type {
                     ObjectType::Source => ExecuteResponse::DroppedSource,
                     ObjectType::View => ExecuteResponse::DroppedView,
@@ -998,6 +959,54 @@ where
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
         );
+    }
+
+    fn drop_items(&mut self, ids: &[GlobalId], cascaded: bool) {
+        let mut sources_to_drop: Vec<GlobalId> = Vec::new();
+        let mut views_to_drop: Vec<GlobalId> = Vec::new();
+        let mut sinks_to_drop: Vec<GlobalId> = Vec::new();
+        let mut indexes_to_drop: Vec<GlobalId> = Vec::new();
+        // Sort ids to be dropped ~before~ removing them from the
+        // Coordinator's Catalog below.
+        for id in ids {
+            match self.catalog.get_by_id(id).item() {
+                CatalogItem::Source(_s) => sources_to_drop.push(*id),
+                CatalogItem::View(_v) => views_to_drop.push(*id),
+                CatalogItem::Sink(_s) => sinks_to_drop.push(*id),
+                CatalogItem::Index(_i) => indexes_to_drop.push(*id),
+            }
+        }
+
+        for id in ids {
+            self.report_catalog_update(
+                *id,
+                self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
+                false,
+            );
+            self.catalog.remove(*id);
+        }
+
+        if !sources_to_drop.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSources(sources_to_drop),
+            );
+        }
+
+        if !views_to_drop.is_empty() {
+            self.drop_views(views_to_drop);
+        }
+
+        if !sinks_to_drop.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSinks(sinks_to_drop),
+            );
+        }
+
+        if !indexes_to_drop.is_empty() {
+            self.drop_indexes(indexes_to_drop, cascaded);
+        }
     }
 
     pub fn drop_views(&mut self, views_names: Vec<GlobalId>) {

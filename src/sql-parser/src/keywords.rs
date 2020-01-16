@@ -352,6 +352,7 @@ define_keywords!(
     REGR_SYY,
     RELEASE,
     REPEATABLE,
+    REPLACE,
     RESTRICT,
     RESULT,
     RETURN,
