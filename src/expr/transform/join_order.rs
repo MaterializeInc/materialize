@@ -78,7 +78,7 @@ impl JoinOrder {
             inputs,
             variables,
             demand,
-            implementation,
+            implementation: _,
         } = relation
         {
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -143,39 +143,41 @@ impl JoinOrder {
                 new_variables.sort();
             }
 
+            // We now choose an implementation.
+            // We'll use delta queries if all necessary arrangements exist.
+            // Otherwise, we'll use a sequence of binary differential joins.
             use crate::relation::JoinImplementation;
-            let new_implementation = match implementation {
-                JoinImplementation::Differential => JoinImplementation::Differential,
-                JoinImplementation::DeltaQuery(_orders) => {
-                    // Determine and overwrite the delta query order.
-                    let mut new_orders = Vec::with_capacity(inputs.len());
-                    let mut input_arrangements = vec![Vec::new(); inputs.len()];
-                    for index in 0..inputs.len() {
-                        match &inputs[index] {
-                            RelationExpr::Get { id, typ: _ } => {
-                                if let crate::id::Id::Global(id) = id {
-                                    if let Some(keys) = arrangements.get(id) {
-                                        input_arrangements[index].extend(keys.clone());
-                                    }
-                                }
-                            }
-                            RelationExpr::ArrangeBy { input: _, keys } => {
+            let mut new_orders = Vec::with_capacity(inputs.len());
+            let mut input_arrangements = vec![Vec::new(); inputs.len()];
+            for index in 0..inputs.len() {
+                match &inputs[index] {
+                    RelationExpr::Get { id, typ: _ } => {
+                        if let crate::id::Id::Global(id) = id {
+                            if let Some(keys) = arrangements.get(id) {
                                 input_arrangements[index].extend(keys.clone());
                             }
-                            _ => {}
                         }
                     }
-
-                    for start in 0..inputs.len() {
-                        new_orders.push(order_delta_join(
-                            inputs.len(),
-                            start,
-                            variables,
-                            &input_arrangements,
-                        ));
+                    RelationExpr::ArrangeBy { input: _, keys } => {
+                        input_arrangements[index].extend(keys.clone());
                     }
-                    JoinImplementation::DeltaQuery(new_orders)
+                    _ => {}
                 }
+            }
+            let mut pure_arranged = true;
+            for start in 0..inputs.len() {
+                new_orders.push(order_delta_join(
+                    inputs.len(),
+                    start,
+                    variables,
+                    &input_arrangements,
+                    &mut pure_arranged,
+                ));
+            }
+            let new_implementation = if pure_arranged {
+                JoinImplementation::DeltaQuery(new_orders)
+            } else {
+                JoinImplementation::Differential
             };
 
             let join = if let Some(demand) = demand {
@@ -283,6 +285,7 @@ fn order_delta_join(
     start: usize,
     constraints: &[Vec<(usize, usize)>],
     arrange_keys: &[Vec<Vec<ScalarExpr>>],
+    pure_arranged: &mut bool,
 ) -> Vec<usize> {
     let mut order = vec![start];
     while order.len() < relations {
@@ -307,6 +310,7 @@ fn order_delta_join(
 
         // Perhaps we found no relation with a key; we should find a relation with some constraint.
         if candidate.is_none() {
+            *pure_arranged = false;
             let mut candidates = (0..relations)
                 .filter(|i| !order.contains(i))
                 .map(|i| {
