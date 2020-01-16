@@ -9,12 +9,12 @@
 # This mostly just shows all the ports that are available to the host system, if you want
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
-  mz: &materialized 6875:6875
-  mysql: &mysql 3306:3306
-  kafka-control-center: &control-center 9021:9021
-  grafana: &grafana 3000:3000
-  metabase: &metabase 3030:3000
-  prometheus: &prometheus 9090:9090
+  - &materialized 6875:6875
+  - &mysql 3306:3306
+  - &control-center 9021:9021
+  - &grafana 3000:3000
+  - &metabase 3030:3000
+  - &prometheus 9090:9090
 
 version: '3.7'
 services:
