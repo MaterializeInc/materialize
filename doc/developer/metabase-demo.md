@@ -125,7 +125,6 @@ the Metabase interactive SQL editor.
       ```sql
       SELECT * FROM orderline_count;
       ```
-      
     - For comparison, you can run the full query on a source once you
       have materialized it. To do so:
       ```sql
@@ -156,7 +155,6 @@ the Metabase interactive SQL editor.
       ```sql
         SELECT * FROM q01;
       ```
-      
     - For comparison, you can run the full query on the underlying
       source once you have materialized it. To do so:
       ```sql
