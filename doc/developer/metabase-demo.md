@@ -125,6 +125,16 @@ the Metabase interactive SQL editor.
       ```sql
       SELECT * FROM orderline_count;
       ```
+      
+    - For comparison, you can run the full query on a source once you
+      have materialized it. To do so:
+      ```sql
+      CREATE VIEW mysql_tpcch_orderline_view;
+      ```
+      And then running the full query on the view:
+      ```sql
+      SELECT count(*) FROM mysql_tpcch_orderline_view;
+      ```
 
 - Q01:
     - Create the view:
@@ -145,6 +155,26 @@ the Metabase interactive SQL editor.
     - Use the view:
       ```sql
         SELECT * FROM q01;
+      ```
+      
+    - For comparison, you can run the full query on the underlying
+      source once you have materialized it. To do so:
+      ```sql
+      CREATE VIEW mysql_tpcch_orderline_view;
+      ```
+      And then running the full query on the view:
+      ```sql
+        SELECT
+            ol_number,
+            sum(ol_quantity) AS sum_qty,
+            sum(ol_amount) AS sum_amount,
+            avg(ol_quantity) AS avg_qty,
+            avg(ol_amount) AS avg_amount,
+            count(*) AS count_order
+        FROM mysql_tpcch_orderline_view
+        WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
+        GROUP BY ol_number
+        ORDER BY ol_number;
       ```
 
 More queries can be found and added from the appendix.
