@@ -1170,7 +1170,8 @@ where
                     }
                 } else {
                     // A complete trace can be read in its final form with this time.
-                    println!("Surprising, but...");
+                    //
+                    // This should only happen for literals that have no sources
                     Timestamp::max_value()
                 }
             }
