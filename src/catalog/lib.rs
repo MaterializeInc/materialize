@@ -12,7 +12,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 
 use dataflow_types::{Index, Sink, Source, View};
-use expr::{GlobalId, Id, IdHumanizer};
+use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr};
 use repr::RelationDesc;
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -75,7 +75,7 @@ pub struct CatalogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CatalogItem {
     Source(Source),
-    View(View),
+    View(View<OptimizedRelationExpr>),
     Sink(Sink),
     Index(Index),
 }
@@ -117,7 +117,7 @@ impl CatalogEntry {
             CatalogItem::Sink(sink) => vec![sink.from.0],
             CatalogItem::View(view) => {
                 let mut out = Vec::new();
-                view.relation_expr.global_uses(&mut out);
+                view.relation_expr.as_ref().global_uses(&mut out);
                 out
             }
             CatalogItem::Index(idx) => {

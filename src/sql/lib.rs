@@ -9,7 +9,7 @@
 
 use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
-use ::expr::GlobalId;
+use ::expr::{GlobalId, RelationExpr};
 use catalog::names::FullName;
 use catalog::{Catalog, CatalogEntry};
 use ore::future::MaybeFuture;
@@ -43,7 +43,7 @@ pub enum Plan {
         name: FullName,
         desc: RelationDesc,
     },
-    CreateView(FullName, View),
+    CreateView(FullName, View<RelationExpr>),
     DropItems(Vec<GlobalId>, ObjectType),
     EmptyQuery,
     SetVariable {

@@ -6,6 +6,8 @@
 #![deny(missing_debug_implementations)]
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 pub mod binding;
@@ -176,11 +178,12 @@ impl Optimizer {
     /// Optimizes the supplied relation expression.
     pub fn optimize(
         &mut self,
-        relation: &mut RelationExpr,
+        mut relation: RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) {
-        self.transform(relation, indexes, env);
+    ) -> OptimizedRelationExpr {
+        self.transform(&mut relation, indexes, env);
+        OptimizedRelationExpr(relation)
     }
 
     /// Simple fusion and elision transformations to render the query readable.
@@ -199,5 +202,32 @@ impl Optimizer {
             Box::new(crate::transform::empty_map::EmptyMap),
         ];
         Self { transforms }
+    }
+}
+
+/// A [`RelationExpr`] that claims to have been optimized, e.g., by an
+/// [`Optimizer`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct OptimizedRelationExpr(RelationExpr);
+
+impl OptimizedRelationExpr {
+    /// Declare that the input `expr` is optimized, without actually running it
+    /// through an optimizer. This can be useful to mark as optimized literal
+    /// `RelationExpr`s that are obviously optimal, without invoking the whole
+    /// machinery of the optimizer.
+    pub fn declare_optimized(expr: RelationExpr) -> OptimizedRelationExpr {
+        OptimizedRelationExpr(expr)
+    }
+}
+
+impl AsRef<RelationExpr> for OptimizedRelationExpr {
+    fn as_ref(&self) -> &RelationExpr {
+        &self.0
+    }
+}
+
+impl AsMut<RelationExpr> for OptimizedRelationExpr {
+    fn as_mut(&mut self) -> &mut RelationExpr {
+        &mut self.0
     }
 }

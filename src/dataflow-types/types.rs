@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
-use expr::{ColumnOrder, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use expr::{ColumnOrder, EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr};
 use regex::Regex;
 use repr::{Datum, RelationDesc, RelationType, Row};
 
@@ -150,7 +150,7 @@ impl RowSetFinishing {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc {
     pub id: GlobalId,
-    pub relation_expr: RelationExpr,
+    pub relation_expr: OptimizedRelationExpr,
     pub eval_env: EvalEnv,
     /// is_some if building a view, none otherwise
     pub typ: Option<RelationType>,
@@ -206,7 +206,7 @@ impl DataflowDesc {
         self.source_imports.insert(id, source);
     }
 
-    pub fn add_view_to_build(&mut self, id: GlobalId, view: View) {
+    pub fn add_view_to_build(&mut self, id: GlobalId, view: View<OptimizedRelationExpr>) {
         self.objects_to_build.push(BuildDesc {
             id,
             relation_expr: view.relation_expr,
@@ -218,13 +218,13 @@ impl DataflowDesc {
     pub fn add_index_to_build(&mut self, id: GlobalId, index: Index) {
         self.objects_to_build.push(BuildDesc {
             id,
-            relation_expr: RelationExpr::ArrangeBy {
+            relation_expr: OptimizedRelationExpr::declare_optimized(RelationExpr::ArrangeBy {
                 input: Box::new(RelationExpr::global_get(
                     index.desc.on_id,
                     index.relation_type,
                 )),
                 keys: vec![index.desc.keys],
-            },
+            }),
             eval_env: index.eval_env,
             typ: None,
         });
@@ -335,14 +335,14 @@ pub struct Sink {
 /// A description of a relational collection in terms of input collections.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct View {
+pub struct View<Expr> {
     pub raw_sql: String,
-    pub relation_expr: RelationExpr,
+    pub relation_expr: Expr,
     pub eval_env: EvalEnv,
     pub desc: RelationDesc,
 }
 
-impl View {
+impl<Expr> View<Expr> {
     pub fn auto_generate_primary_idx(&self, view_id: GlobalId) -> Index {
         let keys = if let Some(keys) = self.desc.typ().keys.first() {
             keys.clone()
