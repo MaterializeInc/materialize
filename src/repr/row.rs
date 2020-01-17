@@ -143,7 +143,7 @@ enum Tag {
 ///
 /// # Safety
 ///
-/// This function is safe if a value of type `T` was previously written at this offset by `PackableRow::push`.
+/// This function is safe if a value of type `T` was previously written at this offset by `push_copy!`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 #[inline(always)]
 unsafe fn read_copy<T>(data: &[u8], offset: &mut usize) -> T
@@ -162,7 +162,7 @@ where
 ///
 /// # Safety
 ///
-/// This function is safe if a `&[u8]` was previously written at this offset by `PackableRow::push_untagged_bytes`.
+/// This function is safe if a `&[u8]` was previously written at this offset by `push_untagged_bytes`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 unsafe fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
     let len = read_copy::<usize>(data, offset);
@@ -177,7 +177,7 @@ unsafe fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8
 ///
 /// # Safety
 ///
-/// This function is safe if a `str` was previously written at this offset by `PackableRow::push_untagged_string`.
+/// This function is safe if a `str` was previously written at this offset by `push_untagged_string`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 unsafe fn read_untagged_string<'a>(data: &'a [u8], offset: &mut usize) -> &'a str {
     let bytes = read_untagged_bytes(data, offset);
@@ -190,7 +190,7 @@ unsafe fn read_untagged_string<'a>(data: &'a [u8], offset: &mut usize) -> &'a st
 ///
 /// # Safety
 ///
-/// This function is safe if a `Datum` was previously written at this offset by `PackableRow::push`.
+/// This function is safe if a `Datum` was previously written at this offset by `push_datum`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
     let tag = read_copy::<Tag>(data, offset);
