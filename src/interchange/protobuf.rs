@@ -130,9 +130,17 @@ pub fn validate_proto_schema_with_descriptors(
     message_name: &str,
     descriptors: &Descriptors,
 ) -> Result<RelationDesc> {
-    let message = descriptors
-        .message_by_name(message_name)
-        .expect("Message not found in file descriptor set");
+    let message = descriptors.message_by_name(message_name).ok_or_else(|| {
+        format_err!(
+            "Message {:?} not found in file descriptor set: {}",
+            message_name,
+            descriptors
+                .iter_messages()
+                .map(|m| m.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
     let column_types = message
         .fields()
         .iter()

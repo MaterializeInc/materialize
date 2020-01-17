@@ -2733,9 +2733,8 @@ dependencies = [
 
 [[package]]
 name = "serde-protobuf"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07f6ba489458bc3402aad4eea5cb81b08da39add38aca2d9f20fc6ba49d340b4"
+version = "0.8.2-alpha.0"
+source = "git+https://github.com/MaterializeInc/serde-protobuf.git?branch=add-iter-messages#fae1e0306be1d1473a895a64c630475948869518"
 dependencies = [
  "failure",
  "linked-hash-map",
