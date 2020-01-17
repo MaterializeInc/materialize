@@ -9,6 +9,7 @@
 # This mostly just shows all the ports that are available to the host system, if you want
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
+  - &kafka 9092:9092
   - &materialized 6875:6875
   - &mysql 3306:3306
   - &control-center 9021:9021
@@ -58,6 +59,8 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.3.0
+    ports:
+      - *kafka
     depends_on: [zookeeper]
     environment:
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
