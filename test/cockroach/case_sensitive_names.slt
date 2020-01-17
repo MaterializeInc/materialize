@@ -41,7 +41,7 @@ mode cockroach
 statement ok
 CREATE TABLE A(x INT)
 
-statement error pgcode 42P01 catalog item '"A"' does not exist
+statement error pgcode 42P01 catalog item 'A' does not exist
 SHOW COLUMNS FROM "A"
 
 # statement error pgcode 42P01 catalog item '"A"' does not exist
@@ -59,7 +59,7 @@ SHOW COLUMNS FROM "A"
 # statement error pgcode 42P01 catalog item '"A"' does not exist
 # SHOW CONSTRAINTS FROM "A"
 
-statement error pgcode 42P01 catalog item '"A"' does not exist
+statement error pgcode 42P01 catalog item 'A' does not exist
 SELECT * FROM "A"
 
 # statement error pgcode 42P01 catalog item '"A"' does not exist
@@ -217,7 +217,7 @@ CREATE VIEW XV AS SELECT X, "Y" FROM foo
 query TT
 SHOW CREATE VIEW xv
 ----
-xv
+materialize.public.xv
 CREATE VIEW XV AS SELECT X, "Y" FROM foo
 
 query error pgcode 42P01 relation "XV" does not exist
@@ -229,7 +229,7 @@ CREATE VIEW "YV" AS SELECT X, "Y" FROM foo
 query TT
 SHOW CREATE VIEW "YV"
 ----
-"YV"
+materialize.public.YV
 CREATE VIEW "YV" AS SELECT X, "Y" FROM foo
 
 query error pgcode 42P01 relation "yv" does not exist

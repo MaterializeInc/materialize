@@ -110,7 +110,7 @@ Project {
   outputs: [1],
   Map {
     scalars: [date_trunc_day #0],
-    Get { date_trunc_timestamps (u5) }
+    Get { materialize.public.date_trunc_timestamps (u5) }
   }
 }
 
@@ -123,8 +123,8 @@ Project {
     scalars: [#0 date_trunc #1],
     Join {
       variables: [],
-      Get { date_trunc_fields (u1) },
-      Get { date_trunc_timestamps (u5) }
+      Get { materialize.public.date_trunc_fields (u1) },
+      Get { materialize.public.date_trunc_timestamps (u5) }
     }
   }
 }

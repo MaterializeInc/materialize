@@ -10,15 +10,17 @@
 use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
 use ::expr::GlobalId;
-use catalog::{Catalog, CatalogEntry, QualName};
+use catalog::names::FullName;
+use catalog::{Catalog, CatalogEntry};
 use ore::future::MaybeFuture;
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
 pub use session::{PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ObjectType, Statement};
+pub use statement::StatementContext;
 
-pub mod names;
+pub mod normalize;
 
 mod expr;
 mod query;
@@ -33,15 +35,15 @@ pub use query::scalar_type_from_sql;
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
-    CreateIndex(QualName, Index),
-    CreateSource(QualName, Source),
-    CreateSources(Vec<(QualName, Source)>),
-    CreateSink(QualName, Sink),
+    CreateIndex(FullName, Index),
+    CreateSource(FullName, Source),
+    CreateSources(Vec<(FullName, Source)>),
+    CreateSink(FullName, Sink),
     CreateTable {
-        name: QualName,
+        name: FullName,
         desc: RelationDesc,
     },
-    CreateView(QualName, View),
+    CreateView(FullName, View),
     DropItems(Vec<GlobalId>, ObjectType),
     EmptyQuery,
     SetVariable {

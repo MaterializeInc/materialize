@@ -48,23 +48,23 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 > CREATE MATERIALIZED VIEW test3b AS SELECT * FROM test2;
 
 ! DROP VIEW test1;
-cannot delete test1: still depended upon by catalog item 'test2'
+cannot delete materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 ! DROP VIEW test2;
-cannot delete test2: still depended upon by catalog item 'test3a'
+cannot delete materialize.public.test2: still depended upon by catalog item 'materialize.public.test3a'
 
 > DROP VIEW test3a;
 
 ! DROP VIEW test1;
-cannot delete test1: still depended upon by catalog item 'test2'
+cannot delete materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 ! DROP VIEW test2;
-cannot delete test2: still depended upon by catalog item 'test3b'
+cannot delete materialize.public.test2: still depended upon by catalog item 'materialize.public.test3b'
 
 > DROP VIEW test3b;
 
 ! DROP VIEW test1;
-cannot delete test1: still depended upon by catalog item 'test2'
+cannot delete materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 > DROP VIEW test2;
 
@@ -118,7 +118,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 
 # Test that sinks cannot be depended upon.
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
-catalog item 's1' is a sink and so cannot be depended upon
+catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT X from s;
 
@@ -129,21 +129,21 @@ catalog item 's1' is a sink and so cannot be depended upon
 # Test that indexes cannot be depended upon
 
 ! CREATE MATERIALIZED VIEW v3 as SELECT * FROM i1;
-catalog item 'i1' is an index and so cannot be depended upon
+catalog item 'materialize.public.i1' is an index and so cannot be depended upon
 
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEX in v2a;
-View  Key_name              Column_name Expression Null  Seq_in_index
----------------------------------------------------------------------
-v2a   i2                    <null>      "x * 2"    false 1
-v2a   "\"v2a_PRIMARY_IDX\"" x           <null>     false 1
+View                   Key_name                           Column_name Expression Null  Seq_in_index
+---------------------------------------------------------------------------------------------------
+materialize.public.v2a   materialize.public.i2                <null>      "x * 2"    false 1
+materialize.public.v2a   materialize.public.v2a_primary_idx   x           <null>     false 1
 
 > SHOW INDEX in v2;
-View  Key_name             Column_name Expression Null  Seq_in_index
---------------------------------------------------------------------
-v2    i1                   x           <null>     false 1
-v2    "\"v2_PRIMARY_IDX\"" x           <null>     false 1
+View                   Key_name                              Column_name Expression Null  Seq_in_index
+------------------------------------------------------------------------------------------------------
+materialize.public.v2    materialize.public.i1                   x           <null>     false 1
+materialize.public.v2    materialize.public.v2_primary_idx       x           <null>     false 1
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views
@@ -153,10 +153,10 @@ v2    "\"v2_PRIMARY_IDX\"" x           <null>     false 1
 catalog item 'v2a' does not exist
 
 > SHOW INDEX in v2;
-View  Key_name             Column_name Expression Null  Seq_in_index
---------------------------------------------------------------------
-v2    i1                   x           <null>     false 1
-v2    "\"v2_PRIMARY_IDX\"" x           <null>     false 1
+View                   Key_name                              Column_name Expression Null  Seq_in_index
+------------------------------------------------------------------------------------------------------
+materialize.public.v2    materialize.public.i1                   x           <null>     false 1
+materialize.public.v2    materialize.public.v2_primary_idx       x           <null>     false 1
 
 ! DROP INDEX i2;
 catalog item 'i2' does not exist
@@ -168,19 +168,19 @@ catalog item 'i2' does not exist
 > CREATE INDEX i3 ON v4a(y);
 
 > SHOW INDEX in v4a;
-View  Key_name              Column_name Expression Null  Seq_in_index
----------------------------------------------------------------------
-v4a   i3                    y           <null>     false 1
-v4a   "\"v4a_PRIMARY_IDX\"" y           <null>     false 1
+View                   Key_name                               Column_name Expression Null  Seq_in_index
+-------------------------------------------------------------------------------------------------------
+materialize.public.v4a   materialize.public.i3                    y           <null>     false 1
+materialize.public.v4a   materialize.public.v4a_primary_idx       y           <null>     false 1
 
 > CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEX in v4;
-View  Key_name            Column_name Expression Null  Seq_in_index
----------------------------------------------------------------------
-v4    i4                  x           <null>     false 1
-v4   "\"v4_PRIMARY_IDX\"" x           <null>     false 1
-v4   "\"v4_PRIMARY_IDX\"" y           <null>     false 2
+View                  Key_name                         Column_name Expression Null  Seq_in_index
+------------------------------------------------------------------------------------------------
+materialize.public.v4   materialize.public.i4              x           <null>     false 1
+materialize.public.v4   materialize.public.v4_primary_idx  x           <null>     false 1
+materialize.public.v4   materialize.public.v4_primary_idx  y           <null>     false 2
 
 # Test cascade deletes associated indexes as well
 > DROP VIEW v4a CASCADE;
@@ -192,21 +192,21 @@ catalog item 'v4a' does not exist
 catalog item 'i3' does not exist
 
 > SHOW INDEX in v4;
-View  Key_name            Column_name Expression Null  Seq_in_index
--------------------------------------------------------------------
-v4     i4                 x           <null>     false 1
-v4   "\"v4_PRIMARY_IDX\"" x           <null>     false 1
-v4   "\"v4_PRIMARY_IDX\"" y           <null>     false 2
+View                  Key_name                              Column_name Expression Null  Seq_in_index
+-----------------------------------------------------------------------------------------------------
+materialize.public.v4   materialize.public.i4                   x           <null>     false 1
+materialize.public.v4   materialize.public.v4_primary_idx       x           <null>     false 1
+materialize.public.v4   materialize.public.v4_primary_idx       y           <null>     false 2
 
 > CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEX in v5;
-View  Key_name            Column_name Expression Null  Seq_in_index
-------------------------------------------------------------
-v5    i5                  substr      <null>     true 1
-v5   "\"v5_PRIMARY_IDX\"" substr      <null>     true 1
+View                  Key_name                              Column_name Expression Null  Seq_in_index
+----------------------------------------------------------------------------------------------------
+materialize.public.v5   materialize.public.i5                   substr      <null>     true 1
+materialize.public.v5   materialize.public.v5_primary_idx       substr      <null>     true 1
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;

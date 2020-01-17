@@ -1,0 +1,9 @@
+Operator | RHS Type | Description
+---------|----------|-------------
+`->` | `string`, `int`| Access field by name or index position, and return `jsonb` ([docs](/docs/sql/types/jsonb/#field-access-as-jsonb))
+`->>` | `string`, `int`| Access field by name or index position, and return `string` ([docs](/docs/sql/types/jsonb/#field-access-as-string))
+<code>&vert;&vert;</code> | `jsonb` | Concatenate LHS and RHS ([docs](/docs/sql/types/jsonb/#jsonb-concat))
+`-` | `string` | Delete all values with key of RHS ([docs](/docs/sql/types/jsonb/#remove-key))
+`@>` | `jsonb` | Does element contain RHS? ([docs](/docs/sql/types/jsonb/#lhs-contains-rhs))
+<code>&lt;@</code> | `jsonb` | Does RHS contain element? ([docs](/docs/sql/types/jsonb/#rhs-contains-lhs))
+`?` | `string` | Is RHS a top-level key? ([docs](/docs/sql/types/jsonb/#search-top-level-keys))

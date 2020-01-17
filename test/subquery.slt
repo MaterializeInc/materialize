@@ -198,8 +198,8 @@ Project {
     scalars: [true],
     Join {
       variables: [],
-      Get { t1 (u37) },
-      Distinct { group_key: [], Get { t2 (u39) } }
+      Get { materialize.public.t1 (u37) },
+      Distinct { group_key: [], Get { materialize.public.t2 (u39) } }
     }
   }
 }
@@ -211,10 +211,10 @@ Project {
   outputs: [0, 0, 2],
   Join {
     variables: [[(0, 0), (1, 0)]],
-    Get { t1 (u37) },
-    Get { t3 (u41) },
+    Get { materialize.public.t1 (u37) },
+    Get { materialize.public.t3 (u41) },
     Constant [[true]],
-    Distinct { group_key: [], Get { t2 (u39) } }
+    Distinct { group_key: [], Get { materialize.public.t2 (u39) } }
   }
 }
 
@@ -224,8 +224,8 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 Let {
   l0 = Join {
     variables: [[(0, 0), (1, 0)]],
-    Get { t1 (u37) },
-    Get { t3 (u41) }
+    Get { materialize.public.t1 (u37) },
+    Get { materialize.public.t3 (u41) }
   }
 } in
 Project {
@@ -239,7 +239,7 @@ Project {
         group_key: [#1],
         Join {
           variables: [[(0, 0), (1, 0)]],
-          Get { t2 (u39) },
+          Get { materialize.public.t2 (u39) },
           Distinct { group_key: [#2], Get { l0 } }
         }
       }

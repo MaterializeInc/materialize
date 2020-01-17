@@ -20,7 +20,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::iter;
 use std::path::Path;
-use std::str::FromStr;
 
 use failure::bail;
 use futures::executor::block_on;
@@ -31,7 +30,8 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
-use catalog::{Catalog, CatalogItem, QualName};
+use catalog::names::{DatabaseSpecifier, FullName};
+use catalog::{Catalog, CatalogItem};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -132,7 +132,11 @@ where
                     .map(|log| {
                         (
                             log.id(),
-                            QualName::from_str(log.name()).expect("invalid logging name"),
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "mz_catalog".into(),
+                                item: log.name().into(),
+                            },
                             CatalogItem::View(View {
                                 raw_sql: "<system log>".to_string(),
                                 // Dummy placeholder
@@ -148,9 +152,11 @@ where
                     .chain(logging_config.active_logs().iter().map(|log| {
                         (
                             log.index_id(),
-                            QualName::from_str(log.name())
-                                .expect("invalid logging name")
-                                .with_trailing_string("_PRIMARY_IDX"),
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "mz_catalog".into(),
+                                item: format!("{}_primary_idx", log.name()),
+                            },
                             CatalogItem::Index(dataflow_types::Index::new_from_cols(
                                 log.id(),
                                 log.index_by(),
@@ -414,7 +420,8 @@ where
                 };
                 let view_id = self.register_view(&name, &view)?;
                 self.insert_view(view_id, &view, Some(true));
-                let index_name = name.with_trailing_string("_PRIMARY_IDX");
+                let mut index_name = name.clone();
+                index_name.item += "_primary_idx";
                 let index = view.auto_generate_primary_idx(view_id);
                 let index_id = self.register_index(&index_name, &index)?;
                 broadcast(
@@ -465,7 +472,7 @@ where
 
             Plan::CreateView(name, view) => {
                 let id = self.register_view(&name, &view)?;
-                self.create_materialized_view_dataflow(name.to_string(), id, view, None)?;
+                self.create_materialized_view_dataflow(&name, id, view, None)?;
                 ExecuteResponse::CreatedView
             }
 
@@ -643,7 +650,11 @@ where
                             eval_env: eval_env.clone(),
                         };
                         self.create_materialized_view_dataflow(
-                            format!("temp-view-{}", view_id),
+                            &FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "temp".into(),
+                                item: format!("temp-view-{}", view_id),
+                            },
                             view_id,
                             view,
                             Some(vec![timestamp.clone()]),
@@ -772,7 +783,7 @@ where
     /// coordinator, so that they can be recovered when used by name in views.
     fn register_source(
         &mut self,
-        name: &QualName,
+        name: &FullName,
         source: &dataflow_types::Source,
     ) -> Result<GlobalId, failure::Error> {
         let id = self
@@ -788,7 +799,7 @@ where
 
     fn register_view(
         &mut self,
-        name: &QualName,
+        name: &FullName,
         view: &dataflow_types::View,
     ) -> Result<GlobalId, failure::Error> {
         let id = self
@@ -804,7 +815,7 @@ where
 
     fn register_index(
         &mut self,
-        name: &QualName,
+        name: &FullName,
         index: &dataflow_types::Index,
     ) -> Result<GlobalId, failure::Error> {
         let id = self
@@ -938,15 +949,16 @@ where
 
     fn create_materialized_view_dataflow(
         &mut self,
-        view_name: String,
+        view_name: &FullName,
         id: GlobalId,
         view: dataflow_types::View,
         as_of: Option<Vec<Timestamp>>,
     ) -> Result<(), failure::Error> {
         self.insert_view(id, &view, None);
-        let mut dataflow = DataflowDesc::new(view_name.clone());
-        self.build_view_collection(&id, &view, &mut dataflow, true);
-        let index_name = QualName::from_str(&view_name)?.with_trailing_string("_PRIMARY_IDX");
+        let mut dataflow = DataflowDesc::new(view_name.to_string());
+        self.build_view_collection(&id, &view, &mut dataflow, false);
+        let mut index_name = view_name.clone();
+        index_name.item += "_primary_idx";
         let index = view.auto_generate_primary_idx(id);
         let index_id = if as_of.is_some() {
             self.catalog.allocate_id()
@@ -1170,7 +1182,8 @@ where
                     }
                 } else {
                     // A complete trace can be read in its final form with this time.
-                    println!("Surprising, but...");
+                    //
+                    // This should only happen for literals that have no sources
                     Timestamp::max_value()
                 }
             }
@@ -1421,7 +1434,7 @@ where
         if let MaybeFuture::Immediate(Some(Err(err))) = plan_result {
             match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    block_on(postgres.execute(&self.catalog, &stmt))
+                    block_on(postgres.execute(&self.catalog, session, &stmt))
                 }
                 _ => Err(err),
             }

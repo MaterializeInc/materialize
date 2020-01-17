@@ -337,11 +337,13 @@ fn add_matching_index_by_input(
         id: Id::Global(id), ..
     } = join_input
     {
-        let index_keys = indexes[id].iter().find(|ik| {
-            ik.len() == join_keys.len()
-                && join_keys
-                    .iter()
-                    .all(|k| ik.contains(&ScalarExpr::Column(*k)))
+        let index_keys = indexes.get(id).and_then(|indexes| {
+            indexes.iter().find(|ik| {
+                ik.len() == join_keys.len()
+                    && join_keys
+                        .iter()
+                        .all(|k| ik.contains(&ScalarExpr::Column(*k)))
+            })
         });
         if let Some(index_keys) = index_keys {
             matching_index_by_input.push((input_num, index_keys.clone()));

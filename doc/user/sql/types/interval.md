@@ -31,8 +31,8 @@ menu:
 
 | Field            | Definition                                                                                                                                                                                                                                                                |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| _head_time_unit_ | Return an interval without `time_unit`s larger than `head_time_unit`. Note that this differs from PostgreSQL's implementation, which ignores this clause.                                                                                                                 |
-| _tail_time_unit_ | 1. Return an interval without `time_unit` smaller than `tail_time_unit`.<br/><br/>2. If the final `time_expr` is only a number, treat the `time_expr` as belonging to `tail_time_unit`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`. |
+| _head&lowbar;time&lowbar;unit_ | Return an interval without `time_unit`s larger than `head_time_unit`. Note that this differs from PostgreSQL's implementation, which ignores this clause.                                                                                                                 |
+| _tail&lowbar;time&lowbar;unit_ | 1. Return an interval without `time_unit` smaller than `tail_time_unit`.<br/><br/>2. If the final `time_expr` is only a number, treat the `time_expr` as belonging to `tail_time_unit`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`. |
 
 ## Details
 
@@ -85,8 +85,6 @@ SELECT INTERVAL '1' MINUTE AS interval_m;
  00:01:00
 ```
 
-<hr/>
-
 ### SQL Standard syntax
 
 ```sql
@@ -99,8 +97,6 @@ SELECT INTERVAL '1-2 3 4:5:6.7' AS interval_p;
  1 year 2 months 3 days 04:05:06.7
 ```
 
-<hr/>
-
 ### PostgreSQL syntax
 
 ```sql
@@ -112,8 +108,6 @@ SELECT INTERVAL '1 year 2.3 days 4.5 seconds' AS interval_p;
 --------------------------
  1 year 2 days 07:12:04.5
 ```
-
-<hr/>
 
 ### Negative intervals
 
@@ -129,8 +123,6 @@ SELECT INTERVAL '-1 day 2:3:4.5' AS interval_n;
  -21:56:55.5
 ```
 
-<hr/>
-
 ### Truncating interval
 
 `interval_r` demonstrates how `head_time_unit` and `tail_time_unit` truncate the
@@ -145,8 +137,6 @@ SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO MINUTE AS interval_r;
 -----------------
  3 days 04:05:00
 ```
-
-<hr/>
 
 ### Complex example
 

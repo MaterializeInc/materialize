@@ -39,7 +39,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > SHOW CREATE SOURCE data
 Source   Create Source
 ------------------
-data  "kafka://${testdrive.kafka-addr-resolved}/testdrive-data-${testdrive.seed}"
+materialize.public.data  "kafka://${testdrive.kafka-addr-resolved}/testdrive-data-${testdrive.seed}"
 
 ! PEEK data
 data is not a view
@@ -70,23 +70,23 @@ a b
 
 
 > SHOW VIEWS;
-data_view
-mz_arrangement_sharing
-mz_arrangement_sizes
-mz_catalog_names
-mz_dataflow_channels
-mz_dataflow_operator_addresses
-mz_dataflow_operators
-mz_materialization_dependencies
-mz_materializations
-mz_peek_active
-mz_peek_durations
-mz_scheduling_elapsed
-mz_scheduling_histogram
-mz_scheduling_parks
-mz_view_foreign_keys
-mz_view_frontiers
-mz_view_keys
+materialize.public.data_view
+mz_catalog.mz_arrangement_sharing
+mz_catalog.mz_arrangement_sizes
+mz_catalog.mz_catalog_names
+mz_catalog.mz_dataflow_channels
+mz_catalog.mz_dataflow_operator_addresses
+mz_catalog.mz_dataflow_operators
+mz_catalog.mz_materialization_dependencies
+mz_catalog.mz_materializations
+mz_catalog.mz_peek_active
+mz_catalog.mz_peek_durations
+mz_catalog.mz_scheduling_elapsed
+mz_catalog.mz_scheduling_histogram
+mz_catalog.mz_scheduling_parks
+mz_catalog.mz_view_foreign_keys
+mz_catalog.mz_view_frontiers
+mz_catalog.mz_view_keys
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b;
@@ -104,19 +104,19 @@ b     NO       int8
 sum   YES      int8
 
 > SHOW VIEWS LIKE '%peek%';
-mz_peek_active
-mz_peek_durations
+mz_catalog.mz_peek_active
+mz_catalog.mz_peek_durations
 
 > SHOW VIEWS LIKE '%data%';
-data_view
-mz_dataflow_channels
-mz_dataflow_operator_addresses
-mz_dataflow_operators
+materialize.public.data_view
+mz_catalog.mz_dataflow_channels
+mz_catalog.mz_dataflow_operator_addresses
+mz_catalog.mz_dataflow_operators
 
 > SHOW CREATE VIEW test1
 View   Create View
 ------------------
-test1  "CREATE VIEW test1 AS SELECT b, sum(a) FROM data GROUP BY b"
+materialize.public.test1  "CREATE VIEW test1 AS SELECT b, sum(a) FROM data GROUP BY b"
 
 > CREATE MATERIALIZED VIEW test2 AS
   SELECT b, 1 + sum(a + 1) FROM data GROUP BY b;
@@ -157,10 +157,10 @@ b  c
 > CREATE INDEX idx1 ON test5(c)
 
 ! PEEK idx1
-catalog item 'idx1' is an index and so cannot be depended upon
+catalog item 'materialize.public.idx1' is an index and so cannot be depended upon
 
 ! SELECT * from idx1
-catalog item 'idx1' is an index and so cannot be depended upon
+catalog item 'materialize.public.idx1' is an index and so cannot be depended upon
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.

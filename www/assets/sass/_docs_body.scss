@@ -35,6 +35,11 @@ main {
     }
   }
 
+  // Spacing for examples
+  p + hr, .highlight + hr {
+    margin-top: 3rem;
+  }
+
   a {
     // Needed to remove conflict with nav header underlines.
     border-bottom: none;

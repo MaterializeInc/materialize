@@ -24,7 +24,7 @@ CREATE DATABASE "foo-bar"
 query T
 SHOW DATABASES
 ----
-defaultdb
+materialize
 foo-bar
 postgres
 system
@@ -47,7 +47,7 @@ t  [53]  DROP
 query T
 SHOW DATABASES
 ----
-defaultdb
+materialize
 postgres
 system
 test
@@ -63,7 +63,7 @@ CREATE DATABASE "foo bar"
 query T
 SHOW DATABASES
 ----
-defaultdb
+materialize
 foo bar
 postgres
 system
@@ -75,7 +75,7 @@ DROP DATABASE "foo bar" CASCADE
 query T
 SHOW DATABASES
 ----
-defaultdb
+materialize
 postgres
 system
 test
@@ -161,7 +161,7 @@ SHOW DATABASES
 ----
 d1
 d2
-defaultdb
+materialize
 postgres
 system
 test
@@ -173,7 +173,7 @@ query T
 SHOW DATABASES
 ----
 d2
-defaultdb
+materialize
 postgres
 system
 test
@@ -200,7 +200,7 @@ DROP DATABASE d2 CASCADE
 query T
 SHOW DATABASES
 ----
-defaultdb
+materialize
 postgres
 system
 test
@@ -233,7 +233,7 @@ DROP DATABASE constraint_db CASCADE
 query T
 SHOW DATABASES
 ----
-defaultdb
+materialize
 postgres
 system
 test
@@ -260,7 +260,7 @@ SET sql_safe_updates = FALSE; DROP DATABASE foo
 
 # Check that the default databases can be dropped and re-created like any other.
 statement OK
-DROP DATABASE defaultdb; DROP DATABASE postgres
+DROP DATABASE materialize; DROP DATABASE postgres
 
 statement ok
-CREATE DATABASE defaultdb; CREATE DATABASE postgres
+CREATE DATABASE materialize; CREATE DATABASE postgres
