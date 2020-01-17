@@ -956,7 +956,7 @@ where
     ) -> Result<(), failure::Error> {
         self.insert_view(id, &view, None);
         let mut dataflow = DataflowDesc::new(view_name.to_string());
-        self.build_view_collection(&id, &view, &mut dataflow, true);
+        self.build_view_collection(&id, &view, &mut dataflow, false);
         let mut index_name = view_name.clone();
         index_name.item += "_primary_idx";
         let index = view.auto_generate_primary_idx(id);
