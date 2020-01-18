@@ -11,7 +11,6 @@ use std::error::Error as _;
 
 use prost::Message;
 use structopt::StructOpt;
-use tokio::runtime;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
 use crate::error::Result;
@@ -24,24 +23,16 @@ mod mz_client;
 mod proto;
 mod randomizer;
 
-fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut rt = runtime::Builder::new()
-        .threaded_scheduler()
-        .enable_all()
-        .enable_time()
-        .build()?;
-    rt.block_on(async {
-        if let Err(e) = run().await {
-            println!("ERROR: {}", e);
-            let mut err = e.source();
-            while let Some(e) = err {
-                println!("    caused by: {}", e);
-                err = e.source();
-            }
+#[tokio::main]
+async fn main() {
+    if let Err(e) = run().await {
+        println!("ERROR: {}", e);
+        let mut err = e.source();
+        while let Some(e) = err {
+            println!("    caused by: {}", e);
+            err = e.source();
         }
-    });
-
-    Ok(())
+    }
 }
 
 async fn run() -> Result<()> {
