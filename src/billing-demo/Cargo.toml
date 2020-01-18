@@ -7,26 +7,26 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.26"
+base64 = "0.11.0"
 bytes = "0.5.3"
 chrono = "0.4.10"
+env_logger = "0.7.1"
+futures = "0.3.1"
+futures-channel = "0.3.1"
 log = "0.4.8"
+parse_duration = "2.0.1"
+postgres-types = "0.1.0"
 prost = "0.6.0"
 rand = "0.7.3"
 rand_distr = "0.2.2"
+rdkafka = "0.23.1"
 structopt = "0.3.7"
+thiserror = "1.0.9"
+tokio = { version = "0.2.9", features = ["full"] }
+tokio-postgres = "0.5.1"
 url = "2.1.1"
 uuid-b64 = "0.1.1"
-tokio-postgres = "0.5.1"
-tokio = { version = "0.2.9", features = ["full"] }
-thiserror = "1.0.9"
-anyhow = "1.0.26"
-env_logger = "0.7.1"
-base64 = "0.11.0"
-rdkafka = "0.23.1"
-futures-channel = "0.3.1"
-futures = "0.3.1"
-parse_duration = "2.0.1"
-postgres-types = "0.1.0"
 
 [build-dependencies]
 prost-build = "0.6.0"
