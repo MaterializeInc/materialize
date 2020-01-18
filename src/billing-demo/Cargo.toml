@@ -26,7 +26,6 @@ rdkafka = "0.23.1"
 futures-channel = "0.3.1"
 futures = "0.3.1"
 parse_duration = "2.0.1"
-tokio-timer = "0.3.0-alpha.5"
 postgres-types = "0.1.0"
 
 [build-dependencies]
