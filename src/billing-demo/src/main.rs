@@ -78,6 +78,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
 
     let mut buf = vec![];
     let mut interval = config.message_sleep.map(|dur| tokio::time::interval(dur));
+    let mut total_size = 0;
     for i in 0..config.message_count {
         if let Some(int) = interval.as_mut() {
             int.tick().await;
@@ -86,9 +87,14 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         m.encode(&mut buf)?;
         log::trace!("sending: {:?}", m);
         k_client.send(&config.topic, &buf).await?;
+        total_size += buf.len();
         buf.clear();
         if i % (config.message_count / 100).max(5) == 0 {
-            log::info!("sent message {}", i);
+            log::info!(
+                "sent message {} average message size: {}B",
+                i,
+                total_size / i.max(1)
+            );
         }
     }
     Ok(())
