@@ -2090,9 +2090,9 @@ dependencies = [
 
 [[package]]
 name = "pretty"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2644ed738e02455d10d8aaa34d9a044e00bf062ad59748db500eea44bb75a44c"
+checksum = "1891757f8427ce41706957fde1fec1b86aee3e335bd50320257705061507a24c"
 dependencies = [
  "arrayvec 0.5.1",
  "typed-arena",
@@ -3292,9 +3292,9 @@ checksum = "e604eb7b43c06650e854be16a2a03155743d3752dd1c943f6829e26b7a36e382"
 
 [[package]]
 name = "typed-arena"
-version = "1.7.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9b2228007eba4120145f785df0f6c92ea538f5a3635a612ecf4e334c8c1446d"
+checksum = "0685c84d5d54d1c26f7d3eb96cd41550adb97baed141a761cf335d3d33bcd0ae"
 
 [[package]]
 name = "typenum"
