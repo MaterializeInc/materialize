@@ -30,7 +30,7 @@ postgres = { version = "0.17", features = ["with-chrono-0_4", "with-serde_json-1
 protobuf = "2.8"
 protoc = "2.8.0"
 rand = "0.7.3"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
+rdkafka = { version = "0.23.1", features = ["cmake-build"] }
 regex = "1"
 reqwest = "0.10.1"
 serde = "1.0.104"
