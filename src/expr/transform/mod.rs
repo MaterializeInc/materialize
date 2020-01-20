@@ -171,7 +171,6 @@ impl Default for Optimizer {
                     Box::new(crate::transform::demand::Demand),
                 ],
             }),
-
             Box::new(crate::transform::fusion::project::Project),
             Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
         ];
