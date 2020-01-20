@@ -163,12 +163,15 @@ impl Default for Optimizer {
             Box::new(crate::transform::redundant_join::RedundantJoin),*/
             // JoinOrder adds Projects, hence need project fusion again.
             Box::new(crate::transform::constant_join::RemoveConstantJoin),
-            Box::new(crate::transform::join_implementation::JoinImplementation),
-            Box::new(crate::transform::fusion::filter::Filter),
-            Box::new(crate::transform::demand::Demand),
-            // Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
-            // Box::new(crate::transform::use_indexes::FilterLifting),
-            Box::new(crate::transform::projection_lifting::ProjectionLifting),
+            Box::new(crate::transform::Fixpoint {
+                transforms: vec![
+                    Box::new(crate::transform::projection_lifting::ProjectionLifting),
+                    Box::new(crate::transform::join_implementation::JoinImplementation),
+                    Box::new(crate::transform::fusion::filter::Filter),
+                    Box::new(crate::transform::demand::Demand),
+                ],
+            }),
+
             Box::new(crate::transform::fusion::project::Project),
             Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
         ];
