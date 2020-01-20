@@ -186,8 +186,8 @@ mod delta_queries {
             );
             *implementation = JoinImplementation::DeltaQuery(orders);
             if !lifted.is_empty() {
+                *demand = None;
                 new_join = new_join.filter(lifted);
-                *demand = None,
             }
 
             // Hooray done!
@@ -244,8 +244,8 @@ mod differential {
             );
             *implementation = JoinImplementation::Differential(start, order);
             if !lifted.is_empty() {
+                *demand = None;
                 new_join = new_join.filter(lifted);
-                *demand = None,
             }
 
             // Hooray done!
