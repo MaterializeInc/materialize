@@ -33,8 +33,8 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 
 mod context;
-mod reduce;
 mod delta_join;
+mod reduce;
 
 pub(crate) fn build_local_input<A: Allocate>(
     manager: &mut TraceManager,
@@ -469,6 +469,11 @@ where
         id: Option<&str>,
     ) {
         if let RelationExpr::ArrangeBy { input, keys } = relation_expr {
+            if keys.is_empty() {
+                self.ensure_rendered(input, env, scope, worker_index);
+                let collection = self.collection(input).unwrap();
+                self.collections.insert(relation_expr.clone(), collection);
+            }
             for key_set in keys {
                 if self.arrangement(&input, &key_set).is_none() {
                     self.ensure_rendered(input, env, scope, worker_index);
@@ -654,28 +659,6 @@ where
                         }
                     })
                     .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", input));
-
-                // // TODO: easier idioms for detecting, re-using, and stashing.
-                // if self.arrangement(&inputs[*input], &next_keys[..]).is_none() {
-                //     let built = self.collection(&inputs[*input]).unwrap();
-                //     let next_keys2 = next_keys.clone();
-                //     let next_keyed = built
-                //         .map({
-                //             let env = env.clone();
-                //             let temp_storage = RowArena::new();
-                //             move |row| {
-                //                 let datums = row.unpack();
-                //                 let key_row = Row::pack(
-                //                     next_keys2
-                //                         .iter()
-                //                         .map(|e| e.eval(&datums, &env, &temp_storage)),
-                //                 );
-                //                 (key_row, row)
-                //             }
-                //         })
-                //         .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinIndex: {}", input));
-                //     self.set_local(&inputs[*input], &next_keys[..], next_keyed);
-                // }
 
                 joined = match self.arrangement(&inputs[*input], &next_keys[..]) {
                     Some(ArrangementFlavor::Local(local)) => {

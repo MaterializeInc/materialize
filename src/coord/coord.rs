@@ -1005,6 +1005,7 @@ where
         dataflow: &mut DataflowDesc,
     ) {
         let view_to_build = view.clone();
+        // TODO: We only need to import Get arguments for which we cannot find arrangements.
         view_to_build.relation_expr.as_ref().visit(&mut |e| {
             if let RelationExpr::Get {
                 id: Id::Global(id),
@@ -1028,12 +1029,17 @@ where
                             on_id: *on_id,
                             keys: key_set.to_vec(),
                         };
-                        dataflow.add_index_import(
-                            self.views[on_id].primary_idxes[key_set],
-                            index_desc,
-                            typ.clone(),
-                            *view_id,
-                        );
+                        // If the arrangement exists, import it. It may not exist, in which
+                        // case we should import the source to be sure that we have access
+                        // to the collection to arrange it ourselves.
+                        if let Some(thing) = self.views[on_id].primary_idxes.get(key_set) {
+                            dataflow.add_index_import(
+                                self.views[on_id].primary_idxes[key_set],
+                                index_desc,
+                                typ.clone(),
+                                *view_id,
+                            );
+                        }
                     }
                 }
             }

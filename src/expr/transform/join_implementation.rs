@@ -425,6 +425,8 @@ fn implement_arrangements<'a>(
         while let RelationExpr::ArrangeBy { input: inner, .. } = &mut inputs[index] {
             inputs[index] = inner.take_dangerous();
         }
-        inputs[index] = RelationExpr::arrange_by(inputs[index].take_dangerous(), needed);
+        if !needed.is_empty() {
+            inputs[index] = RelationExpr::arrange_by(inputs[index].take_dangerous(), needed);
+        }
     }
 }
