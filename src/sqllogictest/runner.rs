@@ -265,7 +265,7 @@ fn write_err(kind: &str, error: &impl failure::AsFail, f: &mut fmt::Formatter) -
     Ok(())
 }
 
-const NUM_TIMELY_WORKERS: usize = 3;
+const NUM_TIMELY_WORKERS: usize = 1;
 
 pub(crate) struct State {
     // Drop order matters for these fields.

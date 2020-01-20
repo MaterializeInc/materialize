@@ -134,8 +134,13 @@ where
                                     let subtract = subtract.clone();
                                     update_stream = match self
                                         .arrangement(&inputs[*other], &next_key[..])
-                                        .expect("Arrangement alarmingly absent!")
-                                    {
+                                        .unwrap_or_else(|| {
+                                            panic!(
+                                                "Arrangement alarmingly absent!: {}, {:?}",
+                                                inputs[*other].pretty(),
+                                                &next_key[..]
+                                            )
+                                        }) {
                                         ArrangementFlavor::Local(local) => {
                                             if other > &relation {
                                                 let local = local

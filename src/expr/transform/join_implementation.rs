@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Determines the join implementation for join operators.
 ///
@@ -41,16 +41,44 @@ impl JoinImplementation {
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) {
-        relation.visit_mut(&mut |e| {
-            self.action(e, indexes);
-        });
+        let mut arranged = HashMap::new();
+        for (k, v) in indexes {
+            arranged.insert(Id::Global(*k), v.clone());
+        }
+        self.action_recursive(relation, &mut arranged);
     }
 
-    pub fn action(
+    /// Pre-order visitor for each `RelationExpr`.
+    pub fn action_recursive(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        arranged: &mut HashMap<Id, Vec<Vec<ScalarExpr>>>,
     ) {
+        if let RelationExpr::Let { id, value, body } = relation {
+            self.action_recursive(value, arranged);
+            match &**value {
+                RelationExpr::ArrangeBy { keys, .. } => {
+                    arranged.insert(Id::Local(*id), keys.clone());
+                }
+                RelationExpr::Reduce { group_key, .. } => {
+                    arranged.insert(
+                        Id::Local(*id),
+                        vec![(0..group_key.len())
+                            .map(|c| ScalarExpr::Column(c))
+                            .collect()],
+                    );
+                }
+                _ => {}
+            }
+            self.action_recursive(body, arranged);
+            arranged.remove(&Id::Local(*id));
+        } else {
+            self.action(relation, arranged);
+            relation.visit1_mut(|e| self.action_recursive(e, arranged));
+        }
+    }
+
+    pub fn action(&self, relation: &mut RelationExpr, indexes: &HashMap<Id, Vec<Vec<ScalarExpr>>>) {
         if let RelationExpr::Join { inputs, .. } = relation {
             // Common information of broad utility.
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -88,21 +116,16 @@ impl JoinImplementation {
                 // Get and ArrangeBy expressions contribute arrangements.
                 match input {
                     RelationExpr::Get { id, typ: _ } => {
-                        // If an external reference, we collect its keys from the `indexes` input.
-                        if let crate::id::Id::Global(id) = id {
-                            if let Some(keys) = indexes.get(id) {
-                                available_arrangements[index].extend(keys.clone());
-                            }
+                        if let Some(keys) = indexes.get(id) {
+                            available_arrangements[index].extend(keys.clone());
                         }
                     }
                     RelationExpr::ArrangeBy { input, keys } => {
                         // We may use any presented arrangement keys.
                         available_arrangements[index].extend(keys.clone());
                         if let RelationExpr::Get { id, typ: _ } = &**input {
-                            if let crate::id::Id::Global(id) = id {
-                                if let Some(keys) = indexes.get(id) {
-                                    available_arrangements[index].extend(keys.clone());
-                                }
+                            if let Some(keys) = indexes.get(id) {
+                                available_arrangements[index].extend(keys.clone());
                             }
                         }
                     }
@@ -172,7 +195,12 @@ mod delta_queries {
             // Convert the order information into specific (input, keys) information.
             let orders = orders
                 .into_iter()
-                .map(|o| o.into_iter().map(|(_c, k, r)| (r, k)).collect::<Vec<_>>())
+                .map(|o| {
+                    o.into_iter()
+                        .skip(1)
+                        .map(|(_c, k, r)| (r, k))
+                        .collect::<Vec<_>>()
+                })
                 .collect::<Vec<_>>();
 
             // Implement arrangements in each of the inputs.
