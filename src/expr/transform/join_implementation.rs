@@ -159,7 +159,7 @@ mod delta_queries {
         if let RelationExpr::Join {
             inputs,
             variables,
-            demand: _,
+            demand,
             implementation,
         } = &mut new_join
         {
@@ -187,6 +187,7 @@ mod delta_queries {
             *implementation = JoinImplementation::DeltaQuery(orders);
             if !lifted.is_empty() {
                 new_join = new_join.filter(lifted);
+                *demand = None,
             }
 
             // Hooray done!
@@ -216,7 +217,7 @@ mod differential {
         if let RelationExpr::Join {
             inputs,
             variables,
-            demand: _,
+            demand,
             implementation,
         } = &mut new_join
         {
@@ -244,6 +245,7 @@ mod differential {
             *implementation = JoinImplementation::Differential(start, order);
             if !lifted.is_empty() {
                 new_join = new_join.filter(lifted);
+                *demand = None,
             }
 
             // Hooray done!
