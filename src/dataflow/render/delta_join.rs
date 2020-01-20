@@ -6,13 +6,11 @@
 use timely::dataflow::Scope;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::arrangement::Arrange;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
 
 use dogsdogsdogs::altneu::AltNeu;
 
 use dataflow_types::Timestamp;
-use expr::{EvalEnv, RelationExpr};
+use expr::{EvalEnv, RelationExpr, ScalarExpr};
 use repr::{Datum, Row};
 
 use super::context::{ArrangementFlavor, Context};
@@ -25,7 +23,6 @@ where
     pub fn render_delta_join<F>(
         &mut self,
         relation_expr: &RelationExpr,
-        orders: &[Vec<usize>],
         env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
@@ -37,7 +34,7 @@ where
             inputs,
             variables,
             demand: _,
-            implementation: _,
+            implementation: expr::JoinImplementation::DeltaQuery(orders),
         } = relation_expr
         {
             // For the moment, assert that each relation participates at most
@@ -98,73 +95,47 @@ where
 
                                 // Repeatedly update `update_stream` to reflect joins with more and more
                                 // other relations, in the specified order.
-                                for index in 1..order.len() {
-                                    let other = order[index];
-
-                                    // Determine which existing columns must be keys, and which incoming
-                                    // columns must be keys.
-                                    let mut prev_key = Vec::new();
-                                    let mut next_key = Vec::new();
-
-                                    for variable in variables {
-                                        // A constraint is active iff it constraints both prior and new relations.
-                                        let prev_col = variable
-                                            .iter()
-                                            .find(|(rel, _)| order[..index].contains(rel));
-                                        let next_col =
-                                            variable.iter().find(|(rel, _)| rel == &other);
-                                        if let (Some(prev), Some(next)) = (prev_col, next_col) {
-                                            prev_key.push(
-                                                update_column_sources
+                                // for index in 0..order.len() {
+                                for (other, next_key) in order.iter() {
+                                    // Keys for the incoming updates are determined by locating
+                                    // the elements of `next_keys` among the existing `columns`.
+                                    let prev_key = next_key
+                                        .iter()
+                                        .map(|k| {
+                                            if let ScalarExpr::Column(c) = k {
+                                                let prev_c = variables
                                                     .iter()
-                                                    .position(|cs| cs == prev)
-                                                    .expect("Did not find prior key column"),
-                                            );
-                                            next_key.push(next.1); // capture only the column.
-                                        }
-                                    }
-
-                                    // Keys might be empty (in cross-join scenarios) but ideally we now have
-                                    // some none-trivial columns to work with.
-
-                                    // Ensures that the necessary arrangement exists. Manufacture it if not.
-                                    if self
-                                        .arrangement_columns(&inputs[other], &next_key[..])
-                                        .is_none()
-                                    {
-                                        let built = self
-                                            .collection(&inputs[other])
-                                            .expect("Collection not found!");
-                                        let next_key_clone = next_key.clone();
-                                        let next_keyed = built
-                                            .map(move |row| {
-                                                let datums = row.unpack();
-                                                let key_row = Row::pack(
-                                                    next_key_clone.iter().map(|i| datums[*i]),
+                                                    .find(|v| v.contains(&(*other, *c)))
+                                                    .expect("Column in key not bound!")
+                                                    .iter()
+                                                    .flat_map(|rel_col1| {
+                                                        update_column_sources.iter().position(
+                                                            |rel_col2| rel_col1 == rel_col2,
+                                                        )
+                                                    })
+                                                    .next()
+                                                    .expect(
+                                                        "Column in key not bound by prior column",
+                                                    );
+                                                prev_c
+                                            } else {
+                                                panic!(
+                                                    "Non-column keys are not currently supported"
                                                 );
-                                                (key_row, row)
-                                            })
-                                            .arrange_named::<OrdValSpine<_, _, _, _>>(&format!(
-                                                "DeltaJoinIndex: {}, {}, {}",
-                                                relation, other, index,
-                                            ));
-                                        self.set_local_columns(
-                                            &inputs[other],
-                                            &next_key[..],
-                                            next_keyed,
-                                        );
-                                    }
+                                            }
+                                        })
+                                        .collect::<Vec<_>>();
 
                                     // We require different logic based on the flavor of arrangement.
                                     // We may need to cache each of these if we want to re-use the same wrapped
                                     // arrangement, rather than re-wrap each time we use a thing.
                                     let subtract = subtract.clone();
                                     update_stream = match self
-                                        .arrangement_columns(&inputs[other], &next_key[..])
+                                        .arrangement(&inputs[*other], &next_key[..])
                                         .expect("Arrangement alarmingly absent!")
                                     {
                                         ArrangementFlavor::Local(local) => {
-                                            if other > relation {
+                                            if other > &relation {
                                                 let local = local
                                                     .enter_at(
                                                         inner,
@@ -185,7 +156,7 @@ where
                                             }
                                         }
                                         ArrangementFlavor::Trace(trace) => {
-                                            if other > relation {
+                                            if other > &relation {
                                                 let trace = trace
                                                     .enter_at(
                                                         inner,
@@ -209,7 +180,7 @@ where
 
                                     // Update our map of the sources of each column in the update stream.
                                     update_column_sources
-                                        .extend((0..arities[other]).map(|c| (other, c)));
+                                        .extend((0..arities[*other]).map(|c| (*other, c)));
                                 }
 
                                 // We must now de-permute the results to return to the common order.

@@ -103,7 +103,7 @@ impl RedundantJoin {
                 *demand = None;
             }
             if projection.iter().enumerate().any(|(i, p)| i != *p) {
-                *implementation = crate::relation::JoinImplementation::Differential;
+                *implementation = crate::relation::JoinImplementation::Unimplemented;
                 *relation = relation.take_dangerous().project(projection);
             }
         }

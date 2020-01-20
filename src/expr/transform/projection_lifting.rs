@@ -173,7 +173,7 @@ impl ProjectionLifting {
                     }
                 }
 
-                *implementation = crate::relation::JoinImplementation::Differential;
+                *implementation = crate::relation::JoinImplementation::Unimplemented;
 
                 if projection.len() != temp_arity || (0..temp_arity).any(|i| projection[i] != i) {
                     *relation = relation.take_dangerous().project(projection);

@@ -498,7 +498,7 @@ impl RelationExpr {
             inputs,
             variables,
             demand: None,
-            implementation: JoinImplementation::Differential,
+            implementation: JoinImplementation::Unimplemented,
         }
     }
 
@@ -1417,9 +1417,12 @@ Constant [[665]]"#
 /// Describe a join implementation in dataflow.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum JoinImplementation {
-    /// Perform a sequence of binary differential dataflow joins in the input order.
-    Differential,
+    /// Perform a sequence of binary differential dataflow joins, in the order and
+    /// with the keys specified by the argument.
+    Differential(usize, Vec<(usize, Vec<ScalarExpr>)>),
     /// Perform independent delta query dataflows for each input, with each joined
-    /// in the order specified in its respective vector.
-    DeltaQuery(Vec<Vec<usize>>),
+    /// in the order and with the keys specified in its respective vector.
+    DeltaQuery(Vec<Vec<(usize, Vec<ScalarExpr>)>>),
+    /// No implementation yet selected.
+    Unimplemented,
 }

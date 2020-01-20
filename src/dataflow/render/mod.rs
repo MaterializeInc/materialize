@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::any::Any;
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -21,8 +20,8 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
 use dataflow_types::*;
-use expr::{EvalEnv, GlobalId, Id, RelationExpr};
-use repr::{Datum, Row, RowArena};
+use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
+use repr::{Datum, Row, RowArena, RowPacker};
 
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
@@ -412,18 +411,16 @@ where
                 }
 
                 RelationExpr::Join { implementation, .. } => match implementation {
-                    expr::JoinImplementation::Differential => {
+                    expr::JoinImplementation::Differential(_start, _order) => {
                         self.render_join(relation_expr, env, scope, worker_index);
                     }
-                    expr::JoinImplementation::DeltaQuery(orders) => {
-                        self.render_delta_join(
-                            relation_expr,
-                            orders,
-                            env,
-                            scope,
-                            worker_index,
-                            |t| t.saturating_sub(1),
-                        );
+                    expr::JoinImplementation::DeltaQuery(_orders) => {
+                        self.render_delta_join(relation_expr, env, scope, worker_index, |t| {
+                            t.saturating_sub(1)
+                        });
+                    }
+                    expr::JoinImplementation::Unimplemented => {
+                        panic!("Attempt to render unimplemented join");
                     }
                 },
 
@@ -521,7 +518,7 @@ where
             inputs,
             variables,
             demand,
-            implementation: _,
+            implementation: expr::JoinImplementation::Differential(start, order),
         } = relation_expr
         {
             // For the moment, assert that each relation participates at most
@@ -568,189 +565,182 @@ where
                 // Assume demand encompasses all columns
                 arities.iter().map(|arity| (0..*arity).collect()).collect()
             };
-            // The relation_expr is to implement join as a `fold` over `inputs`.
-            let mut input_iter = inputs.iter().enumerate();
-            if let Some((index, input)) = input_iter.next() {
-                // This collection will evolve as we join in more inputs.
-                let mut joined = self.collection(input).unwrap();
 
-                // Maintain sources of each in-progress column.
-                let mut columns = (0..arities[index]).map(|c| (index, c)).collect::<Vec<_>>();
+            // This collection will evolve as we join in more inputs.
+            let mut joined = self.collection(&inputs[*start]).unwrap();
 
-                // The intent is to maintain `joined` as the full cross
-                // product of all input relations so far, subject to all
-                // of the equality constraints in `variables`. This means
-                for (index, input) in input_iter {
-                    // Determine keys. there is at most one key for each
-                    // equivalence class, and an equivalence class is only
-                    // engaged if it contains both a new and an old column.
-                    // If the class contains *more than one* new column we
-                    // may need to put a `filter` in, or perhaps await a
-                    // later join (and ensure that one exists).
-                    let mut old_keys = Vec::new();
-                    let mut new_keys = Vec::new();
+            // Maintain sources of each in-progress column.
+            let mut columns = (0..arities[*start])
+                .map(|c| (*start, c))
+                .collect::<Vec<_>>();
 
-                    // Determine which columns from `joined` and `input` will be kept
-                    // Initialize the list of kept columns from `demand`
-                    let mut old_outputs = (0..index)
-                        .flat_map(|i| demand[i].iter().map(|c| (i, *c)).collect::<Vec<_>>())
-                        .map(|c| columns.iter().position(|c2| c == *c2).unwrap())
-                        .collect::<Vec<_>>();
-                    let mut new_outputs = demand[index].clone();
+            // The intent is to maintain `joined` as the full cross
+            // product of all input relations so far, subject to all
+            // of the equality constraints in `variables`. This means
+            let mut inputs_joined = std::collections::HashSet::new();
+            inputs_joined.insert(start);
 
-                    for equivalence in variables.iter() {
-                        // Keep columns that are needed for future joins
-                        if equivalence.last().unwrap().0 > index {
-                            match equivalence[0].0.cmp(&index) {
-                                Ordering::Less => old_outputs.push(
-                                    columns.iter().position(|c2| equivalence[0] == *c2).unwrap(),
-                                ),
-                                Ordering::Equal => new_outputs.push(equivalence[0].1),
-                                Ordering::Greater => {
-                                    // If the relation exceeds the current index,
-                                    // we don't need to worry about retaining it
-                                    // at this moment.
-                                }
-                            }
-                        }
-
-                        // If a key exists in `joined`
-                        if equivalence[0].0 < index {
-                            // Look for a key in `input`
-                            let new_pos = equivalence
+            for (_index, (input, next_keys)) in order.iter().enumerate() {
+                // Keys for the incoming updates are determined by locating
+                // the elements of `next_keys` among the existing `columns`.
+                let prev_keys = next_keys
+                    .iter()
+                    .map(|k| {
+                        if let ScalarExpr::Column(c) = k {
+                            let prev_c = variables
                                 .iter()
-                                .filter(|(i, _)| i == &index)
-                                .map(|(_, c)| *c)
-                                .next();
-                            // If a key in input is found, register join keys
-                            if let Some(new_pos) = new_pos {
-                                old_keys.push(
-                                    columns.iter().position(|i| *i == equivalence[0]).unwrap(),
-                                );
-                                new_keys.push(new_pos);
-                            }
-                        }
-                    }
-
-                    // Dedup both sets of outputs
-                    old_outputs.sort();
-                    old_outputs.dedup();
-                    new_outputs.sort();
-                    new_outputs.dedup();
-                    // List the new locations the columns will be in
-                    columns = old_outputs
-                        .iter()
-                        .map(|i| columns[*i])
-                        .chain(new_outputs.iter().map(|i| (index, *i)))
-                        .collect();
-
-                    let old_keyed = joined
-                        .map(move |row| {
-                            let datums = row.unpack();
-                            let key_row = Row::pack(old_keys.iter().map(|i| datums[*i]));
-                            (key_row, row)
-                        })
-                        .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", index));
-
-                    // TODO: easier idioms for detecting, re-using, and stashing.
-                    if self.arrangement_columns(&input, &new_keys[..]).is_none() {
-                        let built = self.collection(input).unwrap();
-                        let new_keys2 = new_keys.clone();
-                        let new_keyed = built
-                            .map(move |row| {
-                                let datums = row.unpack();
-                                let key_row = Row::pack(new_keys2.iter().map(|i| datums[*i]));
-                                (key_row, row)
-                            })
-                            .arrange_named::<OrdValSpine<_, _, _, _>>(&format!(
-                                "JoinIndex: {}",
-                                index
-                            ));
-                        self.set_local_columns(&input, &new_keys[..], new_keyed);
-                    }
-
-                    joined = match self.arrangement_columns(&input, &new_keys[..]) {
-                        Some(ArrangementFlavor::Local(local)) => {
-                            old_keyed.join_core(&local, move |_keys, old, new| {
-                                let old_datums = old.unpack();
-                                let new_datums = new.unpack();
-                                Some(Row::pack(
-                                    old_outputs
-                                        .iter()
-                                        .map(|i| &old_datums[*i])
-                                        .chain(new_outputs.iter().map(|i| &new_datums[*i])),
-                                ))
-                            })
-                        }
-                        Some(ArrangementFlavor::Trace(trace)) => {
-                            old_keyed.join_core(&trace, move |_keys, old, new| {
-                                let old_datums = old.unpack();
-                                let new_datums = new.unpack();
-                                Some(Row::pack(
-                                    old_outputs
-                                        .iter()
-                                        .map(|i| &old_datums[*i])
-                                        .chain(new_outputs.iter().map(|i| &new_datums[*i])),
-                                ))
-                            })
-                        }
-                        None => {
-                            panic!("Arrangement alarmingly absent!");
-                        }
-                    };
-                }
-
-                // Permute back to the original positions
-                let mut inverse_columns: Vec<(usize, usize)> = columns
-                    .iter()
-                    .map(|(input, col)| prior_arities[*input] + *col)
-                    .enumerate()
-                    .map(|(new_col, original_col)| (original_col, new_col))
-                    .collect();
-                inverse_columns.sort();
-                let mut inverse_columns_iter = inverse_columns.iter().peekable();
-                let mut outputs = Vec::new();
-                for i in 0..arities.iter().sum() {
-                    if let Some((original_col, new_col)) = inverse_columns_iter.peek() {
-                        if i == *original_col {
-                            outputs.push(Some(*new_col));
-                            inverse_columns_iter.next();
-                            continue;
-                        }
-                    }
-                    outputs.push(None);
-                }
-                let dummy_data = types
-                    .iter()
-                    .flat_map(|t| &t.column_types)
-                    .map(|t| {
-                        if t.nullable {
-                            Datum::Null
+                                .find(|v| v.contains(&(*input, *c)))
+                                .expect("Column in key not bound!")
+                                .iter()
+                                .flat_map(|rel_col1| {
+                                    columns.iter().position(|rel_col2| rel_col1 == rel_col2)
+                                })
+                                .next()
+                                .expect("Column in key not bound by prior column");
+                            prev_c
                         } else {
-                            t.scalar_type.dummy_datum()
+                            panic!("Non-column keys are not currently supported");
                         }
                     })
                     .collect::<Vec<_>>();
-                joined = joined.map(move |row| {
-                    let datums = row.unpack();
-                    Row::pack(
-                        outputs
-                            .iter()
-                            .zip(dummy_data.iter())
-                            .map(|(new_col, dummy)| {
-                                if let Some(new_col) = new_col {
-                                    datums[*new_col]
-                                } else {
-                                    // Regenerate any columns ignored during join with dummy data
-                                    *dummy
-                                }
-                            }),
-                    )
-                });
-                self.collections.insert(relation_expr.clone(), joined);
-            } else {
-                panic!("Empty join; why?");
+
+                // Determine which columns from `joined` and `input` will be kept
+                inputs_joined.insert(input);
+                let prev_outputs = columns
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, (r, c))| {
+                        let output_demand = demand[*r].contains(c);
+                        let future_demand = variables.iter().any(|variable| {
+                            variable.contains(&(*r, *c))
+                                && variable.iter().any(|(r2, _)| !inputs_joined.contains(r2))
+                        });
+                        if output_demand || future_demand {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let next_outputs = (0..arities[*input])
+                    .flat_map(|i| {
+                        let output_demand = demand[*input].contains(&i);
+                        let future_demand = variables.iter().any(|variable| {
+                            variable.contains(&(*input, i))
+                                && variable.iter().any(|(r2, _)| !inputs_joined.contains(r2))
+                        });
+                        if output_demand || future_demand {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                // List the new locations the columns will be in
+                columns = prev_outputs
+                    .iter()
+                    .map(|i| columns[*i])
+                    .chain(next_outputs.iter().map(|i| (*input, *i)))
+                    .collect();
+
+                // We exploit the demand information to restrict `prev` to its demanded columns.
+                let prev_keyed = joined
+                    .map({
+                        move |row| {
+                            let datums = row.unpack();
+                            let key_row = Row::pack(prev_keys.iter().map(|i| datums[*i]));
+                            (key_row, Row::pack(prev_outputs.iter().map(|i| datums[*i])))
+                        }
+                    })
+                    .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", input));
+
+                // // TODO: easier idioms for detecting, re-using, and stashing.
+                // if self.arrangement(&inputs[*input], &next_keys[..]).is_none() {
+                //     let built = self.collection(&inputs[*input]).unwrap();
+                //     let next_keys2 = next_keys.clone();
+                //     let next_keyed = built
+                //         .map({
+                //             let env = env.clone();
+                //             let temp_storage = RowArena::new();
+                //             move |row| {
+                //                 let datums = row.unpack();
+                //                 let key_row = Row::pack(
+                //                     next_keys2
+                //                         .iter()
+                //                         .map(|e| e.eval(&datums, &env, &temp_storage)),
+                //                 );
+                //                 (key_row, row)
+                //             }
+                //         })
+                //         .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinIndex: {}", input));
+                //     self.set_local(&inputs[*input], &next_keys[..], next_keyed);
+                // }
+
+                joined = match self.arrangement(&inputs[*input], &next_keys[..]) {
+                    Some(ArrangementFlavor::Local(local)) => {
+                        prev_keyed.join_core(&local, move |_keys, old, new| {
+                            let prev_datums = old.unpack();
+                            let next_datums = new.unpack();
+                            Some(Row::pack(
+                                prev_datums
+                                    .iter()
+                                    .chain(next_outputs.iter().map(|i| &next_datums[*i])),
+                            ))
+                        })
+                    }
+                    Some(ArrangementFlavor::Trace(trace)) => {
+                        prev_keyed.join_core(&trace, move |_keys, old, new| {
+                            let prev_datums = old.unpack();
+                            let next_datums = new.unpack();
+                            Some(Row::pack(
+                                prev_datums
+                                    .iter()
+                                    .chain(next_outputs.iter().map(|i| &next_datums[*i])),
+                            ))
+                        })
+                    }
+                    None => {
+                        panic!("Arrangement alarmingly absent!");
+                    }
+                };
             }
+
+            // We are obliged to produce demanded columns in order, with dummy data allowed
+            // in non-demanded locations. They must all be in order, in any case. All demanded
+            // columns should be present in `columns` (and probably not much else).
+
+            let mut position_or = Vec::new();
+            for rel in 0..inputs.len() {
+                for col in 0..arities[rel] {
+                    position_or.push(if demand[rel].contains(&col) {
+                        Ok(columns
+                            .iter()
+                            .position(|rel_col| rel_col == &(rel, col))
+                            .expect("Demanded column not found"))
+                    } else {
+                        Err({
+                            let typ = &types[rel].column_types[col];
+                            if typ.nullable {
+                                Datum::Null
+                            } else {
+                                typ.scalar_type.dummy_datum()
+                            }
+                        })
+                    });
+                }
+            }
+
+            joined = joined.map(move |row| {
+                let datums = row.unpack();
+                Row::pack(position_or.iter().map(|pos_or| match pos_or {
+                    Result::Ok(index) => datums[*index],
+                    Result::Err(datum) => *datum,
+                }))
+            });
+            self.collections.insert(relation_expr.clone(), joined);
+        } else {
+            panic!("render_join called on invalid expression.");
         }
     }
 
