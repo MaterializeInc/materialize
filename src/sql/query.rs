@@ -667,7 +667,10 @@ fn plan_table_function(
     args: &[Expr],
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     let ident = &*normalize::function_name(name.clone())?;
-    assert!(is_table_func(ident)); // so we don't forget to add names over there
+    if !is_table_func(ident) {
+        // so we don't forget to add names over there
+        bail!("{} is not a table function", ident);
+    }
     match (ident, args) {
         ("jsonb_each", [expr])
         | ("jsonb_object_keys", [expr])
