@@ -1,5 +1,6 @@
 *
 !CMakeLists.txt
+!cmake
 !src
 !flush-tables
 !mz-default.cfg
