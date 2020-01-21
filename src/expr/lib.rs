@@ -20,3 +20,4 @@ pub use relation::func::{AggregateFunc, UnaryTableFunc};
 pub use relation::{AggregateExpr, ColumnOrder, IdGen, RelationExpr};
 pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::{EvalEnv, ScalarExpr};
+pub use transform::OptimizedRelationExpr;
