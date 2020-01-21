@@ -23,18 +23,18 @@ const mz::Config& mz::defaultConfig() {
     int_distribution zero_const {static_cast<inner_type>(std::uniform_int_distribution<int64_t>(0, 0))};
     static Config singleton {
         .expectedSources = {
-            "mysql_tpcch_customer",
-            "mysql_tpcch_history",
-            "mysql_tpcch_district",
-            "mysql_tpcch_neworder",
-            "mysql_tpcch_order",
-            "mysql_tpcch_orderline",
-            "mysql_tpcch_warehouse",
-            "mysql_tpcch_item",
-            "mysql_tpcch_stock",
-            "mysql_tpcch_nation",
-            "mysql_tpcch_region",
-            "mysql_tpcch_supplier"
+            "materialize.public.mysql_tpcch_customer",
+            "materialize.public.mysql_tpcch_history",
+            "materialize.public.mysql_tpcch_district",
+            "materialize.public.mysql_tpcch_neworder",
+            "materialize.public.mysql_tpcch_order",
+            "materialize.public.mysql_tpcch_orderline",
+            "materialize.public.mysql_tpcch_warehouse",
+            "materialize.public.mysql_tpcch_item",
+            "materialize.public.mysql_tpcch_stock",
+            "materialize.public.mysql_tpcch_nation",
+            "materialize.public.mysql_tpcch_region",
+            "materialize.public.mysql_tpcch_supplier"
         },
         .viewPattern = "mysql.tpcch.%",
         .materializedUrl = "postgresql://materialized:6875/?sslmode=disable",
