@@ -327,7 +327,7 @@ where
     });
 
     if ready_to_go.is_empty() {
-        updates.clone()
+        updates
     } else {
         let env = env.clone();
         let temp_storage = repr::RowArena::new();
