@@ -1211,7 +1211,10 @@ impl Parser {
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parse_keyword("TABLE") {
             self.parse_create_table()
-        } else if self.parse_keyword("MATERIALIZED") || self.parse_keyword("VIEW") {
+        } else if self.parse_keyword("MATERIALIZED")
+            || self.parse_keyword("OR")
+            || self.parse_keyword("VIEW")
+        {
             self.prev_token();
             self.parse_create_view()
         } else if self.parse_keyword("SOURCE") {
@@ -1293,6 +1296,12 @@ impl Parser {
     }
 
     pub fn parse_create_view(&mut self) -> Result<Statement, ParserError> {
+        let replace = if self.parse_keyword("OR") {
+            self.expect_keyword("REPLACE")?;
+            true
+        } else {
+            false
+        };
         let materialized = self.parse_keyword("MATERIALIZED");
         self.expect_keyword("VIEW")?;
         // Many dialects support `OR REPLACE` | `OR ALTER` right after `CREATE`, but we don't (yet).
@@ -1308,6 +1317,7 @@ impl Parser {
             columns,
             query,
             materialized,
+            replace,
             with_options,
         })
     }

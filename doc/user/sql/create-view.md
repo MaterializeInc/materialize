@@ -30,6 +30,7 @@ Field | Use
 ------|-----
 _view&lowbar;name_ | A name for the view.
 _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want to materialize and maintain.
+**`OR REPLACE`** | If a view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
 
 ## Details
 

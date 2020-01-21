@@ -566,19 +566,33 @@ fn handle_create_view(
     mut stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (name, columns, query, materialized, with_options) = match &mut stmt {
+    let (name, columns, query, materialized, replace, with_options) = match &mut stmt {
         Statement::CreateView {
             name,
             columns,
             query,
             materialized,
+            replace,
             with_options,
-        } => (name, columns, query, materialized, with_options),
+        } => (name, columns, query, materialized, replace, with_options),
         _ => unreachable!(),
     };
     if !with_options.is_empty() {
         bail!("WITH options are not yet supported");
     }
+    let replace = if *replace {
+        let if_exists = true;
+        let cascade = false;
+        handle_drop_dataflow_core(
+            scx,
+            ObjectType::View,
+            if_exists,
+            vec![name.clone()],
+            cascade,
+        )?
+    } else {
+        vec![]
+    };
     let (mut relation_expr, mut desc, finishing) =
         handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
     if !finishing.is_trivial() {
@@ -615,7 +629,11 @@ fn handle_create_view(
         desc,
         eval_env: EvalEnv::default(),
     };
-    Ok(Plan::CreateView(name, view))
+    Ok(Plan::CreateView {
+        name,
+        view,
+        replace,
+    })
 }
 
 async fn handle_create_dataflow(
@@ -880,6 +898,23 @@ fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan,
         } => (object_type, if_exists, names, cascade),
         _ => unreachable!(),
     };
+    let to_remove = handle_drop_dataflow_core(scx, object_type, if_exists, names, cascade)?;
+    Ok(match object_type {
+        ObjectType::Source => Plan::DropItems(to_remove, ObjectType::Source),
+        ObjectType::View => Plan::DropItems(to_remove, ObjectType::View),
+        ObjectType::Index => Plan::DropItems(to_remove, ObjectType::Index),
+        ObjectType::Sink => Plan::DropItems(to_remove, ObjectType::Sink),
+        _ => bail!("unsupported SQL statement: DROP {}", object_type),
+    })
+}
+
+fn handle_drop_dataflow_core(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    names: Vec<ObjectName>,
+    cascade: bool,
+) -> Result<Vec<GlobalId>, failure::Error> {
     let names = names
         .into_iter()
         .map(|n| scx.resolve_name(n))
@@ -915,13 +950,7 @@ fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan,
     }
     to_remove.sort();
     to_remove.dedup();
-    Ok(match object_type {
-        ObjectType::Source => Plan::DropItems(to_remove, ObjectType::Source),
-        ObjectType::View => Plan::DropItems(to_remove, ObjectType::View),
-        ObjectType::Index => Plan::DropItems(to_remove, ObjectType::Index),
-        ObjectType::Sink => Plan::DropItems(to_remove, ObjectType::Sink),
-        _ => bail!("unsupported SQL statement: DROP {}", object_type),
-    })
+    Ok(to_remove)
 }
 
 fn handle_peek(

@@ -2985,14 +2985,25 @@ fn parse_create_view() {
             columns,
             query,
             materialized,
+            replace,
             with_options,
         } => {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
             assert_eq!("SELECT foo FROM bar", query.to_string());
             assert!(!materialized);
+            assert!(!replace);
             assert_eq!(with_options, vec![]);
         }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_or_replace_view() {
+    let sql = "CREATE OR REPLACE VIEW v AS SELECT 1";
+    match verified_stmt(sql) {
+        Statement::CreateView { replace, .. } => assert!(replace),
         _ => unreachable!(),
     }
 }
@@ -3030,12 +3041,14 @@ fn parse_create_view_with_columns() {
             with_options,
             query,
             materialized,
+            replace,
         } => {
             assert_eq!("v", name.to_string());
             assert_eq!(columns, vec![Ident::new("has"), Ident::new("cols")]);
             assert_eq!(with_options, vec![]);
             assert_eq!("SELECT 1, 2", query.to_string());
             assert!(!materialized);
+            assert!(!replace);
         }
         _ => unreachable!(),
     }
@@ -3050,12 +3063,14 @@ fn parse_create_materialized_view() {
             columns,
             query,
             materialized,
+            replace,
             with_options,
         } => {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
             assert_eq!("SELECT foo FROM bar", query.to_string());
             assert!(materialized);
+            assert!(!replace);
             assert_eq!(with_options, vec![]);
         }
         _ => unreachable!(),

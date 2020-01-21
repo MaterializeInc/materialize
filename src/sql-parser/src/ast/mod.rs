@@ -569,6 +569,7 @@ pub enum Statement {
         columns: Vec<Ident>,
         query: Box<Query>,
         materialized: bool,
+        replace: bool,
         with_options: Vec<SqlOption>,
     },
     /// `CREATE TABLE`
@@ -815,9 +816,13 @@ impl fmt::Display for Statement {
                 columns,
                 query,
                 materialized,
+                replace,
                 with_options,
             } => {
                 write!(f, "CREATE")?;
+                if *replace {
+                    write!(f, " OR REPLACE")?;
+                }
                 if *materialized {
                     write!(f, " MATERIALIZED")?;
                 }

@@ -374,9 +374,10 @@ macro_rules! make_visitor {
                 columns: &'ast $($mut)* [Ident],
                 query: &'ast $($mut)* Query,
                 materialized: bool,
+                replace: bool,
                 with_options: &'ast $($mut)* [SqlOption],
             ) {
-                visit_create_view(self, name, columns, query, materialized, with_options)
+                visit_create_view(self, name, columns, query, materialized, replace, with_options)
             }
 
             fn visit_create_index(
@@ -617,8 +618,9 @@ macro_rules! make_visitor {
                     columns,
                     query,
                     materialized,
+                    replace,
                     with_options,
-                } => visitor.visit_create_view(name, columns, query, *materialized, with_options),
+                } => visitor.visit_create_view(name, columns, query, *materialized, *replace, with_options),
                 Statement::CreateIndex {
                     name,
                     on_name,
@@ -1310,6 +1312,7 @@ macro_rules! make_visitor {
             columns: &'ast $($mut)* [Ident],
             query: &'ast $($mut)* Query,
             _materialized: bool,
+            _replace: bool,
             with_options: &'ast $($mut)* [SqlOption],
         ) {
             visitor.visit_object_name(name);

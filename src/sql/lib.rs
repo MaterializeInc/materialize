@@ -43,7 +43,12 @@ pub enum Plan {
         name: FullName,
         desc: RelationDesc,
     },
-    CreateView(FullName, View<RelationExpr>),
+    CreateView {
+        name: FullName,
+        view: View<RelationExpr>,
+        /// The IDs of the object that this view is replacing, if any.
+        replace: Vec<GlobalId>,
+    },
     DropItems(Vec<GlobalId>, ObjectType),
     EmptyQuery,
     SetVariable {
