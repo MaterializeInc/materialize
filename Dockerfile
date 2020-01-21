@@ -1,6 +1,6 @@
 FROM ubuntu:disco
 
-RUN apt-get update && apt-get install -qy build-essential unixodbc-dev cmake libpqxx-dev libconfig++-dev
+RUN apt-get update && apt-get install -qy build-essential unixodbc-dev cmake libpqxx-dev libconfig++-dev postgresql-server-dev-11
 
 COPY . workdir/
 RUN mkdir workdir/build && cd workdir/build && cmake -DCMAKE_BUILD_TYPE=Release .. && make
