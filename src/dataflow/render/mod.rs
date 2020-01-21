@@ -391,33 +391,59 @@ where
                 }
 
                 RelationExpr::Filter { input, predicates } => {
-                    self.ensure_rendered(input, env, scope, worker_index);
-                    let env = env.clone();
-                    let predicates = predicates.clone();
-                    let collection = self.collection(input).unwrap().filter(move |input_row| {
-                        let datums = input_row.unpack();
-                        let temp_storage = RowArena::new();
-                        predicates.iter().all(|predicate| {
-                            match predicate.eval(&datums, &env, &temp_storage) {
-                                Datum::True => true,
-                                Datum::False | Datum::Null => false,
-                                _ => unreachable!(),
+                    let collection = if let RelationExpr::Join { implementation, .. } = &**input {
+                        match implementation {
+                            expr::JoinImplementation::Differential(_start, _order) => {
+                                self.render_join(input, predicates, env, scope, worker_index)
                             }
+                            expr::JoinImplementation::DeltaQuery(_orders) => self
+                                .render_delta_join(
+                                    input,
+                                    predicates,
+                                    env,
+                                    scope,
+                                    worker_index,
+                                    |t| t.saturating_sub(1),
+                                ),
+                            expr::JoinImplementation::Unimplemented => {
+                                panic!("Attempt to render unimplemented join");
+                            }
+                        }
+                    } else {
+                        self.ensure_rendered(input, env, scope, worker_index);
+                        let env = env.clone();
+                        let temp_storage = RowArena::new();
+                        let predicates = predicates.clone();
+                        self.collection(input).unwrap().filter(move |input_row| {
+                            let datums = input_row.unpack();
+                            predicates.iter().all(|predicate| {
+                                match predicate.eval(&datums, &env, &temp_storage) {
+                                    Datum::True => true,
+                                    Datum::False | Datum::Null => false,
+                                    _ => unreachable!(),
+                                }
+                            })
                         })
-                    });
-
+                    };
                     self.collections.insert(relation_expr.clone(), collection);
-                    // TODO: We could add filtered traces in principle, but the trace wrapper types are problematic.
                 }
 
                 RelationExpr::Join { implementation, .. } => match implementation {
                     expr::JoinImplementation::Differential(_start, _order) => {
-                        self.render_join(relation_expr, env, scope, worker_index);
+                        let collection =
+                            self.render_join(relation_expr, &[], env, scope, worker_index);
+                        self.collections.insert(relation_expr.clone(), collection);
                     }
                     expr::JoinImplementation::DeltaQuery(_orders) => {
-                        self.render_delta_join(relation_expr, env, scope, worker_index, |t| {
-                            t.saturating_sub(1)
-                        });
+                        let collection = self.render_delta_join(
+                            relation_expr,
+                            &[],
+                            env,
+                            scope,
+                            worker_index,
+                            |t| t.saturating_sub(1),
+                        );
+                        self.collections.insert(relation_expr.clone(), collection);
                     }
                     expr::JoinImplementation::Unimplemented => {
                         panic!("Attempt to render unimplemented join");
@@ -515,10 +541,11 @@ where
     fn render_join(
         &mut self,
         relation_expr: &RelationExpr,
+        predicates: &[ScalarExpr],
         env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
-    ) {
+    ) -> Collection<G, Row> {
         if let RelationExpr::Join {
             inputs,
             variables,
@@ -578,6 +605,15 @@ where
             let mut columns = (0..arities[*start])
                 .map(|c| (*start, c))
                 .collect::<Vec<_>>();
+
+            let mut predicates = predicates.to_vec();
+            joined = crate::render::delta_join::build_filter(
+                joined,
+                &columns,
+                &mut predicates,
+                &prior_arities,
+                env,
+            );
 
             // The intent is to maintain `joined` as the full cross
             // product of all input relations so far, subject to all
@@ -687,6 +723,14 @@ where
                         panic!("Arrangement alarmingly absent!");
                     }
                 };
+
+                joined = crate::render::delta_join::build_filter(
+                    joined,
+                    &columns,
+                    &mut predicates,
+                    &prior_arities,
+                    env,
+                );
             }
 
             // We are obliged to produce demanded columns in order, with dummy data allowed
@@ -714,16 +758,15 @@ where
                 }
             }
 
-            joined = joined.map(move |row| {
+            joined.map(move |row| {
                 let datums = row.unpack();
                 Row::pack(position_or.iter().map(|pos_or| match pos_or {
                     Result::Ok(index) => datums[*index],
                     Result::Err(datum) => *datum,
                 }))
-            });
-            self.collections.insert(relation_expr.clone(), joined);
+            })
         } else {
-            panic!("render_join called on invalid expression.");
+            panic!("render_join called on invalid expression.")
         }
     }
 

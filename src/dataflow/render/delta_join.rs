@@ -25,11 +25,13 @@ where
     pub fn render_delta_join<F>(
         &mut self,
         relation_expr: &RelationExpr,
+        predicates: &[ScalarExpr],
         env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
         subtract: F,
-    ) where
+    ) -> Collection<G, Row>
+    where
         F: Fn(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
         if let RelationExpr::Join {
@@ -74,6 +76,13 @@ where
                             .map(|typ| typ.column_types.len())
                             .collect::<Vec<_>>();
 
+                        let mut offset = 0;
+                        let mut prior_arities = Vec::new();
+                        for input in 0..inputs.len() {
+                            prior_arities.push(offset);
+                            offset += arities[input];
+                        }
+
                         for relation in 0..inputs.len() {
                             // This collection determines changes that result from updates inbound
                             // from `inputs[relation]` and reflects all strictly prior updates and
@@ -90,6 +99,15 @@ where
                                 let mut update_column_sources = (0..arities[relation])
                                     .map(|c| (relation, c))
                                     .collect::<Vec<_>>();
+
+                                let mut predicates = predicates.to_vec();
+                                update_stream = build_filter(
+                                    update_stream,
+                                    &update_column_sources,
+                                    &mut predicates,
+                                    &prior_arities,
+                                    env,
+                                );
 
                                 // We must determine an order to join the other relations, starting from
                                 // `relation`, and ideally maximizing the number of arrangements used.
@@ -188,6 +206,14 @@ where
                                     // Update our map of the sources of each column in the update stream.
                                     update_column_sources
                                         .extend((0..arities[*other]).map(|c| (*other, c)));
+
+                                    update_stream = build_filter(
+                                        update_stream,
+                                        &update_column_sources,
+                                        &mut predicates,
+                                        &prior_arities,
+                                        env,
+                                    );
                                 }
 
                                 // We must now de-permute the results to return to the common order.
@@ -210,8 +236,9 @@ where
                         // Concatenate the results of each delta query as the accumulated results.
                         differential_dataflow::collection::concatenate(inner, delta_queries).leave()
                     });
-
-            self.collections.insert(relation_expr.clone(), results);
+            results
+        } else {
+            panic!("delta_join invoke on non-delta join");
         }
     }
 }
@@ -262,4 +289,57 @@ where
         Row::pack::<_, Datum>(None),
         Row::pack::<_, Datum>(None),
     )
+}
+
+/// Filters updates on some columns by predicates that are ready to go.
+///
+/// The `predicates` argument has all applied predicates removed.
+pub fn build_filter<G>(
+    updates: Collection<G, Row>,
+    columns: &[(usize, usize)],
+    predicates: &mut Vec<ScalarExpr>,
+    prior_arities: &[usize],
+    env: &EvalEnv,
+) -> Collection<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    let mut map = std::collections::HashMap::new();
+    for (pos, (rel, col)) in columns.iter().enumerate() {
+        map.insert(prior_arities[*rel] + *col, pos);
+    }
+
+    let mut ready_to_go = Vec::new();
+    predicates.retain(|predicate| {
+        if predicate.support().iter().all(|c| map.contains_key(c)) {
+            let mut predicate = predicate.clone();
+            predicate.visit_mut(&mut |e| {
+                if let ScalarExpr::Column(c) = e {
+                    *c = map[c];
+                }
+            });
+            ready_to_go.push(predicate);
+            false
+        } else {
+            true
+        }
+    });
+
+    if ready_to_go.is_empty() {
+        updates.clone()
+    } else {
+        let env = env.clone();
+        let temp_storage = repr::RowArena::new();
+        updates.filter(move |input_row| {
+            let datums = input_row.unpack();
+            ready_to_go.iter().all(
+                |predicate| match predicate.eval(&datums, &env, &temp_storage) {
+                    Datum::True => true,
+                    Datum::False | Datum::Null => false,
+                    _ => unreachable!(),
+                },
+            )
+        })
+    }
 }
