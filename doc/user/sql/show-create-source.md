@@ -23,7 +23,7 @@ You can determine a source's type by the **Source URL** address prefix.
 Prefix | Type
 -------|------
 `kafka://` | Streaming
-`file://` | Static
+`file://` | File
 
 ## Examples
 
@@ -33,7 +33,7 @@ SHOW CREATE SOURCE my_source;
 ```nofmt
     Source   |        Source URL
 -------------+--------------------------
- my_source   | file:///static-source.csv
+ my_source   | file:///file-source.csv
 ```
 
 ## Related pages
