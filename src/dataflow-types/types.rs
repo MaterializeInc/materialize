@@ -34,9 +34,6 @@ pub enum PeekWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
     Immediately,
-    /// The peek should occur at the latest possible timestamp that has been
-    /// accepted by each input source.
-    EarliestSource,
     /// The peek should occur at the specified timestamp.
     AtTimestamp(Timestamp),
 }

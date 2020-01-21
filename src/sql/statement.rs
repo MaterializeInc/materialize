@@ -956,7 +956,7 @@ fn handle_drop_dataflow_core(
 fn handle_peek(
     scx: &StatementContext,
     name: ObjectName,
-    immediate: bool,
+    _immediate: bool,
 ) -> Result<Plan, failure::Error> {
     let name = scx.resolve_name(name)?;
     let catalog_entry = scx.catalog.get(&name)?.clone();
@@ -969,11 +969,7 @@ fn handle_peek(
             id: Id::Global(catalog_entry.id()),
             typ: typ.clone(),
         },
-        when: if immediate {
-            PeekWhen::Immediately
-        } else {
-            PeekWhen::EarliestSource
-        },
+        when: PeekWhen::Immediately,
         finishing: RowSetFinishing {
             offset: 0,
             limit: None,
