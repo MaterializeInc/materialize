@@ -1,0 +1,55 @@
+# Copyright 2020 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+
+# Map from host-port:internal port
+#
+# This mostly just shows all the ports that are available to the host system, if you want
+# to change these you must restart the docker-compose cluster.
+x-port-mappings:
+  - &server 5000:5000
+  - &materialized 6875:6875
+
+version: '3.7'
+services:
+  materialized:
+    image: materialize/materialized:latest
+    ports:
+      - *materialized
+    init: true
+    command: -w4 --bootstrap-sql=/usr/local/etc/materialized/bootstrap.sql
+    volumes:
+      - logfile:/log
+  
+  server:
+    init: true
+    build: server
+    ports:
+      - *server
+    volumes:
+      - logfile:/log
+    command: /bin/sh -c "./app.py 2> /log/requests"
+
+  client:
+    init: true
+    build: loadgen
+    depends_on: [server]
+
+  cli:
+    build: cli
+    init: true
+    # if you run the terminal with a dark background uncomment these lines
+    # environment:
+    #   MZCLI_PROMPT: DARK_MODE
+    depends_on:
+      - materialized
+
+  setup:
+    build: cli
+    depends_on:
+      - materialized
+    command: setup.sh
+volumes:
+  logfile:
