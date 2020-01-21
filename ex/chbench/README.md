@@ -58,6 +58,7 @@ remove it with `docker volume rm`, so if this is your second time through the
 demo, you can skip this step.
 
 ```shell session
+$ docker-compose run chbench-init
 $ docker-compose run chbench gen --warehouses=1
 ```
 
