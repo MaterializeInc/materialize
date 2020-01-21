@@ -128,7 +128,8 @@ the Metabase interactive SQL editor.
     - For comparison, you can run the full query on a source once you
       have materialized it. To do so:
       ```sql
-      CREATE VIEW mysql_tpcch_orderline_view;
+      CREATE VIEW orderline_view
+      AS SELECT * FROM mysql_tpcch_orderline;
       ```
       And then running the full query on the view:
       ```sql
@@ -158,7 +159,8 @@ the Metabase interactive SQL editor.
     - For comparison, you can run the full query on the underlying
       source once you have materialized it. To do so:
       ```sql
-      CREATE VIEW mysql_tpcch_orderline_view;
+      CREATE VIEW orderline_view
+      AS SELECT * FROM mysql_tpcch_orderline;
       ```
       And then running the full query on the view:
       ```sql
