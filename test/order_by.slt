@@ -198,7 +198,7 @@ statement ok
 CREATE VIEW bazv AS (SELECT val1, val2 FROM baz ORDER BY val2 DESC, val1 LIMIT 2 OFFSET 1 ROW)
 
 query II rowsort
-PEEK bazv
+SELECT * FROM bazv
 ----
 2079   24223
 12345  12345
@@ -207,7 +207,7 @@ statement ok
 DELETE FROM baz WHERE val1=12345
 
 query II rowsort
-PEEK bazv
+SELECT * FROM bazv
 ----
 1735   2079
 2079   24223
@@ -220,7 +220,7 @@ CREATE VIEW fizzorderview AS SELECT a, b FROM fizz ORDER BY a DESC, b
 # TODO: materialize#724 take out the rowsort and rearrange results
 # when ORDER BY's persist past the view creation
 query IT rowsort
-PEEK fizzorderview
+SELECT * FROM fizzorderview
 ----
 12345 one
 12345 three
@@ -244,7 +244,7 @@ statement ok
 CREATE VIEW fizzlimitview2 AS SELECT b, a FROM fizz ORDER BY a ASC LIMIT 2
 
 query TI rowsort
-PEEK fizzlimitview2
+SELECT * FROM fizzlimitview2
 ----
 thirteen 2079
 two      1735
@@ -261,7 +261,7 @@ statement ok
 CREATE VIEW fizzoffsetview2 AS SELECT b, a FROM fizz ORDER BY b DESC, a OFFSET 3 ROWS
 
 query TI rowsort
-PEEK fizzoffsetview2
+SELECT * FROM fizzoffsetview2
 ----
 four     21243
 four     24223
@@ -284,7 +284,7 @@ CREATE VIEW fizzlimitoffsetview2 AS SELECT avg(a), b FROM fizz GROUP BY b
 ORDER BY b DESC LIMIT 3 OFFSET 2 ROWS
 
 query RT rowsort
-PEEK fizzlimitoffsetview2
+SELECT * FROM fizzlimitoffsetview2
 ----
 12345.000000 one
 2079.000000  thirteen
@@ -295,7 +295,7 @@ statement ok
 DELETE FROM fizz WHERE b = 'thirteen'
 
 query IT rowsort
-PEEK fizzorderview
+SELECT * FROM fizzorderview
 ----
 12345 one
 12345 three
@@ -307,7 +307,7 @@ PEEK fizzorderview
 6745  five
 
 query TI rowsort
-PEEK fizzlimitview2
+SELECT * FROM fizzlimitview2
 ----
 five     6745
 two      1735
@@ -318,7 +318,7 @@ SELECT count(b), count(a) FROM fizzoffsetview
 2 2
 
 query TI rowsort
-PEEK fizzoffsetview2
+SELECT * FROM fizzoffsetview2
 ----
 five     6745
 four     21243
@@ -327,7 +327,7 @@ one      12345
 three    12345
 
 query RT rowsort
-PEEK fizzlimitoffsetview2
+SELECT * FROM fizzlimitoffsetview2
 ----
 12345.000000 one
 22733.000000 four
@@ -350,7 +350,7 @@ statement ok
 INSERT INTO fizz VALUES (7584, 'twelve'), (21758, 'fourteen')
 
 query IT rowsort
-PEEK fizzorderview
+SELECT * FROM fizzorderview
 ----
 12345 one
 12345 three
@@ -368,7 +368,7 @@ SELECT count(a), count(b) FROM fizzlimitview
 4 4
 
 query TI rowsort
-PEEK fizzlimitview2
+SELECT * FROM fizzlimitview2
 ----
 twelve   7584
 two      1735
@@ -379,7 +379,7 @@ SELECT count(b), count(a) FROM fizzoffsetview
 3 3
 
 query TI rowsort
-PEEK fizzoffsetview2
+SELECT * FROM fizzoffsetview2
 ----
 four     21243
 four     24223
@@ -394,7 +394,7 @@ SELECT count(tot) FROM fizzlimitoffsetview
 1
 
 query RT rowsort
-PEEK fizzlimitoffsetview2
+SELECT * FROM fizzlimitoffsetview2
 ----
 12345.000000 one
 21758.000000 fourteen

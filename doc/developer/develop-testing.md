@@ -177,7 +177,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> PEEK data
+> SELECT * FROM data
 a b
 ---
 1 1
@@ -187,7 +187,7 @@ a b
 ```
 
 The first two commands, the `$ kafka-ingest ...` commands, ingest some data into
-a topic named `data`. The next command, `> PEEK data` operates like a
+a topic named `data`. The next command, `> SELECT * FROM data` operates like a
 sqllogictest file. It runs the specified SQL command against Materialize and
 verifies the result.
 

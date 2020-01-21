@@ -165,13 +165,13 @@ answer in their once you solve it.
     ```sql
     CREATE SOURCE lineitem FROM 'kafka://localhost:9092/tpch.tpch.lineitem' USING SCHEMA REGISTRY 'http://localhost:8081';
     CREATE MATERIALIZED VIEW count AS SELECT COUNT(*) FROM lineitem;
-    PEEK count;
-    PEEK count;
+    SELECT * FROM count;
+    SELECT * FROM count;
     -- ...
     ```
 
-    Once `PEEK count` returns `6001215`, all of the rows from `lineitem` have
-    been imported.
+    Once `SELECT * FROM count` returns `6001215`, all of the rows from
+    `lineitem` have been imported.
 
     Naturally, if this works at all, it indicates that Debezium is dutifully
     getting data out of MySQL. You could, at this point, tear down the setup
@@ -203,9 +203,9 @@ confluent local stop connect && confluent local start connect
 
 ### Missing rows
 
-If `PEEK count` stops growing at a value less than `6001215`, try writing
-explicit watermarks to indicate that a topic is finished. For example, to add a
-watermark to lineitems:
+If `SELECT * FROM count` stops growing at a value less than `6001215`, try
+writing explicit watermarks to indicate that a topic is finished. For example,
+to add a watermark to lineitems:
 
     ```shell
     kafka-avro-console-producer --broker-list localhost:9092 --topic tpch.tpch.lineitem --property value.schema="$(curl localhost:8081/subjects/tpch.tpch.lineitem-value/versions/1 | jq -r .schema | jq)" <<<'{"before":null,"after":null,"source":{"version":{"string":"0.9.5.Final"},"connector":{"string":"mysql"},"name":"tpch","server_id":0,"ts_sec":0,"gtid":null,"file":"binlog.000004","pos":951896181,"row":0,"snapshot":{"boolean":true},"thread":null,"db":{"string":"tpch"},"table":{"string":"lineitem"},"query":null},"op":"c","ts_ms":{"long":1560886948093}}'

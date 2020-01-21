@@ -312,7 +312,6 @@ define_keywords!(
     PARAMETER,
     PARQUET,
     PARTITION,
-    PEEK,
     PERCENT,
     PERCENT_RANK,
     PERCENTILE_CONT,

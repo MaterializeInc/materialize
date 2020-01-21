@@ -112,15 +112,15 @@ WHERE
 GROUP BY
         ol_number;
 
-PEEK q01;
-PEEK q01;
-PEEK q01;
+SELECT * FROM q01;
+SELECT * FROM q01;
+SELECT * FROM q01;
 ```
 
 For maximum style points, use `watch-sql` for some live query monitoring:
 
 ```bash session
-$ docker-compose run cli watch-sql "PEEK q01"
+$ docker-compose run cli watch-sql "SELECT * FROM q01"
 ```
 
 To ensure that `materialized` reflects all changes to the source data, you can

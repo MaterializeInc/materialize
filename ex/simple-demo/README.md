@@ -120,10 +120,10 @@ available to Docker Engine.
         GROUP BY region.id;
     ```
 
-1. Peek the materialized view.
+1. Read the materialized view.
 
     ```sql
-    PEEK purchase_sum_by_region;
+    SELECT * FROM purchase_sum_by_region;
     ```
 
     Go ahead and do that a few times; you should see the `region_sum` continue
@@ -135,7 +135,7 @@ available to Docker Engine.
    streams changes from Materialize to your terminal.
 
     ```shell
-    docker-compose run cli watch-sql "PEEK purchase_sum_by_region"
+    docker-compose run cli watch-sql "SELECT * FROM purchase_sum_by_region"
     ```
 
 1. Once you're sufficiently wowed, close out of the `watch-sql` container (_ctrl

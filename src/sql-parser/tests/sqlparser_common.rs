@@ -3433,27 +3433,6 @@ fn parse_drop_index() {
 }
 
 #[test]
-fn parse_peek() {
-    let sql = "PEEK foo.bar";
-    match verified_stmt(sql) {
-        Statement::Peek { name, immediate } => {
-            assert_eq!("foo.bar", name.to_string());
-            assert!(!immediate);
-        }
-        _ => unreachable!(),
-    }
-
-    let sql = "PEEK IMMEDIATE foo.bar";
-    match verified_stmt(sql) {
-        Statement::Peek { name, immediate } => {
-            assert_eq!("foo.bar", name.to_string());
-            assert!(immediate);
-        }
-        _ => unreachable!(),
-    }
-}
-
-#[test]
 fn parse_tail() {
     let sql = "TAIL foo.bar";
     match verified_stmt(sql) {
