@@ -15,7 +15,7 @@ menu:
 ## Details
 
 Materialize maintains a number of views on your behalf, all of which begin with the name
-`mz_`, e.g. `mz_dataflow_channels`.
+`mz_catalog.mz_`, e.g. `mz_catalog.mz_dataflow_channels`.
 
 All other sources that display are sources you added to your instances.
 
@@ -25,11 +25,11 @@ All other sources that display are sources you added to your instances.
 SHOW SOURCES;
 ```
 ```nofmt
-mz_dataflow_channels
-mz_view_dependencies
-mz_views
+mz_catalog.mz_dataflow_channels
+mz_catalog.mz_view_dependencies
+mz_catalog.mz_views
 ...
-my_source
+mz_catalog.my_source
 ```
 
 ## Related pages
