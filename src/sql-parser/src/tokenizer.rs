@@ -26,8 +26,6 @@
 
 use std::error::Error;
 use std::fmt;
-use std::iter::Peekable;
-use std::str::Chars;
 
 use crate::keywords::ALL_KEYWORDS;
 
@@ -280,6 +278,26 @@ pub struct Tokenizer {
     pub col: u64,
 }
 
+/// Like `str.chars().peekable()` except we can get at the underlying index
+struct PeekableChars<'a> {
+    str: &'a str,
+    index: usize,
+}
+
+impl<'a> PeekableChars<'a> {
+    fn next(&mut self) -> Option<char> {
+        let c = self.peek();
+        if let Some(c) = c {
+            self.index += c.len_utf8();
+        }
+        c
+    }
+
+    fn peek(&mut self) -> Option<char> {
+        self.str[self.index..].chars().next()
+    }
+}
+
 impl Tokenizer {
     /// Create a new SQL tokenizer for the specified SQL statement
     pub fn new(query: &str) -> Self {
@@ -292,7 +310,10 @@ impl Tokenizer {
 
     /// Tokenize the statement and produce a vector of tokens
     pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
-        let mut peekable = self.query.chars().peekable();
+        let mut peekable = PeekableChars {
+            str: &self.query,
+            index: 0,
+        };
 
         let mut tokens: Vec<Token> = vec![];
 
@@ -318,10 +339,10 @@ impl Tokenizer {
     }
 
     /// Get the next token or return None
-    fn next_token(&self, chars: &mut Peekable<Chars<'_>>) -> Result<Option<Token>, TokenizerError> {
+    fn next_token(&self, chars: &mut PeekableChars) -> Result<Option<Token>, TokenizerError> {
         //println!("next_token: {:?}", chars.peek());
         match chars.peek() {
-            Some(&ch) => match ch {
+            Some(ch) => match ch {
                 ' ' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Space)),
                 '\t' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Tab)),
                 '\n' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Newline)),
@@ -539,25 +560,25 @@ impl Tokenizer {
     }
 
     /// Tokenize an identifier or keyword, after the first char is already consumed.
-    fn tokenize_word(&self, first_char: char, chars: &mut Peekable<Chars<'_>>) -> String {
+    fn tokenize_word(&self, first_char: char, chars: &mut PeekableChars) -> String {
         let mut s = first_char.to_string();
         s.push_str(&peeking_take_while(chars, |ch| self.is_identifier_part(ch)));
         s
     }
 
     /// Read a single quoted string, starting with the opening quote.
-    fn tokenize_single_quoted_string(&self, chars: &mut Peekable<Chars<'_>>) -> String {
+    fn tokenize_single_quoted_string(&self, chars: &mut PeekableChars) -> String {
         //TODO: handle escaped quotes in string
         //TODO: handle newlines in string
         //TODO: handle EOF before terminating quote
         //TODO: handle 'string' <white space> 'string continuation'
         let mut s = String::new();
         chars.next(); // consume the opening quote
-        while let Some(&ch) = chars.peek() {
+        while let Some(ch) = chars.peek() {
             match ch {
                 '\'' => {
                     chars.next(); // consume
-                    let escaped_quote = chars.peek().map(|c| *c == '\'').unwrap_or(false);
+                    let escaped_quote = chars.peek().map(|c| c == '\'').unwrap_or(false);
                     if escaped_quote {
                         s.push('\'');
                         chars.next();
@@ -576,7 +597,7 @@ impl Tokenizer {
 
     fn tokenize_multiline_comment(
         &self,
-        chars: &mut Peekable<Chars<'_>>,
+        chars: &mut PeekableChars,
     ) -> Result<Option<Token>, TokenizerError> {
         let mut s = String::new();
         let mut maybe_closing_comment = false;
@@ -610,7 +631,7 @@ impl Tokenizer {
     /// Grab the positional argument following a $ to parse it.
     fn tokenize_parameter(
         &self,
-        chars: &mut Peekable<Chars<'_>>,
+        chars: &mut PeekableChars,
     ) -> Result<Option<Token>, TokenizerError> {
         assert_eq!(Some('$'), chars.next());
 
@@ -632,7 +653,7 @@ impl Tokenizer {
 
     fn tokenize_number(
         &self,
-        chars: &mut Peekable<Chars<'_>>,
+        chars: &mut PeekableChars,
         seen_decimal: bool,
     ) -> Result<Option<Token>, TokenizerError> {
         let mut seen_decimal = seen_decimal;
@@ -675,7 +696,7 @@ impl Tokenizer {
 
     fn consume_and_return(
         &self,
-        chars: &mut Peekable<Chars<'_>>,
+        chars: &mut PeekableChars,
         t: Token,
     ) -> Result<Option<Token>, TokenizerError> {
         chars.next();
@@ -706,11 +727,11 @@ impl Tokenizer {
 /// Return the characters read as String, and keep the first non-matching
 /// char available as `chars.next()`.
 fn peeking_take_while(
-    chars: &mut Peekable<Chars<'_>>,
+    chars: &mut PeekableChars,
     mut predicate: impl FnMut(char) -> bool,
 ) -> String {
     let mut s = String::new();
-    while let Some(&ch) = chars.peek() {
+    while let Some(ch) = chars.peek() {
         if predicate(ch) {
             chars.next(); // consume
             s.push(ch);
