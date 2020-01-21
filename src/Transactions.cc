@@ -21,210 +21,209 @@ limitations under the License.
 #include "DbcTools.h"
 #include "Log.h"
 #include "Random.h"
-#include "dialect/DialectStrategy.h"
 #include "mz-config.h"
 
 #include <cstdlib>
 #include <cstring>
 #include <string>
 
-bool Transactions::prepare(SQLHDBC& hDBC) {
+bool Transactions::prepare(Dialect* dialect, SQLHDBC& hDBC) {
 
     // NewOrder:
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noWarehouseSelect,
-            DialectStrategy::getInstance()->getNoWarehouseSelect()))
+            dialect->getNoWarehouseSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noDistrictSelect,
-            DialectStrategy::getInstance()->getNoDistrictSelect()))
+            dialect->getNoDistrictSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noDistrictUpdate,
-            DialectStrategy::getInstance()->getNoDistrictUpdate()))
+            dialect->getNoDistrictUpdate()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noCustomerSelect,
-            DialectStrategy::getInstance()->getNoCustomerSelect()))
+            dialect->getNoCustomerSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noItemSelect,
-            DialectStrategy::getInstance()->getNoItemSelect()))
+            dialect->getNoItemSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[0],
-            DialectStrategy::getInstance()->getNoStockSelect01()))
+            dialect->getNoStockSelect01()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[1],
-            DialectStrategy::getInstance()->getNoStockSelect02()))
+            dialect->getNoStockSelect02()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[2],
-            DialectStrategy::getInstance()->getNoStockSelect03()))
+            dialect->getNoStockSelect03()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[3],
-            DialectStrategy::getInstance()->getNoStockSelect04()))
+            dialect->getNoStockSelect04()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[4],
-            DialectStrategy::getInstance()->getNoStockSelect05()))
+            dialect->getNoStockSelect05()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[5],
-            DialectStrategy::getInstance()->getNoStockSelect06()))
+            dialect->getNoStockSelect06()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[6],
-            DialectStrategy::getInstance()->getNoStockSelect07()))
+            dialect->getNoStockSelect07()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[7],
-            DialectStrategy::getInstance()->getNoStockSelect08()))
+            dialect->getNoStockSelect08()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[8],
-            DialectStrategy::getInstance()->getNoStockSelect09()))
+            dialect->getNoStockSelect09()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[9],
-            DialectStrategy::getInstance()->getNoStockSelect10()))
+            dialect->getNoStockSelect10()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockUpdates[0],
-            DialectStrategy::getInstance()->getNoStockUpdate01()))
+            dialect->getNoStockUpdate01()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockUpdates[1],
-            DialectStrategy::getInstance()->getNoStockUpdate02()))
+            dialect->getNoStockUpdate02()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noOrderlineInsert,
-            DialectStrategy::getInstance()->getNoOrderlineInsert()))
+            dialect->getNoOrderlineInsert()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noOrderInsert,
-            DialectStrategy::getInstance()->getNoOrderInsert()))
+            dialect->getNoOrderInsert()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noNewOrderInsert,
-            DialectStrategy::getInstance()->getNoNewOrderInsert()))
+            dialect->getNoNewOrderInsert()))
         return false;
 
     // Payment:
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmWarehouseSelect,
-            DialectStrategy::getInstance()->getPmWarehouseSelect()))
+            dialect->getPmWarehouseSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmWarehouseUpdate,
-            DialectStrategy::getInstance()->getPmWarehouseUpdate()))
+            dialect->getPmWarehouseUpdate()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmDistrictSelect,
-            DialectStrategy::getInstance()->getPmDistrictSelect()))
+            dialect->getPmDistrictSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmDistrictUpdate,
-            DialectStrategy::getInstance()->getPmDistrictUpdate()))
+            dialect->getPmDistrictUpdate()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerSelect1,
-            DialectStrategy::getInstance()->getPmCustomerSelect1()))
+            dialect->getPmCustomerSelect1()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerSelect2,
-            DialectStrategy::getInstance()->getPmCustomerSelect2()))
+            dialect->getPmCustomerSelect2()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerSelect3,
-            DialectStrategy::getInstance()->getPmCustomerSelect3()))
+            dialect->getPmCustomerSelect3()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerUpdate1,
-            DialectStrategy::getInstance()->getPmCustomerUpdate1()))
+            dialect->getPmCustomerUpdate1()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerSelect4,
-            DialectStrategy::getInstance()->getPmCustomerSelect4()))
+            dialect->getPmCustomerSelect4()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerUpdate2,
-            DialectStrategy::getInstance()->getPmCustomerUpdate2()))
+            dialect->getPmCustomerUpdate2()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmHistoryInsert,
-            DialectStrategy::getInstance()->getPmHistoryInsert()))
+            dialect->getPmHistoryInsert()))
         return false;
 
     // OrderStatus:
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osCustomerSelect1,
-            DialectStrategy::getInstance()->getOsCustomerSelect1()))
+            dialect->getOsCustomerSelect1()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osCustomerSelect2,
-            DialectStrategy::getInstance()->getOsCustomerSelect2()))
+            dialect->getOsCustomerSelect2()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osCustomerSelect3,
-            DialectStrategy::getInstance()->getOsCustomerSelect3()))
+            dialect->getOsCustomerSelect3()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osOrderSelect,
-            DialectStrategy::getInstance()->getOsOrderSelect()))
+            dialect->getOsOrderSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osOrderlineSelect,
-            DialectStrategy::getInstance()->getOsOrderlineSelect()))
+            dialect->getOsOrderlineSelect()))
         return false;
 
     // Delivery
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlNewOrderSelect,
-            DialectStrategy::getInstance()->getDlNewOrderSelect()))
+            dialect->getDlNewOrderSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlNewOrderDelete,
-            DialectStrategy::getInstance()->getDlNewOrderDelete()))
+            dialect->getDlNewOrderDelete()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlOrderSelect,
-            DialectStrategy::getInstance()->getDlOrderSelect()))
+            dialect->getDlOrderSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlOrderUpdate,
-            DialectStrategy::getInstance()->getDlOrderUpdate()))
+            dialect->getDlOrderUpdate()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlOrderlineUpdate,
-            DialectStrategy::getInstance()->getDlOrderlineUpdate()))
+            dialect->getDlOrderlineUpdate()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlOrderlineSelect,
-            DialectStrategy::getInstance()->getDlOrderlineSelect()))
+            dialect->getDlOrderlineSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlCustomerUpdate,
-            DialectStrategy::getInstance()->getDlCustomerUpdate()))
+            dialect->getDlCustomerUpdate()))
         return false;
 
     // StockLevel
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, slDistrictSelect,
-            DialectStrategy::getInstance()->getSlDistrictSelect()))
+            dialect->getSlDistrictSelect()))
         return false;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, slStockSelect,
-            DialectStrategy::getInstance()->getSlStockSelect()))
+            dialect->getSlStockSelect()))
         return false;
 
     return true;
 }
 
-bool Transactions::prepareStatements(SQLHDBC& hDBC) {
-    if (!prepare(hDBC)) {
+bool Transactions::prepareStatements(Dialect* dialect, SQLHDBC& hDBC) {
+    if (!prepare(dialect, hDBC)) {
         Log::l2() << Log::tm() << "-prepare statements failed\n";
         return false;
     }
@@ -232,7 +231,7 @@ bool Transactions::prepareStatements(SQLHDBC& hDBC) {
     return true;
 }
 
-bool Transactions::executeNewOrder(SQLHDBC& hDBC, mz::Config& cfg) {
+bool Transactions::executeNewOrder(Dialect* dialect, SQLHDBC& hDBC, mz::Config& cfg) {
 
     struct OrderLine {
         int olIId;
@@ -443,7 +442,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC, mz::Config& cfg) {
     return false;
 }
 
-bool Transactions::executePayment(SQLHDBC& hDBC, mz::Config& cfg) {
+bool Transactions::executePayment(Dialect* dialect, SQLHDBC& hDBC, mz::Config& cfg) {
 
     // 2.5.1.1
     int wId = chRandom::uniformInt(1, warehouseCount);
@@ -661,7 +660,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC, mz::Config& cfg) {
     return false;
 }
 
-bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
+bool Transactions::executeOrderStatus(Dialect* dialect, SQLHDBC& hDBC) {
 
     // 2.6.1.1
     int wId = chRandom::uniformInt(1, warehouseCount);
@@ -760,7 +759,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
     return false;
 }
 
-bool Transactions::executeDelivery(SQLHDBC& hDBC, mz::Config& cfg) {
+bool Transactions::executeDelivery(Dialect* dialect, SQLHDBC& hDBC, mz::Config& cfg) {
 
     // 2.7.1.1
     int wId = chRandom::uniformInt(1, warehouseCount);
@@ -877,7 +876,7 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC, mz::Config& cfg) {
     return true;
 }
 
-bool Transactions::executeStockLevel(SQLHDBC& hDBC) {
+bool Transactions::executeStockLevel(Dialect* dialect, SQLHDBC& hDBC) {
 
     // 2.8.1.1
     int wId = chRandom::uniformInt(1, warehouseCount);

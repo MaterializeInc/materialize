@@ -18,6 +18,8 @@ limitations under the License.
 #ifndef QUERIES_H
 #define QUERIES_H
 
+#include "Dialect.h"
+
 #include <sql.h>
 #include <sqlext.h>
 #include <sqltypes.h>
@@ -28,7 +30,7 @@ class Queries {
     SQLHSTMT odbc_queries[22] = {0};
 
   public:
-    bool prepareStatements(SQLHDBC& hDBC);
+    bool prepareStatements(Dialect* dialect, SQLHDBC& hDBC);
     bool executeTPCH(int& i);
 };
 

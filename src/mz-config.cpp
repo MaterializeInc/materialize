@@ -16,6 +16,7 @@ limitations under the License.
 
 #include <mz-config.h>
 #include "materialized.h"
+#include "MySqlDialect.h"
 
 const mz::Config& mz::defaultConfig() {
     using inner_type = chRandom::int_distribution::inner_type;
@@ -41,6 +42,7 @@ const mz::Config& mz::defaultConfig() {
         .kafkaUrl = "kafka://kafka:9092",
         .schemaRegistryUrl = "http://schema-registry:8081",
         .hQueries = {},
+        .dialect = new MySqlDialect(),
         .hist_date_offset_millis = zero_const,
         .order_entry_date_offset_millis = zero_const,
         .orderline_delivery_date_offset_millis = zero_const,

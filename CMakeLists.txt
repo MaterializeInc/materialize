@@ -15,7 +15,6 @@ add_executable(chbenchmark
     src/Config.cc
     src/DataSource.cc
     src/DbcTools.cc
-    src/dialect/DialectStrategy.cc
     src/Histogram.cc
     src/Histogram.h
     src/Log.cc

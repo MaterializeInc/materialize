@@ -20,6 +20,7 @@ limitations under the License.
 #include "AnalyticalStatistic.h"
 #include "DataSource.h"
 #include "DbcTools.h"
+#include "Dialect.h"
 #include "Log.h"
 #include "PthreadShim.h"
 #include "Queries.h"
@@ -28,7 +29,6 @@ limitations under the License.
 #include "TransactionalStatistic.h"
 #include "Transactions.h"
 #include "TupleGen.h"
-#include "dialect/DialectStrategy.h"
 #include "mz-config.h"
 #include "Histogram.h"
 
@@ -76,7 +76,7 @@ static void* analyticalThread(void* args) {
     int q = 0;
 
     Queries queries;
-    if (!queries.prepareStatements(prm->hDBC)) {
+    if (!queries.prepareStatements(prm->cfg->dialect, prm->hDBC)) {
         exit(1);
     }
 
@@ -214,7 +214,7 @@ static void* transactionalThread(void* args) {
     TransactionalStatistic* tStat = (TransactionalStatistic*) prm->stat;
 
     Transactions transactions {prm->warehouseCount};
-    if (!transactions.prepareStatements(prm->hDBC)) {
+    if (!transactions.prepareStatements(prm->cfg->dialect, prm->hDBC)) {
         exit(1);
     }
 
@@ -234,27 +234,27 @@ static void* transactionalThread(void* args) {
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
-                transactions.executeNewOrder(prm->hDBC, cfg);
+                transactions.executeNewOrder(prm->cfg->dialect, prm->hDBC, cfg);
             }
             else if (decision <= 88) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
-                transactions.executePayment(prm->hDBC, cfg);
+                transactions.executePayment(prm->cfg->dialect, prm->hDBC, cfg);
             }
             else if (decision <= 92) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": OrderStatus\n";
-                transactions.executeOrderStatus(prm->hDBC);
+                transactions.executeOrderStatus(prm->cfg->dialect, prm->hDBC);
             }
             else if (decision <= 96) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
-                transactions.executeDelivery(prm->hDBC, cfg);
+                transactions.executeDelivery(prm->cfg->dialect, prm->hDBC, cfg);
             }
             else {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": StockLevel\n";
-                transactions.executeStockLevel(prm->hDBC);
+                transactions.executeStockLevel(prm->cfg->dialect, prm->hDBC);
             }
             auto sleepTime = chRandom::uniformInt(prm->sleepMin, prm->sleepMax);
             usleep(sleepTime);
@@ -267,31 +267,31 @@ static void* transactionalThread(void* args) {
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
-                b = transactions.executeNewOrder(prm->hDBC, cfg);
+                b = transactions.executeNewOrder(prm->cfg->dialect, prm->hDBC, cfg);
                 tStat->executeTPCCSuccess(1, b);
             }
             else if (decision <= 88) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
-                b = transactions.executePayment(prm->hDBC, cfg);
+                b = transactions.executePayment(prm->cfg->dialect, prm->hDBC, cfg);
                 tStat->executeTPCCSuccess(2, b);
             }
             else if (decision <= 92) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": OrderStatus\n";
-                b = transactions.executeOrderStatus(prm->hDBC);
+                b = transactions.executeOrderStatus(prm->cfg->dialect, prm->hDBC);
                 tStat->executeTPCCSuccess(3, b);
             }
             else if (decision <= 96) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
-                b = transactions.executeDelivery(prm->hDBC, cfg);
+                b = transactions.executeDelivery(prm->cfg->dialect, prm->hDBC, cfg);
                 tStat->executeTPCCSuccess(4, b);
             }
             else {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": StockLevel\n";
-                b = transactions.executeStockLevel(prm->hDBC);
+                b = transactions.executeStockLevel(prm->cfg->dialect, prm->hDBC);
                 tStat->executeTPCCSuccess(5, b);
             }
             auto sleepTime = chRandom::uniformInt(prm->sleepMin, prm->sleepMax);
@@ -334,11 +334,11 @@ static void usage() {
                     "   or: chBenchmark [options] run\n");
 }
 
-static int detectWarehouses(SQLHSTMT& hStmt, int* countOut) {
+static int detectWarehouses(Dialect* dialect, SQLHSTMT& hStmt, int* countOut) {
     *countOut = 0;
 
     DbcTools::executeServiceStatement(
-        hStmt, DialectStrategy::getInstance()->getSelectCountWarehouse());
+        hStmt, dialect->getSelectCountWarehouse());
 
     int temp = 0;
     SQLLEN nIdicator = 0;
@@ -552,30 +552,30 @@ static int run(int argc, char* argv[]) {
 
     // create database schema
     Log::l2() << Log::tm() << "Schema creation:\n";
-    if (!Schema::createSchema(hStmt)) {
+    if (!Schema::createSchema(mzCfg.dialect, hStmt)) {
         return 1;
     }
 
     // import initial database from csv files
     Log::l2() << Log::tm() << "CSV import:\n";
-    if (!Schema::importCSV(hStmt, genDir)) {
+    if (!Schema::importCSV(mzCfg.dialect, hStmt, genDir)) {
         return 1;
     }
 
     // detect warehouse count of loaded initial database
     int warehouseCount;
-    if (detectWarehouses(hStmt, &warehouseCount))
+    if (detectWarehouses(mzCfg.dialect, hStmt, &warehouseCount))
         return 1;
 
     // perform a check to ensure that initial database was imported
     // correctly
-    if (!Schema::check(hStmt)) {
+    if (!Schema::check(mzCfg.dialect, hStmt)) {
         return 1;
     }
 
     // fire additional preparation statements
     Log::l2() << Log::tm() << "Additional Preparation:\n";
-    if (!Schema::additionalPreparation(hStmt)) {
+    if (!Schema::additionalPreparation(mzCfg.dialect, hStmt)) {
         return 1;
     }
 

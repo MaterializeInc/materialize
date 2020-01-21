@@ -18,6 +18,8 @@ limitations under the License.
 #ifndef SCHEMA_H
 #define SCHEMA_H
 
+#include "Dialect.h"
+
 #include <sql.h>
 #include <sqlext.h>
 #include <sqltypes.h>
@@ -29,10 +31,10 @@ class Schema {
     static bool check(SQLHSTMT& hStmt, const char* query, int& cnt);
 
   public:
-    static bool createSchema(SQLHSTMT& hStmt);
-    static bool importCSV(SQLHSTMT& hStmt, const std::string& genDir);
-    static bool check(SQLHSTMT& hStmt);
-    static bool additionalPreparation(SQLHSTMT& hStmt);
+    static bool createSchema(Dialect* dialect, SQLHSTMT& hStmt);
+    static bool importCSV(Dialect* dialect, SQLHSTMT& hStmt, const std::string& genDir);
+    static bool check(Dialect* dialect, SQLHSTMT& hStmt);
+    static bool additionalPreparation(Dialect* dialect, SQLHSTMT& hStmt);
 };
 
 #endif

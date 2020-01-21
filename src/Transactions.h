@@ -18,6 +18,8 @@ limitations under the License.
 #ifndef TRANSACTIONS_H
 #define TRANSACTIONS_H
 
+#include "Dialect.h"
+
 #include <sql.h>
 #include <sqlext.h>
 #include <sqltypes.h>
@@ -68,17 +70,17 @@ class Transactions {
 
     int warehouseCount;
 
-    bool prepare(SQLHDBC& hDBC);
+    bool prepare(Dialect* dialect, SQLHDBC& hDBC);
 
   public:
     Transactions(int wc) : warehouseCount(wc) {}
-    bool prepareStatements(SQLHDBC& hDBC);
+    bool prepareStatements(Dialect* dialect, SQLHDBC& hDBC);
 
-    bool executeNewOrder(SQLHDBC& hDBC, mz::Config& cfg);
-    bool executePayment(SQLHDBC& hDBC, mz::Config& cfg);
-    bool executeOrderStatus(SQLHDBC& hDBC);
-    bool executeDelivery(SQLHDBC& hDBC, mz::Config& cfg);
-    bool executeStockLevel(SQLHDBC& hDBC);
+    bool executeNewOrder(Dialect* dialect, SQLHDBC& hDBC, mz::Config& cfg);
+    bool executePayment(Dialect* dialect, SQLHDBC& hDBC, mz::Config& cfg);
+    bool executeOrderStatus(Dialect* dialect, SQLHDBC& hDBC);
+    bool executeDelivery(Dialect* dialect, SQLHDBC& hDBC, mz::Config& cfg);
+    bool executeStockLevel(Dialect* dialect, SQLHDBC& hDBC);
 };
 
 #endif
