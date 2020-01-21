@@ -376,17 +376,19 @@ fn constrained_columns(
     index: usize,
     order: &[usize],
     variables: &[Vec<(usize, usize)>],
-) -> std::collections::HashSet<usize> {
-    let mut results = std::collections::HashSet::new();
+) -> Vec<usize> {
+    let mut results = Vec::new();
     for variable in variables.iter() {
         if variable.iter().any(|(rel, _col)| order.contains(rel)) {
             for (rel, col) in variable.iter() {
                 if rel == &index {
-                    results.insert(*col);
+                    results.push(*col);
                 }
             }
         }
     }
+    results.sort();
+    results.dedup();
     results
 }
 
