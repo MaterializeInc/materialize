@@ -190,48 +190,66 @@ ORDER BY
     s_acctbal DESC, n_name, s_name, p_partkey
 ----
 Let {
-  l0 = Join {
-    variables: [
-      [(0, 0), (1, 0)],
-      [(1, 1), (2, 0)],
-      [(2, 3), (3, 0)],
-      [(3, 2), (4, 0)]
-    ],
-    Filter {
-      predicates: [^.*BRASS$ ~ #4, #5 = 15],
-      Get { materialize.public.part (u5) }
-    },
-    Get { materialize.public.partsupp (u9) },
-    Get { materialize.public.supplier (u7) },
-    Get { materialize.public.nation (u1) },
-    Filter {
-      predicates: [#1 = "EUROPE"],
-      Get { materialize.public.region (u3) }
+  l0 = Filter {
+    predicates: [^.*BRASS$ ~ #9, #10 = 15, #26 = "EUROPE"],
+    Join {
+      variables: [
+        [(0, 0), (1, 0)],
+        [(0, 1), (2, 0)],
+        [(2, 3), (3, 0)],
+        [(3, 2), (4, 0)]
+      ],
+      Get { materialize.public.partsupp (u9) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.part (u5) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u7) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u1) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.region (u3) }
+      }
     }
   }
 } in
 Project {
-  outputs: [19, 15, 22, 0, 2, 16, 18, 20],
+  outputs: [19, 15, 22, 5, 7, 16, 18, 20],
   Join {
-    variables: [[(0, 0), (1, 0)], [(0, 12), (1, 1)]],
+    variables: [[(0, 5), (1, 0)], [(0, 3), (1, 1)]],
     Get { l0 },
     Reduce {
-      group_key: [#0],
-      aggregates: [min(#4)],
-      Join {
-        variables: [
-          [(0, 0), (1, 0)],
-          [(1, 1), (2, 0)],
-          [(2, 3), (3, 0)],
-          [(3, 2), (4, 0)]
-        ],
-        Distinct { group_key: [#0], Get { l0 } },
-        Get { materialize.public.partsupp (u9) },
-        Get { materialize.public.supplier (u7) },
-        Get { materialize.public.nation (u1) },
-        Filter {
-          predicates: [#1 = "EUROPE"],
-          Get { materialize.public.region (u3) }
+      group_key: [#5],
+      aggregates: [min(#3)],
+      Filter {
+        predicates: [#18 = "EUROPE"],
+        Join {
+          variables: [
+            [(0, 0), (1, 0)],
+            [(0, 1), (2, 0)],
+            [(2, 3), (3, 0)],
+            [(3, 2), (4, 0)]
+          ],
+          Get { materialize.public.partsupp (u9) },
+          Distinct { group_key: [#5], Get { l0 } },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.supplier (u7) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.nation (u1) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.region (u3) }
+          }
         }
       }
     }
@@ -267,21 +285,24 @@ ORDER BY
 Project {
   outputs: [0, 3, 1, 2],
   Reduce {
-    group_key: [#8, #12, #15],
-    aggregates: [sum(#22 * (100dec - #23))],
-    Join {
-      variables: [[(0, 0), (1, 1)], [(1, 0), (2, 0)]],
-      Filter {
-        predicates: [#6 = "BUILDING"],
-        Get { materialize.public.customer (u11) }
-      },
-      Filter {
-        predicates: [#4 < 1995-03-15],
-        Get { materialize.public.orders (u13) }
-      },
-      Filter {
-        predicates: [#10 > 1995-03-15],
-        Get { materialize.public.lineitem (u15) }
+    group_key: [#16, #20, #23],
+    aggregates: [sum(#5 * (100dec - #6))],
+    Filter {
+      predicates: [#20 < 1995-03-15, #31 = "BUILDING"],
+      Join {
+        variables: [[(0, 0), (1, 0)], [(1, 1), (2, 0)]],
+        Filter {
+          predicates: [#10 > 1995-03-15],
+          Get { materialize.public.lineitem (u15) }
+        },
+        ArrangeBy {
+          keys: [[#0]],
+          Get { materialize.public.orders (u13) }
+        },
+        ArrangeBy {
+          keys: [[#0]],
+          Get { materialize.public.customer (u11) }
+        }
       }
     }
   }
@@ -332,7 +353,7 @@ Reduce {
           predicates: [#11 < #12],
           Get { materialize.public.lineitem (u15) }
         },
-        Distinct { group_key: [#0], Get { l0 } }
+        Get { l0 }
       }
     }
   }
@@ -367,27 +388,36 @@ ORDER BY
     revenue DESC
 ----
 Reduce {
-  group_key: [#9],
-  aggregates: [sum(#27 * (100dec - #28))],
-  Join {
-    variables: [
-      [(0, 0), (5, 1)],
-      [(0, 3), (1, 0), (3, 3)],
-      [(1, 2), (2, 0)],
-      [(3, 0), (4, 2)],
-      [(4, 0), (5, 0)]
-    ],
-    Get { materialize.public.customer (u11) },
-    Get { materialize.public.nation (u1) },
-    Filter {
-      predicates: [#1 = "ASIA"],
-      Get { materialize.public.region (u3) }
-    },
-    Get { materialize.public.supplier (u7) },
-    Get { materialize.public.lineitem (u15) },
-    Filter {
-      predicates: [#4 < 1995-01-01, #4 >= 1994-01-01],
-      Get { materialize.public.orders (u13) }
+  group_key: [#41],
+  aggregates: [sum(#5 * (100dec - #6))],
+  Filter {
+    predicates: [#20 < 1995-01-01, #20 >= 1994-01-01, #45 = "ASIA"],
+    Join {
+      variables: [
+        [(0, 0), (1, 0)],
+        [(0, 2), (3, 0)],
+        [(1, 1), (2, 0)],
+        [(2, 3), (3, 3), (4, 0)],
+        [(4, 2), (5, 0)]
+      ],
+      Get { materialize.public.lineitem (u15) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.orders (u13) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.customer (u11) }
+      },
+      Get { materialize.public.supplier (u7) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u1) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.region (u3) }
+      }
     }
   }
 }
@@ -476,31 +506,46 @@ ORDER BY
     l_year
 ----
 Reduce {
-  group_key: [#8, #45, tsextractyear datetots #21],
-  aggregates: [sum(#16 * (100dec - #17))],
+  group_key: [#41, #45, tsextractyear datetots #10],
+  aggregates: [sum(#5 * (100dec - #6))],
   Filter {
     predicates: [
-      ((#8 = "FRANCE") && (#45 = "GERMANY"))
+      ((#41 = "FRANCE") && (#45 = "GERMANY"))
       ||
-      ((#8 = "GERMANY") && (#45 = "FRANCE"))
+      ((#41 = "GERMANY") && (#45 = "FRANCE"))
     ],
     Join {
       variables: [
-        [(0, 0), (2, 2)],
-        [(0, 3), (1, 0)],
-        [(2, 0), (3, 0)],
-        [(3, 1), (4, 0)],
-        [(4, 3), (5, 0)]
+        [(0, 0), (2, 0)],
+        [(0, 2), (1, 0)],
+        [(1, 3), (4, 0)],
+        [(2, 1), (3, 0)],
+        [(3, 3), (5, 0)]
       ],
-      Get { materialize.public.supplier (u7) },
-      Get { materialize.public.nation (u1) },
       Filter {
         predicates: [#10 <= 1996-12-31, #10 >= 1995-01-01],
         Get { materialize.public.lineitem (u15) }
       },
-      Get { materialize.public.orders (u13) },
-      Get { materialize.public.customer (u11) },
-      Get { materialize.public.nation (u1) }
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u7) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.orders (u13) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.customer (u11) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u1) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u1) }
+      }
     }
   }
 }
@@ -551,38 +596,58 @@ Project {
   Map {
     scalars: [((#1 * 10000000dec) / #2) * 1000dec],
     Reduce {
-      group_key: [tsextractyear datetots #29],
+      group_key: [tsextractyear datetots #36],
       aggregates: [
-        sum(if #57 = "BRAZIL" then #14 * (100dec - #15) else 0dec),
-        sum(#14 * (100dec - #15))
+        sum(if #54 = "BRAZIL" then #5 * (100dec - #6) else 0dec),
+        sum(#5 * (100dec - #6))
       ],
-      Join {
-        variables: [
-          [(0, 0), (1, 1)],
-          [(1, 0), (2, 0)],
-          [(1, 2), (6, 0)],
-          [(2, 1), (3, 0)],
-          [(3, 3), (4, 0)],
-          [(4, 2), (5, 0)],
-          [(6, 3), (7, 0)]
+      Filter {
+        predicates: [
+          #20 = "ECONOMY ANODIZED STEEL",
+          #36 <= 1996-12-31,
+          #36 >= 1995-01-01,
+          #58 = "AMERICA"
         ],
-        Filter {
-          predicates: [#4 = "ECONOMY ANODIZED STEEL"],
-          Get { materialize.public.part (u5) }
-        },
-        Get { materialize.public.lineitem (u15) },
-        Filter {
-          predicates: [#4 <= 1996-12-31, #4 >= 1995-01-01],
-          Get { materialize.public.orders (u13) }
-        },
-        Get { materialize.public.customer (u11) },
-        Get { materialize.public.nation (u1) },
-        Filter {
-          predicates: [#1 = "AMERICA"],
-          Get { materialize.public.region (u3) }
-        },
-        Get { materialize.public.supplier (u7) },
-        Get { materialize.public.nation (u1) }
+        Join {
+          variables: [
+            [(0, 0), (3, 0)],
+            [(0, 1), (1, 0)],
+            [(0, 2), (2, 0)],
+            [(2, 3), (6, 0)],
+            [(3, 1), (4, 0)],
+            [(4, 3), (5, 0)],
+            [(5, 2), (7, 0)]
+          ],
+          Get { materialize.public.lineitem (u15) },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.part (u5) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.supplier (u7) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.orders (u13) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.customer (u11) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.nation (u1) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.nation (u1) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.region (u3) }
+          }
+        }
       }
     }
   }
@@ -625,24 +690,39 @@ ORDER BY
     o_year DESC
 ----
 Reduce {
-  group_key: [#47, tsextractyear datetots #34],
-  aggregates: [sum((#19 * (100dec - #20)) - (#12 * #18))],
-  Join {
-    variables: [
-      [(0, 0), (1, 0), (2, 1)],
-      [(1, 1), (2, 2), (4, 0)],
-      [(2, 0), (3, 0)],
-      [(4, 3), (5, 0)]
-    ],
-    Filter {
-      predicates: [^green$ ~ #1],
-      Get { materialize.public.part (u5) }
-    },
-    Get { materialize.public.partsupp (u9) },
-    Get { materialize.public.lineitem (u15) },
-    Get { materialize.public.orders (u13) },
-    Get { materialize.public.supplier (u7) },
-    Get { materialize.public.nation (u1) }
+  group_key: [#47, tsextractyear datetots #41],
+  aggregates: [sum((#5 * (100dec - #6)) - (#35 * #4))],
+  Filter {
+    predicates: [^green$ ~ #17],
+    Join {
+      variables: [
+        [(0, 0), (4, 0)],
+        [(0, 1), (1, 0), (3, 0)],
+        [(0, 2), (2, 0), (3, 1)],
+        [(2, 3), (5, 0)]
+      ],
+      Get { materialize.public.lineitem (u15) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.part (u5) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u7) }
+      },
+      ArrangeBy {
+        keys: [[#0, #1]],
+        Get { materialize.public.partsupp (u9) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.orders (u13) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u1) }
+      }
+    }
   }
 }
 
@@ -685,27 +765,36 @@ ORDER BY
 Project {
   outputs: [0, 1, 7, 2, 4, 5, 3, 6],
   Reduce {
-    group_key: [#0, #1, #5, #4, #9, #2, #7],
-    aggregates: [sum(#26 * (100dec - #27))],
-    Join {
-      variables: [
-        [(0, 0), (2, 1)],
-        [(0, 3), (1, 0)],
-        [(2, 0), (3, 0)]
+    group_key: [#25, #26, #30, #29, #34, #27, #32],
+    aggregates: [sum(#5 * (100dec - #6))],
+    Filter {
+      predicates: [
+        #20 < 1994-01-01,
+        datetots #20 < 1994-01-01 00:00:00,
+        #20 >= 1993-10-01
       ],
-      Get { materialize.public.customer (u11) },
-      Get { materialize.public.nation (u1) },
-      Filter {
-        predicates: [
-          #4 < 1994-01-01,
-          datetots #4 < 1994-01-01 00:00:00,
-          #4 >= 1993-10-01
+      Join {
+        variables: [
+          [(0, 0), (1, 0)],
+          [(1, 1), (2, 0)],
+          [(2, 3), (3, 0)]
         ],
-        Get { materialize.public.orders (u13) }
-      },
-      Filter {
-        predicates: [#8 = "R"],
-        Get { materialize.public.lineitem (u15) }
+        Filter {
+          predicates: [#8 = "R"],
+          Get { materialize.public.lineitem (u15) }
+        },
+        ArrangeBy {
+          keys: [[#0]],
+          Get { materialize.public.orders (u13) }
+        },
+        ArrangeBy {
+          keys: [[#0]],
+          Get { materialize.public.customer (u11) }
+        },
+        ArrangeBy {
+          keys: [[#0]],
+          Get { materialize.public.nation (u1) }
+        }
       }
     }
   }
@@ -743,13 +832,19 @@ ORDER BY
     value DESC
 ----
 Let {
-  l0 = Join {
-    variables: [[(0, 1), (1, 0)], [(1, 3), (2, 0)]],
-    Get { materialize.public.partsupp (u9) },
-    Get { materialize.public.supplier (u7) },
-    Filter {
-      predicates: [#1 = "GERMANY"],
-      Get { materialize.public.nation (u1) }
+  l0 = Filter {
+    predicates: [#13 = "GERMANY"],
+    Join {
+      variables: [[(0, 1), (1, 0)], [(1, 3), (2, 0)]],
+      Get { materialize.public.partsupp (u9) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u7) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u1) }
+      }
     }
   }
 } in
@@ -809,14 +904,13 @@ ORDER BY
     l_shipmode
 ----
 Reduce {
-  group_key: [#23],
+  group_key: [#14],
   aggregates: [
-    sum(if (#5 = "1-URGENT") || (#5 = "2-HIGH") then 1 else 0),
-    sum(if (#5 != "1-URGENT") && (#5 != "2-HIGH") then 1 else 0)
+    sum(if (#21 = "1-URGENT") || (#21 = "2-HIGH") then 1 else 0),
+    sum(if (#21 != "1-URGENT") && (#21 != "2-HIGH") then 1 else 0)
   ],
   Join {
     variables: [[(0, 0), (1, 0)]],
-    Get { materialize.public.orders (u13) },
     Filter {
       predicates: [
         (#14 = "MAIL") || (#14 = "SHIP"),
@@ -826,6 +920,10 @@ Reduce {
         #12 >= 1994-01-01
       ],
       Get { materialize.public.lineitem (u15) }
+    },
+    ArrangeBy {
+      keys: [[#0]],
+      Get { materialize.public.orders (u13) }
     }
   }
 }
@@ -856,11 +954,14 @@ ORDER BY
 ----
 Let {
   l0 = Join {
-    variables: [[(0, 0), (1, 1)]],
-    Get { materialize.public.customer (u11) },
+    variables: [[(0, 1), (1, 0)]],
     Filter {
       predicates: [!(^.*special.*requests.*$ ~ #8)],
       Get { materialize.public.orders (u13) }
+    },
+    ArrangeBy {
+      keys: [[#0]],
+      Get { materialize.public.customer (u11) }
     }
   }
 } in
@@ -871,7 +972,7 @@ Reduce {
     group_key: [#0],
     aggregates: [count(#8)],
     Union {
-      Project { outputs: [0 .. 8, 0, 10 .. 16], Get { l0 } },
+      Project { outputs: [9 .. 16, 0, 9, 2 .. 8], Get { l0 } },
       Map {
         scalars: [
           null,
@@ -887,7 +988,7 @@ Reduce {
         Union {
           Negate {
             Distinct {
-              group_key: [#0, #1, #2, #3, #4, #5, #6, #7],
+              group_key: [#9, #10, #11, #12, #13, #14, #15, #16],
               Get { l0 }
             }
           },
@@ -931,7 +1032,7 @@ Let {
         ],
         Get { materialize.public.lineitem (u15) }
       },
-      Get { materialize.public.part (u5) }
+      ArrangeBy { keys: [[#0]], Get { materialize.public.part (u5) } }
     }
   }
 } in
@@ -990,13 +1091,16 @@ ORDER BY
     s_suppkey
 ----
 Project {
-  outputs: [0 .. 2, 4, 8],
+  outputs: [2 .. 4, 6, 1],
   Join {
-    variables: [[(0, 0), (1, 0)], [(1, 1), (2, 0)]],
-    Get { materialize.public.supplier (u7) },
+    variables: [[(0, 0), (1, 0)], [(0, 1), (2, 0)]],
     Filter {
       predicates: [!isnull #1],
       Get { materialize.public.revenue (u17) }
+    },
+    ArrangeBy {
+      keys: [[#0]],
+      Get { materialize.public.supplier (u7) }
     },
     Filter {
       predicates: [!isnull #0],
@@ -1047,30 +1151,30 @@ ORDER BY
     p_size
 ----
 Let {
-  l0 = Join {
-    variables: [[(0, 0), (1, 0)]],
-    Get { materialize.public.partsupp (u9) },
-    Filter {
-      predicates: [
-        !(^MEDIUM POLISHED.*$ ~ #4),
+  l0 = Filter {
+    predicates: [
+      !(^MEDIUM POLISHED.*$ ~ #9),
+      (
         (
           (
-            (
-              ((((#5 = 49) || (#5 = 14)) || (#5 = 23)) || (#5 = 45))
-              ||
-              (#5 = 19)
-            )
+            ((((#10 = 49) || (#10 = 14)) || (#10 = 23)) || (#10 = 45))
             ||
-            (#5 = 3)
+            (#10 = 19)
           )
           ||
-          (#5 = 36)
+          (#10 = 3)
         )
         ||
-        (#5 = 9),
-        #3 != "Brand#45"
-      ],
-      Get { materialize.public.part (u5) }
+        (#10 = 36)
+      )
+      ||
+      (#10 = 9),
+      #8 != "Brand#45"
+    ],
+    Join {
+      variables: [[(0, 0), (1, 0)]],
+      Get { materialize.public.partsupp (u9) },
+      ArrangeBy { keys: [[#0]], Get { materialize.public.part (u5) } }
     }
   }
 } in
@@ -1130,12 +1234,12 @@ WHERE
   )
 ----
 Let {
-  l1 = Join {
-    variables: [[(0, 1), (1, 0)]],
-    Get { materialize.public.lineitem (u15) },
-    Filter {
-      predicates: [#3 = "Brand#23", #6 = "MED BOX"],
-      Get { materialize.public.part (u5) }
+  l1 = Filter {
+    predicates: [#19 = "Brand#23", #22 = "MED BOX"],
+    Join {
+      variables: [[(0, 1), (1, 0)]],
+      Get { materialize.public.lineitem (u15) },
+      ArrangeBy { keys: [[#0]], Get { materialize.public.part (u5) } }
     }
   }
 } in
@@ -1223,17 +1327,23 @@ ORDER BY
 ----
 Let {
   l0 = Join {
-    variables: [[(0, 0), (1, 1)], [(1, 0), (2, 0)]],
-    Get { materialize.public.customer (u11) },
-    Get { materialize.public.orders (u13) },
-    Get { materialize.public.lineitem (u15) }
+    variables: [[(0, 0), (1, 0)], [(1, 1), (2, 0)]],
+    Get { materialize.public.lineitem (u15) },
+    ArrangeBy {
+      keys: [[#0]],
+      Get { materialize.public.orders (u13) }
+    },
+    ArrangeBy {
+      keys: [[#0]],
+      Get { materialize.public.customer (u11) }
+    }
   }
 } in
 Reduce {
-  group_key: [#1, #0, #8, #12, #11],
-  aggregates: [sum(#21)],
+  group_key: [#26, #25, #16, #20, #19],
+  aggregates: [sum(#4)],
   Join {
-    variables: [[(0, 8), (1, 0)]],
+    variables: [[(0, 16), (1, 0)]],
     Get { l0 },
     Reduce {
       group_key: [#0],
@@ -1246,7 +1356,7 @@ Reduce {
           Join {
             variables: [[(0, 0), (1, 0)]],
             Get { materialize.public.lineitem (u15) },
-            Distinct { group_key: [#8], Get { l0 } }
+            Distinct { group_key: [#16], Get { l0 } }
           }
         }
       }
@@ -1379,18 +1489,21 @@ Let {
           (#21 <= 15)
         )
       ],
-      Join {
-        variables: [[(0, 1), (1, 0)]],
-        Filter {
-          predicates: [
-            (#14 = "AIR") || (#14 = "AIR REG"),
-            #13 = "DELIVER IN PERSON"
-          ],
-          Get { materialize.public.lineitem (u15) }
-        },
-        Filter {
-          predicates: [#5 >= 1],
-          Get { materialize.public.part (u5) }
+      Filter {
+        predicates: [#21 >= 1],
+        Join {
+          variables: [[(0, 1), (1, 0)]],
+          Filter {
+            predicates: [
+              (#14 = "AIR") || (#14 = "AIR REG"),
+              #13 = "DELIVER IN PERSON"
+            ],
+            Get { materialize.public.lineitem (u15) }
+          },
+          ArrangeBy {
+            keys: [[#0]],
+            Get { materialize.public.part (u5) }
+          }
         }
       }
     }
@@ -1449,36 +1562,38 @@ ORDER BY
     s_name
 ----
 Let {
-  l0 = Join {
-    variables: [[(0, 3), (1, 0)]],
-    Get { materialize.public.supplier (u7) },
-    Filter {
-      predicates: [#1 = "CANADA"],
-      Get { materialize.public.nation (u1) }
+  l0 = Filter {
+    predicates: [#8 = "CANADA"],
+    Join {
+      variables: [[(0, 3), (1, 0)]],
+      Get { materialize.public.supplier (u7) },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u1) }
+      }
     }
   }
 } in
 Let {
   l4 = Join {
     variables: [],
-    Distinct { group_key: [#0], Get { l0 } },
+    Get { l0 },
     Get { materialize.public.partsupp (u9) }
   }
 } in
 Let {
-  l3 = Join {
-    variables: [[(0, 1), (1, 0)]],
-    Get { l4 },
-    Reduce {
-      group_key: [#9],
-      aggregates: [any(true)],
+  l3 = Filter {
+    predicates: [^forest.*$ ~ #18],
+    Map {
+      scalars: [true],
       Join {
-        variables: [[(0, 0), (1, 0)]],
-        Filter {
-          predicates: [^forest.*$ ~ #1],
+        variables: [[(0, 11), (1, 0), (2, 0)]],
+        Get { l4 },
+        Distinct { group_key: [#11], Get { l4 } },
+        ArrangeBy {
+          keys: [[#0]],
           Get { materialize.public.part (u5) }
-        },
-        Distinct { group_key: [#1], Get { l4 } }
+        }
       }
     }
   }
@@ -1492,10 +1607,10 @@ Project {
       group_key: [#0],
       aggregates: [any(true)],
       Filter {
-        predicates: [(i32todec #3 * 1000dec) > #11],
+        predicates: [(i32todec #13 * 1000dec) > #30],
         Join {
-          variables: [[(0, 1), (1, 0)], [(0, 2), (1, 1)]],
-          Filter { predicates: [#0 = #2], Get { l3 } },
+          variables: [[(0, 11), (1, 0)], [(0, 12), (1, 1)]],
+          Filter { predicates: [#0 = #12], Get { l3 } },
           Map {
             scalars: [5dec * #2],
             Reduce {
@@ -1510,7 +1625,7 @@ Project {
                   ],
                   Get { materialize.public.lineitem (u15) }
                 },
-                Distinct { group_key: [#1, #2], Get { l3 } }
+                Distinct { group_key: [#11, #12], Get { l3 } }
               }
             }
           }
@@ -1564,20 +1679,30 @@ ORDER BY
     s_name
 ----
 Let {
-  l1 = Join {
-    variables: [[(0, 0), (2, 2)], [(0, 3), (1, 0)], [(2, 0), (3, 0)]],
-    Get { materialize.public.supplier (u7) },
-    Filter {
-      predicates: [#1 = "SAUDI ARABIA"],
-      Get { materialize.public.nation (u1) }
-    },
-    Filter {
-      predicates: [#12 > #11],
-      Get { materialize.public.lineitem (u15) }
-    },
-    Filter {
-      predicates: [#2 = "F"],
-      Get { materialize.public.orders (u13) }
+  l1 = Filter {
+    predicates: [#25 = "F", #33 = "SAUDI ARABIA"],
+    Join {
+      variables: [
+        [(0, 0), (2, 0)],
+        [(0, 2), (1, 0)],
+        [(1, 3), (3, 0)]
+      ],
+      Filter {
+        predicates: [#12 > #11],
+        Get { materialize.public.lineitem (u15) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u7) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.orders (u13) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u1) }
+      }
     }
   }
 } in
@@ -1585,7 +1710,7 @@ Let {
   l0 = Map {
     scalars: [true],
     Join {
-      variables: [[(0, 11), (1, 0)], [(0, 0), (1, 1)]],
+      variables: [[(0, 0), (1, 0)], [(0, 16), (1, 1)]],
       Get { l1 },
       Distinct {
         group_key: [#0, #1],
@@ -1593,7 +1718,7 @@ Let {
           predicates: [#4 != #1],
           Join {
             variables: [[(0, 0), (1, 0)]],
-            Distinct { group_key: [#11, #0], Get { l1 } },
+            Distinct { group_key: [#0, #16], Get { l1 } },
             Get { materialize.public.lineitem (u15) }
           }
         }
@@ -1601,12 +1726,12 @@ Let {
     }
   }
 } in
-Let { l5 = Distinct { group_key: [#11, #0], Get { l0 } } } in
+Let { l5 = Distinct { group_key: [#0, #16], Get { l0 } } } in
 Reduce {
-  group_key: [#1],
+  group_key: [#17],
   aggregates: [countall(null)],
   Join {
-    variables: [[(0, 11), (1, 0)], [(0, 0), (1, 1)]],
+    variables: [[(0, 0), (1, 0)], [(0, 16), (1, 1)]],
     Get { l0 },
     Union {
       Project {
@@ -1761,13 +1886,11 @@ Let {
     }
   }
 } in
-Let { l4 = Distinct { group_key: [#0], Get { l0 } } } in
 Reduce {
-  group_key: [substr(#4, 1, 2)],
-  aggregates: [countall(null), sum(#5)],
+  group_key: [substr(#5, 1, 2)],
+  aggregates: [countall(null), sum(#6)],
   Join {
     variables: [[(0, 0), (1, 0)]],
-    Get { l0 },
     Union {
       Project {
         outputs: [0],
@@ -1779,13 +1902,14 @@ Reduce {
               Join {
                 variables: [[(0, 1), (1, 0)]],
                 Get { materialize.public.orders (u13) },
-                Get { l4 }
+                Get { l0 }
               }
             }
           }
         }
       },
-      Get { l4 }
-    }
+      Project { outputs: [0], Get { l0 } }
+    },
+    Get { l0 }
   }
 }

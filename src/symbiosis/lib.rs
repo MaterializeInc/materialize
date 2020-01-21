@@ -120,6 +120,18 @@ END $$;
                     .iter()
                     .map(|c| Some(sql::normalize::column_name(c.name.clone())));
 
+                for (index, column) in columns.iter().enumerate() {
+                    for option in column.options.iter() {
+                        if let ColumnOption::Unique { is_primary } = option.option {
+                            typ = typ.add_keys(vec![index]);
+                            if is_primary {
+                                typ.column_types[index] =
+                                    typ.column_types[index].clone().nullable(false);
+                            }
+                        }
+                    }
+                }
+
                 for constraint in constraints {
                     use sql_parser::ast::TableConstraint;
                     if let TableConstraint::Unique {
