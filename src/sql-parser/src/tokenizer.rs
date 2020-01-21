@@ -26,6 +26,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::ops::Range;
 
 use crate::keywords::ALL_KEYWORDS;
 
@@ -271,13 +272,6 @@ impl fmt::Display for TokenizerError {
 
 impl Error for TokenizerError {}
 
-/// SQL Tokenizer
-pub struct Tokenizer {
-    pub query: String,
-    pub line: u64,
-    pub col: u64,
-}
-
 /// Like `str.chars().peekable()` except we can get at the underlying index
 struct PeekableChars<'a> {
     str: &'a str,
@@ -298,6 +292,13 @@ impl<'a> PeekableChars<'a> {
     }
 }
 
+/// SQL Tokenizer
+pub struct Tokenizer {
+    pub query: String,
+    pub line: u64,
+    pub col: u64,
+}
+
 impl Tokenizer {
     /// Create a new SQL tokenizer for the specified SQL statement
     pub fn new(query: &str) -> Self {
@@ -309,31 +310,36 @@ impl Tokenizer {
     }
 
     /// Tokenize the statement and produce a vector of tokens
-    pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
+    pub fn tokenize(&mut self) -> Result<Vec<(Token, Range<usize>)>, TokenizerError> {
         let mut peekable = PeekableChars {
             str: &self.query,
             index: 0,
         };
 
-        let mut tokens: Vec<Token> = vec![];
+        let mut tokens: Vec<(Token, Range<usize>)> = vec![];
 
-        while let Some(token) = self.next_token(&mut peekable)? {
-            match &token {
-                Token::Whitespace(Whitespace::Newline) => {
-                    self.line += 1;
-                    self.col = 1;
+        loop {
+            let start = peekable.index;
+            if let Some(token) = self.next_token(&mut peekable)? {
+                let end = peekable.index;
+                match &token {
+                    Token::Whitespace(Whitespace::Newline) => {
+                        self.line += 1;
+                        self.col = 1;
+                    }
+
+                    Token::Whitespace(Whitespace::Tab) => self.col += 4,
+                    Token::Word(w) if w.quote_style == None => self.col += w.value.len() as u64,
+                    Token::Word(w) if w.quote_style != None => self.col += w.value.len() as u64 + 2,
+                    Token::Number(s) => self.col += s.len() as u64,
+                    Token::SingleQuotedString(s) => self.col += s.len() as u64,
+                    Token::Parameter(s) => self.col += s.len() as u64,
+                    _ => self.col += 1,
                 }
-
-                Token::Whitespace(Whitespace::Tab) => self.col += 4,
-                Token::Word(w) if w.quote_style == None => self.col += w.value.len() as u64,
-                Token::Word(w) if w.quote_style != None => self.col += w.value.len() as u64 + 2,
-                Token::Number(s) => self.col += s.len() as u64,
-                Token::SingleQuotedString(s) => self.col += s.len() as u64,
-                Token::Parameter(s) => self.col += s.len() as u64,
-                _ => self.col += 1,
+                tokens.push((token, start..end));
+            } else {
+                break;
             }
-
-            tokens.push(token);
         }
         Ok(tokens)
     }

@@ -22,6 +22,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::ops::Range;
 use std::str::FromStr;
 
 use log::debug;
@@ -90,14 +91,14 @@ impl Error for ParserError {}
 
 /// SQL Parser
 pub struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<(Token, Range<usize>)>,
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
 }
 
 impl Parser {
     /// Parse the specified tokens
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(tokens: Vec<(Token, Range<usize>)>) -> Self {
         Parser { tokens, index: 0 }
     }
 
@@ -1030,10 +1031,10 @@ impl Parser {
         loop {
             index += 1;
             match self.tokens.get(index - 1) {
-                Some(Token::Whitespace(_)) => continue,
+                Some((Token::Whitespace(_), _)) => continue,
                 non_whitespace => {
                     if n == 0 {
-                        return non_whitespace.cloned();
+                        return non_whitespace.map(|(token, _range)| token.clone());
                     }
                     n -= 1;
                 }
@@ -1048,8 +1049,8 @@ impl Parser {
         loop {
             self.index += 1;
             match self.tokens.get(self.index - 1) {
-                Some(Token::Whitespace(_)) => continue,
-                token => return token.cloned(),
+                Some((Token::Whitespace(_), _)) => continue,
+                token => return token.map(|(token, _range)| token.clone()),
             }
         }
     }
@@ -1057,7 +1058,7 @@ impl Parser {
     /// Return the first unprocessed token, possibly whitespace.
     pub fn next_token_no_skip(&mut self) -> Option<&Token> {
         self.index += 1;
-        self.tokens.get(self.index - 1)
+        self.tokens.get(self.index - 1).map(|(token, _range)| token)
     }
 
     /// Push back the last one non-whitespace token. Must be called after
@@ -1067,7 +1068,7 @@ impl Parser {
         loop {
             assert!(self.index > 0);
             self.index -= 1;
-            if let Some(Token::Whitespace(_)) = self.tokens.get(self.index) {
+            if let Some((Token::Whitespace(_), _)) = self.tokens.get(self.index) {
                 continue;
             }
             return;
