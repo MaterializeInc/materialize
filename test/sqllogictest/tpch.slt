@@ -294,11 +294,7 @@ Project {
     group_key: [#8, #12, #15],
     aggregates: [sum(#22 * (100dec - #23))],
     Filter {
-      predicates: [
-        #6 = "BUILDING",
-        #12 < 1995-03-15,
-        #27 > 1995-03-15
-      ],
+      predicates: [#6 = "BUILDING", #12 < 1995-03-15],
       Join {
         variables: [[(0, 0), (1, 1)], [(1, 0), (2, 0)]],
         ArrangeBy {
@@ -309,7 +305,10 @@ Project {
           keys: [[#0]],
           Get { materialize.public.orders (u13) }
         },
-        Get { materialize.public.lineitem (u15) }
+        Filter {
+          predicates: [#10 > 1995-03-15],
+          Get { materialize.public.lineitem (u15) }
+        }
       }
     }
   }
@@ -356,11 +355,11 @@ Reduce {
       keys: [[#0]],
       Distinct {
         group_key: [#0],
-        Filter {
-          predicates: [#20 < #21],
-          Join {
-            variables: [[(0, 0), (1, 0)]],
-            ArrangeBy { keys: [[#0]], Get { l0 } },
+        Join {
+          variables: [[(0, 0), (1, 0)]],
+          ArrangeBy { keys: [[#0]], Get { l0 } },
+          Filter {
+            predicates: [#11 < #12],
             Get { materialize.public.lineitem (u15) }
           }
         }
@@ -525,9 +524,7 @@ Reduce {
     predicates: [
       ((#41 = "FRANCE") && (#45 = "GERMANY"))
       ||
-      ((#41 = "GERMANY") && (#45 = "FRANCE")),
-      #17 <= 1996-12-31,
-      #17 >= 1995-01-01
+      ((#41 = "GERMANY") && (#45 = "FRANCE"))
     ],
     Join {
       variables: [
@@ -541,7 +538,10 @@ Reduce {
         keys: [[#0]],
         Get { materialize.public.supplier (u7) }
       },
-      Get { materialize.public.lineitem (u15) },
+      Filter {
+        predicates: [#10 <= 1996-12-31, #10 >= 1995-01-01],
+        Get { materialize.public.lineitem (u15) }
+      },
       ArrangeBy {
         keys: [[#0]],
         Get { materialize.public.orders (u13) }
@@ -781,7 +781,6 @@ Project {
     aggregates: [sum(#22 * (100dec - #23))],
     Filter {
       predicates: [
-        #25 = "R",
         #12 < 1994-01-01,
         datetots #12 < 1994-01-01 00:00:00,
         #12 >= 1993-10-01
@@ -800,7 +799,10 @@ Project {
           keys: [[#0]],
           Get { materialize.public.orders (u13) }
         },
-        Get { materialize.public.lineitem (u15) },
+        Filter {
+          predicates: [#8 = "R"],
+          Get { materialize.public.lineitem (u15) }
+        },
         ArrangeBy {
           keys: [[#0]],
           Get { materialize.public.nation (u1) }
@@ -922,20 +924,20 @@ Reduce {
     sum(if (#5 = "1-URGENT") || (#5 = "2-HIGH") then 1 else 0),
     sum(if (#5 != "1-URGENT") && (#5 != "2-HIGH") then 1 else 0)
   ],
-  Filter {
-    predicates: [
-      (#23 = "MAIL") || (#23 = "SHIP"),
-      #19 < #20,
-      #20 < #21,
-      datetots #21 < 1995-01-01 00:00:00,
-      #21 >= 1994-01-01
-    ],
-    Join {
-      variables: [[(0, 0), (1, 0)]],
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.orders (u13) }
-      },
+  Join {
+    variables: [[(0, 0), (1, 0)]],
+    ArrangeBy {
+      keys: [[#0]],
+      Get { materialize.public.orders (u13) }
+    },
+    Filter {
+      predicates: [
+        (#14 = "MAIL") || (#14 = "SHIP"),
+        #10 < #11,
+        #11 < #12,
+        datetots #12 < 1995-01-01 00:00:00,
+        #12 >= 1994-01-01
+      ],
       Get { materialize.public.lineitem (u15) }
     }
   }
@@ -966,14 +968,14 @@ ORDER BY
     c_count DESC
 ----
 Let {
-  l0 = Filter {
-    predicates: [!(^.*special.*requests.*$ ~ #16)],
-    Join {
-      variables: [[(0, 0), (1, 1)]],
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.customer (u11) }
-      },
+  l0 = Join {
+    variables: [[(0, 0), (1, 1)]],
+    ArrangeBy {
+      keys: [[#0]],
+      Get { materialize.public.customer (u11) }
+    },
+    Filter {
+      predicates: [!(^.*special.*requests.*$ ~ #8)],
       Get { materialize.public.orders (u13) }
     }
   }
@@ -1036,19 +1038,16 @@ Let {
       sum(if ^PROMO.*$ ~ #20 then #5 * (100dec - #6) else 0dec),
       sum(#5 * (100dec - #6))
     ],
-    Filter {
-      predicates: [
-        datetots #10 < 1996-02-01 00:00:00,
-        #10 >= 1996-01-01
-      ],
-      Join {
-        variables: [[(0, 1), (1, 0)]],
-        Get { materialize.public.lineitem (u15) },
-        ArrangeBy {
-          keys: [[#0]],
-          Get { materialize.public.part (u5) }
-        }
-      }
+    Join {
+      variables: [[(0, 1), (1, 0)]],
+      Filter {
+        predicates: [
+          datetots #10 < 1996-02-01 00:00:00,
+          #10 >= 1996-01-01
+        ],
+        Get { materialize.public.lineitem (u15) }
+      },
+      ArrangeBy { keys: [[#0]], Get { materialize.public.part (u5) } }
     }
   }
 } in
@@ -1108,24 +1107,24 @@ ORDER BY
 ----
 Project {
   outputs: [0 .. 2, 4, 8],
-  Filter {
-    predicates: [!isnull #8],
-    Join {
-      variables: [[(0, 0), (1, 0)], [(1, 1), (2, 0)]],
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.supplier (u7) }
-      },
-      Get { materialize.public.revenue (u17) },
-      ArrangeBy {
-        keys: [[#0]],
-        Filter {
-          predicates: [!isnull #0],
-          Reduce {
-            group_key: [],
-            aggregates: [max(#1)],
-            Get { materialize.public.revenue (u17) }
-          }
+  Join {
+    variables: [[(0, 0), (1, 0)], [(1, 1), (2, 0)]],
+    ArrangeBy {
+      keys: [[#0]],
+      Get { materialize.public.supplier (u7) }
+    },
+    Filter {
+      predicates: [!isnull #1],
+      Get { materialize.public.revenue (u17) }
+    },
+    ArrangeBy {
+      keys: [[#0]],
+      Filter {
+        predicates: [!isnull #0],
+        Reduce {
+          group_key: [],
+          aggregates: [max(#1)],
+          Get { materialize.public.revenue (u17) }
         }
       }
     }
@@ -1203,6 +1202,7 @@ Let {
     group_key: [#0],
     aggregates: [all(#0 != #1)],
 <<<<<<< HEAD
+<<<<<<< HEAD
     Join {
       variables: [],
       Get { l1 },
@@ -1215,6 +1215,13 @@ Let {
         variables: [],
         ArrangeBy { keys: [[]], Get { l3 } },
 >>>>>>> merge master
+=======
+    Join {
+      variables: [],
+      ArrangeBy { keys: [[]], Get { l3 } },
+      Filter {
+        predicates: [^.*Customer.*Complaints.*$ ~ #6],
+>>>>>>> only lift predicate when arrangement needed
         Get { materialize.public.supplier (u7) }
       }
     }
@@ -1544,13 +1551,17 @@ Let {
           &&
           (#21 <= 15)
         ),
-        (#14 = "AIR") || (#14 = "AIR REG"),
-        #13 = "DELIVER IN PERSON",
         #21 >= 1
       ],
       Join {
         variables: [[(0, 1), (1, 0)]],
-        Get { materialize.public.lineitem (u15) },
+        Filter {
+          predicates: [
+            (#14 = "AIR") || (#14 = "AIR REG"),
+            #13 = "DELIVER IN PERSON"
+          ],
+          Get { materialize.public.lineitem (u15) }
+        },
         ArrangeBy {
           keys: [[#0]],
           Get { materialize.public.part (u5) }
@@ -1698,10 +1709,10 @@ Project {
         group_key: [#0],
         aggregates: [any(true)],
         Filter {
-          predicates: [#0 = #12, (i32todec #13 * 1000dec) > #30],
+          predicates: [(i32todec #13 * 1000dec) > #30],
           Join {
             variables: [[(0, 11), (1, 0)], [(0, 12), (1, 1)]],
-            Get { l3 },
+            Filter { predicates: [#0 = #12], Get { l3 } },
             ArrangeBy {
               keys: [[#0, #1]],
               Map {
@@ -1709,17 +1720,17 @@ Project {
                 Reduce {
                   group_key: [#0, #1],
                   aggregates: [sum(#6)],
-                  Filter {
-                    predicates: [
-                      datetots #12 < 1996-01-01 00:00:00,
-                      #12 >= 1995-01-01
-                    ],
-                    Join {
-                      variables: [[(0, 0), (1, 1)], [(0, 1), (1, 2)]],
-                      ArrangeBy {
-                        keys: [[#0, #1]],
-                        Distinct { group_key: [#11, #12], Get { l3 } }
-                      },
+                  Join {
+                    variables: [[(0, 0), (1, 1)], [(0, 1), (1, 2)]],
+                    ArrangeBy {
+                      keys: [[#0, #1]],
+                      Distinct { group_key: [#11, #12], Get { l3 } }
+                    },
+                    Filter {
+                      predicates: [
+                        datetots #10 < 1996-01-01 00:00:00,
+                        #10 >= 1995-01-01
+                      ],
                       Get { materialize.public.lineitem (u15) }
                     }
                   }
@@ -1783,8 +1794,12 @@ Let {
     predicates: [#25 = "F", #33 = "SAUDI ARABIA"],
 =======
   l1 = Filter {
+<<<<<<< HEAD
     predicates: [#25 = "F", #33 = "SAUDI ARABIA", #19 > #18],
 >>>>>>> merge master
+=======
+    predicates: [#25 = "F", #33 = "SAUDI ARABIA"],
+>>>>>>> only lift predicate when arrangement needed
     Join {
       variables: [
         [(0, 0), (1, 2)],
@@ -1795,7 +1810,10 @@ Let {
         keys: [[#0]],
         Get { materialize.public.supplier (u7) }
       },
-      Get { materialize.public.lineitem (u15) },
+      Filter {
+        predicates: [#12 > #11],
+        Get { materialize.public.lineitem (u15) }
+      },
       ArrangeBy {
         keys: [[#0]],
         Get { materialize.public.orders (u13) }
@@ -1871,7 +1889,7 @@ Reduce {
             Distinct {
               group_key: [#0, #1],
               Filter {
-                predicates: [#4 != #1, #14 > #13],
+                predicates: [#4 != #1],
                 Join {
                   variables: [[(0, 0), (1, 0)]],
 <<<<<<< HEAD
@@ -1882,8 +1900,15 @@ Reduce {
                   }
 =======
                   ArrangeBy { keys: [[#0]], Get { l5 } },
+<<<<<<< HEAD
                   Get { materialize.public.lineitem (u15) }
 >>>>>>> merge master
+=======
+                  Filter {
+                    predicates: [#12 > #11],
+                    Get { materialize.public.lineitem (u15) }
+                  }
+>>>>>>> only lift predicate when arrangement needed
                 }
               }
             }
@@ -1948,31 +1973,37 @@ ORDER BY
 ----
 Let {
   l0 = Filter {
-    predicates: [
-      (
-        (
-          (
-            (
-              ((substr(#4, 1, 2) = ":1") || (substr(#4, 1, 2) = ":2"))
-              ||
-              (substr(#4, 1, 2) = ":3")
-            )
-            ||
-            (substr(#4, 1, 2) = ":4")
-          )
-          ||
-          (substr(#4, 1, 2) = ":5")
-        )
-        ||
-        (substr(#4, 1, 2) = ":6")
-      )
-      ||
-      (substr(#4, 1, 2) = ":7"),
-      (#5 * 1000000dec) > #10
-    ],
+    predicates: [(#5 * 1000000dec) > #10],
     Join {
       variables: [],
-      Get { materialize.public.customer (u11) },
+      Filter {
+        predicates: [
+          (
+            (
+              (
+                (
+                  (
+                    (substr(#4, 1, 2) = ":1")
+                    ||
+                    (substr(#4, 1, 2) = ":2")
+                  )
+                  ||
+                  (substr(#4, 1, 2) = ":3")
+                )
+                ||
+                (substr(#4, 1, 2) = ":4")
+              )
+              ||
+              (substr(#4, 1, 2) = ":5")
+            )
+            ||
+            (substr(#4, 1, 2) = ":6")
+          )
+          ||
+          (substr(#4, 1, 2) = ":7")
+        ],
+        Get { materialize.public.customer (u11) }
+      },
       ArrangeBy {
         keys: [[]],
         Map {

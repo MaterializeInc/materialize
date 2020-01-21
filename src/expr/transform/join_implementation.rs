@@ -431,9 +431,10 @@ fn implement_arrangements<'a>(
         needed.sort();
         needed.dedup();
         // We should lift any predicates, iff all arrangements are otherwise available.
-        if needed
-            .iter()
-            .all(|key| available_arrangements[index].contains(key))
+        if !needed.is_empty()
+            && needed
+                .iter()
+                .all(|key| available_arrangements[index].contains(key))
         {
             while let RelationExpr::Filter {
                 input: inner,
