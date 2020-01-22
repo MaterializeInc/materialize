@@ -1396,12 +1396,7 @@ impl Parser {
     }
 
     pub fn parse_create_database(&mut self) -> Result<Statement, ParserError> {
-        let if_not_exists = if self.parse_keyword("IF") {
-            self.expect_keywords(&["NOT", "EXISTS"])?;
-            true
-        } else {
-            false
-        };
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         Ok(Statement::CreateDatabase {
             name,
@@ -1410,12 +1405,7 @@ impl Parser {
     }
 
     pub fn parse_create_schema(&mut self) -> Result<Statement, ParserError> {
-        let if_not_exists = if self.parse_keyword("IF") {
-            self.expect_keywords(&["NOT", "EXISTS"])?;
-            true
-        } else {
-            false
-        };
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         Ok(Statement::CreateSchema {
             name,
@@ -1424,12 +1414,7 @@ impl Parser {
     }
 
     pub fn parse_create_source(&mut self) -> Result<Statement, ParserError> {
-        let if_not_exists = if self.parse_keyword("IF") {
-            self.expect_keywords(&["NOT", "EXISTS"])?;
-            true
-        } else {
-            false
-        };
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let url = self.parse_literal_string()?;
@@ -1478,12 +1463,7 @@ impl Parser {
     }
 
     pub fn parse_create_sink(&mut self) -> Result<Statement, ParserError> {
-        let if_not_exists = if self.parse_keyword("IF") {
-            self.expect_keywords(&["NOT", "EXISTS"])?;
-            true
-        } else {
-            false
-        };
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let from = self.parse_object_name()?;
@@ -1527,12 +1507,7 @@ impl Parser {
     }
 
     pub fn parse_create_index(&mut self) -> Result<Statement, ParserError> {
-        let if_not_exists = if self.parse_keyword("IF") {
-            self.expect_keywords(&["NOT", "EXISTS"])?;
-            true
-        } else {
-            false
-        };
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         self.expect_keyword("ON")?;
         let on_name = self.parse_object_name()?;
@@ -1545,6 +1520,15 @@ impl Parser {
             key_parts,
             if_not_exists,
         })
+    }
+
+    fn parse_if_not_exists(&mut self) -> Result<bool, ParserError> {
+        if self.parse_keyword("IF") {
+            self.expect_keywords(&["NOT", "EXISTS"])?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     pub fn parse_drop(&mut self) -> Result<Statement, ParserError> {
@@ -1589,12 +1573,7 @@ impl Parser {
     }
 
     pub fn parse_create_table(&mut self) -> Result<Statement, ParserError> {
-        let if_not_exists = if self.parse_keyword("IF") {
-            self.expect_keywords(&["NOT", "EXISTS"])?;
-            true
-        } else {
-            false
-        };
+        let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns()?;
