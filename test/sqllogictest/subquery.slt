@@ -214,12 +214,11 @@ query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
 Project {
-  outputs: [0, 0, 2],
+  outputs: [0, 0, 1],
   Map {
     scalars: [true],
     Join {
-      variables: [[(0, 0), (1, 0)]],
-      ArrangeBy { keys: [[#0]], Get { materialize.public.t1 (u37) } },
+      variables: [[(0, 0), (2, 0)]],
       Get { materialize.public.t3 (u41) },
       ArrangeBy {
         keys: [[]],
@@ -227,7 +226,8 @@ Project {
           group_key: [],
           Get { materialize.public.t2 (u39) }
         }
-      }
+      },
+      ArrangeBy { keys: [[#0]], Get { materialize.public.t1 (u37) } }
     }
   }
 }
@@ -238,16 +238,16 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 Let {
   l0 = Join {
     variables: [[(0, 0), (1, 0)]],
-    ArrangeBy { keys: [[#0]], Get { materialize.public.t1 (u37) } },
-    Get { materialize.public.t3 (u41) }
+    Get { materialize.public.t3 (u41) },
+    ArrangeBy { keys: [[#0]], Get { materialize.public.t1 (u37) } }
   }
 } in
 Project {
-  outputs: [0, 0, 2],
+  outputs: [0, 0, 1],
   Map {
     scalars: [true],
     Join {
-      variables: [[(0, 2), (1, 0)]],
+      variables: [[(0, 1), (1, 0)]],
       Get { l0 },
       ArrangeBy {
         keys: [[#0]],
@@ -257,7 +257,7 @@ Project {
             variables: [[(0, 0), (1, 0)]],
             ArrangeBy {
               keys: [[#0]],
-              Distinct { group_key: [#2], Get { l0 } }
+              Distinct { group_key: [#1], Get { l0 } }
             },
             ArrangeBy {
               keys: [[#0]],

@@ -139,6 +139,8 @@ impl JoinImplementation {
                     }
                     _ => {}
                 }
+                available_arrangements[index].sort();
+                available_arrangements[index].dedup();
             }
 
             // Determine if we can perform delta queries with the existing arrangements.
@@ -146,12 +148,14 @@ impl JoinImplementation {
             // but we could imagine wanting the best from each and then comparing the two.
             let delta_query_plan = delta_queries::plan(
                 relation,
+                &arities,
                 &prior_arities,
                 &available_arrangements,
                 &unique_keys,
             );
             let differential_plan = differential::plan(
                 relation,
+                &arities,
                 &prior_arities,
                 &available_arrangements,
                 &unique_keys,
@@ -173,6 +177,7 @@ mod delta_queries {
     /// The method returns `None` if it fails to find a sufficiently pleasing plan.
     pub fn plan(
         join: &RelationExpr,
+        arities: &[usize],
         prior_arities: &[usize],
         available: &[Vec<Vec<ScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
@@ -212,9 +217,31 @@ mod delta_queries {
                 orders.iter().flatten(),
                 &mut lifted,
             );
-            *implementation = JoinImplementation::DeltaQuery(orders);
+
             if !lifted.is_empty() {
-                *demand = None;
+                // We must add the support of expression in `lifted` to the `demand`
+                // member to ensure they are correctly populated.
+                if let Some(demand) = demand {
+                    let mut rel_col = Vec::new();
+                    for (input, arity) in arities.iter().enumerate() {
+                        rel_col.push((input, *arity));
+                    }
+                    for expr in lifted.iter() {
+                        for column in expr.support() {
+                            let (rel, col) = rel_col[column];
+                            demand[rel].push(col);
+                        }
+                    }
+                    for list in demand.iter_mut() {
+                        list.sort();
+                        list.dedup();
+                    }
+                }
+            }
+
+            *implementation = JoinImplementation::DeltaQuery(orders);
+
+            if !lifted.is_empty() {
                 new_join = new_join.filter(lifted);
             }
 
@@ -236,6 +263,7 @@ mod differential {
     /// The method returns `None` if it fails to find a sufficiently pleasing plan.
     pub fn plan(
         join: &RelationExpr,
+        arities: &[usize],
         prior_arities: &[usize],
         available: &[Vec<Vec<ScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
@@ -251,11 +279,18 @@ mod differential {
         {
             // We prefer a starting point based on the characteristics of the other input arrangements.
             // We could change this preference at any point, but the list of orders should still inform.
-            let mut orders =
-                super::optimize_orders(inputs.len(), variables, available, unique_keys);
-            orders.sort_by_key(|x| x.iter().map(|(c, _, _)| c.clone()).min().unwrap());
+            // Important, we should choose something stable under re-ordering, to converge under fixed
+            // point iteration; we choose to start with the first input optimizing our criteria, which
+            // should remain stable even when promoted to the first position.
+            let orders = super::optimize_orders(inputs.len(), variables, available, unique_keys);
+            let max_min_characteristics = orders
+                .iter()
+                .flat_map(|order| order.iter().map(|(c, _, _)| c.clone()).min())
+                .max()
+                .unwrap();
             let mut order = orders
-                .pop()?
+                .into_iter()
+                .find(|o| o.iter().map(|(c, _, _)| c).min().unwrap() == &max_min_characteristics)?
                 .into_iter()
                 .map(|(_c, k, r)| (r, k))
                 .collect::<Vec<_>>();
@@ -270,9 +305,60 @@ mod differential {
                 order.iter(),
                 &mut lifted,
             );
-            *implementation = JoinImplementation::Differential(start, order);
+
             if !lifted.is_empty() {
-                *demand = None;
+                // We must add the support of expression in `lifted` to the `demand`
+                // member to ensure they are correctly populated.
+                if let Some(demand) = demand {
+                    let mut rel_col = Vec::new();
+                    for (input, arity) in arities.iter().enumerate() {
+                        rel_col.push((input, *arity));
+                    }
+                    for expr in lifted.iter() {
+                        for column in expr.support() {
+                            let (rel, col) = rel_col[column];
+                            demand[rel].push(col);
+                        }
+                    }
+                    for list in demand.iter_mut() {
+                        list.sort();
+                        list.dedup();
+                    }
+                }
+            }
+
+            // Install the implementation.
+            *implementation = JoinImplementation::Differential(start, order.clone());
+
+            // Optional: permute join inputs to match join plan order.
+            let mut permutation = Vec::with_capacity(inputs.len());
+            permutation.push(start);
+            for (input, _) in order.iter() {
+                permutation.push(*input);
+            }
+
+            super::permute_join(inputs, variables, demand, implementation, &permutation);
+            if permutation.iter().enumerate().any(|(x, y)| x != *y) {
+                // We must re-arrange the columns so that they are where they are
+                // expected to be, which is in the pre-permuted order.
+                let mut offset = 0;
+                let mut offsets = vec![0; permutation.len()];
+                for input in permutation.iter() {
+                    offsets[*input] = offset;
+                    offset += arities[*input];
+                }
+
+                let mut to_project = Vec::new();
+                for rel in 0..inputs.len() {
+                    for col in 0..arities[rel] {
+                        let position = offsets[rel] + col;
+                        to_project.push(position);
+                    }
+                }
+                new_join = new_join.project(to_project);
+            }
+
+            if !lifted.is_empty() {
                 new_join = new_join.filter(lifted);
             }
 
@@ -281,6 +367,61 @@ mod differential {
         } else {
             panic!("differential::plan call on non-join expression.")
         }
+    }
+}
+
+fn permute_join(
+    inputs: &mut Vec<RelationExpr>,
+    variables: &mut Vec<Vec<(usize, usize)>>,
+    demand: &mut Option<Vec<Vec<usize>>>,
+    implementation: &mut crate::relation::JoinImplementation,
+    permutation: &[usize],
+) {
+    *inputs = permutation
+        .iter()
+        .map(|i| inputs[*i].clone())
+        .collect::<Vec<_>>();
+
+    let mut remap = vec![0; inputs.len()];
+    for (index, input) in permutation.iter().enumerate() {
+        remap[*input] = index;
+    }
+    for variable in variables.iter_mut() {
+        for (rel, _col) in variable.iter_mut() {
+            *rel = remap[*rel];
+        }
+        variable.sort();
+    }
+    variables.sort();
+
+    // update demand
+    if let Some(demand) = demand {
+        *demand = permutation
+            .iter()
+            .map(|i| demand[*i].clone())
+            .collect::<Vec<_>>();
+    }
+
+    match implementation {
+        crate::relation::JoinImplementation::Differential(start, order) => {
+            *start = 0;
+            for (index, (input, _)) in order.iter_mut().enumerate() {
+                *input = index + 1;
+            }
+        }
+        crate::relation::JoinImplementation::DeltaQuery(orders) => {
+            // permute the order of instructions.
+            *orders = permutation
+                .iter()
+                .map(|i| orders[*i].clone())
+                .collect::<Vec<_>>();
+            for order in orders.iter_mut() {
+                for (index, _) in order.iter_mut() {
+                    *index = remap[*index];
+                }
+            }
+        }
+        crate::relation::JoinImplementation::Unimplemented => {}
     }
 }
 
@@ -332,7 +473,7 @@ fn optimize_candidates(
     arrange_keys: &[Vec<Vec<ScalarExpr>>],
     unique_keys: &[Vec<Vec<usize>>],
 ) -> Option<(CandidateCharacteristics, Vec<ScalarExpr>, usize)> {
-    (0..relations)
+    let candidates = (0..relations)
         .filter(|i| !order.contains(i))
         .flat_map(|i| {
             let constrained = constrained_columns(i, &order, variables);
@@ -368,7 +509,15 @@ fn optimize_candidates(
                 }))
                 .max()
         })
-        .max()
+        .collect::<Vec<_>>();
+
+    // We determine the best candidate characteristics, and then choose the first relation with
+    // these characteristics. The convoluted logic is meant to ensure stability under permutation
+    // of inputs, at least in the case that we promote appealing candidates.
+    let max_characteristics = candidates.iter().map(|(c, _, _)| c.clone()).max().unwrap();
+    candidates
+        .into_iter()
+        .find(|(c, _, _)| c == &max_characteristics)
 }
 
 /// Lists the columns of collection `index` constrained to be equal to columns present in `order`.
