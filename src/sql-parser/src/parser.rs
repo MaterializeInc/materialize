@@ -67,16 +67,22 @@ use IsLateral::*;
 
 impl<'a> fmt::Display for ParserError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let line_start = self.sql[..self.range.start.max(self.sql.len())]
+        // be careful with edge cases
+        // 0 <= self.range.start <= self.sql.len()
+        // 1 <= self.range.end <= self.sql.len()+1
+        // 0 <= line_start <= self.range.start
+        // 1 <= safe_end <= self.sql.len()-1
+        // safe_end <= line_end <= self.sql.len()
+        let line_start = self.sql[..self.range.start]
             .rfind('\n')
             .map(|start| start + 1)
             .unwrap_or(0);
-        let line_end = self.sql[self.range.end.max(self.sql.len() - 1)..]
+        let safe_end = self.range.end.min(self.sql.len() - 1);
+        let line_end = self.sql[safe_end..]
             .find('\n')
-            .map(|end| self.range.end + end - 1)
+            .map(|end| safe_end + end)
             .unwrap_or(self.sql.len());
         let line = &self.sql[line_start..line_end];
-        // TODO(jamii) what if `line` contains \n
         let underline = std::iter::repeat(' ')
             .take(self.range.start - line_start)
             .chain(std::iter::repeat('^').take(self.range.end - self.range.start))
@@ -1177,15 +1183,20 @@ impl Parser {
         }
     }
 
-    /// Return the range withing the query string at which the next non-whitespace token occurs
+    /// Return the range within the query string at which the next non-whitespace token occurs
     fn peek_range(&self) -> Range<usize> {
-        match self.tokens.get(self.index) {
-            Some((_token, range)) => range.clone(),
-            None => self.sql.len()..self.sql.len() + 1,
+        let mut index = self.index;
+        loop {
+            index += 1;
+            match self.tokens.get(index - 1) {
+                Some((Token::Whitespace(_), _)) => continue,
+                Some((_token, range)) => return range.clone(),
+                None => return self.sql.len()..self.sql.len() + 1,
+            }
         }
     }
 
-    /// Return the range withing the query string at which the previous non-whitespace token occurs
+    /// Return the range within the query string at which the previous non-whitespace token occurs
     ///
     /// Must be called after `next_token()`, otherwise might panic.
     /// OK to call after `next_token()` indicates an EOF.
@@ -1194,14 +1205,11 @@ impl Parser {
         loop {
             assert!(index > 0);
             index -= 1;
-            if let Some((Token::Whitespace(_), _)) = self.tokens.get(index) {
-                continue;
+            match self.tokens.get(index) {
+                Some((Token::Whitespace(_), _)) => continue,
+                Some((_token, range)) => return range.clone(),
+                None => return self.sql.len()..self.sql.len() + 1,
             }
-            break;
-        }
-        match self.tokens.get(index) {
-            Some((_token, range)) => range.clone(),
-            None => self.sql.len()..self.sql.len() + 1,
         }
     }
 
