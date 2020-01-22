@@ -198,6 +198,7 @@ Project {
     scalars: [true],
     Join {
       variables: [],
+      implementation: DifferentialLinear,
       Get { materialize.public.t1 (u37) },
       ArrangeBy {
         keys: [[]],
@@ -219,6 +220,7 @@ Project {
     scalars: [true],
     Join {
       variables: [[(0, 0), (2, 0)]],
+      implementation: DifferentialLinear,
       Get { materialize.public.t3 (u41) },
       ArrangeBy {
         keys: [[]],
@@ -238,6 +240,7 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 Let {
   l0 = Join {
     variables: [[(0, 0), (1, 0)]],
+    implementation: DifferentialLinear,
     Get { materialize.public.t3 (u41) },
     ArrangeBy { keys: [[#0]], Get { materialize.public.t1 (u37) } }
   }
@@ -248,6 +251,7 @@ Project {
     scalars: [true],
     Join {
       variables: [[(0, 1), (1, 0)]],
+      implementation: DifferentialLinear,
       Get { l0 },
       ArrangeBy {
         keys: [[#0]],
@@ -255,6 +259,7 @@ Project {
           group_key: [#0],
           Join {
             variables: [[(0, 0), (1, 0)]],
+            implementation: DeltaQuery,
             ArrangeBy {
               keys: [[#0]],
               Distinct { group_key: [#1], Get { l0 } }

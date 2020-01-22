@@ -123,6 +123,7 @@ Project {
     scalars: [#0 date_trunc #1],
     Join {
       variables: [],
+      implementation: DifferentialLinear,
       Get { materialize.public.date_trunc_fields (u1) },
       ArrangeBy {
         keys: [[]],

@@ -823,7 +823,10 @@ impl RelationExpr {
                 .append(input.to_doc(alloc, id_humanizer))
                 .embrace("Filter {", "}"),
             RelationExpr::Join {
-                inputs, variables, ..
+                inputs,
+                variables,
+                implementation,
+                ..
             } => {
                 let pair_to_doc = |pair: &(usize, usize)| {
                     alloc
@@ -849,12 +852,22 @@ impl RelationExpr {
                     )
                     .tightly_embrace("variables: [", "]");
 
+                let implementation = match implementation {
+                    JoinImplementation::Differential(_, _) => "DifferentialLinear",
+                    JoinImplementation::DeltaQuery(_) => "DeltaQuery",
+                    JoinImplementation::Unimplemented => "Unimplemented",
+                };
+                let implementation = alloc.text(format!("implementation: {}", implementation));
+
                 let inputs = alloc.intersperse(
                     inputs.iter().map(|inp| inp.to_doc(alloc, id_humanizer)),
                     alloc.text(",").append(alloc.line()),
                 );
 
                 variables
+                    .append(",")
+                    .append(alloc.line())
+                    .append(implementation)
                     .append(",")
                     .append(alloc.line())
                     .append(inputs)
