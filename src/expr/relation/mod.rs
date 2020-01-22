@@ -1368,7 +1368,12 @@ Constant [[665]]"#
 
         assert_eq!(
             join.doc().pretty(82).to_string(),
-            "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], Constant [], Constant [] }",
+            "Join {
+  variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]],
+  implementation: Unimplemented,
+  Constant [],
+  Constant []
+}",
         );
 
         assert_eq!(
@@ -1378,6 +1383,7 @@ Constant [[665]]"#
     [(0, 0), (1, 0)],
     [(0, 1), (1, 1)]
   ],
+  implementation: Unimplemented,
   Constant [],
   Constant []
 }",
