@@ -561,12 +561,6 @@ macro_rules! make_visitor {
             fn visit_explain(&mut self, stage: &'ast $($mut)* Stage, query: &'ast $($mut)* Query) {
                 visit_explain(self, stage, query)
             }
-            fn visit_flush(&mut self, name: &'ast $($mut)* ObjectName) {
-                visit_flush(self, name)
-            }
-            fn visit_flush_all(&mut self) {
-                visit_flush_all(self)
-            }
         }
 
         pub fn visit_statement<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, statement: &'ast $($mut)* Statement) {
@@ -668,8 +662,6 @@ macro_rules! make_visitor {
                     visitor.visit_tail(name);
                 }
                 Statement::Explain { stage, query } => visitor.visit_explain(stage, query),
-                Statement::FlushSource { name } => visitor.visit_flush(name),
-                Statement::FlushAllSources => visitor.visit_flush_all(),
             }
         }
 
@@ -1626,12 +1618,6 @@ macro_rules! make_visitor {
         pub fn visit_explain<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, _stage: &'ast $($mut)* Stage, query: &'ast $($mut)* Query) {
             visitor.visit_query(query);
         }
-
-        pub fn visit_flush<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, name: &'ast $($mut)* ObjectName) {
-            visitor.visit_object_name(name);
-        }
-
-        pub fn visit_flush_all<'ast, V: $name<'ast> + ?Sized>(_visitor: &mut V) {}
     }
 }
 

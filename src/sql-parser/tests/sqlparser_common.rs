@@ -3815,20 +3815,6 @@ fn parse_explain() {
 }
 
 #[test]
-fn parse_flush() {
-    let ast = verified_stmt("FLUSH ALL SOURCES");
-    assert_eq!(ast, Statement::FlushAllSources,);
-
-    let ast = verified_stmt("FLUSH SOURCE foo");
-    assert_eq!(
-        ast,
-        Statement::FlushSource {
-            name: ObjectName(vec![Ident::new("foo")])
-        }
-    );
-}
-
-#[test]
 fn parse_show_columns() {
     let table_name = ObjectName(vec![Ident::new("mytable")]);
     assert_eq!(

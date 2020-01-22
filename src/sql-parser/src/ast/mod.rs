@@ -558,10 +558,6 @@ pub enum Statement {
         url: String,
         with_options: Vec<SqlOption>,
     },
-    /// `FLUSH SOURCE`
-    FlushSource { name: ObjectName },
-    /// `FLUSH ALL SOURCES`
-    FlushAllSources,
     /// `CREATE VIEW`
     CreateView {
         /// View name
@@ -995,8 +991,6 @@ impl fmt::Display for Statement {
             }
             Statement::Tail { name } => write!(f, "TAIL {}", name),
             Statement::Explain { stage, query } => write!(f, "EXPLAIN {} FOR {}", stage, query),
-            Statement::FlushSource { name } => write!(f, "FLUSH SOURCE {}", name),
-            Statement::FlushAllSources => write!(f, "FLUSH ALL SOURCES"),
         }
     }
 }
