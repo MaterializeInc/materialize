@@ -107,7 +107,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
 
     let (server, mut client) = util::start_server(config)?;
 
-    let fetch_rows = |client: &mut postgres::Client, source| -> Result<Vec<_>, Box<dyn Error>> {
+    let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
         thread::sleep(Duration::from_secs(1));
         Ok(client
