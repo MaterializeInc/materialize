@@ -1155,15 +1155,15 @@ mod test {
         let test_cases = [
             (
                 "1+2",
-                "sql parser error: Invalid date-time type string '1+2': cannot determine format",
+                "Invalid date-time type string '1+2': cannot determine format",
             ),
             (
                 "1:2+3",
-                "sql parser error: Invalid date-time type string '1:2+3': cannot determine format",
+                "Invalid date-time type string '1:2+3': cannot determine format",
             ),
             (
                 "1:1YEAR2",
-                "sql parser error: Invalid date-time type string '1:1YEAR2': cannot determine format",
+                "Invalid date-time type string '1:1YEAR2': cannot determine format",
             ),
         ];
 
@@ -1549,13 +1549,13 @@ mod test {
             (
                 "1.2.",
                 Month,
-                "sql parser error: Invalid INTERVAL \'1.2.\': Invalid syntax at offset 3: \
+                "Invalid INTERVAL \'1.2.\': Invalid syntax at offset 3: \
                  provided Dot but expected TimeUnit(Year)",
             ),
             (
                 "YEAR",
                 Year,
-                "sql parser error: Invalid INTERVAL \'YEAR\': Year must be preceeded \
+                "Invalid INTERVAL \'YEAR\': Year must be preceeded \
                  by a number, e.g. \'1Year\'",
             ),
             // Running into this error means that determine_format_w_datetimefield
@@ -1563,7 +1563,7 @@ mod test {
             (
                 "1YEAR",
                 Month,
-                "sql parser error: Invalid INTERVAL \'1YEAR\': Invalid syntax at offset \
+                "Invalid INTERVAL \'1YEAR\': Invalid syntax at offset \
                  3: provided Month but expected Year\'",
             ),
         ];
@@ -1718,25 +1718,25 @@ mod test {
             (
                 "1.2",
                 Year,
-                "sql parser error: Invalid INTERVAL \'1.2\': Invalid syntax at \
+                "Invalid INTERVAL \'1.2\': Invalid syntax at \
                  offset 1: provided Dot but expected Dash",
             ),
             (
                 "1-2:3.4",
                 Minute,
-                "sql parser error: Invalid INTERVAL \'1-2:3.4\': Invalid syntax at \
+                "Invalid INTERVAL \'1-2:3.4\': Invalid syntax at \
                  offset 1: provided Dash but expected Colon",
             ),
             (
                 "1:2.2.",
                 Minute,
-                "sql parser error: Invalid INTERVAL \'1:2.2.\': Invalid syntax at \
+                "Invalid INTERVAL \'1:2.2.\': Invalid syntax at \
                  offset 5: provided Dot but expected None",
             ),
             (
                 "1YEAR",
                 Year,
-                "sql parser error: Invalid INTERVAL \'1YEAR\': Invalid syntax at \
+                "Invalid INTERVAL \'1YEAR\': Invalid syntax at \
                  offset 1: provided TimeUnit(Year) but expected Dash",
             ),
         ];
@@ -2277,131 +2277,131 @@ mod test {
             (
                 "1 year 2 years",
                 Second,
-                "sql parser error: Invalid INTERVAL '1 year 2 years': YEAR field \
+                "Invalid INTERVAL '1 year 2 years': YEAR field \
                 set twice",
             ),
             (
                 "1-2 3-4",
                 Second,
-                "sql parser error: Invalid INTERVAL '1-2 3-4': YEAR or MONTH field \
+                "Invalid INTERVAL '1-2 3-4': YEAR or MONTH field \
                 set twice",
             ),
             (
                 "1-2 3 year",
                 Second,
-                "sql parser error: Invalid INTERVAL '1-2 3 year': YEAR field set twice",
+                "Invalid INTERVAL '1-2 3 year': YEAR field set twice",
             ),
             (
                 "1-2 3",
                 Month,
-                "sql parser error: Invalid INTERVAL '1-2 3': MONTH field set twice",
+                "Invalid INTERVAL '1-2 3': MONTH field set twice",
             ),
             (
                 "1-2 3:4 5",
                 Second,
-                "sql parser error: Invalid INTERVAL '1-2 3:4 5': SECOND field set twice",
+                "Invalid INTERVAL '1-2 3:4 5': SECOND field set twice",
             ),
             (
                 "1:2:3.4 5-6 7",
                 Year,
-                "sql parser error: Invalid INTERVAL '1:2:3.4 5-6 7': YEAR field set twice",
+                "Invalid INTERVAL '1:2:3.4 5-6 7': YEAR field set twice",
             ),
             (
                 "-:::::1.27",
                 Second,
-                "sql parser error: Invalid INTERVAL '-:::::1.27': Invalid syntax at \
+                "Invalid INTERVAL '-:::::1.27': Invalid syntax at \
                 offset 7: provided Colon but expected None",
             ),
             (
                 "-1 ::.27",
                 Second,
-                "sql parser error: Invalid INTERVAL '-1 ::.27': cannot determine format of all parts. \
+                "Invalid INTERVAL '-1 ::.27': cannot determine format of all parts. \
                 Add explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
             ),
             (
                 "100-13",
                 Second,
-                "sql parser error: Invalid INTERVAL '100-13': MONTH field out range; must be < 12, have 13",
+                "Invalid INTERVAL '100-13': MONTH field out range; must be < 12, have 13",
             ),
             (
                 "100-11 366 250:61",
                 Second,
-                "sql parser error: Invalid INTERVAL '100-11 366 250:61': MINUTE field out range; \
+                "Invalid INTERVAL '100-11 366 250:61': MINUTE field out range; \
                 must be < 60, have 61",
             ),
             (
                 "100-11 366 250:59:61",
                 Second,
-                "sql parser error: Invalid INTERVAL '100-11 366 250:59:61': SECOND field out range; \
+                "Invalid INTERVAL '100-11 366 250:59:61': SECOND field out range; \
                 must be < 60, have 61",
             ),
             (
                 "1:2:3.4.5",
                 Second,
-                "sql parser error: Invalid INTERVAL '1:2:3.4.5': Invalid syntax at offset 7: provided \
+                "Invalid INTERVAL '1:2:3.4.5': Invalid syntax at offset 7: provided \
                 Dot but expected None",
             ),
             (
                 "1+2:3.4",
                 Second,
-                "sql parser error: Invalid date-time type string '1+2:3.4': cannot determine format",
+                "Invalid date-time type string '1+2:3.4': cannot determine format",
             ),
             (
                 "1x2:3.4",
                 Second,
-                "sql parser error: invalid DateTimeField: X",
+                "invalid DateTimeField: X",
             ),
             (
                 "0 foo",
                 Second,
-                "sql parser error: invalid DateTimeField: FOO",
+                "invalid DateTimeField: FOO",
             ),
             (
                 "1-2 hour",
                 Second,
-                "sql parser error: Invalid INTERVAL '1-2 hour': Hour must be preceeded by a number, e.g. '1Hour'",
+                "Invalid INTERVAL '1-2 hour': Hour must be preceeded by a number, e.g. '1Hour'",
             ),
             (
                 "1-2hour",
                 Second,
-                "sql parser error: Invalid INTERVAL '1-2hour': Invalid syntax at offset 3: provided TimeUnit(Hour) \
+                "Invalid INTERVAL '1-2hour': Invalid syntax at offset 3: provided TimeUnit(Hour) \
                 but expected Space",
             ),
             (
                 "1-2 3:4 5 second",
                 Second,
-                "sql parser error: Invalid INTERVAL '1-2 3:4 5 second': SECOND field set twice",
+                "Invalid INTERVAL '1-2 3:4 5 second': SECOND field set twice",
             ),
             (
                 "1-2 5 second 3:4",
                 Second,
-                "sql parser error: Invalid INTERVAL '1-2 5 second 3:4': HOUR, MINUTE, SECOND field set twice",
+                "Invalid INTERVAL '1-2 5 second 3:4': HOUR, MINUTE, SECOND field set twice",
             ),
             (
                 "1 2-3 4:5",
                 Day,
-                "sql parser error: Invalid INTERVAL '1 2-3 4:5': cannot determine format of all parts. Add \
+                "Invalid INTERVAL '1 2-3 4:5': cannot determine format of all parts. Add \
                 explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
             ),
             (
                 "9223372036854775808 months",
                 Day,
-                "sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 0: number too large to fit in target type",
             ),
             (
                 "-9223372036854775808 months",
                 Day,
-                "sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 0: number too large to fit in target type",
             ),
             (
                 "9223372036854775808 seconds",
                 Day,
-                "sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 0: number too large to fit in target type",
             ),
             (
                 "-9223372036854775808 seconds",
                 Day,
-                "sql parser error: Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 0: number too large to fit in target type",
             ),
         ];
         for test in test_cases.iter() {

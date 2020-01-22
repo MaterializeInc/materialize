@@ -629,6 +629,7 @@ impl Tokenizer {
         });
 
         if n.is_empty() {
+            chars.next();
             return Err(format!(
                 "parameter marker ($) was not followed by at least one digit"
             ));
@@ -1009,7 +1010,7 @@ mod tests {
             tokenizer.tokenize(),
             Err(ParserError {
                 sql: sql,
-                range: 0..1,
+                range: 0..4,
                 message: format!("Expected close delimiter '\"' before EOF.")
             })
         );

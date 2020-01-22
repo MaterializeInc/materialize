@@ -87,11 +87,7 @@ impl<'a> fmt::Display for ParserError {
             .take(self.range.start - line_start)
             .chain(std::iter::repeat('^').take(self.range.end - self.range.start))
             .collect::<String>();
-        write!(
-            f,
-            "Parser error:\n{}\n{}\n{}",
-            line, underline, self.message,
-        )
+        write!(f, "Parse error:\n{}\n{}\n{}", line, underline, self.message,)
     }
 }
 
@@ -352,11 +348,13 @@ impl Parser {
     pub fn parse_function(&mut self, name: ObjectName) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
         let all = self.parse_keyword("ALL");
+        let all_range = self.peek_prev_range();
         let distinct = self.parse_keyword("DISTINCT");
+        let distinct_range = self.peek_prev_range();
         if all && distinct {
             return parser_err!(
                 self,
-                self.peek_prev_range(),
+                all_range.start..distinct_range.end,
                 format!(
                     "Cannot specify both ALL and DISTINCT in function: {}",
                     name.to_string(),
@@ -533,46 +531,42 @@ impl Parser {
         use std::convert::TryInto;
 
         let value = self.parse_literal_string()?;
-        let pdt = self.parse_timestamp_string(&value, false)?;
+        let range = self.peek_prev_range();
+        let pdt = self.parse_timestamp_string(&value, range.clone(), false)?;
 
         // pdt.hour, pdt.minute, pdt.second are all dropped, which is allowed by
         // PostgreSQL.
         match (pdt.year, pdt.month, pdt.day) {
             (Some(year), Some(month), Some(day)) => {
-                let p_err = |e: std::num::TryFromIntError, field: &str| {
-                    self.error(
-                        self.peek_prev_range(),
-                        format!("{} in date '{}' is invalid: {}", field, value, e),
-                    )
+                let p_err = {
+                    |range: Range<usize>, e: std::num::TryFromIntError, field: &str| {
+                        self.error(
+                            range,
+                            format!("{} in date '{}' is invalid: {}", field, value, e),
+                        )
+                    }
                 };
 
                 if year.unit == 0 {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_range(),
-                        "YEAR in DATE '{}' cannot be zero.",
-                        value,
-                    );
+                    return parser_err!(self, range, "YEAR in DATE '{}' cannot be zero.", value,);
                 }
 
                 if month.unit > 12 || month.unit <= 0 {
                     return parser_err!(
                         self,
-                        self.peek_prev_range(),
+                        range,
                         "MONTH in DATE '{}' must be a number between 1 and 12, got: {}",
                         value,
                         month.unit
                     );
                 }
                 let month: u8 = month.unit.try_into().expect("invalid month");
-                let day: u8 = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
+                let day: u8 = day.unit.try_into().map_err(|e| {
+                    let range = range.clone();
+                    p_err(range, e, "Day")
+                })?;
                 if day == 0 {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_range(),
-                        "DAY in DATE '{}' cannot be zero",
-                        value
-                    );
+                    return parser_err!(self, range, "DAY in DATE '{}' cannot be zero", value);
                 }
                 Ok(Value::Date(
                     value,
@@ -586,7 +580,7 @@ impl Parser {
             (_, _, _) => {
                 return parser_err!(
                     self,
-                    self.peek_prev_range(),
+                    range,
                     "YEAR, MONTH, DAY are all required for DATE, got: '{}'",
                     value
                 );
@@ -612,7 +606,8 @@ impl Parser {
         use std::convert::TryInto;
 
         let value = self.parse_literal_string()?;
-        let pdt = self.parse_timestamp_string(&value, parse_timezone)?;
+        let range = self.peek_prev_range();
+        let pdt = self.parse_timestamp_string(&value, range.clone(), parse_timezone)?;
 
         match (
             pdt.year,
@@ -624,28 +619,33 @@ impl Parser {
             pdt.timezone_offset_second,
         ) {
             (Some(year), Some(month), Some(day), hour, minute, second, timezone_offset_second) => {
-                let p_err = |e: std::num::TryFromIntError, field: &str| {
-                    self.error(
-                        self.peek_prev_range(),
-                        format!("{} in date '{}' is invalid: {}", field, value, e),
-                    )
+                let p_err = {
+                    |range: Range<usize>, e: std::num::TryFromIntError, field: &str| {
+                        self.error(
+                            range,
+                            format!("{} in date '{}' is invalid: {}", field, value, e),
+                        )
+                    }
                 };
 
                 if month.unit > 12 || month.unit <= 0 {
                     return parser_err!(
                         self,
-                        self.peek_prev_range(),
+                        range,
                         "Month in date '{}' must be a number between 1 and 12, got: {}",
                         value,
                         month.unit
                     );
                 }
                 let month: u8 = month.unit.try_into().expect("invalid month");
-                let day: u8 = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
+                let day: u8 = day.unit.try_into().map_err(|e| {
+                    let range = range.clone();
+                    p_err(range, e, "Day")
+                })?;
                 if day == 0 {
                     return parser_err!(
                         self,
-                        self.peek_prev_range(),
+                        range,
                         "Day in timestamp '{}' cannot be zero: {}",
                         value,
                         day
@@ -654,11 +654,14 @@ impl Parser {
 
                 let hour = match hour {
                     Some(hour) => {
-                        let hour: u8 = hour.unit.try_into().map_err(|e| p_err(e, "Hour"))?;
+                        let hour: u8 = hour.unit.try_into().map_err({
+                            let range = range.clone();
+                            |e| p_err(range, e, "Hour")
+                        })?;
                         if hour > 23 {
                             return parser_err!(
                                 self,
-                                self.peek_prev_range(),
+                                range,
                                 "Hour in timestamp '{}' cannot be > 23: {}",
                                 value,
                                 hour
@@ -671,11 +674,14 @@ impl Parser {
 
                 let minute = match minute {
                     Some(minute) => {
-                        let minute: u8 = minute.unit.try_into().map_err(|e| p_err(e, "Minute"))?;
+                        let minute: u8 = minute.unit.try_into().map_err({
+                            let range = range.clone();
+                            |e| p_err(range, e, "Minute")
+                        })?;
                         if minute > 59 {
                             return parser_err!(
                                 self,
-                                self.peek_prev_range(),
+                                range,
                                 "Minute in timestamp '{}' cannot be > 59: {}",
                                 value,
                                 minute
@@ -688,15 +694,18 @@ impl Parser {
 
                 let (second, nano) = match second {
                     Some(second) => {
-                        let nano: u32 = second
-                            .fraction
-                            .try_into()
-                            .map_err(|e| p_err(e, "Nanosecond"))?;
-                        let second: u8 = second.unit.try_into().map_err(|e| p_err(e, "Minute"))?;
+                        let nano: u32 = second.fraction.try_into().map_err({
+                            let range = range.clone();
+                            |e| p_err(range, e, "Nanosecond")
+                        })?;
+                        let second: u8 = second.unit.try_into().map_err({
+                            let range = range.clone();
+                            |e| p_err(range, e, "Minute")
+                        })?;
                         if second > 60 {
                             return parser_err!(
                                 self,
-                                self.peek_prev_range(),
+                                range,
                                 "Second in timestamp '{}' cannot be > 60: {}",
                                 value,
                                 second
@@ -739,7 +748,7 @@ impl Parser {
                 ))
             }
             _ => Err(self.error(
-                self.peek_prev_range(),
+                range,
                 format!(
                     "timestamp is missing fields, year through day are all required, got: '{}'",
                     value
@@ -762,6 +771,7 @@ impl Parser {
         // The first token in an interval is a string literal which specifies
         // the duration of the interval.
         let raw_value = self.parse_literal_string()?;
+        let raw_range = self.peek_prev_range();
 
         // Determine the range of TimeUnits , whether explicit (`INTERVAL ... DAY TO MINUTE`) or
         // implicit (in which all date fields are eligible).
@@ -771,11 +781,13 @@ impl Parser {
                 "HOURS", "MINUTES", "SECONDS",
             ]) {
                 Ok(d) => {
+                    let d_range = self.peek_prev_range();
                     if self.parse_keyword("TO") {
                         let e = self.expect_one_of_keywords(&[
                             "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "YEARS", "MONTHS",
                             "DAYS", "HOURS", "MINUTES", "SECONDS",
                         ])?;
+                        let e_range = self.peek_prev_range();
 
                         let high = DateTimeField::from_str(d)
                             .map_err(|e| self.error(self.peek_prev_range(), e.to_string()))?;
@@ -788,7 +800,7 @@ impl Parser {
                         if high >= low {
                             return parser_err!(
                                 self,
-                                self.peek_prev_range(),
+                                d_range.start..e_range.end,
                                 "Invalid field range in INTERVAL '{}' {} TO {}; the value in the \
                                  position of {} should be more significant than {}.",
                                 raw_value,
@@ -825,7 +837,7 @@ impl Parser {
         // after determining the TimeUnit range so you can use `precision_low` in cases
         // where `raw_value` is ambiguous (e.g. `INTERVAL '1'`) to annotate the desired
         // TimeUnit (e.g. `INTERVAL '1' HOUR`).
-        let parsed = self.parse_interval_string(&raw_value, precision_low)?;
+        let parsed = self.parse_interval_string(&raw_value, raw_range, precision_low)?;
 
         Ok(Expr::Value(Value::Interval(IntervalValue {
             value: raw_value,
@@ -881,6 +893,7 @@ impl Parser {
             },
             _ => None,
         };
+        let op_range = self.peek_prev_range();
 
         if let Some(op) = regular_binary_operator {
             let any = self.parse_keyword("ANY");
@@ -890,7 +903,7 @@ impl Parser {
                 use BinaryOperator::*;
                 match op {
                     Eq | NotEq | Gt | GtEq | Lt | LtEq => (),
-                    _ => self.expected(self.peek_prev_range(), "comparison operator", Some(tok))?,
+                    _ => self.expected(op_range, "comparison operator", Some(tok))?,
                 }
                 self.expect_token(&Token::LParen)?;
                 let query = self.parse_query()?;
@@ -979,18 +992,15 @@ impl Parser {
     pub fn parse_interval_string(
         &self,
         value: &str,
+        range: Range<usize>,
         ambiguous_resolver: DateTimeField,
     ) -> Result<ParsedDateTime, ParserError> {
         if value.is_empty() {
-            return parser_err!(
-                self,
-                self.peek_prev_range(),
-                "Interval date string is empty!"
-            );
+            return parser_err!(self, range, "Interval date string is empty!");
         }
 
         datetime::build_parsed_datetime_interval(value, ambiguous_resolver)
-            .map_err(|e| self.error(self.peek_prev_range(), e))
+            .map_err(|e| self.error(range, e))
     }
 
     /// parse
@@ -1009,23 +1019,27 @@ impl Parser {
     pub fn parse_timestamp_string(
         &self,
         value: &str,
+        range: Range<usize>,
         parse_timezone: bool,
     ) -> Result<ParsedDateTime, ParserError> {
         if value.is_empty() {
-            return parser_err!(self, self.peek_prev_range(), "Timestamp string is empty!");
+            return parser_err!(self, range, "Timestamp string is empty!");
         }
 
         let (ts_string, tz_string) = datetime::split_timestamp_string(value);
 
-        let mut pdt = datetime::build_parsed_datetime_timestamp(ts_string)
-            .map_err(|e| self.error(self.peek_prev_range(), e))?;
+        let mut pdt = datetime::build_parsed_datetime_timestamp(ts_string).map_err({
+            let range = range.clone();
+            |e| self.error(range, e)
+        })?;
         if !parse_timezone || tz_string.is_empty() {
             return Ok(pdt);
         }
-        pdt.timezone_offset_second = Some(
-            datetime::parse_timezone_offset_second(tz_string)
-                .map_err(|e| self.error(self.peek_prev_range(), e))?,
-        );
+        pdt.timezone_offset_second =
+            Some(datetime::parse_timezone_offset_second(tz_string).map_err({
+                let range = range.clone();
+                |e| self.error(range, e)
+            })?);
         Ok(pdt)
     }
 
@@ -1497,11 +1511,13 @@ impl Parser {
         let if_exists = self.parse_keywords(vec!["IF", "EXISTS"]);
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = self.parse_keyword("CASCADE");
+        let cascade_range = self.peek_prev_range();
         let restrict = self.parse_keyword("RESTRICT");
+        let restrict_range = self.peek_prev_range();
         if cascade && restrict {
             return parser_err!(
                 self,
-                self.peek_prev_range(),
+                cascade_range.start..restrict_range.end,
                 "Cannot specify both CASCADE and RESTRICT in DROP"
             );
         }
@@ -2204,11 +2220,13 @@ impl Parser {
     /// assuming the initial `SELECT` was already consumed
     pub fn parse_select(&mut self) -> Result<Select, ParserError> {
         let all = self.parse_keyword("ALL");
+        let all_range = self.peek_prev_range();
         let distinct = self.parse_keyword("DISTINCT");
+        let distinct_range = self.peek_prev_range();
         if all && distinct {
             return parser_err!(
                 self,
-                self.peek_prev_range(),
+                all_range.start..distinct_range.end,
                 "Cannot specify both ALL and DISTINCT in SELECT"
             );
         }

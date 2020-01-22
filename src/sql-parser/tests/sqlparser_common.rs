@@ -91,7 +91,12 @@ fn parse_insert_invalid() {
     let sql = "INSERT public.customer (id, name, active) VALUES (1, 2, 3)";
     let res = parse_sql_statements(sql);
     assert_eq!(
-        ("Expected INTO, found: public".to_string()),
+        ("\
+Parse error:
+INSERT public.customer (id, name, active) VALUES (1, 2, 3)
+       ^^^^^^
+Expected INTO, found: public"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -134,14 +139,24 @@ fn parse_update() {
     let sql = "UPDATE t WHERE 1";
     let res = parse_sql_statements(sql);
     assert_eq!(
-        ("Expected SET, found: WHERE".to_string()),
+        ("\
+Parse error:
+UPDATE t WHERE 1
+         ^^^^^
+Expected SET, found: WHERE"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let sql = "UPDATE t SET a = 1 extrabadstuff";
     let res = parse_sql_statements(sql);
     assert_eq!(
-        ("Expected end of statement, found: extrabadstuff".to_string()),
+        ("\
+Parse error:
+UPDATE t SET a = 1 extrabadstuff
+                   ^^^^^^^^^^^^^
+Expected end of statement, found: extrabadstuff"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -246,7 +261,12 @@ fn parse_select_all() {
 fn parse_select_all_distinct() {
     let result = parse_sql_statements("SELECT ALL DISTINCT name FROM customer");
     assert_eq!(
-        "Cannot specify both ALL and DISTINCT in SELECT".to_string(),
+        "\
+Parse error:
+SELECT ALL DISTINCT name FROM customer
+       ^^^^^^^^^^^^
+Cannot specify both ALL and DISTINCT in SELECT"
+            .to_string(),
         format!("{}", result.unwrap_err()),
     );
 }
@@ -320,13 +340,23 @@ fn parse_concat_function() {
 fn test_eof_after_as() {
     let res = parse_sql_statements("SELECT foo AS");
     assert_eq!(
-        ("Expected an identifier after AS, found: EOF".to_string()),
+        ("\
+Parse error:
+SELECT foo AS
+             ^
+Expected an identifier after AS, found: EOF"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("SELECT 1 FROM foo AS");
     assert_eq!(
-        ("Expected an identifier after AS, found: EOF".to_string()),
+        ("\
+Parse error:
+SELECT 1 FROM foo AS
+                    ^
+Expected an identifier after AS, found: EOF"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -371,7 +401,12 @@ fn parse_select_count_distinct() {
     let sql = "SELECT COUNT(ALL DISTINCT + x) FROM customer";
     let res = parse_sql_statements(sql);
     assert_eq!(
-        ("Cannot specify both ALL and DISTINCT in function: COUNT".to_string()),
+        ("\
+Parse error:
+SELECT COUNT(ALL DISTINCT + x) FROM customer
+             ^^^^^^^^^^^^
+Cannot specify both ALL and DISTINCT in function: COUNT"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -393,21 +428,47 @@ fn parse_parameters() {
         verified_expr("$91 + $42"),
     );
 
+    let res = parse_sql_statements("SELECT $");
+    assert_eq!(
+        "\
+Parse error:
+SELECT $
+       ^
+parameter marker ($) was not followed by at least one digit"
+            .to_string(),
+        format!("{}", res.unwrap_err())
+    );
+
     let res = parse_sql_statements("SELECT $q");
     assert_eq!(
-        "parameter marker ($) was not followed by at least one digit".to_string(),
+        "\
+Parse error:
+SELECT $q
+       ^^
+parameter marker ($) was not followed by at least one digit"
+            .to_string(),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("SELECT $1$2");
     assert_eq!(
-        "Expected end of statement, found: $2".to_string(),
+        "\
+Parse error:
+SELECT $1$2
+         ^^
+Expected end of statement, found: $2"
+            .to_string(),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("SELECT $18446744073709551616");
     assert_eq!(
-        "unable to parse parameter: number too large to fit in target type".to_string(),
+        "\
+Parse error:
+SELECT $18446744073709551616
+       ^^^^^^^^^^^^^^^^^^^^^
+unable to parse parameter: number too large to fit in target type"
+            .to_string(),
         format!("{}", res.unwrap_err())
     );
 }
@@ -423,7 +484,12 @@ fn parse_not() {
 fn parse_invalid_infix_not() {
     let res = parse_sql_statements("SELECT c FROM t WHERE c NOT (");
     assert_eq!(
-        ("Expected end of statement, found: NOT".to_string()),
+        ("\
+Parse error:
+SELECT c FROM t WHERE c NOT (
+                        ^^^
+Expected end of statement, found: NOT"
+            .to_string()),
         format!("{}", res.unwrap_err(),)
     );
 }
@@ -977,7 +1043,12 @@ fn parse_extract() {
 
     let res = parse_sql_statements("SELECT EXTRACT(MILLISECOND FROM d)");
     assert_eq!(
-        ("Expected valid extract field, found: MILLISECOND".to_string()),
+        ("\
+Parse error:
+SELECT EXTRACT(MILLISECOND FROM d)
+               ^^^^^^^^^^^
+Expected valid extract field, found: MILLISECOND"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -1157,13 +1228,23 @@ fn parse_alter_table_constraints() {
 fn parse_bad_constraint() {
     let res = parse_sql_statements("ALTER TABLE tab ADD");
     assert_eq!(
-        ("Expected a constraint in ALTER TABLE .. ADD, found: EOF".to_string()),
+        ("\
+Parse error:
+ALTER TABLE tab ADD
+                   ^
+Expected a constraint in ALTER TABLE .. ADD, found: EOF"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("CREATE TABLE tab (foo int,");
     assert_eq!(
-        ("Expected column name or constraint definition, found: EOF".to_string()),
+        ("\
+Parse error:
+CREATE TABLE tab (foo int,
+                          ^
+Expected column name or constraint definition, found: EOF"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -1289,30 +1370,50 @@ fn parse_literal_date() {
     );
 
     assert_eq!(
-        "YEAR in DATE \'0-00-00\' cannot be zero.".to_string(),
+        "\
+Parse error:
+SELECT DATE '0-00-00'
+            ^^^^^^^^^
+YEAR in DATE \'0-00-00\' cannot be zero."
+            .to_string(),
         parse_sql_statements("SELECT DATE '0-00-00'")
             .unwrap_err()
             .to_string(),
     );
 
     assert_eq!(
-        ("MONTH in DATE \'1-00-00\' must be a number between 1 and 12, got: 0".to_string()),
+        ("\
+Parse error:
+SELECT DATE '1-00-00'
+            ^^^^^^^^^
+MONTH in DATE \'1-00-00\' must be a number between 1 and 12, got: 0"
+            .to_string()),
         parse_sql_statements("SELECT DATE '1-00-00'")
             .unwrap_err()
             .to_string(),
     );
     assert_eq!(
-        ("DAY in DATE \'1-01-00\' cannot be zero".to_string()),
+        ("\
+Parse error:
+SELECT DATE '1-01-00'
+            ^^^^^^^^^
+DAY in DATE \'1-01-00\' cannot be zero"
+            .to_string()),
         parse_sql_statements("SELECT DATE '1-01-00'")
             .unwrap_err()
             .to_string(),
     );
 
     assert_eq!(
-        (
-            "Invalid DATE/TIME \'-1-01-01\'; Invalid syntax at offset 5: provided Dash but expected None".to_string()
-        ),
-        parse_sql_statements("SELECT DATE '-1-01-01'").unwrap_err().to_string(),
+        ("\
+Parse error:
+SELECT DATE '-1-01-01'
+            ^^^^^^^^^^
+Invalid DATE/TIME \'-1-01-01\'; Invalid syntax at offset 5: provided Dash but expected None"
+            .to_string()),
+        parse_sql_statements("SELECT DATE '-1-01-01'")
+            .unwrap_err()
+            .to_string(),
     );
 }
 
@@ -1793,7 +1894,13 @@ fn parse_literal_interval_with_fsec_max_precision() {
         Interval {
             ..Default::default()
         },
-        Some("Expected end of statement, found: ("),
+        Some(
+            "\
+Parse error:
+SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)
+                                  ^
+Expected end of statement, found: (",
+        ),
     );
 
     // Only supports precision for trailing second.
@@ -1805,7 +1912,13 @@ fn parse_literal_interval_with_fsec_max_precision() {
         Interval {
             ..Default::default()
         },
-        Some("Expected ), found: ,"),
+        Some(
+            "\
+Parse error:
+SELECT INTERVAL '1' SECOND (5, 4)
+                             ^
+Expected ), found: ,",
+        ),
     );
 
     // Only supports precision for trailing second.
@@ -1817,7 +1930,13 @@ fn parse_literal_interval_with_fsec_max_precision() {
         Interval {
             ..Default::default()
         },
-        Some("Expected end of statement, found: SECOND"),
+        Some(
+            "\
+Parse error:
+SELECT INTERVAL '10' SECOND (1) TO SECOND
+                                   ^^^^^^
+Expected end of statement, found: SECOND",
+        ),
     );
 }
 
@@ -2019,26 +2138,43 @@ fn parse_literal_interval_full() {
 fn parse_literal_interval_error_messages() {
     let result = parse_sql_statements("SELECT INTERVAL '1' SECOND TO SECOND");
     assert_eq!(
-        ("Invalid field range in INTERVAL '1' SECOND TO SECOND; the value in the position \
+        ("\
+Parse error:
+SELECT INTERVAL '1' SECOND TO SECOND
+                    ^^^^^^^^^^^^^^^^
+Invalid field range in INTERVAL '1' SECOND TO SECOND; the value in the position \
           of SECOND should be more significant than SECOND."
             .to_string()),
         format!("{}", result.unwrap_err()),
     );
     let result = parse_sql_statements("SELECT INTERVAL '1' MINUTE TO DAY");
     assert_eq!(
-        ("Invalid field range in INTERVAL '1' MINUTE TO DAY; the value in the position of \
+        ("\
+Parse error:
+SELECT INTERVAL '1' MINUTE TO DAY
+                    ^^^^^^^^^^^^^
+Invalid field range in INTERVAL '1' MINUTE TO DAY; the value in the position of \
           MINUTE should be more significant than DAY."
             .to_string()),
         format!("{}", result.unwrap_err()),
     );
     let result = parse_sql_statements("SELECT INTERVAL '10' HOUR (1) TO HOUR (2)");
     assert_eq!(
-        ("Expected end of statement, found: (".to_string()),
+        ("\
+Parse error:
+SELECT INTERVAL '10' HOUR (1) TO HOUR (2)
+                          ^
+Expected end of statement, found: ("
+            .to_string()),
         format!("{}", result.unwrap_err()),
     );
     let result = parse_sql_statements("SELECT INTERVAL '1 1-1' DAY");
     assert_eq!(
-        ("Invalid INTERVAL '1 1-1': cannot determine format of all parts. Add explicit time \
+        ("\
+Parse error:
+SELECT INTERVAL '1 1-1' DAY
+                ^^^^^^^
+Invalid INTERVAL '1 1-1': cannot determine format of all parts. Add explicit time \
           components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY"
             .to_string()),
         format!("{}", result.unwrap_err())
@@ -2576,7 +2712,12 @@ fn parse_natural_join() {
 
     let sql = "SELECT * FROM t1 natural";
     assert_eq!(
-        ("Expected a join type after NATURAL, found: EOF".to_string()),
+        ("\
+Parse error:
+SELECT * FROM t1 natural
+                        ^
+Expected a join type after NATURAL, found: EOF"
+            .to_string()),
         parse_sql_statements(sql).unwrap_err().to_string(),
     );
 }
@@ -2647,7 +2788,12 @@ fn parse_join_nesting() {
 
     let res = parse_sql_statements("SELECT * FROM (a NATURAL JOIN (b))");
     assert_eq!(
-        ("Expected joined table, found: )".to_string()),
+        ("\
+Parse error:
+SELECT * FROM (a NATURAL JOIN (b))
+                                ^
+Expected joined table, found: )"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -2673,7 +2819,12 @@ fn parse_join_syntax_variants() {
 
     let res = parse_sql_statements("SELECT * FROM a OUTER JOIN b ON 1");
     assert_eq!(
-        ("Expected LEFT, RIGHT, or FULL, found: OUTER".to_string()),
+        ("\
+Parse error:
+SELECT * FROM a OUTER JOIN b ON 1
+                ^^^^^
+Expected LEFT, RIGHT, or FULL, found: OUTER"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -2794,7 +2945,12 @@ fn parse_derived_tables() {
 
     let res = parse_sql_statements("SELECT * FROM ((SELECT 1) AS t)");
     assert_eq!(
-        ("Expected joined table, found: )".to_string()),
+        ("\
+Parse error:
+SELECT * FROM ((SELECT 1) AS t)
+                              ^
+Expected joined table, found: )"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -2842,10 +2998,8 @@ fn parse_multiple_statements() {
         one_statement_parses_to(&(sql1.to_owned() + ";"), sql1);
         // Check that forgetting the semicolon results in an error:
         let res = parse_sql_statements(&(sql1.to_owned() + " " + sql2_kw + sql2_rest));
-        assert_eq!(
-            ("Expected end of statement, found: ".to_string() + sql2_kw),
-            format!("{}", res.unwrap_err())
-        );
+        assert!(format!("{}", res.unwrap_err())
+            .contains(&format!("Expected end of statement, found: {}", sql2_kw)));
     }
     test_with("SELECT foo", "SELECT", " bar");
     // ensure that SELECT/WITH is not parsed as a table or column alias if ';'
@@ -2900,26 +3054,46 @@ fn parse_any_some_all() {
 
     let res = parse_sql_statements("SELECT 1 WHERE 1 < ANY SELECT 2");
     assert_eq!(
-        ("Expected (, found: SELECT".to_string()),
+        ("\
+Parse error:
+SELECT 1 WHERE 1 < ANY SELECT 2
+                       ^^^^^^
+Expected (, found: SELECT"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("SELECT 1 WHERE 1 < NONE (SELECT 2)");
     assert_eq!(
         // TODO this is a pretty unhelpful error - it started parsing "NONE (SELECT" as applying the function NONE to the argument SELECT
-        ("Expected ), found: 2".to_string()),
+        ("\
+Parse error:
+SELECT 1 WHERE 1 < NONE (SELECT 2)
+                                ^
+Expected ), found: 2"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("SELECT 1 WHERE 1 < ANY (SELECT 2");
     assert_eq!(
-        ("Expected ), found: EOF".to_string()),
+        ("\
+Parse error:
+SELECT 1 WHERE 1 < ANY (SELECT 2
+                                ^
+Expected ), found: EOF"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("SELECT 1 WHERE 1 + ANY (SELECT 2)");
     assert_eq!(
-        ("Expected comparison operator, found: +".to_string()),
+        ("\
+Parse error:
+SELECT 1 WHERE 1 + ANY (SELECT 2)
+                 ^
+Expected comparison operator, found: +"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -2949,13 +3123,23 @@ fn parse_exists_subquery() {
 
     let res = parse_sql_statements("SELECT EXISTS (");
     assert_eq!(
-        ("Expected SELECT, VALUES, or a subquery in the query body, found: EOF".to_string()),
+        ("\
+Parse error:
+SELECT EXISTS (
+               ^
+Expected SELECT, VALUES, or a subquery in the query body, found: EOF"
+            .to_string()),
         format!("{}", res.unwrap_err().to_string(),)
     );
 
     let res = parse_sql_statements("SELECT EXISTS (NULL)");
     assert_eq!(
-        ("Expected SELECT, VALUES, or a subquery in the query body, found: NULL".to_string()),
+        ("\
+Parse error:
+SELECT EXISTS (NULL)
+               ^^^^
+Expected SELECT, VALUES, or a subquery in the query body, found: NULL"
+            .to_string()),
         format!("{}", res.unwrap_err().to_string(),)
     );
 }
@@ -3282,7 +3466,12 @@ fn parse_invalid_create_index() {
     // Index names should not have a schema in front of it
     let res = parse_sql_statements("CREATE INDEX myschema.ind ON foo(b)");
     assert_eq!(
-        ("Expected ON, found: .".to_string()),
+        ("\
+Parse error:
+CREATE INDEX myschema.ind ON foo(b)
+                     ^
+Expected ON, found: ."
+            .to_string()),
         format!("{}", res.unwrap_err().to_string(),)
     );
 }
@@ -3329,13 +3518,23 @@ fn parse_drop_table() {
 
     let sql = "DROP TABLE";
     assert_eq!(
-        ("Expected identifier, found: EOF".to_string()),
+        ("\
+Parse error:
+DROP TABLE
+          ^
+Expected identifier, found: EOF"
+            .to_string()),
         parse_sql_statements(sql).unwrap_err().to_string(),
     );
 
     let sql = "DROP TABLE IF EXISTS foo, bar CASCADE RESTRICT";
     assert_eq!(
-        ("Cannot specify both CASCADE and RESTRICT in DROP".to_string()),
+        ("\
+Parse error:
+DROP TABLE IF EXISTS foo, bar CASCADE RESTRICT
+                              ^^^^^^^^^^^^^^^^
+Cannot specify both CASCADE and RESTRICT in DROP"
+            .to_string()),
         parse_sql_statements(sql).unwrap_err().to_string(),
     );
 }
@@ -3437,7 +3636,12 @@ fn parse_tail() {
 fn parse_invalid_subquery_without_parens() {
     let res = parse_sql_statements("SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz");
     assert_eq!(
-        ("Expected end of statement, found: 1".to_string()),
+        ("\
+Parse error:
+SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
+              ^
+Expected end of statement, found: 1"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -3647,14 +3851,24 @@ fn lateral_derived() {
     let sql = "SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id)";
     let res = parse_sql_statements(sql);
     assert_eq!(
-        ("Expected subquery after LATERAL, found: generate_series".to_string()),
+        ("\
+Parse error:
+SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id)
+                                         ^^^^^^^^^^^^^^^
+Expected subquery after LATERAL, found: generate_series"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let sql = "SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)";
     let res = parse_sql_statements(sql);
     assert_eq!(
-        ("Expected SELECT, VALUES, or a subquery in the query body, found: b".to_string()),
+        ("\
+Parse error:
+SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
+                                   ^
+Expected SELECT, VALUES, or a subquery in the query body, found: b"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -3702,19 +3916,34 @@ fn parse_start_transaction() {
 
     let res = parse_sql_statements("START TRANSACTION ISOLATION LEVEL BAD");
     assert_eq!(
-        ("Expected isolation level, found: BAD".to_string()),
+        ("\
+Parse error:
+START TRANSACTION ISOLATION LEVEL BAD
+                                  ^^^
+Expected isolation level, found: BAD"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("START TRANSACTION BAD");
     assert_eq!(
-        ("Expected transaction mode, found: BAD".to_string()),
+        ("\
+Parse error:
+START TRANSACTION BAD
+                  ^^^
+Expected transaction mode, found: BAD"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 
     let res = parse_sql_statements("START TRANSACTION READ ONLY,");
     assert_eq!(
-        ("Expected transaction mode, found: EOF".to_string()),
+        ("\
+Parse error:
+START TRANSACTION READ ONLY,
+                            ^
+Expected transaction mode, found: EOF"
+            .to_string()),
         format!("{}", res.unwrap_err())
     );
 }
@@ -4182,17 +4411,32 @@ fn parse_set() {
 
     assert_eq!(
         parse_sql_statements("SET").unwrap_err().to_string(),
-        "Expected identifier, found: EOF".to_string(),
+        "\
+Parse error:
+SET
+   ^
+Expected identifier, found: EOF"
+            .to_string(),
     );
 
     assert_eq!(
         parse_sql_statements("SET a b").unwrap_err().to_string(),
-        "Expected equals sign or TO, found: b".to_string(),
+        "\
+Parse error:
+SET a b
+      ^
+Expected equals sign or TO, found: b"
+            .to_string(),
     );
 
     assert_eq!(
         parse_sql_statements("SET a =").unwrap_err().to_string(),
-        "Expected variable value, found: EOF".to_string(),
+        "\
+Parse error:
+SET a =
+       ^
+Expected variable value, found: EOF"
+            .to_string(),
     );
 }
 
