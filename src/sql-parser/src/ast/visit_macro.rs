@@ -374,9 +374,10 @@ macro_rules! make_visitor {
                 columns: &'ast $($mut)* [Ident],
                 query: &'ast $($mut)* Query,
                 materialized: bool,
+                replace: bool,
                 with_options: &'ast $($mut)* [SqlOption],
             ) {
-                visit_create_view(self, name, columns, query, materialized, with_options)
+                visit_create_view(self, name, columns, query, materialized, replace, with_options)
             }
 
             fn visit_create_index(
@@ -553,22 +554,12 @@ macro_rules! make_visitor {
 
             fn visit_rollback(&mut self, _chain: bool) {}
 
-            fn visit_peek(&mut self, name: &'ast $($mut)* ObjectName, immediate: bool) {
-                visit_peek(self, name, immediate)
-            }
-
             fn visit_tail(&mut self, name: &'ast $($mut)* ObjectName) {
                 visit_tail(self, name)
             }
 
             fn visit_explain(&mut self, stage: &'ast $($mut)* Stage, query: &'ast $($mut)* Query) {
                 visit_explain(self, stage, query)
-            }
-            fn visit_flush(&mut self, name: &'ast $($mut)* ObjectName) {
-                visit_flush(self, name)
-            }
-            fn visit_flush_all(&mut self) {
-                visit_flush_all(self)
             }
         }
 
@@ -617,8 +608,9 @@ macro_rules! make_visitor {
                     columns,
                     query,
                     materialized,
+                    replace,
                     with_options,
-                } => visitor.visit_create_view(name, columns, query, *materialized, with_options),
+                } => visitor.visit_create_view(name, columns, query, *materialized, *replace, with_options),
                 Statement::CreateIndex {
                     name,
                     on_name,
@@ -666,15 +658,10 @@ macro_rules! make_visitor {
                 Statement::SetTransaction { modes } => visitor.visit_set_transaction(modes),
                 Statement::Commit { chain } => visitor.visit_commit(*chain),
                 Statement::Rollback { chain } => visitor.visit_rollback(*chain),
-                Statement::Peek { name, immediate } => {
-                    visitor.visit_peek(name, *immediate);
-                }
                 Statement::Tail { name } => {
                     visitor.visit_tail(name);
                 }
                 Statement::Explain { stage, query } => visitor.visit_explain(stage, query),
-                Statement::FlushSource { name } => visitor.visit_flush(name),
-                Statement::FlushAllSources => visitor.visit_flush_all(),
             }
         }
 
@@ -1310,6 +1297,7 @@ macro_rules! make_visitor {
             columns: &'ast $($mut)* [Ident],
             query: &'ast $($mut)* Query,
             _materialized: bool,
+            _replace: bool,
             with_options: &'ast $($mut)* [SqlOption],
         ) {
             visitor.visit_object_name(name);
@@ -1623,14 +1611,6 @@ macro_rules! make_visitor {
             }
         }
 
-        pub fn visit_peek<'ast, V: $name<'ast> + ?Sized>(
-            visitor: &mut V,
-            name: &'ast $($mut)* ObjectName,
-            _immediate: bool,
-        ) {
-            visitor.visit_object_name(name);
-        }
-
         pub fn visit_tail<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, name: &'ast $($mut)* ObjectName) {
             visitor.visit_object_name(name);
         }
@@ -1638,12 +1618,6 @@ macro_rules! make_visitor {
         pub fn visit_explain<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, _stage: &'ast $($mut)* Stage, query: &'ast $($mut)* Query) {
             visitor.visit_query(query);
         }
-
-        pub fn visit_flush<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, name: &'ast $($mut)* ObjectName) {
-            visitor.visit_object_name(name);
-        }
-
-        pub fn visit_flush_all<'ast, V: $name<'ast> + ?Sized>(_visitor: &mut V) {}
     }
 }
 

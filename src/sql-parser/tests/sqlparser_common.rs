@@ -3153,14 +3153,25 @@ fn parse_create_view() {
             columns,
             query,
             materialized,
+            replace,
             with_options,
         } => {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
             assert_eq!("SELECT foo FROM bar", query.to_string());
             assert!(!materialized);
+            assert!(!replace);
             assert_eq!(with_options, vec![]);
         }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_or_replace_view() {
+    let sql = "CREATE OR REPLACE VIEW v AS SELECT 1";
+    match verified_stmt(sql) {
+        Statement::CreateView { replace, .. } => assert!(replace),
         _ => unreachable!(),
     }
 }
@@ -3198,12 +3209,14 @@ fn parse_create_view_with_columns() {
             with_options,
             query,
             materialized,
+            replace,
         } => {
             assert_eq!("v", name.to_string());
             assert_eq!(columns, vec![Ident::new("has"), Ident::new("cols")]);
             assert_eq!(with_options, vec![]);
             assert_eq!("SELECT 1, 2", query.to_string());
             assert!(!materialized);
+            assert!(!replace);
         }
         _ => unreachable!(),
     }
@@ -3218,12 +3231,14 @@ fn parse_create_materialized_view() {
             columns,
             query,
             materialized,
+            replace,
             with_options,
         } => {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
             assert_eq!("SELECT foo FROM bar", query.to_string());
             assert!(materialized);
+            assert!(!replace);
             assert_eq!(with_options, vec![]);
         }
         _ => unreachable!(),
@@ -3595,27 +3610,6 @@ fn parse_drop_index() {
             );
             assert_eq!(false, cascade);
             assert_eq!(ObjectType::Index, object_type);
-        }
-        _ => unreachable!(),
-    }
-}
-
-#[test]
-fn parse_peek() {
-    let sql = "PEEK foo.bar";
-    match verified_stmt(sql) {
-        Statement::Peek { name, immediate } => {
-            assert_eq!("foo.bar", name.to_string());
-            assert!(!immediate);
-        }
-        _ => unreachable!(),
-    }
-
-    let sql = "PEEK IMMEDIATE foo.bar";
-    match verified_stmt(sql) {
-        Statement::Peek { name, immediate } => {
-            assert_eq!("foo.bar", name.to_string());
-            assert!(immediate);
         }
         _ => unreachable!(),
     }
@@ -4025,20 +4019,6 @@ fn parse_explain() {
         Statement::Explain {
             stage: Stage::Plan,
             query: Box::new(verified_query("SELECT 665")),
-        }
-    );
-}
-
-#[test]
-fn parse_flush() {
-    let ast = verified_stmt("FLUSH ALL SOURCES");
-    assert_eq!(ast, Statement::FlushAllSources,);
-
-    let ast = verified_stmt("FLUSH SOURCE foo");
-    assert_eq!(
-        ast,
-        Statement::FlushSource {
-            name: ObjectName(vec![Ident::new("foo")])
         }
     );
 }

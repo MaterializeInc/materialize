@@ -76,7 +76,7 @@ $ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=2
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names JOIN mods USING (num);
 
-> PEEK test1;
+> SELECT * FROM test1;
 num name mod
 ------------
 1 one odd
@@ -85,7 +85,7 @@ num name mod
 > CREATE MATERIALIZED VIEW test2 AS
   SELECT * FROM names JOIN mods ON names.num = mods.num;
 
-> PEEK test2;
+> SELECT * FROM test2;
 num name num mod
 ----------------
 1 one 1 odd
@@ -94,7 +94,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test3 AS
   SELECT * FROM names, mods WHERE names.num = mods.num;
 
-> PEEK test3;
+> SELECT * FROM test3;
 num name num mod
 ----------------
 1 one 1 odd
@@ -103,7 +103,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test4 AS
   SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even';
 
-> PEEK test4;
+> SELECT * FROM test4;
 num name num mod
 ----------------
 2 two 2 even
@@ -111,7 +111,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test5 AS
   SELECT * FROM names LEFT JOIN mods ON names.num = mods.num;
 
-> PEEK test5;
+> SELECT * FROM test5;
 num name num mod
 ----------------
 1 one 1 odd
@@ -121,7 +121,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test6 AS
   SELECT * FROM names RIGHT JOIN mods ON names.num = mods.num;
 
-> PEEK test6;
+> SELECT * FROM test6;
 num name num mod
 ----------------
 <null> <null> 0 even
@@ -131,7 +131,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test7 AS
   SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even';
 
-> PEEK test7;
+> SELECT * FROM test7;
 num name num mod
 ----------------
 2 two 2 even
@@ -139,7 +139,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test8 AS
   SELECT mods.* FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even';
 
-> PEEK test8;
+> SELECT * FROM test8;
 num mod
 -------
 2 even
@@ -148,7 +148,7 @@ num mod
   SELECT foo.mod, foo.num, bar.name FROM names as bar, mods as foo
   WHERE bar.num = foo.num AND foo.mod = 'even';
 
-> PEEK test9;
+> SELECT * FROM test9;
 mod num name
 ------------
 even 2 two
@@ -156,7 +156,7 @@ even 2 two
 > CREATE MATERIALIZED VIEW test10 AS
   SELECT * FROM names, mods;
 
-> PEEK test10;
+> SELECT * FROM test10;
 num name num mod
 ----------------
 1 one 0 even
@@ -172,7 +172,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test11 AS
   SELECT * FROM names CROSS JOIN mods;
 
-> PEEK test11;
+> SELECT * FROM test11;
 num name num mod
 ----------------
 1 one 0 even
@@ -188,7 +188,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test12 AS
   SELECT * FROM names LEFT JOIN mods ON 1 = 0;
 
-> PEEK test12;
+> SELECT * FROM test12;
 num name num mod
 ----------------
 1 one <null> <null>
@@ -198,7 +198,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test13 AS
   SELECT * FROM names RIGHT JOIN mods ON 1 = 0;
 
-> PEEK test13;
+> SELECT * FROM test13;
 num name num mod
 ----------------
 <null> <null> 0 even
@@ -208,7 +208,7 @@ num name num mod
 > CREATE MATERIALIZED VIEW test14 AS
   SELECT * FROM names FULL OUTER JOIN mods ON 1 = 0;
 
-> PEEK test14;
+> SELECT * FROM test14;
 num name num mod
 ----------------
 1 one <null> <null>

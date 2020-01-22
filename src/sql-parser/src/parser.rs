@@ -176,15 +176,10 @@ impl Parser {
                     "BEGIN" => Ok(self.parse_begin()?),
                     "COMMIT" => Ok(self.parse_commit()?),
                     "ROLLBACK" => Ok(self.parse_rollback()?),
-                    "PEEK" => Ok(Statement::Peek {
-                        immediate: self.parse_keyword("IMMEDIATE"),
-                        name: self.parse_object_name()?,
-                    }),
                     "TAIL" => Ok(Statement::Tail {
                         name: self.parse_object_name()?,
                     }),
                     "EXPLAIN" => Ok(self.parse_explain()?),
-                    "FLUSH" => Ok(self.parse_flush()?),
                     _ => parser_err!(
                         self,
                         self.peek_prev_range(),
@@ -1372,7 +1367,10 @@ impl Parser {
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parse_keyword("TABLE") {
             self.parse_create_table()
-        } else if self.parse_keyword("MATERIALIZED") || self.parse_keyword("VIEW") {
+        } else if self.parse_keyword("MATERIALIZED")
+            || self.parse_keyword("OR")
+            || self.parse_keyword("VIEW")
+        {
             self.prev_token();
             self.parse_create_view()
         } else if self.parse_keyword("SOURCE") {
@@ -1455,6 +1453,12 @@ impl Parser {
     }
 
     pub fn parse_create_view(&mut self) -> Result<Statement, ParserError> {
+        let replace = if self.parse_keyword("OR") {
+            self.expect_keyword("REPLACE")?;
+            true
+        } else {
+            false
+        };
         let materialized = self.parse_keyword("MATERIALIZED");
         self.expect_keyword("VIEW")?;
         // Many dialects support `OR REPLACE` | `OR ALTER` right after `CREATE`, but we don't (yet).
@@ -1470,6 +1474,7 @@ impl Parser {
             columns,
             query,
             materialized,
+            replace,
             with_options,
         })
     }
@@ -2816,27 +2821,6 @@ impl Parser {
             stage,
             query: Box::new(self.parse_query()?),
         })
-    }
-
-    /// Parse a statement like `FLUSH SOURCE foo` or `FLUSH ALL SOURCES`,
-    /// assuming that the `FLUSH` token has already been consumed.
-    ///
-    /// This causes the source (or sources) to downgrade their capability(-ies),
-    /// promising not to send any new data for the current timestamp
-    pub fn parse_flush(&mut self) -> Result<Statement, ParserError> {
-        if self.parse_keywords(vec!["ALL", "SOURCES"]) {
-            Ok(Statement::FlushAllSources)
-        } else if self.parse_keyword("SOURCE") {
-            Ok(Statement::FlushSource {
-                name: self.parse_object_name()?,
-            })
-        } else {
-            self.expected(
-                self.peek_range(),
-                "ALL SOURCES or SOURCE",
-                self.peek_token(),
-            )?
-        }
     }
 }
 

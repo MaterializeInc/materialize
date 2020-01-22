@@ -8,12 +8,12 @@ pygmentsStyle = "xcode"
     [[menu.main]]
     identifier = "overview"
     name = "Overview"
-    weight = 1
+    weight = 10
 
     [[menu.main]]
     identifier = "sql"
     name = "SQL"
-    weight = 2
+    weight = 20
 
     [[menu.main]]
     identifier = "sql-types"
@@ -28,3 +28,8 @@ pygmentsStyle = "xcode"
     url = "/docs/sql/functions/"
     weight = 2
     parent = "sql"
+
+    [[menu.main]]
+    identifier = "demos"
+    name = "Demos"
+    weight = 30

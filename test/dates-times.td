@@ -53,7 +53,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 
 > CREATE VIEW data_view as SELECT * from data
 
-> PEEK data_view
+> SELECT * FROM data_view
 2019-08-27 "2019-08-27 00:17:09.000877"
 1970-01-01 "1970-01-01 00:01:05"
 

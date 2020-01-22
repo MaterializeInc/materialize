@@ -47,6 +47,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 
 > CREATE VIEW data_view as SELECT * from data
 
-> PEEK data_view
+> SELECT * FROM data_view
 17.94
 -0.70

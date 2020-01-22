@@ -39,7 +39,7 @@ use dataflow_types::{
     DataflowDesc, IndexDesc, PeekResponse, PeekWhen, Sink, SinkConnector, TailSinkConnector,
     Timestamp, Update, View,
 };
-use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr};
+use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr};
 use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
@@ -140,9 +140,11 @@ where
                             CatalogItem::View(View {
                                 raw_sql: "<system log>".to_string(),
                                 // Dummy placeholder
-                                relation_expr: RelationExpr::constant(
-                                    vec![vec![]],
-                                    log.schema().typ().clone(),
+                                relation_expr: OptimizedRelationExpr::declare_optimized(
+                                    RelationExpr::constant(
+                                        vec![vec![]],
+                                        log.schema().typ().clone(),
+                                    ),
                                 ),
                                 eval_env: EvalEnv::default(),
                                 desc: log.schema(),
@@ -414,7 +416,9 @@ where
             Plan::CreateTable { name, desc } => {
                 let view = View {
                     raw_sql: "<created by CREATE TABLE>".to_string(),
-                    relation_expr: RelationExpr::constant(vec![vec![]], desc.typ().clone()),
+                    relation_expr: OptimizedRelationExpr::declare_optimized(
+                        RelationExpr::constant(vec![vec![]], desc.typ().clone()),
+                    ),
                     eval_env: EvalEnv::default(),
                     desc,
                 };
@@ -470,7 +474,14 @@ where
                 ExecuteResponse::CreatedSink
             }
 
-            Plan::CreateView(name, view) => {
+            Plan::CreateView {
+                name,
+                view,
+                replace,
+            } => {
+                let cascaded = true;
+                self.drop_items(&replace, cascaded);
+                let view = self.optimize_view(view);
                 let id = self.register_view(&name, &view)?;
                 self.create_materialized_view_dataflow(&name, id, view, None)?;
                 ExecuteResponse::CreatedView
@@ -483,52 +494,7 @@ where
             }
 
             Plan::DropItems(ids, item_type) => {
-                let mut sources_to_drop: Vec<GlobalId> = Vec::new();
-                let mut views_to_drop: Vec<GlobalId> = Vec::new();
-                let mut sinks_to_drop: Vec<GlobalId> = Vec::new();
-                let mut indexes_to_drop: Vec<GlobalId> = Vec::new();
-                // Sort ids to be dropped ~before~ removing them from the
-                // Coordinator's Catalog below.
-                for id in &ids {
-                    match self.catalog.get_by_id(id).item() {
-                        CatalogItem::Source(_s) => sources_to_drop.push(*id),
-                        CatalogItem::View(_v) => views_to_drop.push(*id),
-                        CatalogItem::Sink(_s) => sinks_to_drop.push(*id),
-                        CatalogItem::Index(_i) => indexes_to_drop.push(*id),
-                    }
-                }
-
-                for id in &ids {
-                    self.report_catalog_update(
-                        *id,
-                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
-                        false,
-                    );
-                    self.catalog.remove(*id);
-                }
-
-                if !sources_to_drop.is_empty() {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::DropSources(sources_to_drop),
-                    );
-                }
-
-                if !views_to_drop.is_empty() {
-                    self.drop_views(views_to_drop);
-                }
-
-                if !sinks_to_drop.is_empty() {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::DropSinks(sinks_to_drop),
-                    );
-                }
-
-                if !indexes_to_drop.is_empty() {
-                    self.drop_indexes(indexes_to_drop, item_type != ObjectType::Index);
-                }
-
+                self.drop_items(&ids, item_type != ObjectType::Index);
                 match item_type {
                     ObjectType::Source => ExecuteResponse::DroppedSource,
                     ObjectType::View => ExecuteResponse::DroppedView,
@@ -561,7 +527,7 @@ where
             }
 
             Plan::Peek {
-                mut source,
+                source,
                 when,
                 finishing,
                 mut eval_env,
@@ -570,17 +536,16 @@ where
                 let timestamp = self.determine_timestamp(&source, when)?;
                 eval_env.wall_time = Some(chrono::Utc::now());
                 eval_env.logical_time = Some(timestamp);
-                // TODO (wangandi): what do we do about this line when we start passing indexes
-                // to the optimizer?
-                // Related: Is there anything that optimizes to a constant expression that originally
-                // contains a global get? Is there anything not containing a global get that cannot be optimized to
-                // a constant expression?
-                self.optimize(&mut source, &eval_env);
+                // TODO (wangandi): Is there anything that optimizes to a
+                // constant expression that originally contains a global get? Is
+                // there anything not containing a global get that cannot be
+                // optimized to a constant expression?
+                let mut source = self.optimize(source, &eval_env);
 
                 // If this optimizes to a constant expression, we can immediately return the result.
-                if let RelationExpr::Constant { rows, typ: _ } = source {
+                if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
                     let mut results = Vec::new();
-                    for (row, count) in rows {
+                    for &(ref row, count) in rows {
                         assert!(
                             count >= 0,
                             "Negative multiplicity in constant result: {}",
@@ -604,21 +569,21 @@ where
                     // need to block on the arrival of further input data.
                     let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
-                    let (project, filter) = Self::plan_peek(&mut source);
+                    let (project, filter) = Self::plan_peek(source.as_mut());
 
                     let (fast_path, view_id) = if let RelationExpr::Get {
                         id: Id::Global(id),
                         typ: _,
-                    } = source
+                    } = source.as_ref()
                     {
-                        if self.upper_of(&id).is_some() {
-                            (true, id)
+                        if self.upper_of(id).is_some() {
+                            (true, *id)
                         } else if materialize {
                             (false, self.catalog.allocate_id())
                         } else {
                             bail!(
                                 "{} is not materialized",
-                                self.catalog.humanize_id(expr::Id::Global(id)).unwrap()
+                                self.catalog.humanize_id(expr::Id::Global(*id)).unwrap()
                             )
                         }
                     } else {
@@ -629,7 +594,7 @@ where
                         // Slow path. We need to perform some computation, so build
                         // a new transient dataflow that will be dropped after the
                         // peek completes.
-                        let typ = source.typ();
+                        let typ = source.as_ref().typ();
                         let ncols = typ.column_types.len();
                         // Cheat a little bit here to get a relation description. A
                         // relation description is just a relation type with column
@@ -734,10 +699,10 @@ where
 
             Plan::SendRows(rows) => send_immediate_rows(rows),
 
-            Plan::ExplainPlan(mut relation_expr, mut eval_env) => {
+            Plan::ExplainPlan(relation_expr, mut eval_env) => {
                 eval_env.wall_time = Some(chrono::Utc::now());
-                self.optimize(&mut relation_expr, &eval_env);
-                let pretty = relation_expr.pretty_humanized(&self.catalog);
+                let relation_expr = self.optimize(relation_expr, &eval_env);
+                let pretty = relation_expr.as_ref().pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
                 send_immediate_rows(rows)
             }
@@ -800,7 +765,7 @@ where
     fn register_view(
         &mut self,
         name: &FullName,
-        view: &dataflow_types::View,
+        view: &dataflow_types::View<OptimizedRelationExpr>,
     ) -> Result<GlobalId, failure::Error> {
         let id = self
             .catalog
@@ -854,7 +819,7 @@ where
                             *id,
                         );
                     } else {
-                        self.build_view_collection(id, &view, dataflow, false);
+                        self.build_view_collection(id, &view, dataflow);
                     }
                 }
                 _ => unreachable!(),
@@ -862,7 +827,7 @@ where
         }
     }
 
-    fn optimize(&mut self, expr: &mut RelationExpr, env: &EvalEnv) {
+    fn optimize(&mut self, expr: RelationExpr, env: &EvalEnv) -> OptimizedRelationExpr {
         let mut indexes = HashMap::new();
         expr.visit(&mut |e| {
             if let RelationExpr::Get {
@@ -877,18 +842,26 @@ where
                 }
             }
         });
-        self.optimizer.optimize(expr, &indexes, env);
+        self.optimizer.optimize(expr, &indexes, env)
+    }
+
+    fn optimize_view(&mut self, view: View<RelationExpr>) -> View<OptimizedRelationExpr> {
+        View {
+            raw_sql: view.raw_sql,
+            relation_expr: self.optimize(view.relation_expr, &view.eval_env),
+            desc: view.desc,
+            eval_env: view.eval_env,
+        }
     }
 
     fn build_view_collection(
         &mut self,
         view_id: &GlobalId,
-        view: &dataflow_types::View,
+        view: &dataflow_types::View<OptimizedRelationExpr>,
         dataflow: &mut DataflowDesc,
-        optimized: bool,
     ) {
-        let mut view_to_build = view.clone();
-        view_to_build.relation_expr.visit(&mut |e| {
+        let view_to_build = view.clone();
+        view_to_build.relation_expr.as_ref().visit(&mut |e| {
             if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
@@ -898,13 +871,8 @@ where
                 dataflow.add_dependency(*view_id, *id)
             }
         });
-        // optimize the view RelationExpr. If this is being called from the peek command,
-        // the RelationExpr has already been optimized.
-        if !optimized {
-            self.optimize(&mut view_to_build.relation_expr, &view_to_build.eval_env);
-        }
         // Collect sources, views, and indexes used.
-        view_to_build.relation_expr.visit(&mut |e| {
+        view_to_build.relation_expr.as_ref().visit(&mut |e| {
             if let RelationExpr::ArrangeBy { input, keys } = e {
                 if let RelationExpr::Get {
                     id: Id::Global(on_id),
@@ -951,12 +919,12 @@ where
         &mut self,
         view_name: &FullName,
         id: GlobalId,
-        view: dataflow_types::View,
+        view: dataflow_types::View<OptimizedRelationExpr>,
         as_of: Option<Vec<Timestamp>>,
     ) -> Result<(), failure::Error> {
         self.insert_view(id, &view, None);
         let mut dataflow = DataflowDesc::new(view_name.to_string());
-        self.build_view_collection(&id, &view, &mut dataflow, false);
+        self.build_view_collection(&id, &view, &mut dataflow);
         let mut index_name = view_name.clone();
         index_name.item += "_primary_idx";
         let index = view.auto_generate_primary_idx(id);
@@ -991,6 +959,54 @@ where
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
         );
+    }
+
+    fn drop_items(&mut self, ids: &[GlobalId], cascaded: bool) {
+        let mut sources_to_drop: Vec<GlobalId> = Vec::new();
+        let mut views_to_drop: Vec<GlobalId> = Vec::new();
+        let mut sinks_to_drop: Vec<GlobalId> = Vec::new();
+        let mut indexes_to_drop: Vec<GlobalId> = Vec::new();
+        // Sort ids to be dropped ~before~ removing them from the
+        // Coordinator's Catalog below.
+        for id in ids {
+            match self.catalog.get_by_id(id).item() {
+                CatalogItem::Source(_s) => sources_to_drop.push(*id),
+                CatalogItem::View(_v) => views_to_drop.push(*id),
+                CatalogItem::Sink(_s) => sinks_to_drop.push(*id),
+                CatalogItem::Index(_i) => indexes_to_drop.push(*id),
+            }
+        }
+
+        for id in ids {
+            self.report_catalog_update(
+                *id,
+                self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
+                false,
+            );
+            self.catalog.remove(*id);
+        }
+
+        if !sources_to_drop.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSources(sources_to_drop),
+            );
+        }
+
+        if !views_to_drop.is_empty() {
+            self.drop_views(views_to_drop);
+        }
+
+        if !sinks_to_drop.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSinks(sinks_to_drop),
+            );
+        }
+
+        if !indexes_to_drop.is_empty() {
+            self.drop_indexes(indexes_to_drop, cascaded);
+        }
     }
 
     pub fn drop_views(&mut self, views_names: Vec<GlobalId>) {
@@ -1155,7 +1171,7 @@ where
             // These two strategies vary in terms of which traces drive the
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
-            PeekWhen::EarliestSource | PeekWhen::Immediately => {
+            PeekWhen::Immediately => {
                 // Form lower bound on available times.
                 let mut upper = Antichain::new();
                 for id in uses_ids.iter() {
@@ -1314,14 +1330,14 @@ where
     fn insert_view(
         &mut self,
         view_id: GlobalId,
-        view: &dataflow_types::View,
+        view: &dataflow_types::View<OptimizedRelationExpr>,
         known_source_contain: Option<bool>,
     ) {
         let contains_sources = if let Some(contains_sources) = known_source_contain {
             contains_sources
         } else {
             let mut contains_sources = false;
-            view.relation_expr.visit(&mut |e| {
+            view.relation_expr.as_ref().visit(&mut |e| {
                 // Some `Get` expressions are for let bindings, and should not be loaded.
                 // We might want explicitly enumerate assets to import.
                 if let RelationExpr::Get {
@@ -1609,10 +1625,10 @@ impl Default for ViewState {
 
 impl ViewState {
     /// Creates view state from a view, and number of workers.
-    pub fn from_view(view: &View) -> Self {
+    pub fn from_view(view: &View<OptimizedRelationExpr>) -> Self {
         let mut view_state = Self::default();
         let mut out = Vec::new();
-        view.relation_expr.global_uses(&mut out);
+        view.relation_expr.as_ref().global_uses(&mut out);
         out.sort();
         out.dedup();
         view_state.uses = out;

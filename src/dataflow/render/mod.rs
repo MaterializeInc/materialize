@@ -175,18 +175,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
             for object in dataflow.objects_to_build.clone() {
                 if let Some(typ) = object.typ {
                     context.ensure_rendered(
-                        &object.relation_expr,
+                        object.relation_expr.as_ref(),
                         &object.eval_env,
                         region,
                         worker_index,
                     );
                     context.collections.insert(
                         RelationExpr::global_get(object.id, typ.clone()),
-                        context.collection(&object.relation_expr).unwrap(),
+                        context.collection(&object.relation_expr.as_ref()).unwrap(),
                     );
                 } else {
                     context.render_arranged(
-                        &object.relation_expr,
+                        &object.relation_expr.as_ref(),
                         &object.eval_env,
                         region,
                         worker_index,

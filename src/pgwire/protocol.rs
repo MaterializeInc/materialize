@@ -11,12 +11,13 @@ use std::time::Instant;
 use byteorder::{ByteOrder, NetworkEndian};
 use failure::bail;
 use futures::sink::SinkExt;
-use futures::stream::{self, TryStreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::{debug, trace};
 use prometheus::register_histogram_vec;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::time::{self, Duration};
 use tokio_util::codec::Framed;
 
 use coord::ExecuteResponse;
@@ -730,19 +731,46 @@ where
         .await?;
 
         let mut count = 0;
-        while let Some(updates) = rx.try_next().await? {
-            count += updates.len();
-            let messages = updates
-                .into_iter()
-                .map(|update| BackendMessage::CopyData(message::encode_update(update, typ)));
-            self.send_all(messages).await?;
+        loop {
+            match time::timeout(Duration::from_secs(1), rx.next()).await {
+                Ok(None) => break,
+                Ok(Some(updates)) => {
+                    let updates = updates?;
+                    count += updates.len();
+                    let messages = updates.into_iter().map(|update| {
+                        BackendMessage::CopyData(message::encode_update(update, typ))
+                    });
+                    self.send_all(messages).await?;
+                }
+                Err(time::Elapsed { .. }) => {
+                    // It's been a while since we've had any data to send, and
+                    // the client may have disconnected. Send a data message
+                    // with zero bytes of data, which will error if the client
+                    // has, in fact, disconnected. Otherwise we might block
+                    // forever waiting for rows, leaking memory and a socket.
+                    //
+                    // Writing these empty data packets is rather distasteful,
+                    // but no better solution for detecting a half-closed socket
+                    // presents itself. Tokio/Mio don't provide a cross-platform
+                    // means of receiving socket closed notifications, and it's
+                    // not clear how to plumb such notifications through a
+                    // `Codec` and a `Framed`, anyway.
+                    //
+                    // If someone does wind up investigating a better solution,
+                    // on Linux, the underlying epoll system call supports the
+                    // desired notifications via POLLRDHUP [0].
+                    //
+                    // [0]: https://lkml.org/lkml/2003/7/12/116
+                    let empty = BackendMessage::CopyData(vec![]);
+                    self.send_all(iter::once(empty)).await?;
+                }
+            }
         }
 
         let tag = format!("COPY {}", count);
         self.send(BackendMessage::CopyDone).await?;
         self.send(BackendMessage::CommandComplete { tag }).await?;
-
-        self.sync(session).await
+        Ok(State::Ready(session))
     }
 
     async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {

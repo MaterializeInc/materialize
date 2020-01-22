@@ -10,7 +10,9 @@
 //! but for now we just use the parser's AST directly.
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{BinaryOperator, Expr, Function, ObjectName, Query, Value};
+use sql_parser::ast::{
+    BinaryOperator, Expr, Function, Ident, ObjectName, Query, SelectItem, Value,
+};
 
 use crate::normalize;
 
@@ -131,31 +133,45 @@ impl AggFuncRewriter {
             distinct: false,
         })
     }
+
+    fn rewrite_expr(expr: &Expr) -> Option<(Ident, Expr)> {
+        let func = match expr {
+            Expr::Function(func) => func,
+            _ => return None,
+        };
+        let name = normalize::function_name(func.name.clone()).ok()?;
+        if func.args.len() != 1 {
+            return None;
+        }
+        let arg = func.args[0].clone();
+        let expr = match name.as_str() {
+            "avg" => Some(Self::plan_avg(arg, func.distinct)),
+            "variance" | "var_samp" => Some(Self::plan_variance(arg, func.distinct, true)),
+            "var_pop" => Some(Self::plan_variance(arg, func.distinct, false)),
+            "stddev" | "stddev_samp" => Some(Self::plan_stddev(arg, func.distinct, true)),
+            "stddev_pop" => Some(Self::plan_stddev(arg, func.distinct, false)),
+            _ => None,
+        };
+        expr.map(|expr| (func.name.0[0].clone(), expr))
+    }
 }
 
 impl<'ast> VisitMut<'ast> for AggFuncRewriter {
+    fn visit_select_item(&mut self, item: &'ast mut SelectItem) {
+        if let SelectItem::UnnamedExpr(expr) = item {
+            visit_mut::visit_expr(self, expr);
+            if let Some((alias, expr)) = Self::rewrite_expr(expr) {
+                *item = SelectItem::ExprWithAlias { expr, alias }
+            }
+        } else {
+            visit_mut::visit_select_item(self, item);
+        }
+    }
+
     fn visit_expr(&mut self, expr: &'ast mut Expr) {
         visit_mut::visit_expr(self, expr);
-        if let Expr::Function(func) = expr {
-            let name = match normalize::function_name(func.name.clone()) {
-                Ok(name) => name,
-                Err(_) => return,
-            };
-            if func.args.len() != 1 {
-                return;
-            }
-            let arg = func.args[0].clone();
-            if &name == "avg" {
-                *expr = Self::plan_avg(arg, func.distinct)
-            } else if &name == "variance" || &name == "var_samp" {
-                *expr = Self::plan_variance(arg, func.distinct, true)
-            } else if &name == "var_pop" {
-                *expr = Self::plan_variance(arg, func.distinct, false)
-            } else if &name == "stddev" || &name == "stddev_samp" {
-                *expr = Self::plan_stddev(arg, func.distinct, true)
-            } else if &name == "stddev_pop" {
-                *expr = Self::plan_stddev(arg, func.distinct, false)
-            }
+        if let Some((_name, new_expr)) = Self::rewrite_expr(expr) {
+            *expr = new_expr;
         }
     }
 }

@@ -164,13 +164,13 @@ have Materialize ingest the TPCH `lineitem` table.
     ```sql
     CREATE SOURCE lineitem FROM 'kafka://localhost:9092/tpch.tpch.lineitem' USING SCHEMA REGISTRY 'http://localhost:8081';
     CREATE MATERIALIZED VIEW count AS SELECT COUNT(*) FROM lineitem;
-    PEEK count;
-    PEEK count;
+    SELECT * FROM count;
+    SELECT * FROM count;
     -- ...
     ```
 
-    Once `PEEK count` returns `6001215`, all of the rows from `lineitem` have
-    been imported.
+    Once `SELECT * FROM count` returns `6001215`, all of the rows from
+    `lineitem` have been imported.
 
     Naturally, if this works at all, it indicates that Debezium is dutifully
     getting data out of PostgreSQL. You could, at this point, tear down the setup

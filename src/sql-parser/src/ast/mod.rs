@@ -553,10 +553,6 @@ pub enum Statement {
         url: String,
         with_options: Vec<SqlOption>,
     },
-    /// `FLUSH SOURCE`
-    FlushSource { name: ObjectName },
-    /// `FLUSH ALL SOURCES`
-    FlushAllSources,
     /// `CREATE VIEW`
     CreateView {
         /// View name
@@ -564,6 +560,7 @@ pub enum Statement {
         columns: Vec<Ident>,
         query: Box<Query>,
         materialized: bool,
+        replace: bool,
         with_options: Vec<SqlOption>,
     },
     /// `CREATE TABLE`
@@ -659,8 +656,6 @@ pub enum Statement {
     Commit { chain: bool },
     /// `ROLLBACK [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
     Rollback { chain: bool },
-    /// `PEEK [ IMMEDIATE ]`
-    Peek { name: ObjectName, immediate: bool },
     /// `TAIL`
     Tail { name: ObjectName },
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
@@ -810,9 +805,13 @@ impl fmt::Display for Statement {
                 columns,
                 query,
                 materialized,
+                replace,
                 with_options,
             } => {
                 write!(f, "CREATE")?;
+                if *replace {
+                    write!(f, " OR REPLACE")?;
+                }
                 if *materialized {
                     write!(f, " MATERIALIZED")?;
                 }
@@ -985,17 +984,8 @@ impl fmt::Display for Statement {
             Statement::Rollback { chain } => {
                 write!(f, "ROLLBACK{}", if *chain { " AND CHAIN" } else { "" },)
             }
-            Statement::Peek { name, immediate } => {
-                f.write_str("PEEK ")?;
-                if *immediate {
-                    f.write_str("IMMEDIATE ")?;
-                }
-                write!(f, "{}", name)
-            }
             Statement::Tail { name } => write!(f, "TAIL {}", name),
             Statement::Explain { stage, query } => write!(f, "EXPLAIN {} FOR {}", stage, query),
-            Statement::FlushSource { name } => write!(f, "FLUSH SOURCE {}", name),
-            Statement::FlushAllSources => write!(f, "FLUSH ALL SOURCES"),
         }
     }
 }

@@ -38,7 +38,7 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=2
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM foo JOIN foo as foo2 USING (a);
 
-> PEEK test1;
+> SELECT * FROM test1;
 a
 ---
 1

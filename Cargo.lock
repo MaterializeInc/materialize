@@ -99,6 +99,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e49efa51329a5fd37e7c79db4621af617cd4e3e5bc224939808d076077077bf"
 
 [[package]]
+name = "autocfg"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
+
+[[package]]
 name = "avro-rs"
 version = "0.6.5"
 source = "git+https://github.com/MaterializeInc/avro-rs.git#dd965e4560ae0c600a52acc2e250ffad891355fc"
@@ -115,18 +121,19 @@ dependencies = [
 
 [[package]]
 name = "backoff"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afe2eef13bc0f5a77e7c2fec6d863fa59eea6901e4949830b67f0c348d720100"
+checksum = "66483433ebf577e03c6546df761778e4cc40b00e5a1ea7ed850733ffb555d71f"
 dependencies = [
+ "instant",
  "rand 0.6.5",
 ]
 
 [[package]]
 name = "backtrace"
-version = "0.3.40"
+version = "0.3.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "924c76597f0d9ca25d762c25a4d369d51267536465dc5064bdf0eb073ed477ea"
+checksum = "b4b1549d804b6c73f4817df2ba073709e96e426f12987127c48e6745568c350b"
 dependencies = [
  "backtrace-sys",
  "cfg-if",
@@ -1242,9 +1249,12 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.2.0"
+version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a61202fbe46c4a951e9404a720a0180bcf3212c750d735cb5c4ba4dc551299f3"
+checksum = "0b54058f0a6ff80b6803da8faf8997cde53872b38f4023728f6830b06cd3c0dc"
+dependencies = [
+ "autocfg 1.0.0",
+]
 
 [[package]]
 name = "inotify"
@@ -1265,6 +1275,12 @@ checksum = "e74a1aa87c59aeff6ef2cc2fa62d41bc43f54952f55652656b18a02fd5e356c0"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "instant"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c346c299e3fe8ef94dc10c2c0253d858a69aac1245157a3bf4125915d528caf"
 
 [[package]]
 name = "interchange"
@@ -1390,7 +1406,7 @@ dependencies = [
 [[package]]
 name = "libfuzzer-sys"
 version = "0.1.0"
-source = "git+https://github.com/rust-fuzz/libfuzzer-sys.git#0c4507533a79e85e1984f59765bdd35fbdaa7f1b"
+source = "git+https://github.com/rust-fuzz/libfuzzer-sys.git#35ce7d7177c254b9c798aec171dfe76877d1a20f"
 dependencies = [
  "arbitrary",
  "cc",
@@ -1681,7 +1697,7 @@ version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9c3f34cdd24f334cb265d9bf8bfa8a241920d026916785747a92f0e55541a1a"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "num-integer",
  "num-traits",
 ]
@@ -1692,7 +1708,7 @@ version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcb0cf31fb3ff77e6d2a6ebd6800df7fdcd106f2ad89113c9130bcd07f93dffc"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "num-traits",
 ]
 
@@ -1702,7 +1718,7 @@ version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b85e541ef8255f6cf42bbfe4ef361305c6c135d10919ecc26126c4e5ae94bc09"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "num-traits",
 ]
 
@@ -1712,7 +1728,7 @@ version = "0.1.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76bd5272412d173d6bf9afdf98db8612bbabc9a7a830b7bfc9c188911716132e"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "num-integer",
  "num-traits",
 ]
@@ -1723,7 +1739,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2885278d5fe2adc2f75ced642d52d879bffaceb5a2e0b1d4309ffdfb239b454"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -1731,11 +1747,11 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4c81ffc11c212fa327657cb19dd85eb7419e163b5b076bede2bdb5c974c07e4"
+checksum = "c62be47e61d1842b9170f0fdeec8eba98e60e90e5446449a0545e5152acd7096"
 dependencies = [
- "autocfg",
+ "autocfg 1.0.0",
 ]
 
 [[package]]
@@ -1801,7 +1817,7 @@ version = "0.9.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c977d08e1312e2f7e4b86f9ebaa0ed3b19d1daff75fae88bbb88108afbd801fc"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "cc",
  "libc",
  "pkg-config",
@@ -2090,9 +2106,9 @@ dependencies = [
 
 [[package]]
 name = "pretty"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2644ed738e02455d10d8aaa34d9a044e00bf062ad59748db500eea44bb75a44c"
+checksum = "1891757f8427ce41706957fde1fec1b86aee3e335bd50320257705061507a24c"
 dependencies = [
  "arrayvec 0.5.1",
  "typed-arena",
@@ -2291,7 +2307,7 @@ version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d71dacdc3c88c1fde3885a3be3fbab9f35724e6ce99467f7d9c5026132184ca"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "libc",
  "rand_chacha 0.1.1",
  "rand_core 0.4.0",
@@ -2324,7 +2340,7 @@ version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "556d3a1ca6600bfcbab7c7c91ccb085ac7fbbcd70e008a98742e7847f4f7bcef"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "rand_core 0.3.1",
 ]
 
@@ -2430,7 +2446,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abf9b09b01790cfe0364f52bf32995ea3c39f4d2dd011eac241d2914146d0b44"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "rand_core 0.4.0",
 ]
 
@@ -2440,7 +2456,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e196346cbbc5c70c77e7b4926147ee8e383a38ee4d15d58a08098b169e492b6"
 dependencies = [
- "autocfg",
+ "autocfg 0.1.4",
  "rand_core 0.5.1",
 ]
 
@@ -2488,8 +2504,9 @@ dependencies = [
 
 [[package]]
 name = "rdkafka"
-version = "0.22.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#f4ea213aa369a92599d54f3fa9b94c66a5977212"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d455ac2a07a27d87b4f0e321dfd8d9a5b574bd96f55e42e6c594712a08051222"
 dependencies = [
  "futures",
  "libc",
@@ -2502,8 +2519,9 @@ dependencies = [
 
 [[package]]
 name = "rdkafka-sys"
-version = "1.2.2"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#f4ea213aa369a92599d54f3fa9b94c66a5977212"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d770343fbbc6089c750000711a17a906e8b3f7831afcd752d9667d38833e578"
 dependencies = [
  "cmake",
  "libc",
@@ -2550,9 +2568,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.6.12"
+version = "0.6.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11a7e20d1cce64ef2fed88b66d347f88bd9babb82845b2b858f3edbf59a4f716"
+checksum = "e734e891f5b408a29efbf8309e656876276f49ab6a6ac208600b4419bd893d90"
 
 [[package]]
 name = "remove_dir_all"
@@ -3292,9 +3310,9 @@ checksum = "e604eb7b43c06650e854be16a2a03155743d3752dd1c943f6829e26b7a36e382"
 
 [[package]]
 name = "typed-arena"
-version = "1.7.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9b2228007eba4120145f785df0f6c92ea538f5a3635a612ecf4e334c8c1446d"
+checksum = "0685c84d5d54d1c26f7d3eb96cd41550adb97baed141a761cf335d3d33bcd0ae"
 
 [[package]]
 name = "typenum"
