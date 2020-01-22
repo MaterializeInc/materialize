@@ -252,4 +252,3 @@ cannot drop materialize.public.v3: still depended upon by catalog item 'material
 > CREATE OR REPLACE VIEW v3 AS SELECT 4
 > SELECT * FROM v3
 4
-

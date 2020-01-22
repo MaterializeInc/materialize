@@ -147,7 +147,7 @@ b  max
 #unmaterialize data view
 > DROP INDEX data_view_primary_idx;
 
-#can continue to select from a 
+#can continue to select from view that depends on the unmaterialized view
 > SELECT * FROM test4
 b  max
 ------
