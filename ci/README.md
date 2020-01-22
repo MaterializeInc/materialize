@@ -103,16 +103,6 @@ reproduced here. If you need to recreate the SSH key:
 
 If you need the Docker hub password, it's in the company 1Password.
 
-## Docker Images
-
-We produce several docker images as part of CI, all are prefixed with `ci-`
-until they are ready for end-users to use.
-
-The two tradeoffs that we try to balance are CI speed and end-user convenience.
-Right now that mostly manifests as creating stripped binaries for use within CI
-and a `ci-raw-materialized` unstripped docker image for use in all
-interactive/deployed scenarios.
-
 ## Build caching
 
 We once used [sccache], a distributed build cache from Mozilla, to share built
@@ -128,6 +118,57 @@ Rust to the minimum possible. These agents thus wind up with a warm local Cargo
 cache (i.e., the cache in the `target` directory, which is quite a bit more
 reliable than sccache), and typically only need to rebuild the first-party
 crates that have changed.
+
+These agents build a number of Docker images, each with a name starting with
+`ci-, that are pushed to Docker Hub. Future steps in the build pipeline run
+tests by downloading and orchestrating these Docker images appropriately,
+effectively using Docker Hub for intra-build artifact storage. This system
+isn't ideal, but it's much faster than having each build step compile its own
+binaries.
+
+Note that most of these Docker images don't contain debug symbols, which can
+make debugging CI failures quite challenging, as backtraces won't contain
+function names, only program counters. (The debug symbols are too large to ship
+to Docker Hub; the `ci-test` image would generate several gigabytes of debug
+symbols!) Whenever possible, try to reproduce the CI failure locally to get a
+real backtrace.
+
+## macOS agent
+
+We run one macOS agent on Buildkite, via [MacStadium], to produce our macOS
+binaries. This agent is manually configured. Ask Nikhil for access if you need
+it.
+
+The basic configuration is as follows:
+
+```
+% brew install --token='<redacted>' buildkite/buildkite/buildkite-agent
+% brew services start buildkite-agent
+% vim /usr/local/etc/buildkite-agent/buildkite-agent.cfg
+<edit to match config above>
+% brew install cmake [other materialize dependencies...]
+% curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+% cat /usr/local/etc/buildkite-agent/hooks/environment
+export AWS_ACCESS_KEY_ID=<redacted>
+export AWS_SECRET_ACCESS_KEY=<redacted>
+export PATH=$HOME/.cargo/bin:$PATH
+```
+
+Be sure to install an SSH key with the appropriate GitHub access in
+`~/.ssh/id_rsa`, too.
+
+The agent runs as the default MacStadium `administrator` user, since there isn't
+an easy way to isolate builds on macOS.
+
+## Deployment
+
+Binary tarballs are deployed to an S3 bucket accessible at
+https://downloads.mtrlz.dev. If you're a Materialize developer,
+see https://mtrlz.dev for the specific links.
+
+A [ready-to-use materialized image][materialized-docker] is also shipped to
+Docker Hub. Unlike the intra-build Docker image, this image contains debug
+symbols.
 
 ## DNS
 
@@ -148,7 +189,12 @@ binary, with a bit of elbow grease.
 You'll need the ID of the container in which the faulty process is running and
 the exact version of the image it's running. The goal is to launch a new
 container with "ptrace" capabilities into the same PID and network namespace,
-so that you can attach GDB to the process. If you attempt to GDB directly from the host, GDB will get confused because userspace differs, and the userspace libraries that the binary claims to link against won't exist. If you GDB with a `docker exec` from within the already-running container, GDB will fail to ptrace, since CI, quite reasonably, doesn't launch containers with ptrace capabilities.
+so that you can attach GDB to the process. If you attempt to GDB directly from
+the host, GDB will get confused because userspace differs, and the userspace
+libraries that the binary claims to link against won't exist. If you GDB with a
+`docker exec` from within the already-running container, GDB will fail to
+ptrace, since CI, quite reasonably, doesn't launch containers with ptrace
+capabilities.
 
 Roughly:
 
@@ -181,3 +227,5 @@ USER@mtrlz.dev -p 2222`.
 [Docker Compose]: https://docs.docker.com/compose/
 [autouseradd]: https://github.com/benesch/autouseradd
 [materializer GitHub user]: https://github.com/materializer
+[materialized-docker]: https://hub.docker.com/repository/docker/materialize/materialized
+[MacStadium]: https://www.macstadium.com
