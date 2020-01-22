@@ -216,7 +216,7 @@ where
                         GlobalId::User(_) => {
                             coord.create_index_dataflow(name.to_string(), id, index)
                         }
-                        GlobalId::System(_) => coord.add_index_to_view(id, index.desc, Some(1_000)),
+                        GlobalId::System(_) => coord.insert_index(id, index.desc, Some(1_000)),
                     },
                 }
             }
@@ -459,7 +459,7 @@ where
                                 advance_to: self.local_input_time,
                             },
                         );
-                        self.add_index_to_view(index_id, index.desc, None);
+                        self.insert_index(index_id, index.desc, None);
                         Ok(ExecuteResponse::CreatedTable { existed: false })
                     }
                     Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1000,7 +1000,7 @@ where
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
         );
-        self.add_index_to_view(*id, index.desc, None);
+        self.insert_index(*id, index.desc, None);
     }
 
     fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: dataflow_types::Index) {
@@ -1362,28 +1362,23 @@ where
     }
 
     /// Add an index to a view in the coordinator.
-    /// Is no-op if there is no view state in the coordinator (because the view is temporary)
-    fn add_index_to_view(&mut self, id: GlobalId, desc: IndexDesc, latency_ms: Option<Timestamp>) {
+    fn insert_index(&mut self, id: GlobalId, desc: IndexDesc, latency_ms: Option<Timestamp>) {
         if let Some(viewstate) = self.views.get_mut(&desc.on_id) {
             viewstate.add_primary_idx(&desc.keys, id);
-            let mut index_state = IndexState::new(desc, self.num_timely_workers);
-            if latency_ms.is_some() {
-                index_state.set_compaction_latency(latency_ms);
-            }
-            if self.log {
-                for time in index_state.upper.frontier().iter() {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            id,
-                            time.clone(),
-                            1,
-                        )),
-                    );
-                }
-            }
-            self.indexes.insert(id, index_state);
+        } // else the view is temporary
+        let mut index_state = IndexState::new(desc, self.num_timely_workers);
+        if latency_ms.is_some() {
+            index_state.set_compaction_latency(latency_ms);
         }
+        if self.log {
+            for time in index_state.upper.frontier().iter() {
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(id, time.clone(), 1)),
+                );
+            }
+        }
+        self.indexes.insert(id, index_state);
     }
 
     fn handle_statement(
