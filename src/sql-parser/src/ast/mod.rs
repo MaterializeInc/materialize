@@ -532,12 +532,23 @@ pub enum Statement {
         /// `WHERE`
         selection: Option<Expr>,
     },
+    /// `CREATE DATABASE`
+    CreateDatabase {
+        name: Ident,
+        if_not_exists: bool,
+    },
+    /// `CREATE SCHEMA`
+    CreateSchema {
+        name: ObjectName,
+        if_not_exists: bool,
+    },
     /// `CREATE SOURCE`
     CreateSource {
         name: ObjectName,
         url: String,
         schema: Option<SourceSchema>,
         with_options: Vec<SqlOption>,
+        if_not_exists: bool,
     },
     /// `CREATE SOURCES`
     CreateSources {
@@ -552,6 +563,7 @@ pub enum Statement {
         from: ObjectName,
         url: String,
         with_options: Vec<SqlOption>,
+        if_not_exists: bool,
     },
     /// `CREATE VIEW`
     CreateView {
@@ -571,6 +583,7 @@ pub enum Statement {
         columns: Vec<ColumnDef>,
         constraints: Vec<TableConstraint>,
         with_options: Vec<SqlOption>,
+        if_not_exists: bool,
     },
     /// `CREATE INDEX`
     CreateIndex {
@@ -580,6 +593,7 @@ pub enum Statement {
         on_name: ObjectName,
         /// Expressions that form part of the index key
         key_parts: Vec<Expr>,
+        if_not_exists: bool,
     },
     /// `ALTER TABLE`
     AlterTable {
@@ -587,8 +601,12 @@ pub enum Statement {
         name: ObjectName,
         operation: AlterTableOperation,
     },
+    DropDatabase {
+        name: Ident,
+        if_exists: bool,
+    },
     /// `DROP`
-    Drop {
+    DropObjects {
         /// The type of the object to drop: TABLE, VIEW, etc.
         object_type: ObjectType,
         /// An optional `IF EXISTS` clause. (Non-standard.)
@@ -612,7 +630,13 @@ pub enum Statement {
     /// `SHOW <variable>`
     ///
     /// Note: this is a PostgreSQL-specific statement.
-    ShowVariable { variable: Ident },
+    ShowVariable {
+        variable: Ident,
+    },
+    /// `SHOW DATABASES`
+    ShowDatabases {
+        filter: Option<ShowStatementFilter>,
+    },
     /// `SHOW <object>S`
     ///
     /// ```sql
@@ -623,6 +647,7 @@ pub enum Statement {
     /// ```
     ShowObjects {
         object_type: ObjectType,
+        from: Option<ObjectName>,
         extended: bool,
         full: bool,
         filter: Option<ShowStatementFilter>,
@@ -645,21 +670,38 @@ pub enum Statement {
         filter: Option<ShowStatementFilter>,
     },
     /// `SHOW CREATE VIEW <view>`
-    ShowCreateView { view_name: ObjectName },
+    ShowCreateView {
+        view_name: ObjectName,
+    },
     /// `SHOW CREATE SOURCE <source>`
-    ShowCreateSource { source_name: ObjectName },
+    ShowCreateSource {
+        source_name: ObjectName,
+    },
     /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
-    StartTransaction { modes: Vec<TransactionMode> },
+    StartTransaction {
+        modes: Vec<TransactionMode>,
+    },
     /// `SET TRANSACTION ...`
-    SetTransaction { modes: Vec<TransactionMode> },
+    SetTransaction {
+        modes: Vec<TransactionMode>,
+    },
     /// `COMMIT [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
-    Commit { chain: bool },
+    Commit {
+        chain: bool,
+    },
     /// `ROLLBACK [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
-    Rollback { chain: bool },
+    Rollback {
+        chain: bool,
+    },
     /// `TAIL`
-    Tail { name: ObjectName },
+    Tail {
+        name: ObjectName,
+    },
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
-    Explain { stage: Stage, query: Box<Query> },
+    Explain {
+        stage: Stage,
+        query: Box<Query>,
+    },
 }
 
 impl fmt::Display for Statement {
@@ -730,17 +772,42 @@ impl fmt::Display for Statement {
                 }
                 Ok(())
             }
+            Statement::CreateDatabase {
+                name,
+                if_not_exists,
+            } => {
+                write!(f, "CREATE DATABASE ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
+                write!(f, "{}", name)
+            }
+            Statement::CreateSchema {
+                name,
+                if_not_exists,
+            } => {
+                write!(f, "CREATE SCHEMA ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
+                write!(f, "{}", name)
+            }
             Statement::CreateSource {
                 name,
                 url,
                 schema,
                 with_options,
+                if_not_exists,
             } => {
+                write!(f, "CREATE SOURCE ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
                 write!(
                     f,
-                    "CREATE SOURCE {} FROM {}",
-                    name.to_string(),
-                    Value::SingleQuotedString(url.clone()).to_string()
+                    "{} FROM {}",
+                    name,
+                    Value::SingleQuotedString(url.clone())
                 )?;
                 match schema {
                     Some(schema) => {
@@ -787,10 +854,15 @@ impl fmt::Display for Statement {
                 from,
                 url,
                 with_options,
+                if_not_exists,
             } => {
+                write!(f, "CREATE SINK ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
                 write!(
                     f,
-                    "CREATE SINK {} FROM {} INTO {}",
+                    "{} FROM {} INTO {}",
                     name,
                     from,
                     Value::SingleQuotedString(url.clone())
@@ -833,13 +905,13 @@ impl fmt::Display for Statement {
                 columns,
                 constraints,
                 with_options,
+                if_not_exists,
             } => {
-                write!(
-                    f,
-                    "CREATE TABLE {} ({}",
-                    name,
-                    display_comma_separated(columns)
-                )?;
+                write!(f, "CREATE TABLE ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
+                write!(f, "{} ({}", name, display_comma_separated(columns))?;
                 if !constraints.is_empty() {
                     write!(f, ", {}", display_comma_separated(constraints))?;
                 }
@@ -854,10 +926,15 @@ impl fmt::Display for Statement {
                 name,
                 on_name,
                 key_parts,
+                if_not_exists,
             } => {
+                write!(f, "CREATE INDEX ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
                 write!(
                     f,
-                    "CREATE INDEX {} ON {} ({})",
+                    "{} ON {} ({})",
                     name,
                     on_name,
                     display_comma_separated(key_parts),
@@ -867,7 +944,14 @@ impl fmt::Display for Statement {
             Statement::AlterTable { name, operation } => {
                 write!(f, "ALTER TABLE {} {}", name, operation)
             }
-            Statement::Drop {
+            Statement::DropDatabase { name, if_exists } => {
+                write!(f, "DROP DATABASE ")?;
+                if *if_exists {
+                    write!(f, "IF EXISTS ")?;
+                }
+                write!(f, "{}", name)
+            }
+            Statement::DropObjects {
                 object_type,
                 if_exists,
                 names,
@@ -892,13 +976,20 @@ impl fmt::Display for Statement {
                 write!(f, "{} = {}", variable, value)
             }
             Statement::ShowVariable { variable } => write!(f, "SHOW {}", variable),
+            Statement::ShowDatabases { filter } => {
+                f.write_str("SHOW DATABASES")?;
+                if let Some(filter) = filter {
+                    write!(f, " {}", filter)?;
+                }
+                Ok(())
+            }
             Statement::ShowObjects {
                 object_type,
                 filter,
                 full,
+                from,
                 extended,
             } => {
-                use ObjectType::*;
                 f.write_str("SHOW")?;
                 if *extended {
                     f.write_str(" EXTENDED")?;
@@ -910,13 +1001,17 @@ impl fmt::Display for Statement {
                     f,
                     " {}",
                     match object_type {
-                        Table => "TABLES",
-                        View => "VIEWS",
-                        Source => "SOURCES",
-                        Sink => "SINKS",
-                        Index => unreachable!(),
+                        ObjectType::Schema => "SCHEMAS",
+                        ObjectType::Table => "TABLES",
+                        ObjectType::View => "VIEWS",
+                        ObjectType::Source => "SOURCES",
+                        ObjectType::Sink => "SINKS",
+                        ObjectType::Index => unreachable!(),
                     }
                 )?;
+                if let Some(from) = from {
+                    write!(f, " FROM {}", from)?;
+                }
                 if let Some(filter) = filter {
                     write!(f, " {}", filter)?;
                 }
@@ -1042,6 +1137,7 @@ pub enum SourceSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum ObjectType {
+    Schema,
     Table,
     View,
     Source,
@@ -1052,6 +1148,7 @@ pub enum ObjectType {
 impl fmt::Display for ObjectType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
+            ObjectType::Schema => "SCHEMA",
             ObjectType::Table => "TABLE",
             ObjectType::View => "VIEW",
             ObjectType::Source => "SOURCE",

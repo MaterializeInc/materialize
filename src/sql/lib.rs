@@ -35,13 +35,26 @@ pub use query::scalar_type_from_sql;
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
-    CreateIndex(FullName, Index),
-    CreateSource(FullName, Source),
+    CreateIndex {
+        name: FullName,
+        index: Index,
+        if_not_exists: bool,
+    },
+    CreateSource {
+        name: FullName,
+        source: Source,
+        if_not_exists: bool,
+    },
     CreateSources(Vec<(FullName, Source)>),
-    CreateSink(FullName, Sink),
+    CreateSink {
+        name: FullName,
+        sink: Sink,
+        if_not_exists: bool,
+    },
     CreateTable {
         name: FullName,
         desc: RelationDesc,
+        if_not_exists: bool,
     },
     CreateView {
         name: FullName,

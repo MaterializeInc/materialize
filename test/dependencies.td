@@ -30,14 +30,10 @@ $ set schema={
 
 > CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
-{"before": null, "after": {"x": 1, "y": "mouse"}}
-{"before": null, "after": {"x": 2, "y": "keyboard"}}
-{"before": null, "after": {"x": 3, "y": "monitor"}}
-{"before": null, "after": {"x": 1, "y": "keyboard"}}
+! CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' USING SCHEMA '${schema}'
+catalog item 'materialize.public.s' already exists
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
-{"before": null, "after": null}
+> CREATE SOURCE IF NOT EXISTS s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS SELECT 1;
 
@@ -105,16 +101,12 @@ catalog item 'test4' does not exist
 
 > CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
-{"before": null, "after": {"x": 1, "y": "mouse"}}
-{"before": null, "after": {"x": 2, "y": "keyboard"}}
-{"before": null, "after": {"x": 3, "y": "monitor"}}
-{"before": null, "after": {"x": 1, "y": "keyboard"}}
-
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
-{"before": null, "after": null}
-
 > CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
+
+! CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v2' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
+catalog item 'materialize.public.s1' already exists
+
+> CREATE SINK IF NOT EXISTS s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v2' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
 
 # Test that sinks cannot be depended upon.
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;

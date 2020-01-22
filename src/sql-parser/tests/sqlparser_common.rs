@@ -1076,6 +1076,7 @@ fn parse_create_table() {
             columns,
             constraints,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("uk_cities", name.to_string());
             assert_eq!(
@@ -1148,6 +1149,7 @@ fn parse_create_table() {
             );
             assert!(constraints.is_empty());
             assert_eq!(with_options, vec![]);
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -2304,25 +2306,52 @@ fn parse_searched_case_expr() {
 }
 
 #[test]
+fn parse_show_databases() {
+    assert_eq!(
+        verified_stmt("SHOW DATABASES"),
+        Statement::ShowDatabases { filter: None }
+    );
+
+    assert_eq!(
+        verified_stmt("SHOW DATABASES LIKE 'blah'"),
+        Statement::ShowDatabases {
+            filter: Some(ShowStatementFilter::Like("blah".into())),
+        }
+    );
+}
+
+#[test]
 fn parse_show_objects() {
     let trials = [
+        ("SCHEMAS", ObjectType::Schema),
         ("SOURCES", ObjectType::Source),
         ("VIEWS", ObjectType::View),
         ("TABLES", ObjectType::Table),
         ("SINKS", ObjectType::Sink),
     ];
 
-    for (s, ot) in &trials {
-        let sql = format!("SHOW {}", s);
+    for &(sql, object_type) in &trials {
         assert_eq!(
-            verified_stmt(&sql),
+            verified_stmt(&format!("SHOW {}", sql)),
             Statement::ShowObjects {
-                object_type: *ot,
+                object_type,
                 extended: false,
                 full: false,
+                from: None,
                 filter: None
             }
-        )
+        );
+
+        assert_eq!(
+            verified_stmt(&format!("SHOW {} FROM foo.bar", sql)),
+            Statement::ShowObjects {
+                object_type,
+                extended: false,
+                full: false,
+                from: Some(ObjectName(vec!["foo".into(), "bar".into()])),
+                filter: None,
+            }
+        );
     }
 }
 
@@ -2334,6 +2363,7 @@ fn parse_show_objects_with_like_regex() {
             object_type,
             extended: false,
             full: false,
+            from: None,
             filter,
         } => {
             assert_eq!(filter.unwrap(), ShowStatementFilter::Like("%foo%".into()));
@@ -2352,6 +2382,7 @@ fn parse_show_objects_with_full() {
             object_type: ObjectType::View,
             extended: false,
             full: true,
+            from: None,
             filter: None,
         }
     );
@@ -2362,6 +2393,7 @@ fn parse_show_objects_with_full() {
             object_type: ObjectType::Table,
             extended: false,
             full: true,
+            from: None,
             filter: None,
         }
     );
@@ -3145,6 +3177,74 @@ Expected SELECT, VALUES, or a subquery in the query body, found: NULL"
 }
 
 #[test]
+fn parse_create_database() {
+    match verified_stmt("CREATE DATABASE foo") {
+        Statement::CreateDatabase {
+            name,
+            if_not_exists,
+        } => {
+            assert_eq!(name.to_string(), "foo");
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    match verified_stmt("CREATE DATABASE IF NOT EXISTS foo") {
+        Statement::CreateDatabase {
+            name,
+            if_not_exists,
+        } => {
+            assert_eq!(name.to_string(), "foo");
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE DATABASE IF EXISTS foo");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
+
+    let res = parse_sql_statements("CREATE DATABASE foo.bar");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected end of statement, found: ."));
+}
+
+#[test]
+fn parse_create_schema() {
+    match verified_stmt("CREATE SCHEMA foo.bar") {
+        Statement::CreateSchema {
+            name,
+            if_not_exists,
+        } => {
+            assert_eq!(name.to_string(), "foo.bar");
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    match verified_stmt("CREATE SCHEMA IF NOT EXISTS foo") {
+        Statement::CreateSchema {
+            name,
+            if_not_exists,
+        } => {
+            assert_eq!(name.to_string(), "foo");
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE SCHEMA IF EXISTS foo");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
+}
+
+#[test]
 fn parse_create_view() {
     let sql = "CREATE VIEW myschema.myview AS SELECT foo FROM bar";
     match verified_stmt(sql) {
@@ -3254,6 +3354,7 @@ fn parse_create_source_raw_schema() {
             url,
             schema,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3265,6 +3366,7 @@ fn parse_create_source_raw_schema() {
                     value: Value::SingleQuotedString("val".into())
                 },]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3279,6 +3381,7 @@ fn parse_create_source_path_schema_multiple_args() {
             url,
             schema,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3296,6 +3399,7 @@ fn parse_create_source_path_schema_multiple_args() {
                     },
                 ]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3310,6 +3414,7 @@ fn parse_create_source_registry() {
             url,
             schema,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3318,9 +3423,27 @@ fn parse_create_source_registry() {
                 schema.unwrap()
             );
             assert_eq!(with_options, vec![]);
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
+}
+
+#[test]
+fn parse_create_source_if_not_exists() {
+    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' USING SCHEMA ''";
+    match verified_stmt(sql) {
+        Statement::CreateSource { if_not_exists, .. } => {
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE SOURCE IF EXISTS foo FROM 'bar' USING SCHEMA ''");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
 }
 
 #[test]
@@ -3373,6 +3496,7 @@ fn parse_create_sink() {
             from,
             url,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", from.to_string());
@@ -3384,9 +3508,27 @@ fn parse_create_sink() {
                     value: Value::SingleQuotedString("val".into())
                 },]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
+}
+
+#[test]
+fn parse_create_sink_if_not_exists() {
+    let sql = "CREATE SINK IF NOT EXISTS foo FROM bar INTO 'baz'";
+    match verified_stmt(sql) {
+        Statement::CreateSink { if_not_exists, .. } => {
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE SINK IF EXISTS foo FROM bar INTO 'baz'");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
 }
 
 #[test]
@@ -3397,6 +3539,7 @@ fn parse_create_index() {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("myschema.bar", on_name.to_string());
@@ -3407,6 +3550,7 @@ fn parse_create_index() {
                     Expr::Identifier(Ident::new("b"))
                 ]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3417,6 +3561,7 @@ fn parse_create_index() {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         } => {
             assert_eq!("fizz", name.to_string());
             assert_eq!("baz", on_name.to_string());
@@ -3431,6 +3576,7 @@ fn parse_create_index() {
                 unreachable!();
             }
             assert_eq!(key_parts[3], Expr::Identifier(Ident::new("delta")));
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3441,6 +3587,7 @@ fn parse_create_index() {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         } => {
             assert_eq!("ind", name.to_string());
             assert_eq!("tab", on_name.to_string());
@@ -3452,6 +3599,7 @@ fn parse_create_index() {
                     right: Box::new(Expr::Value(Value::Number("1".to_string())))
                 }))],
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3461,6 +3609,7 @@ fn parse_create_index() {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         } => {
             assert_eq!("qualifiers", name.to_string());
             assert_eq!("no_parentheses", on_name.to_string());
@@ -3471,6 +3620,14 @@ fn parse_create_index() {
                     Ident::new("omega"),
                 ])],
             );
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+    let sql = "CREATE INDEX IF NOT EXISTS foo ON bar (baz)";
+    match verified_stmt(sql) {
+        Statement::CreateIndex { if_not_exists, .. } => {
+            assert!(if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3489,13 +3646,61 @@ Expected ON, found: ."
             .to_string()),
         format!("{}", res.unwrap_err())
     );
+
+    let res = parse_sql_statements("CREATE INDEX IF EXISTS myschema.ind ON foo(b)");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
+}
+
+#[test]
+fn parse_drop_database() {
+    match verified_stmt("DROP DATABASE mydb") {
+        Statement::DropDatabase { name, if_exists } => {
+            assert_eq!(name.to_string(), "mydb");
+            assert!(!if_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    match verified_stmt("DROP DATABASE IF EXISTS mydb") {
+        Statement::DropDatabase { name, if_exists } => {
+            assert_eq!(name.to_string(), "mydb");
+            assert!(if_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("DROP DATABASE mydb.nope");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected end of statement, found: ."));
+}
+
+#[test]
+fn parse_drop_schema() {
+    let sql = "DROP SCHEMA mydb.myschema";
+    match verified_stmt(sql) {
+        Statement::DropObjects {
+            names, object_type, ..
+        } => {
+            assert_eq!(
+                vec!["mydb.myschema"],
+                names.iter().map(ToString::to_string).collect::<Vec<_>>()
+            );
+            assert_eq!(ObjectType::Schema, object_type);
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[test]
 fn parse_drop_table() {
     let sql = "DROP TABLE foo";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -3514,7 +3719,7 @@ fn parse_drop_table() {
 
     let sql = "DROP TABLE IF EXISTS foo, bar CASCADE";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -3558,7 +3763,7 @@ Cannot specify both CASCADE and RESTRICT in DROP"
 fn parse_drop_view() {
     let sql = "DROP VIEW myschema.myview";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             names, object_type, ..
         } => {
             assert_eq!(
@@ -3575,7 +3780,7 @@ fn parse_drop_view() {
 fn parse_drop_source() {
     let sql = "DROP SOURCE myschema.mydatasource";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -3597,7 +3802,7 @@ fn parse_drop_source() {
 fn parse_drop_index() {
     let sql = "DROP INDEX IF EXISTS myschema.myindex";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -4121,6 +4326,7 @@ fn parse_create_table_with_defaults() {
             columns,
             constraints,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("public.customer", name.to_string());
             assert_eq!(
@@ -4259,6 +4465,7 @@ fn parse_create_table_with_defaults() {
                     },
                 ]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -4304,6 +4511,23 @@ fn parse_create_table_with_inherit() {
                use_metric boolean DEFAULT true\
                )";
     verified_stmt(sql);
+}
+
+#[test]
+fn parse_create_table_if_not_exists() {
+    let sql = "CREATE TABLE IF NOT EXISTS foo (bar int)";
+    match verified_stmt(sql) {
+        Statement::CreateTable { if_not_exists, .. } => {
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE TABLE IF EXISTS foo (bar int)");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
 }
 
 #[ignore] // NOTE(benesch): this test is doomed. COPY data should not be tokenized/parsed.

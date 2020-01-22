@@ -334,14 +334,31 @@ macro_rules! make_visitor {
 
             fn visit_literal_string(&mut self, _string: &'ast $($mut)* String) {}
 
+            fn visit_create_database(
+                &mut self,
+                name: &'ast $($mut)* Ident,
+                if_not_exists: bool,
+            ) {
+                visit_create_database(self, name, if_not_exists)
+            }
+
+            fn visit_create_schema(
+                &mut self,
+                name: &'ast $($mut)* ObjectName,
+                if_not_exists: bool,
+            ) {
+                visit_create_schema(self, name, if_not_exists)
+            }
+
             fn visit_create_source(
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
                 url: &'ast $($mut)* String,
                 schema: Option<&'ast $($mut)* SourceSchema>,
                 with_options: &'ast $($mut)* Vec<SqlOption>,
+                if_not_exists: bool,
             ) {
-                visit_create_source(self, name, url, schema, with_options)
+                visit_create_source(self, name, url, schema, with_options, if_not_exists)
             }
 
             fn visit_create_sources(
@@ -364,8 +381,9 @@ macro_rules! make_visitor {
                 from: &'ast $($mut)* ObjectName,
                 url: &'ast $($mut)* String,
                 with_options: &'ast $($mut)* Vec<SqlOption>,
+                if_not_exists: bool,
             ) {
-                visit_create_sink(self, name, from, url, with_options)
+                visit_create_sink(self, name, from, url, with_options, if_not_exists)
             }
 
             fn visit_create_view(
@@ -384,9 +402,10 @@ macro_rules! make_visitor {
                 &mut self,
                 name: &'ast $($mut)* Ident,
                 on_name: &'ast $($mut)* ObjectName,
-                key_parts: &'ast $($mut)* Vec<Expr>
+                key_parts: &'ast $($mut)* Vec<Expr>,
+                if_not_exists: bool,
             ){
-                visit_create_index(self, name, on_name, key_parts)
+                visit_create_index(self, name, on_name, key_parts, if_not_exists)
             }
 
             fn visit_create_table(
@@ -395,6 +414,7 @@ macro_rules! make_visitor {
                 columns: &'ast $($mut)* [ColumnDef],
                 constraints: &'ast $($mut)* [TableConstraint],
                 with_options: &'ast $($mut)* [SqlOption],
+                if_not_exists: bool,
             ) {
                 visit_create_table(
                     self,
@@ -402,6 +422,7 @@ macro_rules! make_visitor {
                     columns,
                     constraints,
                     with_options,
+                    if_not_exists,
                 )
             }
 
@@ -421,14 +442,22 @@ macro_rules! make_visitor {
                 visit_option(self, option)
             }
 
-            fn visit_drop(
+            fn visit_drop_database(
+                &mut self,
+                name: &'ast $($mut)* Ident,
+                if_exists: bool,
+            ) {
+                visit_drop_database(self, name, if_exists)
+            }
+
+            fn visit_drop_objects(
                 &mut self,
                 object_type: ObjectType,
                 if_exists: bool,
                 names: &'ast $($mut)* [ObjectName],
                 cascade: bool,
             ) {
-                visit_drop(self, object_type, if_exists, names, cascade)
+                visit_drop_objects(self, object_type, if_exists, names, cascade)
             }
 
             fn visit_object_type(&mut self, _object_type: ObjectType) {}
@@ -493,8 +522,19 @@ macro_rules! make_visitor {
                 visit_show_variable(self, variable)
             }
 
-            fn visit_show_objects(&mut self, extended: bool, full: bool, object_type: ObjectType, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
-                visit_show_objects(self, extended, full, object_type, filter)
+            fn visit_show_databases(&mut self, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
+                visit_show_databases(self, filter)
+            }
+
+            fn visit_show_objects(
+                &mut self,
+                extended: bool,
+                full: bool,
+                object_type: ObjectType,
+                from: Option<&'ast $($mut)* ObjectName>,
+                filter: Option<&'ast $($mut)* ShowStatementFilter>
+            ) {
+                visit_show_objects(self, extended, full, object_type, from, filter)
             }
 
             fn visit_show_indexes(&mut self, extended: bool, table_name: &'ast $($mut)* ObjectName, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
@@ -585,12 +625,19 @@ macro_rules! make_visitor {
                     table_name,
                     selection,
                 } => visitor.visit_delete(table_name, selection.as_auto_ref()),
+                Statement::CreateDatabase { name, if_not_exists } => {
+                    visitor.visit_create_database(name, *if_not_exists)
+                }
+                Statement::CreateSchema { name, if_not_exists } => {
+                    visitor.visit_create_schema(name, *if_not_exists)
+                }
                 Statement::CreateSource {
                     name,
                     url,
                     schema,
                     with_options,
-                } => visitor.visit_create_source(name, url, schema.as_auto_ref(), with_options),
+                    if_not_exists,
+                } => visitor.visit_create_source(name, url, schema.as_auto_ref(), with_options, *if_not_exists),
                 Statement::CreateSources {
                     like,
                     url,
@@ -602,7 +649,8 @@ macro_rules! make_visitor {
                     from,
                     url,
                     with_options,
-                } => visitor.visit_create_sink(name, from, url, with_options),
+                    if_not_exists,
+                } => visitor.visit_create_sink(name, from, url, with_options, *if_not_exists),
                 Statement::CreateView {
                     name,
                     columns,
@@ -615,23 +663,27 @@ macro_rules! make_visitor {
                     name,
                     on_name,
                     key_parts,
-                } => visitor.visit_create_index(name, on_name, key_parts),
-                Statement::Drop {
+                    if_not_exists,
+                } => visitor.visit_create_index(name, on_name, key_parts, *if_not_exists),
+                Statement::DropDatabase { name, if_exists } => visitor.visit_drop_database(name, *if_exists),
+                Statement::DropObjects {
                     object_type,
                     if_exists,
                     names,
                     cascade,
-                } => visitor.visit_drop(*object_type, *if_exists, names, *cascade),
+                } => visitor.visit_drop_objects(*object_type, *if_exists, names, *cascade),
                 Statement::CreateTable {
                     name,
                     columns,
                     constraints,
                     with_options,
+                    if_not_exists,
                 } => visitor.visit_create_table(
                     name,
                     columns,
                     constraints,
                     with_options,
+                    *if_not_exists,
                 ),
                 Statement::AlterTable { name, operation } => visitor.visit_alter_table(name, operation),
                 Statement::SetVariable {
@@ -640,8 +692,11 @@ macro_rules! make_visitor {
                     value,
                 } => visitor.visit_set_variable(*local, variable, value),
                 Statement::ShowVariable { variable } => visitor.visit_show_variable(variable),
-                Statement::ShowObjects { object_type, extended, full, filter } => {
-                    visitor.visit_show_objects( *extended, *full, *object_type, filter.as_auto_ref())
+                Statement::ShowDatabases { filter } => {
+                    visitor.visit_show_databases(filter.as_auto_ref())
+                }
+                Statement::ShowObjects { object_type, extended, full, from, filter } => {
+                    visitor.visit_show_objects(*extended, *full, *object_type, from.as_auto_ref(), filter.as_auto_ref())
                 }
                 Statement::ShowIndexes { table_name, extended, filter } => {
                     visitor.visit_show_indexes(*extended, table_name, filter.as_auto_ref())
@@ -1219,12 +1274,29 @@ macro_rules! make_visitor {
             }
         }
 
+        pub fn visit_create_database<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            name: &'ast $($mut)* Ident,
+            _if_not_exists: bool,
+        ) {
+            visitor.visit_ident(name);
+        }
+
+        pub fn visit_create_schema<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            name: &'ast $($mut)* ObjectName,
+            _if_not_exists: bool,
+        ) {
+            visitor.visit_object_name(name);
+        }
+
         pub fn visit_create_source<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             name: &'ast $($mut)* ObjectName,
             url: &'ast $($mut)* String,
             schema: Option<&'ast $($mut)* SourceSchema>,
             with_options: &'ast $($mut)* Vec<SqlOption>,
+            _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_literal_string(url);
@@ -1269,6 +1341,7 @@ macro_rules! make_visitor {
             from: &'ast $($mut)* ObjectName,
             url: &'ast $($mut)* String,
             with_options: &'ast $($mut)* Vec<SqlOption>,
+            _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_object_name(from);
@@ -1278,7 +1351,15 @@ macro_rules! make_visitor {
             }
         }
 
-        pub fn visit_drop<'ast, V: $name<'ast> + ?Sized>(
+        pub fn visit_drop_database<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            name: &'ast $($mut)* Ident,
+            _if_exists: bool,
+        ) {
+            visitor.visit_ident(name);
+        }
+
+        pub fn visit_drop_objects<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             object_type: ObjectType,
             _if_exists: bool,
@@ -1315,6 +1396,7 @@ macro_rules! make_visitor {
             name: &'ast $($mut)* Ident,
             on_name: &'ast $($mut)* ObjectName,
             key_parts: &'ast $($mut)* Vec<Expr>,
+            _if_not_exists: bool,
         ) {
             visitor.visit_ident(name);
             visitor.visit_object_name(on_name);
@@ -1329,6 +1411,7 @@ macro_rules! make_visitor {
             columns: &'ast $($mut)* [ColumnDef],
             constraints: &'ast $($mut)* [TableConstraint],
             with_options: &'ast $($mut)* [SqlOption],
+            _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             for column in columns {
@@ -1517,14 +1600,27 @@ macro_rules! make_visitor {
             visitor.visit_ident(variable);
         }
 
+        pub fn visit_show_databases<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            filter: Option<&'ast $($mut)* ShowStatementFilter>
+        ) {
+            if let Some(filter) = filter {
+                visitor.visit_show_statement_filter(filter);
+            }
+        }
+
         pub fn visit_show_objects<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             _extended: bool,
             _full: bool,
             object_type: ObjectType,
+            from: Option<&'ast $($mut)* ObjectName>,
             filter: Option<&'ast $($mut)* ShowStatementFilter>
         ) {
             visitor.visit_object_type(object_type);
+            if let Some(from) = from {
+                visitor.visit_object_name(from);
+            }
             if let Some(filter) = filter {
                 visitor.visit_show_statement_filter(filter);
             }

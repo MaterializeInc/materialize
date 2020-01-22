@@ -1366,7 +1366,11 @@ impl Parser {
 
     /// Parse a SQL CREATE statement
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
-        if self.parse_keyword("TABLE") {
+        if self.parse_keyword("DATABASE") {
+            self.parse_create_database()
+        } else if self.parse_keyword("SCHEMA") {
+            self.parse_create_schema()
+        } else if self.parse_keyword("TABLE") {
             self.parse_create_table()
         } else if self.parse_keyword("MATERIALIZED")
             || self.parse_keyword("OR")
@@ -1385,13 +1389,32 @@ impl Parser {
         } else {
             self.expected(
                 self.peek_range(),
-                "TABLE, VIEW, SOURCE, SINK, or INDEX after CREATE",
+                "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, or INDEX after CREATE",
                 self.peek_token(),
             )
         }
     }
 
+    pub fn parse_create_database(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_identifier()?;
+        Ok(Statement::CreateDatabase {
+            name,
+            if_not_exists,
+        })
+    }
+
+    pub fn parse_create_schema(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_object_name()?;
+        Ok(Statement::CreateSchema {
+            name,
+            if_not_exists,
+        })
+    }
+
     pub fn parse_create_source(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let url = self.parse_literal_string()?;
@@ -1411,6 +1434,7 @@ impl Parser {
             url,
             schema,
             with_options,
+            if_not_exists,
         })
     }
 
@@ -1439,6 +1463,7 @@ impl Parser {
     }
 
     pub fn parse_create_sink(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let from = self.parse_object_name()?;
@@ -1450,6 +1475,7 @@ impl Parser {
             from,
             url,
             with_options,
+            if_not_exists,
         })
     }
 
@@ -1481,6 +1507,7 @@ impl Parser {
     }
 
     pub fn parse_create_index(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         self.expect_keyword("ON")?;
         let on_name = self.parse_object_name()?;
@@ -1491,30 +1518,54 @@ impl Parser {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         })
     }
 
-    pub fn parse_drop(&mut self) -> Result<Statement, ParserError> {
-        let object_type = if self.parse_keyword("TABLE") {
-            ObjectType::Table
-        } else if self.parse_keyword("VIEW") {
-            ObjectType::View
-        } else if self.parse_keywords(vec!["SOURCE"]) {
-            ObjectType::Source
-        } else if self.parse_keywords(vec!["SINK"]) {
-            ObjectType::Sink
-        } else if self.parse_keyword("INDEX") {
-            ObjectType::Index
+    fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
+        if self.parse_keyword("IF") {
+            self.expect_keyword("EXISTS")?;
+            Ok(true)
         } else {
-            return self.expected(
-                self.peek_range(),
-                "TABLE, VIEW, SOURCE, SINK, or INDEX after DROP",
-                self.peek_token(),
-            );
+            Ok(false)
+        }
+    }
+
+    fn parse_if_not_exists(&mut self) -> Result<bool, ParserError> {
+        if self.parse_keyword("IF") {
+            self.expect_keywords(&["NOT", "EXISTS"])?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn parse_drop(&mut self) -> Result<Statement, ParserError> {
+        let object_type = match self.parse_one_of_keywords(&[
+            "DATABASE", "SCHEMA", "TABLE", "VIEW", "SOURCE", "SINK", "INDEX",
+        ]) {
+            Some("DATABASE") => {
+                return Ok(Statement::DropDatabase {
+                    if_exists: self.parse_if_exists()?,
+                    name: self.parse_identifier()?,
+                });
+            }
+            Some("SCHEMA") => ObjectType::Schema,
+            Some("TABLE") => ObjectType::Table,
+            Some("VIEW") => ObjectType::View,
+            Some("SOURCE") => ObjectType::Source,
+            Some("SINK") => ObjectType::Sink,
+            Some("INDEX") => ObjectType::Index,
+            _ => {
+                return self.expected(
+                    self.peek_range(),
+                    "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, or INDEX after DROP",
+                    self.peek_token(),
+                )
+            }
         };
-        // Many dialects support the non standard `IF EXISTS` clause and allow
-        // specifying multiple objects to delete in a single statement
-        let if_exists = self.parse_keywords(vec!["IF", "EXISTS"]);
+
+        let if_exists = self.parse_if_exists()?;
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = self.parse_keyword("CASCADE");
         let cascade_range = self.peek_prev_range();
@@ -1527,7 +1578,7 @@ impl Parser {
                 "Cannot specify both CASCADE and RESTRICT in DROP"
             );
         }
-        Ok(Statement::Drop {
+        Ok(Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -1536,6 +1587,7 @@ impl Parser {
     }
 
     pub fn parse_create_table(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns()?;
@@ -1546,6 +1598,7 @@ impl Parser {
             columns,
             constraints,
             with_options,
+            if_not_exists,
         })
     }
 
@@ -2302,29 +2355,36 @@ impl Parser {
     }
 
     pub fn parse_show(&mut self) -> Result<Statement, ParserError> {
+        if self.parse_keyword("DATABASES") {
+            return Ok(Statement::ShowDatabases {
+                filter: self.parse_show_statement_filter()?,
+            });
+        }
+
         let extended = self.parse_keyword("EXTENDED");
         if extended {
             self.expect_one_of_keywords(&[
-                "INDEX", "INDEXES", "KEYS", "TABLES", "COLUMNS", "FULL",
+                "SCHEMAS", "INDEX", "INDEXES", "KEYS", "TABLES", "COLUMNS", "FULL",
             ])?;
             self.prev_token();
         }
 
         let full = self.parse_keyword("FULL");
         if full {
-            self.expect_one_of_keywords(&["COLUMNS", "TABLES", "VIEWS", "SINKS", "SOURCES"])?;
+            self.expect_one_of_keywords(&[
+                "SCHEMAS", "COLUMNS", "TABLES", "VIEWS", "SINKS", "SOURCES",
+            ])?;
             self.prev_token();
         }
 
         if self.parse_one_of_keywords(&["COLUMNS", "FIELDS"]).is_some() {
             self.parse_show_columns(extended, full)
         } else if let Some(object_type) =
-            self.parse_one_of_keywords(&["SOURCES", "VIEWS", "SINKS", "TABLES"])
+            self.parse_one_of_keywords(&["SCHEMAS", "SOURCES", "VIEWS", "SINKS", "TABLES"])
         {
-            // TODO(benesch): support LIKE/WHERE filters, like we do for SHOW
-            // COLUMNS, for parity with MySQL.
             Ok(Statement::ShowObjects {
                 object_type: match object_type {
+                    "SCHEMAS" => ObjectType::Schema,
                     "SOURCES" => ObjectType::Source,
                     "VIEWS" => ObjectType::View,
                     "SINKS" => ObjectType::Sink,
@@ -2336,6 +2396,11 @@ impl Parser {
                 },
                 extended,
                 full,
+                from: if self.parse_one_of_keywords(&["FROM", "IN"]).is_some() {
+                    Some(self.parse_object_name()?)
+                } else {
+                    None
+                },
                 filter: self.parse_show_statement_filter()?,
             })
         } else if self

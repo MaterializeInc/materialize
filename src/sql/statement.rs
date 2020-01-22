@@ -7,6 +7,7 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
+use std::collections::HashMap;
 use std::iter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -48,7 +49,7 @@ pub fn describe_statement(
         | Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
-        | Statement::Drop { .. }
+        | Statement::DropObjects { .. }
         | Statement::SetVariable { .. }
         | Statement::StartTransaction { .. }
         | Statement::Rollback { .. }
@@ -123,6 +124,11 @@ pub fn describe_statement(
             vec![],
         ),
 
+        Statement::ShowDatabases { .. } => (
+            Some(RelationDesc::empty().add_column("Database", ScalarType::String)),
+            vec![],
+        ),
+
         Statement::ShowObjects {
             object_type, full, ..
         } => {
@@ -191,7 +197,7 @@ fn handle_sync_statement(
         Statement::Rollback { .. } => handle_rollback_transaction(),
         Statement::CreateSink { .. } => handle_create_sink(scx, stmt),
         Statement::CreateIndex { .. } => handle_create_index(scx, stmt),
-        Statement::Drop { .. } => handle_drop_dataflow(scx, stmt),
+        Statement::DropObjects { .. } => handle_drop_dataflow(scx, stmt),
         Statement::Query(query) => handle_select(scx, *query, params),
         Statement::SetVariable {
             local,
@@ -199,12 +205,14 @@ fn handle_sync_statement(
             value,
         } => handle_set_variable(scx, local, variable, value),
         Statement::ShowVariable { variable } => handle_show_variable(scx, variable),
+        Statement::ShowDatabases { filter } => handle_show_databases(scx, filter.as_ref()),
         Statement::ShowObjects {
             extended,
             full,
             object_type: ot,
+            from,
             filter,
-        } => handle_show_objects(scx, extended, full, ot, filter.as_ref()),
+        } => handle_show_objects(scx, extended, full, ot, from, filter),
         Statement::ShowIndexes {
             extended,
             table_name,
@@ -304,43 +312,124 @@ fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
     Ok(Plan::Rollback)
 }
 
+fn handle_show_databases(
+    scx: &StatementContext,
+    filter: Option<&ShowStatementFilter>,
+) -> Result<Plan, failure::Error> {
+    if filter.is_some() {
+        bail!("SHOW DATABASES {LIKE | WHERE} is not yet supported");
+    }
+    Ok(Plan::SendRows(
+        scx.catalog
+            .databases()
+            .map(|database| Row::pack(&[Datum::from(database)]))
+            .collect(),
+    ))
+}
+
 fn handle_show_objects(
     scx: &StatementContext,
     extended: bool,
     full: bool,
     object_type: ObjectType,
-    filter: Option<&ShowStatementFilter>,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
-    if extended {
-        bail!("SHOW EXTENDED ... is not supported ");
-    }
-
-    let like_regex = match filter {
-        Some(ShowStatementFilter::Like(like_string)) => {
-            build_like_regex_from_string(like_string.as_ref())?
+    let classify_id = |id| match id {
+        GlobalId::System(_) => "SYSTEM",
+        GlobalId::User(_) => "USER",
+    };
+    let make_row = |name: &str, class| {
+        if full {
+            Row::pack(&[Datum::from(name), Datum::from(class)])
+        } else {
+            Row::pack(&[Datum::from(name)])
         }
-        Some(ShowStatementFilter::Where(_where_epr)) => bail!("SHOW ... WHERE is not supported"),
-        None => build_like_regex_from_string(&String::from("%"))?,
     };
 
-    let rows = scx.catalog.iter().filter(|entry| {
-        object_type_matches(object_type, entry.item())
-            && like_regex.is_match(&entry.name().to_string())
-    });
-    let mut rows: Vec<Row> = if full {
-        rows.map(|entry| {
-            let object_type = match entry.id() {
-                GlobalId::System(_) => "SYSTEM",
-                GlobalId::User(_) => "USER",
-            };
-            Row::pack(&[
-                Datum::from(&*entry.name().to_string()),
-                Datum::from(object_type),
-            ])
-        })
-        .collect()
+    let mut rows = if let ObjectType::Schema = object_type {
+        if filter.is_some() {
+            bail!("SHOW SCHEMAS ... {LIKE | WHERE} is not supported");
+        }
+
+        let schemas = if let Some(from) = from {
+            if from.0.len() != 1 {
+                bail!(
+                    "database name '{}' does not have exactly one component",
+                    from
+                );
+            }
+            let database_spec = DatabaseSpecifier::Name(normalize::ident(from.0[0].clone()));
+            scx.catalog
+                .get_schemas(&database_spec)
+                .ok_or_else(|| format_err!("database '{:?}' does not exist", database_spec))?
+        } else {
+            scx.catalog
+                .get_schemas(&DatabaseSpecifier::Name(scx.session.database().to_owned()))
+                .ok_or_else(|| {
+                    format_err!(
+                        "session database '{}' does not exist",
+                        scx.session.database()
+                    )
+                })?
+        };
+
+        let mut rows = vec![];
+        for name in schemas.keys() {
+            rows.push(make_row(name, "USER"));
+        }
+        if extended {
+            let ambient_schemas = scx
+                .catalog
+                .get_schemas(&DatabaseSpecifier::Ambient)
+                .expect("ambient database should always exist");
+            for name in ambient_schemas.keys() {
+                rows.push(make_row(name, "SYSTEM"));
+            }
+        }
+        rows
     } else {
-        rows.map(|entry| Row::pack(&[Datum::from(&*entry.name().to_string())]))
+        let like_regex = match filter {
+            Some(ShowStatementFilter::Like(pattern)) => build_like_regex_from_string(&pattern)?,
+            Some(ShowStatementFilter::Where(_)) => bail!("SHOW ... WHERE is not supported"),
+            None => build_like_regex_from_string("%")?,
+        };
+
+        let empty_schema = HashMap::new();
+        let items = if let Some(mut from) = from {
+            if from.0.len() > 2 {
+                bail!(
+                    "schema name '{}' cannot have more than two components",
+                    from
+                );
+            }
+            let schema_name = normalize::ident(from.0.pop().unwrap());
+            let database_name = from
+                .0
+                .pop()
+                .map(normalize::ident)
+                .unwrap_or_else(|| scx.session.database().to_owned());
+            &scx.catalog
+                .database_resolver(&database_name)?
+                .resolve_schema(&schema_name)
+                .ok_or_else(|| format_err!("schema '{}' does not exist", schema_name))?
+                .items
+        } else {
+            let resolver = scx.catalog.database_resolver(scx.session.database())?;
+            &["public"]
+                .iter()
+                .find_map(|schema_name| resolver.resolve_schema(schema_name))
+                .map_or_else(|| &empty_schema, |schema| &schema.items)
+        };
+
+        items
+            .iter()
+            .map(|(name, id)| (name, scx.catalog.get_by_id(id)))
+            .filter(|(_name, entry)| {
+                object_type_matches(object_type, entry.item())
+                    && like_regex.is_match(&entry.name().to_string())
+            })
+            .map(|(name, entry)| make_row(name, classify_id(entry.id())))
             .collect()
     };
     rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
@@ -476,13 +565,14 @@ fn handle_show_create_source(
 }
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let (name, from, url, with_options) = match stmt {
+    let (name, from, url, with_options, if_not_exists) = match stmt {
         Statement::CreateSink {
             name,
             from,
             url,
             with_options,
-        } => (name, from, url, with_options),
+            if_not_exists,
+        } => (name, from, url, with_options, if_not_exists),
         _ => unreachable!(),
     };
     if with_options.is_empty() {
@@ -522,16 +612,21 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         }),
     };
 
-    Ok(Plan::CreateSink(name, sink))
+    Ok(Plan::CreateSink {
+        name,
+        sink,
+        if_not_exists,
+    })
 }
 
 fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let (name, on_name, key_parts) = match stmt {
+    let (name, on_name, key_parts, if_not_exists) = match stmt {
         Statement::CreateIndex {
             name,
             on_name,
             key_parts,
-        } => (name, on_name, key_parts),
+            if_not_exists,
+        } => (name, on_name, key_parts, if_not_exists),
         _ => unreachable!(),
     };
     let on_name = scx.resolve_name(on_name)?;
@@ -543,19 +638,20 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
         .into_iter()
         .map(|x| x.lower_uncorrelated())
         .collect::<Vec<_>>();
-    Ok(Plan::CreateIndex(
-        FullName {
+    Ok(Plan::CreateIndex {
+        name: FullName {
             database: on_name.database.clone(),
             schema: on_name.schema.clone(),
             item: normalize::ident(name),
         },
-        Index::new(
+        index: Index::new(
             catalog_entry.id(),
             keys,
             key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
             catalog_entry.desc()?,
         ),
-    ))
+        if_not_exists,
+    })
 }
 
 fn handle_create_view(
@@ -643,6 +739,7 @@ async fn handle_create_dataflow(
             url,
             schema,
             with_options,
+            if_not_exists,
         } => {
             let source_url = parse_source_url(url)?;
             let mut format = KafkaSchemaFormat::Avro;
@@ -685,7 +782,11 @@ async fn handle_create_dataflow(
                             let source =
                                 build_kafka_source(schema, addr, topic, format, message_name)
                                     .await?;
-                            Ok(Plan::CreateSource(name, source))
+                            Ok(Plan::CreateSource {
+                                name,
+                                source,
+                                if_not_exists: *if_not_exists,
+                            })
                         } else {
                             bail!("Kafka sources require a schema.");
                         }
@@ -812,7 +913,11 @@ async fn handle_create_dataflow(
                     };
                     let name =
                         allocate_name(&current_database, normalize::object_name(name.clone())?);
-                    Ok(Plan::CreateSource(name, source))
+                    Ok(Plan::CreateSource {
+                        name,
+                        source,
+                        if_not_exists: *if_not_exists,
+                    })
                 }
             }
         }
@@ -888,7 +993,7 @@ async fn handle_create_dataflow(
 
 fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     let (object_type, if_exists, names, cascade) = match stmt {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -1266,6 +1371,7 @@ fn object_type_matches(object_type: ObjectType, item: &CatalogItem) -> bool {
 
 fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
     match object_type {
+        ObjectType::Schema => "SCHEMAS",
         ObjectType::Index => "INDEXES",
         ObjectType::Table => "TABLES",
         ObjectType::View => "VIEWS",
