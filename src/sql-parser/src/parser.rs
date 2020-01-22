@@ -1522,6 +1522,15 @@ impl Parser {
         })
     }
 
+    fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
+        if self.parse_keyword("IF") {
+            self.expect_keyword("EXISTS")?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     fn parse_if_not_exists(&mut self) -> Result<bool, ParserError> {
         if self.parse_keyword("IF") {
             self.expect_keywords(&["NOT", "EXISTS"])?;
@@ -1532,26 +1541,31 @@ impl Parser {
     }
 
     pub fn parse_drop(&mut self) -> Result<Statement, ParserError> {
-        let object_type = if self.parse_keyword("TABLE") {
-            ObjectType::Table
-        } else if self.parse_keyword("VIEW") {
-            ObjectType::View
-        } else if self.parse_keywords(vec!["SOURCE"]) {
-            ObjectType::Source
-        } else if self.parse_keywords(vec!["SINK"]) {
-            ObjectType::Sink
-        } else if self.parse_keyword("INDEX") {
-            ObjectType::Index
-        } else {
-            return self.expected(
-                self.peek_range(),
-                "TABLE, VIEW, SOURCE, SINK, or INDEX after DROP",
-                self.peek_token(),
-            );
+        let object_type = match self.parse_one_of_keywords(&[
+            "DATABASE", "SCHEMA", "TABLE", "VIEW", "SOURCE", "SINK", "INDEX",
+        ]) {
+            Some("DATABASE") => {
+                return Ok(Statement::DropDatabase {
+                    if_exists: self.parse_if_exists()?,
+                    name: self.parse_identifier()?,
+                });
+            }
+            Some("SCHEMA") => ObjectType::Schema,
+            Some("TABLE") => ObjectType::Table,
+            Some("VIEW") => ObjectType::View,
+            Some("SOURCE") => ObjectType::Source,
+            Some("SINK") => ObjectType::Sink,
+            Some("INDEX") => ObjectType::Index,
+            _ => {
+                return self.expected(
+                    self.peek_range(),
+                    "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, or INDEX after DROP",
+                    self.peek_token(),
+                )
+            }
         };
-        // Many dialects support the non standard `IF EXISTS` clause and allow
-        // specifying multiple objects to delete in a single statement
-        let if_exists = self.parse_keywords(vec!["IF", "EXISTS"]);
+
+        let if_exists = self.parse_if_exists()?;
         let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = self.parse_keyword("CASCADE");
         let cascade_range = self.peek_prev_range();
@@ -1564,7 +1578,7 @@ impl Parser {
                 "Cannot specify both CASCADE and RESTRICT in DROP"
             );
         }
-        Ok(Statement::Drop {
+        Ok(Statement::DropObjects {
             object_type,
             if_exists,
             names,

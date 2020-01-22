@@ -48,7 +48,7 @@ pub fn describe_statement(
         | Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
-        | Statement::Drop { .. }
+        | Statement::DropObjects { .. }
         | Statement::SetVariable { .. }
         | Statement::StartTransaction { .. }
         | Statement::Rollback { .. }
@@ -191,7 +191,7 @@ fn handle_sync_statement(
         Statement::Rollback { .. } => handle_rollback_transaction(),
         Statement::CreateSink { .. } => handle_create_sink(scx, stmt),
         Statement::CreateIndex { .. } => handle_create_index(scx, stmt),
-        Statement::Drop { .. } => handle_drop_dataflow(scx, stmt),
+        Statement::DropObjects { .. } => handle_drop_dataflow(scx, stmt),
         Statement::Query(query) => handle_select(scx, *query, params),
         Statement::SetVariable {
             local,
@@ -904,7 +904,7 @@ async fn handle_create_dataflow(
 
 fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     let (object_type, if_exists, names, cascade) = match stmt {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -1282,6 +1282,7 @@ fn object_type_matches(object_type: ObjectType, item: &CatalogItem) -> bool {
 
 fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
     match object_type {
+        ObjectType::Schema => "SCHEMAS",
         ObjectType::Index => "INDEXES",
         ObjectType::Table => "TABLES",
         ObjectType::View => "VIEWS",

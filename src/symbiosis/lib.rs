@@ -75,7 +75,7 @@ END $$;
     pub fn can_handle(&self, stmt: &Statement) -> bool {
         match stmt {
             Statement::CreateTable { .. }
-            | Statement::Drop { .. }
+            | Statement::DropObjects { .. }
             | Statement::Delete { .. }
             | Statement::Insert { .. }
             | Statement::Update { .. } => true,
@@ -170,7 +170,7 @@ END $$;
                     if_not_exists: *if_not_exists,
                 }
             }
-            Statement::Drop {
+            Statement::DropObjects {
                 names,
                 object_type: ObjectType::Table,
                 if_exists,

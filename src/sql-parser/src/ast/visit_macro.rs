@@ -442,14 +442,22 @@ macro_rules! make_visitor {
                 visit_option(self, option)
             }
 
-            fn visit_drop(
+            fn visit_drop_database(
+                &mut self,
+                name: &'ast $($mut)* Ident,
+                if_exists: bool,
+            ) {
+                visit_drop_database(self, name, if_exists)
+            }
+
+            fn visit_drop_objects(
                 &mut self,
                 object_type: ObjectType,
                 if_exists: bool,
                 names: &'ast $($mut)* [ObjectName],
                 cascade: bool,
             ) {
-                visit_drop(self, object_type, if_exists, names, cascade)
+                visit_drop_objects(self, object_type, if_exists, names, cascade)
             }
 
             fn visit_object_type(&mut self, _object_type: ObjectType) {}
@@ -646,12 +654,13 @@ macro_rules! make_visitor {
                     key_parts,
                     if_not_exists,
                 } => visitor.visit_create_index(name, on_name, key_parts, *if_not_exists),
-                Statement::Drop {
+                Statement::DropDatabase { name, if_exists } => visitor.visit_drop_database(name, *if_exists),
+                Statement::DropObjects {
                     object_type,
                     if_exists,
                     names,
                     cascade,
-                } => visitor.visit_drop(*object_type, *if_exists, names, *cascade),
+                } => visitor.visit_drop_objects(*object_type, *if_exists, names, *cascade),
                 Statement::CreateTable {
                     name,
                     columns,
@@ -1328,7 +1337,15 @@ macro_rules! make_visitor {
             }
         }
 
-        pub fn visit_drop<'ast, V: $name<'ast> + ?Sized>(
+        pub fn visit_drop_database<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            name: &'ast $($mut)* Ident,
+            _if_exists: bool,
+        ) {
+            visitor.visit_ident(name);
+        }
+
+        pub fn visit_drop_objects<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             object_type: ObjectType,
             _if_exists: bool,

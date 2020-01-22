@@ -527,6 +527,7 @@ where
             Plan::DropItems(ids, item_type) => {
                 self.drop_items(&ids, item_type != ObjectType::Index);
                 Ok(match item_type {
+                    ObjectType::Schema => unreachable!(),
                     ObjectType::Source => ExecuteResponse::DroppedSource,
                     ObjectType::View => ExecuteResponse::DroppedView,
                     ObjectType::Table => ExecuteResponse::DroppedTable,

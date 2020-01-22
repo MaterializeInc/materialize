@@ -533,7 +533,10 @@ pub enum Statement {
         selection: Option<Expr>,
     },
     /// `CREATE DATABASE`
-    CreateDatabase { name: Ident, if_not_exists: bool },
+    CreateDatabase {
+        name: Ident,
+        if_not_exists: bool,
+    },
     /// `CREATE SCHEMA`
     CreateSchema {
         name: ObjectName,
@@ -598,8 +601,12 @@ pub enum Statement {
         name: ObjectName,
         operation: AlterTableOperation,
     },
+    DropDatabase {
+        name: Ident,
+        if_exists: bool,
+    },
     /// `DROP`
-    Drop {
+    DropObjects {
         /// The type of the object to drop: TABLE, VIEW, etc.
         object_type: ObjectType,
         /// An optional `IF EXISTS` clause. (Non-standard.)
@@ -623,7 +630,9 @@ pub enum Statement {
     /// `SHOW <variable>`
     ///
     /// Note: this is a PostgreSQL-specific statement.
-    ShowVariable { variable: Ident },
+    ShowVariable {
+        variable: Ident,
+    },
     /// `SHOW <object>S`
     ///
     /// ```sql
@@ -656,21 +665,38 @@ pub enum Statement {
         filter: Option<ShowStatementFilter>,
     },
     /// `SHOW CREATE VIEW <view>`
-    ShowCreateView { view_name: ObjectName },
+    ShowCreateView {
+        view_name: ObjectName,
+    },
     /// `SHOW CREATE SOURCE <source>`
-    ShowCreateSource { source_name: ObjectName },
+    ShowCreateSource {
+        source_name: ObjectName,
+    },
     /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
-    StartTransaction { modes: Vec<TransactionMode> },
+    StartTransaction {
+        modes: Vec<TransactionMode>,
+    },
     /// `SET TRANSACTION ...`
-    SetTransaction { modes: Vec<TransactionMode> },
+    SetTransaction {
+        modes: Vec<TransactionMode>,
+    },
     /// `COMMIT [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
-    Commit { chain: bool },
+    Commit {
+        chain: bool,
+    },
     /// `ROLLBACK [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
-    Rollback { chain: bool },
+    Rollback {
+        chain: bool,
+    },
     /// `TAIL`
-    Tail { name: ObjectName },
+    Tail {
+        name: ObjectName,
+    },
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
-    Explain { stage: Stage, query: Box<Query> },
+    Explain {
+        stage: Stage,
+        query: Box<Query>,
+    },
 }
 
 impl fmt::Display for Statement {
@@ -913,7 +939,14 @@ impl fmt::Display for Statement {
             Statement::AlterTable { name, operation } => {
                 write!(f, "ALTER TABLE {} {}", name, operation)
             }
-            Statement::Drop {
+            Statement::DropDatabase { name, if_exists } => {
+                write!(f, "DROP DATABASE ")?;
+                if *if_exists {
+                    write!(f, "IF EXISTS ")?;
+                }
+                write!(f, "{}", name)
+            }
+            Statement::DropObjects {
                 object_type,
                 if_exists,
                 names,
@@ -944,7 +977,6 @@ impl fmt::Display for Statement {
                 full,
                 extended,
             } => {
-                use ObjectType::*;
                 f.write_str("SHOW")?;
                 if *extended {
                     f.write_str(" EXTENDED")?;
@@ -956,11 +988,11 @@ impl fmt::Display for Statement {
                     f,
                     " {}",
                     match object_type {
-                        Table => "TABLES",
-                        View => "VIEWS",
-                        Source => "SOURCES",
-                        Sink => "SINKS",
-                        Index => unreachable!(),
+                        ObjectType::Table => "TABLES",
+                        ObjectType::View => "VIEWS",
+                        ObjectType::Source => "SOURCES",
+                        ObjectType::Sink => "SINKS",
+                        ObjectType::Schema | ObjectType::Index => unreachable!(),
                     }
                 )?;
                 if let Some(filter) = filter {
@@ -1088,6 +1120,7 @@ pub enum SourceSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum ObjectType {
+    Schema,
     Table,
     View,
     Source,
@@ -1098,6 +1131,7 @@ pub enum ObjectType {
 impl fmt::Display for ObjectType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
+            ObjectType::Schema => "SCHEMA",
             ObjectType::Table => "TABLE",
             ObjectType::View => "VIEW",
             ObjectType::Source => "SOURCE",

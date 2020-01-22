@@ -3171,16 +3171,16 @@ fn parse_create_database() {
     }
 
     let res = parse_sql_statements("CREATE DATABASE IF EXISTS foo");
-    assert_eq!(
-        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
-        res.unwrap_err()
-    );
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
 
     let res = parse_sql_statements("CREATE DATABASE foo.bar");
-    assert_eq!(
-        ParserError::ParserError("Expected end of statement, found: .".into()),
-        res.unwrap_err()
-    );
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected end of statement, found: ."));
 }
 
 #[test]
@@ -3208,10 +3208,10 @@ fn parse_create_schema() {
     }
 
     let res = parse_sql_statements("CREATE SCHEMA IF EXISTS foo");
-    assert_eq!(
-        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
-        res.unwrap_err()
-    );
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
 }
 
 #[test]
@@ -3410,10 +3410,10 @@ fn parse_create_source_if_not_exists() {
     }
 
     let res = parse_sql_statements("CREATE SOURCE IF EXISTS foo FROM 'bar' USING SCHEMA ''");
-    assert_eq!(
-        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
-        res.unwrap_err()
-    );
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
 }
 
 #[test]
@@ -3495,10 +3495,10 @@ fn parse_create_sink_if_not_exists() {
     }
 
     let res = parse_sql_statements("CREATE SINK IF EXISTS foo FROM bar INTO 'baz'");
-    assert_eq!(
-        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
-        res.unwrap_err()
-    );
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
 }
 
 #[test]
@@ -3618,17 +3618,59 @@ Expected ON, found: ."
     );
 
     let res = parse_sql_statements("CREATE INDEX IF EXISTS myschema.ind ON foo(b)");
-    assert_eq!(
-        ParserError::ParserError("Expected NOT, found: EXISTS".to_string()),
-        res.unwrap_err(),
-    );
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
+}
+
+#[test]
+fn parse_drop_database() {
+    match verified_stmt("DROP DATABASE mydb") {
+        Statement::DropDatabase { name, if_exists } => {
+            assert_eq!(name.to_string(), "mydb");
+            assert!(!if_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    match verified_stmt("DROP DATABASE IF EXISTS mydb") {
+        Statement::DropDatabase { name, if_exists } => {
+            assert_eq!(name.to_string(), "mydb");
+            assert!(if_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("DROP DATABASE mydb.nope");
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected end of statement, found: ."));
+}
+
+#[test]
+fn parse_drop_schema() {
+    let sql = "DROP SCHEMA mydb.myschema";
+    match verified_stmt(sql) {
+        Statement::DropObjects {
+            names, object_type, ..
+        } => {
+            assert_eq!(
+                vec!["mydb.myschema"],
+                names.iter().map(ToString::to_string).collect::<Vec<_>>()
+            );
+            assert_eq!(ObjectType::Schema, object_type);
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[test]
 fn parse_drop_table() {
     let sql = "DROP TABLE foo";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -3647,7 +3689,7 @@ fn parse_drop_table() {
 
     let sql = "DROP TABLE IF EXISTS foo, bar CASCADE";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -3691,7 +3733,7 @@ Cannot specify both CASCADE and RESTRICT in DROP"
 fn parse_drop_view() {
     let sql = "DROP VIEW myschema.myview";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             names, object_type, ..
         } => {
             assert_eq!(
@@ -3708,7 +3750,7 @@ fn parse_drop_view() {
 fn parse_drop_source() {
     let sql = "DROP SOURCE myschema.mydatasource";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -3730,7 +3772,7 @@ fn parse_drop_source() {
 fn parse_drop_index() {
     let sql = "DROP INDEX IF EXISTS myschema.myindex";
     match verified_stmt(sql) {
-        Statement::Drop {
+        Statement::DropObjects {
             object_type,
             if_exists,
             names,
@@ -4452,10 +4494,10 @@ fn parse_create_table_if_not_exists() {
     }
 
     let res = parse_sql_statements("CREATE TABLE IF EXISTS foo (bar int)");
-    assert_eq!(
-        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
-        res.unwrap_err()
-    );
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("Expected NOT, found: EXISTS"));
 }
 
 #[ignore] // NOTE(benesch): this test is doomed. COPY data should not be tokenized/parsed.
