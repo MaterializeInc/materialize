@@ -24,12 +24,11 @@
 //!
 //! The tokens then form the input for the parser, which outputs an Abstract Syntax Tree (AST).
 
-use std::error::Error;
 use std::fmt;
-use std::iter::Peekable;
-use std::str::Chars;
+use std::ops::Range;
 
 use crate::keywords::ALL_KEYWORDS;
+use crate::parser::ParserError;
 
 /// SQL Token enumeration
 #[derive(Debug, Clone, PartialEq)]
@@ -261,23 +260,29 @@ impl fmt::Display for Whitespace {
     }
 }
 
-/// Tokenizer error
-#[derive(Debug, PartialEq)]
-pub struct TokenizerError(String);
-
-impl fmt::Display for TokenizerError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.0)
-    }
+/// Like `str.chars().peekable()` except we can get at the underlying index
+struct PeekableChars<'a> {
+    str: &'a str,
+    index: usize,
 }
 
-impl Error for TokenizerError {}
+impl<'a> PeekableChars<'a> {
+    fn next(&mut self) -> Option<char> {
+        let c = self.peek();
+        if let Some(c) = c {
+            self.index += c.len_utf8();
+        }
+        c
+    }
+
+    fn peek(&mut self) -> Option<char> {
+        self.str[self.index..].chars().next()
+    }
+}
 
 /// SQL Tokenizer
 pub struct Tokenizer {
     pub query: String,
-    pub line: u64,
-    pub col: u64,
 }
 
 impl Tokenizer {
@@ -285,43 +290,42 @@ impl Tokenizer {
     pub fn new(query: &str) -> Self {
         Self {
             query: query.to_string(),
-            line: 1,
-            col: 1,
         }
     }
 
     /// Tokenize the statement and produce a vector of tokens
-    pub fn tokenize(&mut self) -> Result<Vec<Token>, TokenizerError> {
-        let mut peekable = self.query.chars().peekable();
+    pub fn tokenize(&mut self) -> Result<Vec<(Token, Range<usize>)>, ParserError> {
+        let mut peekable = PeekableChars {
+            str: &self.query,
+            index: 0,
+        };
 
-        let mut tokens: Vec<Token> = vec![];
+        let mut tokens: Vec<(Token, Range<usize>)> = vec![];
 
-        while let Some(token) = self.next_token(&mut peekable)? {
-            match &token {
-                Token::Whitespace(Whitespace::Newline) => {
-                    self.line += 1;
-                    self.col = 1;
+        loop {
+            let start = peekable.index;
+            let token = self.next_token(&mut peekable);
+            let end = peekable.index;
+            match token {
+                Err(message) => {
+                    return Err(ParserError {
+                        sql: self.query.clone(),
+                        range: start..end,
+                        message,
+                    })
                 }
-
-                Token::Whitespace(Whitespace::Tab) => self.col += 4,
-                Token::Word(w) if w.quote_style == None => self.col += w.value.len() as u64,
-                Token::Word(w) if w.quote_style != None => self.col += w.value.len() as u64 + 2,
-                Token::Number(s) => self.col += s.len() as u64,
-                Token::SingleQuotedString(s) => self.col += s.len() as u64,
-                Token::Parameter(s) => self.col += s.len() as u64,
-                _ => self.col += 1,
+                Ok(Some(token)) => tokens.push((token, start..end)),
+                Ok(None) => break,
             }
-
-            tokens.push(token);
         }
         Ok(tokens)
     }
 
     /// Get the next token or return None
-    fn next_token(&self, chars: &mut Peekable<Chars<'_>>) -> Result<Option<Token>, TokenizerError> {
+    fn next_token(&self, chars: &mut PeekableChars) -> Result<Option<Token>, String> {
         //println!("next_token: {:?}", chars.peek());
         match chars.peek() {
-            Some(&ch) => match ch {
+            Some(ch) => match ch {
                 ' ' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Space)),
                 '\t' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Tab)),
                 '\n' => self.consume_and_return(chars, Token::Whitespace(Whitespace::Newline)),
@@ -384,10 +388,10 @@ impl Tokenizer {
                     if chars.next() == Some(quote_end) {
                         Ok(Some(Token::make_word(&s, Some(quote_start))))
                     } else {
-                        Err(TokenizerError(format!(
+                        Err(format!(
                             "Expected close delimiter '{}' before EOF.",
                             quote_end
-                        )))
+                        ))
                     }
                 }
                 // numbers
@@ -447,10 +451,7 @@ impl Tokenizer {
                             }
                         }
                         Some('-') => self.consume_and_return(chars, Token::JsonDeletePath),
-                        _ => Err(TokenizerError(format!(
-                            "Tokenizer Error at Line: {}, Col: {}",
-                            self.line, self.col
-                        ))),
+                        _ => Err("Unrecognized token".to_string()),
                     }
                 }
                 '@' => {
@@ -459,10 +460,7 @@ impl Tokenizer {
                         Some('>') => self.consume_and_return(chars, Token::JsonContainsJson),
                         Some('?') => self.consume_and_return(chars, Token::JsonContainsPath),
                         Some('@') => self.consume_and_return(chars, Token::JsonApplyPathPredicate),
-                        _ => Err(TokenizerError(format!(
-                            "Tokenizer Error at Line: {}, Col: {}",
-                            self.line, self.col
-                        ))),
+                        _ => Err("Unrecognized token".to_string()),
                     }
                 }
                 '?' => {
@@ -477,10 +475,7 @@ impl Tokenizer {
                     chars.next(); // consume '|'
                     match chars.peek() {
                         Some('|') => self.consume_and_return(chars, Token::JsonConcat),
-                        _ => Err(TokenizerError(format!(
-                            "Tokenizer Error at Line: {}, Col: {}",
-                            self.line, self.col
-                        ))),
+                        _ => Err("Unrecognized token".to_string()),
                     }
                 }
                 '=' => self.consume_and_return(chars, Token::Eq),
@@ -495,10 +490,7 @@ impl Tokenizer {
                     chars.next(); // consume
                     match chars.peek() {
                         Some('=') => self.consume_and_return(chars, Token::Neq),
-                        _ => Err(TokenizerError(format!(
-                            "Tokenizer Error at Line: {}, Col: {}",
-                            self.line, self.col
-                        ))),
+                        _ => Err("Unrecognized token".to_string()),
                     }
                 }
                 '<' => {
@@ -539,25 +531,25 @@ impl Tokenizer {
     }
 
     /// Tokenize an identifier or keyword, after the first char is already consumed.
-    fn tokenize_word(&self, first_char: char, chars: &mut Peekable<Chars<'_>>) -> String {
+    fn tokenize_word(&self, first_char: char, chars: &mut PeekableChars) -> String {
         let mut s = first_char.to_string();
         s.push_str(&peeking_take_while(chars, |ch| self.is_identifier_part(ch)));
         s
     }
 
     /// Read a single quoted string, starting with the opening quote.
-    fn tokenize_single_quoted_string(&self, chars: &mut Peekable<Chars<'_>>) -> String {
+    fn tokenize_single_quoted_string(&self, chars: &mut PeekableChars) -> String {
         //TODO: handle escaped quotes in string
         //TODO: handle newlines in string
         //TODO: handle EOF before terminating quote
         //TODO: handle 'string' <white space> 'string continuation'
         let mut s = String::new();
         chars.next(); // consume the opening quote
-        while let Some(&ch) = chars.peek() {
+        while let Some(ch) = chars.peek() {
             match ch {
                 '\'' => {
                     chars.next(); // consume
-                    let escaped_quote = chars.peek().map(|c| *c == '\'').unwrap_or(false);
+                    let escaped_quote = chars.peek().map(|c| c == '\'').unwrap_or(false);
                     if escaped_quote {
                         s.push('\'');
                         chars.next();
@@ -576,8 +568,8 @@ impl Tokenizer {
 
     fn tokenize_multiline_comment(
         &self,
-        chars: &mut Peekable<Chars<'_>>,
-    ) -> Result<Option<Token>, TokenizerError> {
+        chars: &mut PeekableChars,
+    ) -> Result<Option<Token>, String> {
         let mut s = String::new();
         let mut maybe_closing_comment = false;
         // TODO: deal with nested comments
@@ -597,9 +589,7 @@ impl Tokenizer {
                     }
                 }
                 None => {
-                    break Err(TokenizerError(
-                        "Unexpected EOF while in a multi-line comment".to_string(),
-                    ));
+                    break Err("Unexpected EOF while in a multi-line comment".to_string());
                 }
             }
         }
@@ -608,10 +598,7 @@ impl Tokenizer {
     /// PostgreSQL supports positional parameters (like $1, $2, etc.) for
     /// prepared statements and function definitions.
     /// Grab the positional argument following a $ to parse it.
-    fn tokenize_parameter(
-        &self,
-        chars: &mut Peekable<Chars<'_>>,
-    ) -> Result<Option<Token>, TokenizerError> {
+    fn tokenize_parameter(&self, chars: &mut PeekableChars) -> Result<Option<Token>, String> {
         assert_eq!(Some('$'), chars.next());
 
         let n = peeking_take_while(chars, |ch| match ch {
@@ -620,11 +607,8 @@ impl Tokenizer {
         });
 
         if n.is_empty() {
-            return Err(TokenizerError(
-                "parameter marker ($) was not followed by \
-                 at least one digit"
-                    .into(),
-            ));
+            chars.next();
+            return Err("parameter marker ($) was not followed by at least one digit".to_string());
         }
 
         Ok(Some(Token::Parameter(n)))
@@ -632,9 +616,9 @@ impl Tokenizer {
 
     fn tokenize_number(
         &self,
-        chars: &mut Peekable<Chars<'_>>,
+        chars: &mut PeekableChars,
         seen_decimal: bool,
-    ) -> Result<Option<Token>, TokenizerError> {
+    ) -> Result<Option<Token>, String> {
         let mut seen_decimal = seen_decimal;
         let mut s = if seen_decimal {
             ".".to_string()
@@ -675,9 +659,9 @@ impl Tokenizer {
 
     fn consume_and_return(
         &self,
-        chars: &mut Peekable<Chars<'_>>,
+        chars: &mut PeekableChars,
         t: Token,
-    ) -> Result<Option<Token>, TokenizerError> {
+    ) -> Result<Option<Token>, String> {
         chars.next();
         Ok(Some(t))
     }
@@ -706,11 +690,11 @@ impl Tokenizer {
 /// Return the characters read as String, and keep the first non-matching
 /// char available as `chars.next()`.
 fn peeking_take_while(
-    chars: &mut Peekable<Chars<'_>>,
+    chars: &mut PeekableChars,
     mut predicate: impl FnMut(char) -> bool,
 ) -> String {
     let mut s = String::new();
-    while let Some(&ch) = chars.peek() {
+    while let Some(ch) = chars.peek() {
         if predicate(ch) {
             chars.next(); // consume
             s.push(ch);
@@ -729,7 +713,12 @@ mod tests {
     fn tokenize_select_1() {
         let sql = String::from("SELECT 1");
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
 
         let expected = vec![
             Token::make_keyword("SELECT"),
@@ -744,7 +733,12 @@ mod tests {
     fn tokenize_scalar_function() {
         let sql = String::from("SELECT sqrt(1)");
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
 
         let expected = vec![
             Token::make_keyword("SELECT"),
@@ -762,7 +756,12 @@ mod tests {
     fn tokenize_simple_select() {
         let sql = String::from("SELECT * FROM customer WHERE id = 1 LIMIT 5");
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
 
         let expected = vec![
             Token::make_keyword("SELECT"),
@@ -793,7 +792,12 @@ mod tests {
     fn tokenize_string_predicate() {
         let sql = String::from("SELECT * FROM customer WHERE salary != 'Not Provided'");
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
 
         let expected = vec![
             Token::make_keyword("SELECT"),
@@ -821,7 +825,12 @@ mod tests {
         let sql = String::from("\nمصطفىh");
 
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
         println!("tokens: {:#?}", tokens);
         let expected = vec![
             Token::Whitespace(Whitespace::Newline),
@@ -840,7 +849,12 @@ mod tests {
         let sql = String::from("\n\nSELECT * FROM table\tمصطفىh");
 
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
         println!("tokens: {:#?}", tokens);
         let expected = vec![
             Token::Whitespace(Whitespace::Newline),
@@ -867,7 +881,12 @@ mod tests {
     fn tokenize_is_null() {
         let sql = String::from("a IS NULL");
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
 
         let expected = vec![
             Token::make_word("a", None),
@@ -885,7 +904,12 @@ mod tests {
         let sql = String::from("0--this is a comment\n1");
 
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
         let expected = vec![
             Token::Number("0".to_string()),
             Token::Whitespace(Whitespace::SingleLineComment(
@@ -901,7 +925,12 @@ mod tests {
         let sql = String::from("--this is a comment");
 
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
         let expected = vec![Token::Whitespace(Whitespace::SingleLineComment(
             "this is a comment".to_string(),
         ))];
@@ -913,7 +942,12 @@ mod tests {
         let sql = String::from("0/*multi-line\n* /comment*/1");
 
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
         let expected = vec![
             Token::Number("0".to_string()),
             Token::Whitespace(Whitespace::MultiLineComment(
@@ -929,7 +963,12 @@ mod tests {
         let sql = String::from("\n/** Comment **/\n");
 
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
         let expected = vec![
             Token::Whitespace(Whitespace::Newline),
             Token::Whitespace(Whitespace::MultiLineComment("* Comment *".to_string())),
@@ -945,9 +984,11 @@ mod tests {
         let mut tokenizer = Tokenizer::new(&sql);
         assert_eq!(
             tokenizer.tokenize(),
-            Err(TokenizerError(
-                "Expected close delimiter '\"' before EOF.".to_string(),
-            ))
+            Err(ParserError {
+                sql: sql,
+                range: 0..4,
+                message: "Expected close delimiter '\"' before EOF.".to_string()
+            })
         );
     }
 
@@ -956,7 +997,12 @@ mod tests {
         let sql = String::from("line1\nline2\rline3\r\nline4\r");
 
         let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize().unwrap();
+        let tokens = tokenizer
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
         let expected = vec![
             Token::make_word("line1", None),
             Token::Whitespace(Whitespace::Newline),
