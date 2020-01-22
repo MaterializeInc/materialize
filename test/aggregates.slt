@@ -14,11 +14,11 @@ INSERT INTO t (a, b) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 statement error aggregate functions are not allowed in WHERE clause
 SELECT a FROM t WHERE sum(b) = 3 GROUP BY a
 
-query III colnames
-SELECT 1 AS literal, sum(a) as sum_a, sum(b) FROM t
+query IIIR colnames
+SELECT 1 AS literal, sum(a) as sum_a, sum(b), avg(a) FROM t
 ----
-literal  sum_a  sum
-1        7      7
+literal  sum_a  sum  avg
+1        7      7    1.750000
 
 query I rowsort
 SELECT a FROM t GROUP BY a HAVING sum(b) = 3
@@ -70,9 +70,10 @@ NULL
 statement error
 SELECT * ORDER BY SUM(fake_column)
 
-query RRRRRR
+query RRRRRR colnames
 SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_pop(a) FROM t
 ----
+variance        var_samp        var_pop         stddev          stddev_samp     stddev_pop
 0.916666600000  0.916666600000  0.687500000000  0.957427072940  0.957427072940  0.829156197588
 
 query RRRRRR
