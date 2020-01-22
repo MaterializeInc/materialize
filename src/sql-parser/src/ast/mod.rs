@@ -633,6 +633,10 @@ pub enum Statement {
     ShowVariable {
         variable: Ident,
     },
+    /// `SHOW DATABASES`
+    ShowDatabases {
+        filter: Option<ShowStatementFilter>,
+    },
     /// `SHOW <object>S`
     ///
     /// ```sql
@@ -971,6 +975,13 @@ impl fmt::Display for Statement {
                 write!(f, "{} = {}", variable, value)
             }
             Statement::ShowVariable { variable } => write!(f, "SHOW {}", variable),
+            Statement::ShowDatabases { filter } => {
+                f.write_str("SHOW DATABASES")?;
+                if let Some(filter) = filter {
+                    write!(f, " {}", filter)?;
+                }
+                Ok(())
+            }
             Statement::ShowObjects {
                 object_type,
                 filter,

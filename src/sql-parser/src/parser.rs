@@ -2355,6 +2355,12 @@ impl Parser {
     }
 
     pub fn parse_show(&mut self) -> Result<Statement, ParserError> {
+        if self.parse_keyword("DATABASES") {
+            return Ok(Statement::ShowDatabases {
+                filter: self.parse_show_statement_filter()?,
+            });
+        }
+
         let extended = self.parse_keyword("EXTENDED");
         if extended {
             self.expect_one_of_keywords(&[

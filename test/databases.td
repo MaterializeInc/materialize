@@ -8,3 +8,8 @@ unsupported SQL statement: CreateDatabase
 
 ! CREATE SCHEMA s
 unsupported SQL statement: CreateSchema
+
+> SHOW DATABASES
+Database
+----
+materialize

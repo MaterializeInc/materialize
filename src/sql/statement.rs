@@ -123,6 +123,11 @@ pub fn describe_statement(
             vec![],
         ),
 
+        Statement::ShowDatabases { .. } => (
+            Some(RelationDesc::empty().add_column("Database", ScalarType::String)),
+            vec![],
+        ),
+
         Statement::ShowObjects {
             object_type, full, ..
         } => {
@@ -199,6 +204,7 @@ fn handle_sync_statement(
             value,
         } => handle_set_variable(scx, local, variable, value),
         Statement::ShowVariable { variable } => handle_show_variable(scx, variable),
+        Statement::ShowDatabases { filter } => handle_show_databases(scx, filter.as_ref()),
         Statement::ShowObjects {
             extended,
             full,
@@ -302,6 +308,21 @@ fn handle_commit_transaction() -> Result<Plan, failure::Error> {
 
 fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
     Ok(Plan::Rollback)
+}
+
+fn handle_show_databases(
+    scx: &StatementContext,
+    filter: Option<&ShowStatementFilter>,
+) -> Result<Plan, failure::Error> {
+    if filter.is_some() {
+        bail!("SHOW DATABASES {LIKE | WHERE} is not yet supported");
+    }
+    Ok(Plan::SendRows(
+        scx.catalog
+            .databases()
+            .map(|database| Row::pack(&[Datum::from(database)]))
+            .collect(),
+    ))
 }
 
 fn handle_show_objects(

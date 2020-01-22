@@ -2306,6 +2306,21 @@ fn parse_searched_case_expr() {
 }
 
 #[test]
+fn parse_show_databases() {
+    assert_eq!(
+        verified_stmt("SHOW DATABASES"),
+        Statement::ShowDatabases { filter: None }
+    );
+
+    assert_eq!(
+        verified_stmt("SHOW DATABASES LIKE 'blah'"),
+        Statement::ShowDatabases {
+            filter: Some(ShowStatementFilter::Like("blah".into())),
+        }
+    );
+}
+
+#[test]
 fn parse_show_objects() {
     let trials = [
         ("SOURCES", ObjectType::Source),

@@ -146,6 +146,7 @@ define_keywords!(
     CURSOR,
     CYCLE,
     DATABASE,
+    DATABASES,
     DATAFLOW,
     DATE,
     DAY,

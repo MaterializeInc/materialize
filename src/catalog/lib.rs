@@ -290,6 +290,11 @@ impl Catalog {
         &self.by_id[id]
     }
 
+    /// Returns an iterator over the name of each database in the catalog.
+    pub fn databases(&self) -> impl Iterator<Item = &str> {
+        self.by_name.keys().map(String::as_str)
+    }
+
     /// Gets the schema map for the database matching `database_spec`.
     fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&HashMap<String, Schema>> {
         // Keep in sync with `get_schemas_mut`.

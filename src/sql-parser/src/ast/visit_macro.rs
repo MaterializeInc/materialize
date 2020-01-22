@@ -522,6 +522,10 @@ macro_rules! make_visitor {
                 visit_show_variable(self, variable)
             }
 
+            fn visit_show_databases(&mut self, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
+                visit_show_databases(self, filter)
+            }
+
             fn visit_show_objects(&mut self, extended: bool, full: bool, object_type: ObjectType, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
                 visit_show_objects(self, extended, full, object_type, filter)
             }
@@ -681,6 +685,9 @@ macro_rules! make_visitor {
                     value,
                 } => visitor.visit_set_variable(*local, variable, value),
                 Statement::ShowVariable { variable } => visitor.visit_show_variable(variable),
+                Statement::ShowDatabases { filter } => {
+                    visitor.visit_show_databases(filter.as_auto_ref())
+                }
                 Statement::ShowObjects { object_type, extended, full, filter } => {
                     visitor.visit_show_objects( *extended, *full, *object_type, filter.as_auto_ref())
                 }
@@ -1584,6 +1591,15 @@ macro_rules! make_visitor {
 
         pub fn visit_show_variable<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, variable: &'ast $($mut)* Ident) {
             visitor.visit_ident(variable);
+        }
+
+        pub fn visit_show_databases<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            filter: Option<&'ast $($mut)* ShowStatementFilter>
+        ) {
+            if let Some(filter) = filter {
+                visitor.visit_show_statement_filter(filter);
+            }
         }
 
         pub fn visit_show_objects<'ast, V: $name<'ast> + ?Sized>(
