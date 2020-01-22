@@ -69,24 +69,26 @@ a b
 1 2
 
 
-> SHOW VIEWS;
-materialize.public.data_view
-mz_catalog.mz_arrangement_sharing
-mz_catalog.mz_arrangement_sizes
-mz_catalog.mz_catalog_names
-mz_catalog.mz_dataflow_channels
-mz_catalog.mz_dataflow_operator_addresses
-mz_catalog.mz_dataflow_operators
-mz_catalog.mz_materialization_dependencies
-mz_catalog.mz_materializations
-mz_catalog.mz_peek_active
-mz_catalog.mz_peek_durations
-mz_catalog.mz_scheduling_elapsed
-mz_catalog.mz_scheduling_histogram
-mz_catalog.mz_scheduling_parks
-mz_catalog.mz_view_foreign_keys
-mz_catalog.mz_view_frontiers
-mz_catalog.mz_view_keys
+> SHOW VIEWS
+data_view
+
+> SHOW VIEWS FROM mz_catalog
+mz_arrangement_sharing
+mz_arrangement_sizes
+mz_catalog_names
+mz_dataflow_channels
+mz_dataflow_operator_addresses
+mz_dataflow_operators
+mz_materialization_dependencies
+mz_materializations
+mz_peek_active
+mz_peek_durations
+mz_scheduling_elapsed
+mz_scheduling_histogram
+mz_scheduling_parks
+mz_view_foreign_keys
+mz_view_frontiers
+mz_view_keys
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b;
@@ -103,15 +105,12 @@ Field Nullable Type
 b     NO       int8
 sum   YES      int8
 
-> SHOW VIEWS LIKE '%peek%';
-mz_catalog.mz_peek_active
-mz_catalog.mz_peek_durations
+> SHOW VIEWS FROM mz_catalog LIKE '%peek%';
+mz_peek_active
+mz_peek_durations
 
 > SHOW VIEWS LIKE '%data%';
-materialize.public.data_view
-mz_catalog.mz_dataflow_channels
-mz_catalog.mz_dataflow_operator_addresses
-mz_catalog.mz_dataflow_operators
+data_view
 
 > SHOW CREATE VIEW test1
 View   Create View

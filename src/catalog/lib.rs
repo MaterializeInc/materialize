@@ -59,9 +59,9 @@ struct Database {
 }
 
 #[derive(Debug)]
-struct Schema {
-    id: i32,
-    items: HashMap<String, GlobalId>,
+pub struct Schema {
+    pub id: i32,
+    pub items: HashMap<String, GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -219,7 +219,7 @@ impl Catalog {
 
     /// Resolves [`PartialName`] into a [`FullName`].
     ///
-    /// If `name` does not specify a database, the `current_database` is used..
+    /// If `name` does not specify a database, the `current_database` is used.
     /// If `name` does not specify a schema, then the schemas in `search_path`
     /// are searched in order.
     pub fn resolve(
@@ -240,26 +240,19 @@ impl Catalog {
         // Find the specified database, or `current_database` if no database was
         // specified.
         let database_name = name.database.as_deref().unwrap_or(current_database);
-        let resolver = match self.by_name.get(database_name) {
-            Some(database) => DatabaseResolver {
-                database_name,
-                database,
-                ambient_schemas: &self.ambient_schemas,
-            },
-            None => bail!("unknown database '{}'", database_name),
-        };
+        let resolver = self.database_resolver(database_name)?;
 
         if let Some(schema_name) = &name.schema {
             // A schema name was specified, so just try to find the item in
             // that schema.
-            if let Some(out) = resolver.resolve(schema_name, &name.item) {
+            if let Some(out) = resolver.resolve_item(schema_name, &name.item) {
                 return Ok(out);
             }
         } else {
             // No schema was specified, so try to find the item in every schema
             // in the search path, in order.
             for &schema_name in search_path {
-                if let Some(out) = resolver.resolve(schema_name, &name.item) {
+                if let Some(out) = resolver.resolve_item(schema_name, &name.item) {
                     return Ok(out);
                 }
             }
@@ -295,8 +288,25 @@ impl Catalog {
         self.by_name.keys().map(String::as_str)
     }
 
+    pub fn database_resolver<'a, 'b>(
+        &'a self,
+        database_name: &'b str,
+    ) -> Result<DatabaseResolver<'a, 'b>, failure::Error> {
+        match self.by_name.get(database_name) {
+            Some(database) => Ok(DatabaseResolver {
+                database_name,
+                database,
+                ambient_schemas: &self.ambient_schemas,
+            }),
+            None => bail!("unknown database '{}'", database_name),
+        }
+    }
+
     /// Gets the schema map for the database matching `database_spec`.
-    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&HashMap<String, Schema>> {
+    pub fn get_schemas(
+        &self,
+        database_spec: &DatabaseSpecifier,
+    ) -> Option<&HashMap<String, Schema>> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
             DatabaseSpecifier::Ambient => Some(&self.ambient_schemas),
@@ -499,18 +509,18 @@ impl IdHumanizer for Catalog {
     }
 }
 
-/// A helper for resolving item names within one database.
-struct DatabaseResolver<'a> {
-    database_name: &'a str,
+/// A helper for resolving schema and item names within one database.
+pub struct DatabaseResolver<'a, 'b> {
+    database_name: &'b str,
     database: &'a Database,
     ambient_schemas: &'a HashMap<String, Schema>,
 }
 
-impl<'a> DatabaseResolver<'a> {
+impl<'a, 'b> DatabaseResolver<'a, 'b> {
     /// Attempts to resolve the item specified by `schema_name` and `item_name`
     /// in the database that this resolver is attached to, or in the set of
     /// ambient schemas.
-    fn resolve(&self, schema_name: &str, item_name: &str) -> Option<FullName> {
+    pub fn resolve_item(&self, schema_name: &str, item_name: &str) -> Option<FullName> {
         if let Some(schema) = self.database.schemas.get(schema_name) {
             if schema.items.contains_key(item_name) {
                 return Some(FullName {
@@ -530,6 +540,15 @@ impl<'a> DatabaseResolver<'a> {
             }
         }
         None
+    }
+
+    /// Attempts to find the schema specified by `schema_name` in the database
+    /// that this resolver is attached to, or in the set of ambient schemas.
+    pub fn resolve_schema(&self, schema_name: &str) -> Option<&'a Schema> {
+        self.database
+            .schemas
+            .get(schema_name)
+            .or_else(|| self.ambient_schemas.get(schema_name))
     }
 }
 

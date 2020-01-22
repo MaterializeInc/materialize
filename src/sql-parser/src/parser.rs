@@ -2364,26 +2364,27 @@ impl Parser {
         let extended = self.parse_keyword("EXTENDED");
         if extended {
             self.expect_one_of_keywords(&[
-                "INDEX", "INDEXES", "KEYS", "TABLES", "COLUMNS", "FULL",
+                "SCHEMAS", "INDEX", "INDEXES", "KEYS", "TABLES", "COLUMNS", "FULL",
             ])?;
             self.prev_token();
         }
 
         let full = self.parse_keyword("FULL");
         if full {
-            self.expect_one_of_keywords(&["COLUMNS", "TABLES", "VIEWS", "SINKS", "SOURCES"])?;
+            self.expect_one_of_keywords(&[
+                "SCHEMAS", "COLUMNS", "TABLES", "VIEWS", "SINKS", "SOURCES",
+            ])?;
             self.prev_token();
         }
 
         if self.parse_one_of_keywords(&["COLUMNS", "FIELDS"]).is_some() {
             self.parse_show_columns(extended, full)
         } else if let Some(object_type) =
-            self.parse_one_of_keywords(&["SOURCES", "VIEWS", "SINKS", "TABLES"])
+            self.parse_one_of_keywords(&["SCHEMAS", "SOURCES", "VIEWS", "SINKS", "TABLES"])
         {
-            // TODO(benesch): support LIKE/WHERE filters, like we do for SHOW
-            // COLUMNS, for parity with MySQL.
             Ok(Statement::ShowObjects {
                 object_type: match object_type {
+                    "SCHEMAS" => ObjectType::Schema,
                     "SOURCES" => ObjectType::Source,
                     "VIEWS" => ObjectType::View,
                     "SINKS" => ObjectType::Sink,
@@ -2395,6 +2396,11 @@ impl Parser {
                 },
                 extended,
                 full,
+                from: if self.parse_one_of_keywords(&["FROM", "IN"]).is_some() {
+                    Some(self.parse_object_name()?)
+                } else {
+                    None
+                },
                 filter: self.parse_show_statement_filter()?,
             })
         } else if self

@@ -13,3 +13,16 @@ unsupported SQL statement: CreateSchema
 Database
 ----
 materialize
+
+> SHOW SCHEMAS
+Schema
+----
+public
+
+
+> SHOW EXTENDED SCHEMAS
+Schema
+----
+public
+mz_catalog
+pg_catalog

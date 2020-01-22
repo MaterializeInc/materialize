@@ -366,6 +366,7 @@ define_keywords!(
     ROWS,
     SAVEPOINT,
     SCHEMA,
+    SCHEMAS,
     SCOPE,
     SCROLL,
     SEARCH,

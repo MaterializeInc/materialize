@@ -526,8 +526,15 @@ macro_rules! make_visitor {
                 visit_show_databases(self, filter)
             }
 
-            fn visit_show_objects(&mut self, extended: bool, full: bool, object_type: ObjectType, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
-                visit_show_objects(self, extended, full, object_type, filter)
+            fn visit_show_objects(
+                &mut self,
+                extended: bool,
+                full: bool,
+                object_type: ObjectType,
+                from: Option<&'ast $($mut)* ObjectName>,
+                filter: Option<&'ast $($mut)* ShowStatementFilter>
+            ) {
+                visit_show_objects(self, extended, full, object_type, from, filter)
             }
 
             fn visit_show_indexes(&mut self, extended: bool, table_name: &'ast $($mut)* ObjectName, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
@@ -688,8 +695,8 @@ macro_rules! make_visitor {
                 Statement::ShowDatabases { filter } => {
                     visitor.visit_show_databases(filter.as_auto_ref())
                 }
-                Statement::ShowObjects { object_type, extended, full, filter } => {
-                    visitor.visit_show_objects( *extended, *full, *object_type, filter.as_auto_ref())
+                Statement::ShowObjects { object_type, extended, full, from, filter } => {
+                    visitor.visit_show_objects(*extended, *full, *object_type, from.as_auto_ref(), filter.as_auto_ref())
                 }
                 Statement::ShowIndexes { table_name, extended, filter } => {
                     visitor.visit_show_indexes(*extended, table_name, filter.as_auto_ref())
@@ -1607,9 +1614,13 @@ macro_rules! make_visitor {
             _extended: bool,
             _full: bool,
             object_type: ObjectType,
+            from: Option<&'ast $($mut)* ObjectName>,
             filter: Option<&'ast $($mut)* ShowStatementFilter>
         ) {
             visitor.visit_object_type(object_type);
+            if let Some(from) = from {
+                visitor.visit_object_name(from);
+            }
             if let Some(filter) = filter {
                 visitor.visit_show_statement_filter(filter);
             }

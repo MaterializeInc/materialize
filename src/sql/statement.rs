@@ -7,6 +7,7 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
+use std::collections::HashMap;
 use std::iter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -209,8 +210,9 @@ fn handle_sync_statement(
             extended,
             full,
             object_type: ot,
+            from,
             filter,
-        } => handle_show_objects(scx, extended, full, ot, filter.as_ref()),
+        } => handle_show_objects(scx, extended, full, ot, from, filter),
         Statement::ShowIndexes {
             extended,
             table_name,
@@ -330,38 +332,104 @@ fn handle_show_objects(
     extended: bool,
     full: bool,
     object_type: ObjectType,
-    filter: Option<&ShowStatementFilter>,
+    from: Option<ObjectName>,
+    filter: Option<ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
-    if extended {
-        bail!("SHOW EXTENDED ... is not supported ");
-    }
-
-    let like_regex = match filter {
-        Some(ShowStatementFilter::Like(like_string)) => {
-            build_like_regex_from_string(like_string.as_ref())?
+    let classify_id = |id| match id {
+        GlobalId::System(_) => "SYSTEM",
+        GlobalId::User(_) => "USER",
+    };
+    let make_row = |name: &str, class| {
+        if full {
+            Row::pack(&[Datum::from(name), Datum::from(class)])
+        } else {
+            Row::pack(&[Datum::from(name)])
         }
-        Some(ShowStatementFilter::Where(_where_epr)) => bail!("SHOW ... WHERE is not supported"),
-        None => build_like_regex_from_string(&String::from("%"))?,
     };
 
-    let rows = scx.catalog.iter().filter(|entry| {
-        object_type_matches(object_type, entry.item())
-            && like_regex.is_match(&entry.name().to_string())
-    });
-    let mut rows: Vec<Row> = if full {
-        rows.map(|entry| {
-            let object_type = match entry.id() {
-                GlobalId::System(_) => "SYSTEM",
-                GlobalId::User(_) => "USER",
-            };
-            Row::pack(&[
-                Datum::from(&*entry.name().to_string()),
-                Datum::from(object_type),
-            ])
-        })
-        .collect()
+    let mut rows = if let ObjectType::Schema = object_type {
+        if filter.is_some() {
+            bail!("SHOW SCHEMAS ... {LIKE | WHERE} is not supported");
+        }
+
+        let schemas = if let Some(from) = from {
+            if from.0.len() != 1 {
+                bail!(
+                    "database name '{}' does not have exactly one component",
+                    from
+                );
+            }
+            let database_spec = DatabaseSpecifier::Name(normalize::ident(from.0[0].clone()));
+            scx.catalog
+                .get_schemas(&database_spec)
+                .ok_or_else(|| format_err!("database '{:?}' does not exist", database_spec))?
+        } else {
+            scx.catalog
+                .get_schemas(&DatabaseSpecifier::Name(scx.session.database().to_owned()))
+                .ok_or_else(|| {
+                    format_err!(
+                        "session database '{}' does not exist",
+                        scx.session.database()
+                    )
+                })?
+        };
+
+        let mut rows = vec![];
+        for name in schemas.keys() {
+            rows.push(make_row(name, "USER"));
+        }
+        if extended {
+            let ambient_schemas = scx
+                .catalog
+                .get_schemas(&DatabaseSpecifier::Ambient)
+                .expect("ambient database should always exist");
+            for name in ambient_schemas.keys() {
+                rows.push(make_row(name, "SYSTEM"));
+            }
+        }
+        rows
     } else {
-        rows.map(|entry| Row::pack(&[Datum::from(&*entry.name().to_string())]))
+        let like_regex = match filter {
+            Some(ShowStatementFilter::Like(pattern)) => build_like_regex_from_string(&pattern)?,
+            Some(ShowStatementFilter::Where(_)) => bail!("SHOW ... WHERE is not supported"),
+            None => build_like_regex_from_string("%")?,
+        };
+
+        let empty_schema = HashMap::new();
+        let items = if let Some(mut from) = from {
+            if from.0.len() > 2 {
+                bail!(
+                    "schema name '{}' cannot have more than two components",
+                    from
+                );
+            }
+            let schema_name = normalize::ident(from.0.pop().unwrap());
+            let database_name = from
+                .0
+                .pop()
+                .map(normalize::ident)
+                .unwrap_or_else(|| scx.session.database().to_owned());
+            &scx.catalog
+                .database_resolver(&database_name)?
+                .resolve_schema(&schema_name)
+                .ok_or_else(|| format_err!("schema '{}' does not exist", schema_name))?
+                .items
+        } else {
+            let resolver = scx.catalog.database_resolver(scx.session.database())?;
+            &["public"]
+                .iter()
+                .find_map(|schema_name| resolver.resolve_schema(schema_name))
+                .map_or_else(|| &empty_schema, |schema| &schema.items)
+        };
+
+        items
+            .iter()
+            .map(|(name, id)| (name, scx.catalog.get_by_id(id)))
+            .filter(|(_name, entry)| {
+                object_type_matches(object_type, entry.item())
+                    && like_regex.is_match(&entry.name().to_string())
+            })
+            .map(|(name, entry)| make_row(name, classify_id(entry.id())))
             .collect()
     };
     rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));

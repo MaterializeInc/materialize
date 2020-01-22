@@ -39,28 +39,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             .collect();
         assert_eq!(
             rows,
-            &[
-                "materialize.public.bootstrap1",
-                "materialize.public.bootstrap2",
-                "materialize.public.constant",
-                "materialize.public.logging_derived",
-                "mz_catalog.mz_arrangement_sharing",
-                "mz_catalog.mz_arrangement_sizes",
-                "mz_catalog.mz_catalog_names",
-                "mz_catalog.mz_dataflow_channels",
-                "mz_catalog.mz_dataflow_operator_addresses",
-                "mz_catalog.mz_dataflow_operators",
-                "mz_catalog.mz_materialization_dependencies",
-                "mz_catalog.mz_materializations",
-                "mz_catalog.mz_peek_active",
-                "mz_catalog.mz_peek_durations",
-                "mz_catalog.mz_scheduling_elapsed",
-                "mz_catalog.mz_scheduling_histogram",
-                "mz_catalog.mz_scheduling_parks",
-                "mz_catalog.mz_view_foreign_keys",
-                "mz_catalog.mz_view_frontiers",
-                "mz_catalog.mz_view_keys",
-            ]
+            &["bootstrap1", "bootstrap2", "constant", "logging_derived"]
         );
     }
 

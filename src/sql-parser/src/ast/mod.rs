@@ -647,6 +647,7 @@ pub enum Statement {
     /// ```
     ShowObjects {
         object_type: ObjectType,
+        from: Option<ObjectName>,
         extended: bool,
         full: bool,
         filter: Option<ShowStatementFilter>,
@@ -986,6 +987,7 @@ impl fmt::Display for Statement {
                 object_type,
                 filter,
                 full,
+                from,
                 extended,
             } => {
                 f.write_str("SHOW")?;
@@ -999,13 +1001,17 @@ impl fmt::Display for Statement {
                     f,
                     " {}",
                     match object_type {
+                        ObjectType::Schema => "SCHEMAS",
                         ObjectType::Table => "TABLES",
                         ObjectType::View => "VIEWS",
                         ObjectType::Source => "SOURCES",
                         ObjectType::Sink => "SINKS",
-                        ObjectType::Schema | ObjectType::Index => unreachable!(),
+                        ObjectType::Index => unreachable!(),
                     }
                 )?;
+                if let Some(from) = from {
+                    write!(f, " FROM {}", from)?;
+                }
                 if let Some(filter) = filter {
                     write!(f, " {}", filter)?;
                 }

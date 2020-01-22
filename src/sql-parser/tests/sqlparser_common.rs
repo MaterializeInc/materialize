@@ -2323,23 +2323,35 @@ fn parse_show_databases() {
 #[test]
 fn parse_show_objects() {
     let trials = [
+        ("SCHEMAS", ObjectType::Schema),
         ("SOURCES", ObjectType::Source),
         ("VIEWS", ObjectType::View),
         ("TABLES", ObjectType::Table),
         ("SINKS", ObjectType::Sink),
     ];
 
-    for (s, ot) in &trials {
-        let sql = format!("SHOW {}", s);
+    for &(sql, object_type) in &trials {
         assert_eq!(
-            verified_stmt(&sql),
+            verified_stmt(&format!("SHOW {}", sql)),
             Statement::ShowObjects {
-                object_type: *ot,
+                object_type,
                 extended: false,
                 full: false,
+                from: None,
                 filter: None
             }
-        )
+        );
+
+        assert_eq!(
+            verified_stmt(&format!("SHOW {} FROM foo.bar", sql)),
+            Statement::ShowObjects {
+                object_type,
+                extended: false,
+                full: false,
+                from: Some(ObjectName(vec!["foo".into(), "bar".into()])),
+                filter: None,
+            }
+        );
     }
 }
 
@@ -2351,6 +2363,7 @@ fn parse_show_objects_with_like_regex() {
             object_type,
             extended: false,
             full: false,
+            from: None,
             filter,
         } => {
             assert_eq!(filter.unwrap(), ShowStatementFilter::Like("%foo%".into()));
@@ -2369,6 +2382,7 @@ fn parse_show_objects_with_full() {
             object_type: ObjectType::View,
             extended: false,
             full: true,
+            from: None,
             filter: None,
         }
     );
@@ -2379,6 +2393,7 @@ fn parse_show_objects_with_full() {
             object_type: ObjectType::Table,
             extended: false,
             full: true,
+            from: None,
             filter: None,
         }
     );

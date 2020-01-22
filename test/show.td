@@ -83,57 +83,61 @@ $ set plurals-schema={
 > SHOW SOURCES
 SOURCES
 ----
-materialize.public.names
-materialize.public.mods
-materialize.public.plurals
+names
+mods
+plurals
 
 
 > SHOW FULL SOURCES
-SOURCES                  TYPE
+SOURCES  TYPE
 -----------------------------
-materialize.public.names   USER
-materialize.public.mods    USER
-materialize.public.plurals USER
+names    USER
+mods     USER
+plurals  USER
 
 
 > SHOW VIEWS
 VIEWS
 -----
-materialize.public.test1
-mz_catalog.mz_arrangement_sharing
-mz_catalog.mz_arrangement_sizes
-mz_catalog.mz_catalog_names
-mz_catalog.mz_dataflow_channels
-mz_catalog.mz_dataflow_operator_addresses
-mz_catalog.mz_dataflow_operators
-mz_catalog.mz_materialization_dependencies
-mz_catalog.mz_materializations
-mz_catalog.mz_peek_active
-mz_catalog.mz_peek_durations
-mz_catalog.mz_scheduling_elapsed
-mz_catalog.mz_scheduling_histogram
-mz_catalog.mz_scheduling_parks
-mz_catalog.mz_view_foreign_keys
-mz_catalog.mz_view_frontiers
-mz_catalog.mz_view_keys
+test1
+
+> SHOW VIEWS FROM public
+VIEWS
+-----
+test1
+
+> SHOW VIEWS FROM materialize.public
+VIEWS
+-----
+test1
+
+! SHOW VIEWS FROM noexist
+schema 'noexist' does not exist
+
+! SHOW VIEWS FROM noexist.noexist
+unknown database 'noexist'
 
 > SHOW FULL VIEWS
-VIEWS                                      TYPE
---------------------------------------------------------
-mz_catalog.mz_arrangement_sharing          SYSTEM
-mz_catalog.mz_arrangement_sizes            SYSTEM
-mz_catalog.mz_catalog_names                SYSTEM
-mz_catalog.mz_dataflow_channels            SYSTEM
-mz_catalog.mz_dataflow_operator_addresses  SYSTEM
-mz_catalog.mz_dataflow_operators           SYSTEM
-mz_catalog.mz_materialization_dependencies SYSTEM
-mz_catalog.mz_materializations             SYSTEM
-mz_catalog.mz_peek_active                  SYSTEM
-mz_catalog.mz_peek_durations               SYSTEM
-mz_catalog.mz_scheduling_elapsed           SYSTEM
-mz_catalog.mz_scheduling_histogram         SYSTEM
-mz_catalog.mz_scheduling_parks             SYSTEM
-mz_catalog.mz_view_foreign_keys            SYSTEM
-mz_catalog.mz_view_frontiers               SYSTEM
-mz_catalog.mz_view_keys                    SYSTEM
-materialize.public.test1                     USER
+VIEWS  TYPE
+-----------
+test1  USER
+
+> SHOW FULL VIEWS FROM mz_catalog
+VIEWS                            TYPE
+---------------------------------------
+mz_arrangement_sharing           SYSTEM
+mz_arrangement_sizes             SYSTEM
+mz_catalog_names                 SYSTEM
+mz_dataflow_channels             SYSTEM
+mz_dataflow_operator_addresses   SYSTEM
+mz_dataflow_operators            SYSTEM
+mz_materialization_dependencies  SYSTEM
+mz_materializations              SYSTEM
+mz_peek_active                   SYSTEM
+mz_peek_durations                SYSTEM
+mz_scheduling_elapsed            SYSTEM
+mz_scheduling_histogram          SYSTEM
+mz_scheduling_parks              SYSTEM
+mz_view_foreign_keys             SYSTEM
+mz_view_frontiers                SYSTEM
+mz_view_keys                     SYSTEM
