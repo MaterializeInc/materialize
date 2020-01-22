@@ -158,7 +158,6 @@ impl Parser {
                         name: self.parse_object_name()?,
                     }),
                     "EXPLAIN" => Ok(self.parse_explain()?),
-                    "FLUSH" => Ok(self.parse_flush()?),
                     _ => parser_err!(format!(
                         "Unexpected keyword {:?} at the beginning of a statement",
                         w.to_string()
@@ -2573,23 +2572,6 @@ impl Parser {
             stage,
             query: Box::new(self.parse_query()?),
         })
-    }
-
-    /// Parse a statement like `FLUSH SOURCE foo` or `FLUSH ALL SOURCES`,
-    /// assuming that the `FLUSH` token has already been consumed.
-    ///
-    /// This causes the source (or sources) to downgrade their capability(-ies),
-    /// promising not to send any new data for the current timestamp
-    pub fn parse_flush(&mut self) -> Result<Statement, ParserError> {
-        if self.parse_keywords(vec!["ALL", "SOURCES"]) {
-            Ok(Statement::FlushAllSources)
-        } else if self.parse_keyword("SOURCE") {
-            Ok(Statement::FlushSource {
-                name: self.parse_object_name()?,
-            })
-        } else {
-            self.expected("ALL SOURCES or SOURCE", self.peek_token())?
-        }
     }
 }
 
