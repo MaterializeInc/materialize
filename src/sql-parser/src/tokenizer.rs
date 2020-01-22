@@ -473,7 +473,7 @@ impl Tokenizer {
                             }
                         }
                         Some('-') => self.consume_and_return(chars, Token::JsonDeletePath),
-                        _ => Err(format!("Unrecognized token")),
+                        _ => Err("Unrecognized token".to_string()),
                     }
                 }
                 '@' => {
@@ -482,7 +482,7 @@ impl Tokenizer {
                         Some('>') => self.consume_and_return(chars, Token::JsonContainsJson),
                         Some('?') => self.consume_and_return(chars, Token::JsonContainsPath),
                         Some('@') => self.consume_and_return(chars, Token::JsonApplyPathPredicate),
-                        _ => Err(format!("Unrecognized token")),
+                        _ => Err("Unrecognized token".to_string()),
                     }
                 }
                 '?' => {
@@ -497,7 +497,7 @@ impl Tokenizer {
                     chars.next(); // consume '|'
                     match chars.peek() {
                         Some('|') => self.consume_and_return(chars, Token::JsonConcat),
-                        _ => Err(format!("Unrecognized token")),
+                        _ => Err("Unrecognized token".to_string()),
                     }
                 }
                 '=' => self.consume_and_return(chars, Token::Eq),
@@ -512,7 +512,7 @@ impl Tokenizer {
                     chars.next(); // consume
                     match chars.peek() {
                         Some('=') => self.consume_and_return(chars, Token::Neq),
-                        _ => Err(format!("Unrecognized token")),
+                        _ => Err("Unrecognized token".to_string()),
                     }
                 }
                 '<' => {
@@ -630,9 +630,7 @@ impl Tokenizer {
 
         if n.is_empty() {
             chars.next();
-            return Err(format!(
-                "parameter marker ($) was not followed by at least one digit"
-            ));
+            return Err("parameter marker ($) was not followed by at least one digit".to_string());
         }
 
         Ok(Some(Token::Parameter(n)))
@@ -1011,7 +1009,7 @@ mod tests {
             Err(ParserError {
                 sql: sql,
                 range: 0..4,
-                message: format!("Expected close delimiter '\"' before EOF.")
+                message: "Expected close delimiter '\"' before EOF.".to_string()
             })
         );
     }

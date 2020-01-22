@@ -572,22 +572,18 @@ fn determine_format_w_datetimefield(
                 Some(Colon) | Some(Space) | None => Ok(Some(SQLStandard(Hour))),
                 // Implies {M:S.NS}
                 Some(Dot) => Ok(Some(SQLStandard(Minute))),
-                _ => {
-                    return Err(format!(
-                        "Invalid date-time type string '{}': cannot determine format",
-                        interval_str,
-                    ))
-                }
+                _ => Err(format!(
+                    "Invalid date-time type string '{}': cannot determine format",
+                    interval_str,
+                )),
             }
         }
         // Implies {Num}?{TimeUnit}
         Some(TimeUnit(f)) => Ok(Some(PostgreSQL(*f))),
-        _ => {
-            return Err(format!(
-                "Invalid date-time type string '{}': cannot determine format",
-                interval_str,
-            ))
-        }
+        _ => Err(format!(
+            "Invalid date-time type string '{}': cannot determine format",
+            interval_str,
+        )),
     }
 }
 

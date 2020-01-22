@@ -3129,7 +3129,7 @@ SELECT EXISTS (
                ^
 Expected SELECT, VALUES, or a subquery in the query body, found: EOF"
             .to_string()),
-        format!("{}", res.unwrap_err().to_string(),)
+        format!("{}", res.unwrap_err(),)
     );
 
     let res = parse_sql_statements("SELECT EXISTS (NULL)");
@@ -3140,7 +3140,7 @@ SELECT EXISTS (NULL)
                ^^^^
 Expected SELECT, VALUES, or a subquery in the query body, found: NULL"
             .to_string()),
-        format!("{}", res.unwrap_err().to_string(),)
+        format!("{}", res.unwrap_err(),)
     );
 }
 
@@ -3487,7 +3487,7 @@ CREATE INDEX myschema.ind ON foo(b)
                      ^
 Expected ON, found: ."
             .to_string()),
-        format!("{}", res.unwrap_err().to_string(),)
+        format!("{}", res.unwrap_err())
     );
 }
 

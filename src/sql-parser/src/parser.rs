@@ -81,7 +81,7 @@ impl<'a> fmt::Display for ParserError {
         let line_end = self.sql[safe_end..]
             .find('\n')
             .map(|end| safe_end + end)
-            .unwrap_or(self.sql.len());
+            .unwrap_or_else(|| self.sql.len());
         let line = &self.sql[line_start..line_end.max(line_start)];
         let underline = std::iter::repeat(' ')
             .take(self.range.start - line_start)
@@ -785,9 +785,9 @@ impl Parser {
                         let e_range = self.peek_prev_range();
 
                         let high = DateTimeField::from_str(d)
-                            .map_err(|e| self.error(self.peek_prev_range(), e.to_string()))?;
+                            .map_err(|e| self.error(self.peek_prev_range(), e))?;
                         let low = DateTimeField::from_str(e)
-                            .map_err(|e| self.error(self.peek_prev_range(), e.to_string()))?;
+                            .map_err(|e| self.error(self.peek_prev_range(), e))?;
 
                         // Check for invalid ranges, i.e. precision_high is the same
                         // as or a less significant DateTimeField than
@@ -815,7 +815,7 @@ impl Parser {
                         (high, low, fsec_max_precision)
                     } else {
                         let low = DateTimeField::from_str(d)
-                            .map_err(|e| self.error(self.peek_prev_range(), e.to_string()))?;
+                            .map_err(|e| self.error(self.peek_prev_range(), e))?;
                         let fsec_max_precision = if low == DateTimeField::Second {
                             self.parse_optional_precision()?
                         } else {
@@ -1030,11 +1030,10 @@ impl Parser {
         if !parse_timezone || tz_string.is_empty() {
             return Ok(pdt);
         }
-        pdt.timezone_offset_second =
-            Some(datetime::parse_timezone_offset_second(tz_string).map_err({
-                let range = range.clone();
-                |e| self.error(range, e)
-            })?);
+        pdt.timezone_offset_second = Some(
+            datetime::parse_timezone_offset_second(tz_string)
+                .map_err({ |e| self.error(range, e) })?,
+        );
         Ok(pdt)
     }
 
@@ -1200,6 +1199,7 @@ impl Parser {
             match self.tokens.get(index - 1) {
                 Some((Token::Whitespace(_), _)) => continue,
                 Some((_token, range)) => return range.clone(),
+                #[allow(clippy::range_plus_one)]
                 None => return self.sql.len()..self.sql.len() + 1,
             }
         }
@@ -1217,6 +1217,7 @@ impl Parser {
             match self.tokens.get(index) {
                 Some((Token::Whitespace(_), _)) => continue,
                 Some((_token, range)) => return range.clone(),
+                #[allow(clippy::range_plus_one)]
                 None => return self.sql.len()..self.sql.len() + 1,
             }
         }
