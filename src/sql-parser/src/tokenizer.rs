@@ -283,8 +283,6 @@ impl<'a> PeekableChars<'a> {
 /// SQL Tokenizer
 pub struct Tokenizer {
     pub query: String,
-    pub line: u64,
-    pub col: u64,
 }
 
 impl Tokenizer {
@@ -292,8 +290,6 @@ impl Tokenizer {
     pub fn new(query: &str) -> Self {
         Self {
             query: query.to_string(),
-            line: 1,
-            col: 1,
         }
     }
 
@@ -318,25 +314,7 @@ impl Tokenizer {
                         message,
                     })
                 }
-                Ok(Some(token)) => {
-                    match &token {
-                        Token::Whitespace(Whitespace::Newline) => {
-                            self.line += 1;
-                            self.col = 1;
-                        }
-
-                        Token::Whitespace(Whitespace::Tab) => self.col += 4,
-                        Token::Word(w) if w.quote_style == None => self.col += w.value.len() as u64,
-                        Token::Word(w) if w.quote_style != None => {
-                            self.col += w.value.len() as u64 + 2
-                        }
-                        Token::Number(s) => self.col += s.len() as u64,
-                        Token::SingleQuotedString(s) => self.col += s.len() as u64,
-                        Token::Parameter(s) => self.col += s.len() as u64,
-                        _ => self.col += 1,
-                    }
-                    tokens.push((token, start..end));
-                }
+                Ok(Some(token)) => tokens.push((token, start..end)),
                 Ok(None) => break,
             }
         }
