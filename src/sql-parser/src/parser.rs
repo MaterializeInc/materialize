@@ -33,11 +33,11 @@ use crate::tokenizer::*;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
-    ($parser:expr, $MSG:expr) => {
-        Err($parser.error($MSG.to_string()))
+    ($parser:expr, $range:expr, $MSG:expr) => {
+        Err($parser.error($range, $MSG.to_string()))
     };
-    ($parser:expr, $($arg:tt)*) => {
-        Err($parser.error(format!($($arg)*)))
+    ($parser:expr, $range:expr, $($arg:tt)*) => {
+        Err($parser.error($range, format!($($arg)*)))
     };
 }
 
@@ -45,9 +45,9 @@ mod datetime;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParserError {
-    /// Original query so we can easily print an error
+    /// Original query (so we can easily print an error)
     pub sql: String,
-    /// Range at which the parser was looking at the time
+    /// Part of the query at which the error occurred
     pub range: Range<usize>,
     pub message: String,
 }
@@ -67,11 +67,11 @@ use IsLateral::*;
 
 impl<'a> fmt::Display for ParserError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let line_start = self.sql[..self.range.start]
+        let line_start = self.sql[..self.range.start.max(self.sql.len())]
             .rfind('\n')
             .map(|start| start + 1)
             .unwrap_or(0);
-        let line_end = self.sql[self.range.end..]
+        let line_end = self.sql[self.range.end.max(self.sql.len() - 1)..]
             .find('\n')
             .map(|end| self.range.end + end - 1)
             .unwrap_or(self.sql.len());
@@ -109,10 +109,10 @@ impl Parser {
         }
     }
 
-    fn error(&self, message: String) -> ParserError {
+    fn error(&self, range: Range<usize>, message: String) -> ParserError {
         ParserError {
             sql: self.sql.clone(),
-            range: self.tokens[(self.index - 1).max(0)].1.clone(),
+            range,
             message,
         }
     }
@@ -134,7 +134,11 @@ impl Parser {
             if parser.peek_token().is_none() {
                 break;
             } else if expecting_statement_delimiter {
-                return parser.expected("end of statement", parser.peek_token());
+                return parser.expected(
+                    parser.peek_range(),
+                    "end of statement",
+                    parser.peek_token(),
+                );
             }
 
             let statement = parser.parse_statement()?;
@@ -181,6 +185,7 @@ impl Parser {
                     "FLUSH" => Ok(self.parse_flush()?),
                     _ => parser_err!(
                         self,
+                        self.peek_prev_range(),
                         format!(
                             "Unexpected keyword {:?} at the beginning of a statement",
                             w.to_string()
@@ -192,11 +197,12 @@ impl Parser {
                     Ok(Statement::Query(Box::new(self.parse_query()?)))
                 }
                 unexpected => self.expected(
+                    self.peek_prev_range(),
                     "a keyword at the beginning of a statement",
                     Some(unexpected),
                 ),
             },
-            None => self.expected("SQL statement", None),
+            None => self.expected(self.peek_prev_range(), "SQL statement", None),
         }
     }
 
@@ -226,7 +232,7 @@ impl Parser {
     pub fn parse_prefix(&mut self) -> Result<Expr, ParserError> {
         let tok = self
             .next_token()
-            .ok_or_else(|| self.error("Unexpected EOF".to_string()))?;
+            .ok_or_else(|| self.error(self.peek_prev_range(), "Unexpected EOF".to_string()))?;
         let expr = match tok {
             Token::Word(w) => match w.keyword.as_ref() {
                 "TRUE" | "FALSE" | "NULL" => {
@@ -264,8 +270,11 @@ impl Parser {
                                     break;
                                 }
                                 unexpected => {
-                                    return self
-                                        .expected("an identifier or a '*' after '.'", unexpected);
+                                    return self.expected(
+                                        self.peek_prev_range(),
+                                        "an identifier or a '*' after '.'",
+                                        unexpected,
+                                    );
                                 }
                             }
                         }
@@ -302,7 +311,14 @@ impl Parser {
             }
             Token::Parameter(s) => Ok(Expr::Parameter(match s.parse() {
                 Ok(n) => n,
-                Err(err) => return parser_err!(self, "unable to parse parameter: {}", err),
+                Err(err) => {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_range(),
+                        "unable to parse parameter: {}",
+                        err
+                    )
+                }
             })),
             Token::LParen => {
                 let expr = if self.parse_keyword("SELECT") || self.parse_keyword("WITH") {
@@ -314,7 +330,7 @@ impl Parser {
                 self.expect_token(&Token::RParen)?;
                 Ok(expr)
             }
-            unexpected => self.expected("an expression", Some(unexpected)),
+            unexpected => self.expected(self.peek_prev_range(), "an expression", Some(unexpected)),
         }?;
 
         if self.parse_keyword("COLLATE") {
@@ -334,6 +350,7 @@ impl Parser {
         if all && distinct {
             return parser_err!(
                 self,
+                self.peek_prev_range(),
                 format!(
                     "Cannot specify both ALL and DISTINCT in function: {}",
                     name.to_string(),
@@ -385,8 +402,10 @@ impl Parser {
             Some(Token::Word(w)) => w
                 .keyword
                 .parse::<WindowFrameUnits>()
-                .map_err(|e| self.error(e))?,
-            unexpected => return self.expected("ROWS, RANGE, GROUPS", unexpected),
+                .map_err(|e| self.error(self.peek_prev_range(), e))?,
+            unexpected => {
+                return self.expected(self.peek_prev_range(), "ROWS, RANGE, GROUPS", unexpected)
+            }
         };
         let (start_bound, end_bound) = if self.parse_keyword("BETWEEN") {
             let start_bound = self.parse_window_frame_bound()?;
@@ -418,7 +437,11 @@ impl Parser {
             } else if self.parse_keyword("FOLLOWING") {
                 Ok(WindowFrameBound::Following(rows))
             } else {
-                self.expected("PRECEDING or FOLLOWING", self.peek_token())
+                self.expected(
+                    self.peek_range(),
+                    "PRECEDING or FOLLOWING",
+                    self.peek_token(),
+                )
             }
         }
     }
@@ -492,11 +515,11 @@ impl Parser {
         let field: Result<ExtractField, _> = match tok {
             Some(Token::Word(ref k)) => k.keyword.parse(),
             Some(Token::SingleQuotedString(ref s)) => s.parse(),
-            _ => return self.expected("extract field token", tok),
+            _ => return self.expected(self.peek_prev_range(), "extract field token", tok),
         };
         match field {
             Ok(f) => Ok(f),
-            Err(_) => self.expected("valid extract field", tok)?,
+            Err(_) => self.expected(self.peek_prev_range(), "valid extract field", tok)?,
         }
     }
 
@@ -511,16 +534,25 @@ impl Parser {
         match (pdt.year, pdt.month, pdt.day) {
             (Some(year), Some(month), Some(day)) => {
                 let p_err = |e: std::num::TryFromIntError, field: &str| {
-                    self.error(format!("{} in date '{}' is invalid: {}", field, value, e))
+                    self.error(
+                        self.peek_prev_range(),
+                        format!("{} in date '{}' is invalid: {}", field, value, e),
+                    )
                 };
 
                 if year.unit == 0 {
-                    return parser_err!(self, "YEAR in DATE '{}' cannot be zero.", value,);
+                    return parser_err!(
+                        self,
+                        self.peek_prev_range(),
+                        "YEAR in DATE '{}' cannot be zero.",
+                        value,
+                    );
                 }
 
                 if month.unit > 12 || month.unit <= 0 {
                     return parser_err!(
                         self,
+                        self.peek_prev_range(),
                         "MONTH in DATE '{}' must be a number between 1 and 12, got: {}",
                         value,
                         month.unit
@@ -529,7 +561,12 @@ impl Parser {
                 let month: u8 = month.unit.try_into().expect("invalid month");
                 let day: u8 = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
                 if day == 0 {
-                    return parser_err!(self, "DAY in DATE '{}' cannot be zero", value);
+                    return parser_err!(
+                        self,
+                        self.peek_prev_range(),
+                        "DAY in DATE '{}' cannot be zero",
+                        value
+                    );
                 }
                 Ok(Value::Date(
                     value,
@@ -543,6 +580,7 @@ impl Parser {
             (_, _, _) => {
                 return parser_err!(
                     self,
+                    self.peek_prev_range(),
                     "YEAR, MONTH, DAY are all required for DATE, got: '{}'",
                     value
                 );
@@ -581,12 +619,16 @@ impl Parser {
         ) {
             (Some(year), Some(month), Some(day), hour, minute, second, timezone_offset_second) => {
                 let p_err = |e: std::num::TryFromIntError, field: &str| {
-                    self.error(format!("{} in date '{}' is invalid: {}", field, value, e))
+                    self.error(
+                        self.peek_prev_range(),
+                        format!("{} in date '{}' is invalid: {}", field, value, e),
+                    )
                 };
 
                 if month.unit > 12 || month.unit <= 0 {
                     return parser_err!(
                         self,
+                        self.peek_prev_range(),
                         "Month in date '{}' must be a number between 1 and 12, got: {}",
                         value,
                         month.unit
@@ -597,6 +639,7 @@ impl Parser {
                 if day == 0 {
                     return parser_err!(
                         self,
+                        self.peek_prev_range(),
                         "Day in timestamp '{}' cannot be zero: {}",
                         value,
                         day
@@ -609,6 +652,7 @@ impl Parser {
                         if hour > 23 {
                             return parser_err!(
                                 self,
+                                self.peek_prev_range(),
                                 "Hour in timestamp '{}' cannot be > 23: {}",
                                 value,
                                 hour
@@ -625,6 +669,7 @@ impl Parser {
                         if minute > 59 {
                             return parser_err!(
                                 self,
+                                self.peek_prev_range(),
                                 "Minute in timestamp '{}' cannot be > 59: {}",
                                 value,
                                 minute
@@ -645,6 +690,7 @@ impl Parser {
                         if second > 60 {
                             return parser_err!(
                                 self,
+                                self.peek_prev_range(),
                                 "Second in timestamp '{}' cannot be > 60: {}",
                                 value,
                                 second
@@ -686,10 +732,13 @@ impl Parser {
                     },
                 ))
             }
-            _ => Err(self.error(format!(
-                "timestamp is missing fields, year through day are all required, got: '{}'",
-                value
-            ))),
+            _ => Err(self.error(
+                self.peek_prev_range(),
+                format!(
+                    "timestamp is missing fields, year through day are all required, got: '{}'",
+                    value
+                ),
+            )),
         }
     }
 
@@ -722,10 +771,10 @@ impl Parser {
                             "DAYS", "HOURS", "MINUTES", "SECONDS",
                         ])?;
 
-                        let high =
-                            DateTimeField::from_str(d).map_err(|e| self.error(e.to_string()))?;
-                        let low =
-                            DateTimeField::from_str(e).map_err(|e| self.error(e.to_string()))?;
+                        let high = DateTimeField::from_str(d)
+                            .map_err(|e| self.error(self.peek_prev_range(), e.to_string()))?;
+                        let low = DateTimeField::from_str(e)
+                            .map_err(|e| self.error(self.peek_prev_range(), e.to_string()))?;
 
                         // Check for invalid ranges, i.e. precision_high is the same
                         // as or a less significant DateTimeField than
@@ -733,6 +782,7 @@ impl Parser {
                         if high >= low {
                             return parser_err!(
                                 self,
+                                self.peek_prev_range(),
                                 "Invalid field range in INTERVAL '{}' {} TO {}; the value in the \
                                  position of {} should be more significant than {}.",
                                 raw_value,
@@ -751,8 +801,8 @@ impl Parser {
 
                         (high, low, fsec_max_precision)
                     } else {
-                        let low =
-                            DateTimeField::from_str(d).map_err(|e| self.error(e.to_string()))?;
+                        let low = DateTimeField::from_str(d)
+                            .map_err(|e| self.error(self.peek_prev_range(), e.to_string()))?;
                         let fsec_max_precision = if low == DateTimeField::Second {
                             self.parse_optional_precision()?
                         } else {
@@ -834,7 +884,7 @@ impl Parser {
                 use BinaryOperator::*;
                 match op {
                     Eq | NotEq | Gt | GtEq | Lt | LtEq => (),
-                    _ => self.expected("comparison operator", Some(tok))?,
+                    _ => self.expected(self.peek_prev_range(), "comparison operator", Some(tok))?,
                 }
                 self.expect_token(&Token::LParen)?;
                 let query = self.parse_query()?;
@@ -868,7 +918,11 @@ impl Parser {
                     } else if self.parse_keywords(vec!["NOT", "NULL"]) {
                         Ok(Expr::IsNotNull(Box::new(expr)))
                     } else {
-                        self.expected("NULL or NOT NULL after IS", self.peek_token())
+                        self.expected(
+                            self.peek_range(),
+                            "NULL or NOT NULL after IS",
+                            self.peek_token(),
+                        )
                     }
                 }
                 "NOT" | "IN" | "BETWEEN" => {
@@ -879,7 +933,11 @@ impl Parser {
                     } else if self.parse_keyword("BETWEEN") {
                         self.parse_between(expr, negated)
                     } else {
-                        self.expected("IN or BETWEEN after NOT", self.peek_token())
+                        self.expected(
+                            self.peek_range(),
+                            "IN or BETWEEN after NOT",
+                            self.peek_token(),
+                        )
                     }
                 }
                 // Can only happen if `get_next_precedence` got out of sync with this function
@@ -918,11 +976,15 @@ impl Parser {
         ambiguous_resolver: DateTimeField,
     ) -> Result<ParsedDateTime, ParserError> {
         if value.is_empty() {
-            return parser_err!(self, "Interval date string is empty!");
+            return parser_err!(
+                self,
+                self.peek_prev_range(),
+                "Interval date string is empty!"
+            );
         }
 
         datetime::build_parsed_datetime_interval(value, ambiguous_resolver)
-            .map_err(|e| self.error(e))
+            .map_err(|e| self.error(self.peek_prev_range(), e))
     }
 
     /// parse
@@ -944,18 +1006,20 @@ impl Parser {
         parse_timezone: bool,
     ) -> Result<ParsedDateTime, ParserError> {
         if value.is_empty() {
-            return parser_err!(self, "Timestamp string is empty!");
+            return parser_err!(self, self.peek_prev_range(), "Timestamp string is empty!");
         }
 
         let (ts_string, tz_string) = datetime::split_timestamp_string(value);
 
-        let mut pdt =
-            datetime::build_parsed_datetime_timestamp(ts_string).map_err(|e| self.error(e))?;
+        let mut pdt = datetime::build_parsed_datetime_timestamp(ts_string)
+            .map_err(|e| self.error(self.peek_prev_range(), e))?;
         if !parse_timezone || tz_string.is_empty() {
             return Ok(pdt);
         }
-        pdt.timezone_offset_second =
-            Some(datetime::parse_timezone_offset_second(tz_string).map_err(|e| self.error(e))?);
+        pdt.timezone_offset_second = Some(
+            datetime::parse_timezone_offset_second(tz_string)
+                .map_err(|e| self.error(self.peek_prev_range(), e))?,
+        );
         Ok(pdt)
     }
 
@@ -1113,15 +1177,47 @@ impl Parser {
         }
     }
 
+    /// Return the range withing the query string at which the next non-whitespace token occurs
+    fn peek_range(&self) -> Range<usize> {
+        match self.tokens.get(self.index) {
+            Some((_token, range)) => range.clone(),
+            None => self.sql.len()..self.sql.len() + 1,
+        }
+    }
+
+    /// Return the range withing the query string at which the previous non-whitespace token occurs
+    ///
+    /// Must be called after `next_token()`, otherwise might panic.
+    /// OK to call after `next_token()` indicates an EOF.
+    fn peek_prev_range(&self) -> Range<usize> {
+        let mut index = self.index;
+        loop {
+            assert!(index > 0);
+            index -= 1;
+            if let Some((Token::Whitespace(_), _)) = self.tokens.get(index) {
+                continue;
+            }
+            break;
+        }
+        match self.tokens.get(index) {
+            Some((_token, range)) => range.clone(),
+            None => self.sql.len()..self.sql.len() + 1,
+        }
+    }
+
     /// Report unexpected token
-    fn expected<T>(&self, expected: &str, found: Option<Token>) -> Result<T, ParserError> {
+    fn expected<T>(
+        &self,
+        range: Range<usize>,
+        expected: &str,
+        found: Option<Token>,
+    ) -> Result<T, ParserError> {
         parser_err!(
             self,
-            format!(
-                "Expected {}, found: {}",
-                expected,
-                found.map_or_else(|| "EOF".to_string(), |t| format!("{}", t))
-            )
+            range,
+            "Expected {}, found: {}",
+            expected,
+            found.map_or_else(|| "EOF".to_string(), |t| format!("{}", t))
         )
     }
 
@@ -1189,6 +1285,7 @@ impl Parser {
             Ok(keyword)
         } else {
             self.expected(
+                self.peek_range(),
                 &format!("one of {}", keywords.join(" or ")),
                 self.peek_token(),
             )
@@ -1200,7 +1297,7 @@ impl Parser {
         if self.parse_keyword(expected) {
             Ok(())
         } else {
-            self.expected(expected, self.peek_token())
+            self.expected(self.peek_range(), expected, self.peek_token())
         }
     }
 
@@ -1230,7 +1327,7 @@ impl Parser {
         if self.consume_token(expected) {
             Ok(())
         } else {
-            self.expected(&expected.to_string(), self.peek_token())
+            self.expected(self.peek_range(), &expected.to_string(), self.peek_token())
         }
     }
 
@@ -1266,6 +1363,7 @@ impl Parser {
             self.parse_create_index()
         } else {
             self.expected(
+                self.peek_range(),
                 "TABLE, VIEW, SOURCE, SINK, or INDEX after CREATE",
                 self.peek_token(),
             )
@@ -1381,6 +1479,7 @@ impl Parser {
             ObjectType::Index
         } else {
             return self.expected(
+                self.peek_range(),
                 "TABLE, VIEW, SOURCE, SINK, or INDEX after DROP",
                 self.peek_token(),
             );
@@ -1392,7 +1491,11 @@ impl Parser {
         let cascade = self.parse_keyword("CASCADE");
         let restrict = self.parse_keyword("RESTRICT");
         if cascade && restrict {
-            return parser_err!(self, "Cannot specify both CASCADE and RESTRICT in DROP");
+            return parser_err!(
+                self,
+                self.peek_prev_range(),
+                "Cannot specify both CASCADE and RESTRICT in DROP"
+            );
         }
         Ok(Statement::Drop {
             object_type,
@@ -1449,14 +1552,22 @@ impl Parser {
                     options,
                 });
             } else {
-                return self.expected("column name or constraint definition", self.peek_token());
+                return self.expected(
+                    self.peek_range(),
+                    "column name or constraint definition",
+                    self.peek_token(),
+                );
             }
             let comma = self.consume_token(&Token::Comma);
             if self.consume_token(&Token::RParen) {
                 // allow a trailing comma, even though it's not in standard
                 break;
             } else if !comma {
-                return self.expected("',' or ')' after column definition", self.peek_token());
+                return self.expected(
+                    self.peek_range(),
+                    "',' or ')' after column definition",
+                    self.peek_token(),
+                );
             }
         }
 
@@ -1493,7 +1604,7 @@ impl Parser {
             self.expect_token(&Token::RParen)?;
             ColumnOption::Check(expr)
         } else {
-            return self.expected("column option", self.peek_token());
+            return self.expected(self.peek_range(), "column option", self.peek_token());
         };
 
         Ok(ColumnOptionDef { name, option })
@@ -1541,7 +1652,11 @@ impl Parser {
             }
             unexpected => {
                 if name.is_some() {
-                    self.expected("PRIMARY, UNIQUE, FOREIGN, or CHECK", unexpected)
+                    self.expected(
+                        self.peek_prev_range(),
+                        "PRIMARY, UNIQUE, FOREIGN, or CHECK",
+                        unexpected,
+                    )
                 } else {
                     self.prev_token();
                     Ok(None)
@@ -1576,10 +1691,18 @@ impl Parser {
             if let Some(constraint) = self.parse_optional_table_constraint()? {
                 AlterTableOperation::AddConstraint(constraint)
             } else {
-                return self.expected("a constraint in ALTER TABLE .. ADD", self.peek_token());
+                return self.expected(
+                    self.peek_range(),
+                    "a constraint in ALTER TABLE .. ADD",
+                    self.peek_token(),
+                );
             }
         } else {
-            return self.expected("ADD after ALTER TABLE", self.peek_token());
+            return self.expected(
+                self.peek_range(),
+                "ADD after ALTER TABLE",
+                self.peek_token(),
+            );
         };
         Ok(Statement::AlterTable {
             name: table_name,
@@ -1655,6 +1778,7 @@ impl Parser {
                     _ => {
                         return parser_err!(
                             self,
+                            self.peek_prev_range(),
                             format!("No value parser for keyword {}", k.keyword)
                         );
                     }
@@ -1665,9 +1789,17 @@ impl Parser {
                     Ok(Value::NationalStringLiteral(s.to_string()))
                 }
                 Token::HexStringLiteral(ref s) => Ok(Value::HexStringLiteral(s.to_string())),
-                _ => parser_err!(self, format!("Unsupported value: {:?}", t)),
+                _ => parser_err!(
+                    self,
+                    self.peek_prev_range(),
+                    format!("Unsupported value: {:?}", t)
+                ),
             },
-            None => parser_err!(self, "Expecting a value, but found EOF"),
+            None => parser_err!(
+                self,
+                self.peek_prev_range(),
+                "Expecting a value, but found EOF"
+            ),
         }
     }
 
@@ -1692,7 +1824,7 @@ impl Parser {
             v @ Value::Number(_) => Ok(v),
             _ => {
                 self.prev_token();
-                self.expected("literal number", self.peek_token())
+                self.expected(self.peek_range(), "literal number", self.peek_token())
             }
         }
     }
@@ -1700,10 +1832,13 @@ impl Parser {
     /// Parse an unsigned literal integer/long
     pub fn parse_literal_uint(&mut self) -> Result<u64, ParserError> {
         match self.next_token() {
-            Some(Token::Number(s)) => s
-                .parse::<u64>()
-                .map_err(|e| self.error(format!("Could not parse '{}' as u64: {}", s, e))),
-            other => self.expected("literal int", other),
+            Some(Token::Number(s)) => s.parse::<u64>().map_err(|e| {
+                self.error(
+                    self.peek_prev_range(),
+                    format!("Could not parse '{}' as u64: {}", s, e),
+                )
+            }),
+            other => self.expected(self.peek_prev_range(), "literal int", other),
         }
     }
 
@@ -1711,7 +1846,7 @@ impl Parser {
     pub fn parse_literal_string(&mut self) -> Result<String, ParserError> {
         match self.next_token() {
             Some(Token::SingleQuotedString(ref s)) => Ok(s.clone()),
-            other => self.expected("literal string", other),
+            other => self.expected(self.peek_prev_range(), "literal string", other),
         }
     }
 
@@ -1774,9 +1909,13 @@ impl Parser {
                     DataType::Decimal(precision, scale)
                 }
                 "JSON" | "JSONB" => DataType::Jsonb,
-                _ => self.expected("a known data type", Some(Token::Word(k)))?,
+                _ => self.expected(
+                    self.peek_prev_range(),
+                    "a known data type",
+                    Some(Token::Word(k)),
+                )?,
             },
-            other => self.expected("a data type name", other)?,
+            other => self.expected(self.peek_prev_range(), "a data type name", other)?,
         };
         match &self.peek_token() {
             Some(Token::LBracket) => {
@@ -1816,7 +1955,11 @@ impl Parser {
             }
             not_an_ident => {
                 if after_as {
-                    return self.expected("an identifier after AS", not_an_ident);
+                    return self.expected(
+                        self.peek_prev_range(),
+                        "an identifier after AS",
+                        not_an_ident,
+                    );
                 }
                 self.prev_token();
                 Ok(None) // no alias found
@@ -1858,7 +2001,7 @@ impl Parser {
     pub fn parse_identifier(&mut self) -> Result<Ident, ParserError> {
         match self.next_token() {
             Some(Token::Word(w)) => Ok(w.to_ident()),
-            unexpected => self.expected("identifier", unexpected),
+            unexpected => self.expected(self.peek_prev_range(), "identifier", unexpected),
         }
     }
 
@@ -1874,7 +2017,11 @@ impl Parser {
         } else if optional == Optional {
             Ok(vec![])
         } else {
-            self.expected("a list of columns in parentheses", self.peek_token())
+            self.expected(
+                self.peek_range(),
+                "a list of columns in parentheses",
+                self.peek_token(),
+            )
         }
     }
 
@@ -2003,6 +2150,7 @@ impl Parser {
             SetExpr::Values(self.parse_values()?)
         } else {
             return self.expected(
+                self.peek_range(),
                 "SELECT, VALUES, or a subquery in the query body",
                 self.peek_token(),
             );
@@ -2050,7 +2198,11 @@ impl Parser {
         let all = self.parse_keyword("ALL");
         let distinct = self.parse_keyword("DISTINCT");
         if all && distinct {
-            return parser_err!(self, "Cannot specify both ALL and DISTINCT in SELECT");
+            return parser_err!(
+                self,
+                self.peek_prev_range(),
+                "Cannot specify both ALL and DISTINCT in SELECT"
+            );
         }
         let projection = self.parse_comma_separated(Parser::parse_select_item)?;
 
@@ -2101,7 +2253,7 @@ impl Parser {
             let value = match (self.parse_value(), token) {
                 (Ok(value), _) => SetVariableValue::Literal(value),
                 (Err(_), Some(Token::Word(ident))) => SetVariableValue::Ident(ident.to_ident()),
-                (Err(_), other) => self.expected("variable value", other)?,
+                (Err(_), other) => self.expected(self.peek_range(), "variable value", other)?,
             };
             Ok(Statement::SetVariable {
                 local: modifier == Some("LOCAL"),
@@ -2113,7 +2265,7 @@ impl Parser {
                 modes: self.parse_transaction_modes()?,
             })
         } else {
-            self.expected("equals sign or TO", self.peek_token())
+            self.expected(self.peek_range(), "equals sign or TO", self.peek_token())
         }
     }
 
@@ -2172,7 +2324,11 @@ impl Parser {
                         filter,
                     })
                 }
-                None => self.expected("FROM or IN after SHOW INDEXES", self.peek_token()),
+                None => self.expected(
+                    self.peek_range(),
+                    "FROM or IN after SHOW INDEXES",
+                    self.peek_token(),
+                ),
             }
         } else if self.parse_keywords(vec!["CREATE", "VIEW"]) {
             Ok(Statement::ShowCreateView {
@@ -2255,9 +2411,19 @@ impl Parser {
                             _ => unreachable!(),
                         }
                     }
-                    "OUTER" => return self.expected("LEFT, RIGHT, or FULL", self.peek_token()),
+                    "OUTER" => {
+                        return self.expected(
+                            self.peek_range(),
+                            "LEFT, RIGHT, or FULL",
+                            self.peek_token(),
+                        )
+                    }
                     _ if natural => {
-                        return self.expected("a join type after NATURAL", self.peek_token());
+                        return self.expected(
+                            self.peek_range(),
+                            "a join type after NATURAL",
+                            self.peek_token(),
+                        );
                     }
                     _ => break,
                 };
@@ -2278,7 +2444,11 @@ impl Parser {
         if self.parse_keyword("LATERAL") {
             // LATERAL must always be followed by a subquery.
             if !self.consume_token(&Token::LParen) {
-                self.expected("subquery after LATERAL", self.peek_token())?;
+                self.expected(
+                    self.peek_range(),
+                    "subquery after LATERAL",
+                    self.peek_token(),
+                )?;
             }
             return self.parse_derived_table_factor(Lateral);
         }
@@ -2326,7 +2496,7 @@ impl Parser {
                             if table_and_joins.joins.is_empty() {
                                 // The SQL spec prohibits derived tables and bare
                                 // tables from appearing alone in parentheses.
-                                self.expected("joined table", self.peek_token())?
+                                self.expected(self.peek_range(), "joined table", self.peek_token())?
                             }
                         }
                     }
@@ -2390,7 +2560,11 @@ impl Parser {
             let columns = self.parse_parenthesized_column_list(Mandatory)?;
             Ok(JoinConstraint::Using(columns))
         } else {
-            self.expected("ON, or USING after JOIN", self.peek_token())
+            self.expected(
+                self.peek_range(),
+                "ON, or USING after JOIN",
+                self.peek_token(),
+            )
         }
     }
 
@@ -2504,7 +2678,11 @@ impl Parser {
         } else if self.parse_keywords(vec!["WITH", "TIES"]) {
             true
         } else {
-            return self.expected("one of ONLY or WITH TIES", self.peek_token());
+            return self.expected(
+                self.peek_range(),
+                "one of ONLY or WITH TIES",
+                self.peek_token(),
+            );
         };
         Ok(Fetch {
             with_ties,
@@ -2551,7 +2729,7 @@ impl Parser {
                 } else if self.parse_keyword("SERIALIZABLE") {
                     TransactionIsolationLevel::Serializable
                 } else {
-                    self.expected("isolation level", self.peek_token())?
+                    self.expected(self.peek_range(), "isolation level", self.peek_token())?
                 };
                 TransactionMode::IsolationLevel(iso_level)
             } else if self.parse_keywords(vec!["READ", "ONLY"]) {
@@ -2559,7 +2737,7 @@ impl Parser {
             } else if self.parse_keywords(vec!["READ", "WRITE"]) {
                 TransactionMode::AccessMode(TransactionAccessMode::ReadWrite)
             } else if required || self.peek_token().is_some() {
-                self.expected("transaction mode", self.peek_token())?
+                self.expected(self.peek_range(), "transaction mode", self.peek_token())?
             } else {
                 break;
             };
@@ -2604,7 +2782,7 @@ impl Parser {
         } else if self.parse_keyword("PLAN") {
             Stage::Plan
         } else {
-            self.expected("DATAFLOW or PLAN", self.peek_token())?
+            self.expected(self.peek_range(), "DATAFLOW or PLAN", self.peek_token())?
         };
         self.expect_keyword("FOR")?;
 
@@ -2627,7 +2805,11 @@ impl Parser {
                 name: self.parse_object_name()?,
             })
         } else {
-            self.expected("ALL SOURCES or SOURCE", self.peek_token())?
+            self.expected(
+                self.peek_range(),
+                "ALL SOURCES or SOURCE",
+                self.peek_token(),
+            )?
         }
     }
 }
