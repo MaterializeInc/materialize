@@ -40,12 +40,25 @@ pub const VERSIONS: &[i32] = &[
     VERSION_GSSENC,
 ];
 
-#[allow(dead_code)]
 #[derive(Debug)]
-pub enum Severity {
+pub enum ErrorSeverity {
     Error,
     Fatal,
     Panic,
+}
+
+impl ErrorSeverity {
+    pub fn string(&self) -> &'static str {
+        match self {
+            ErrorSeverity::Error => "ERROR",
+            ErrorSeverity::Fatal => "FATAL",
+            ErrorSeverity::Panic => "PANIC",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum NoticeSeverity {
     Warning,
     Notice,
     Debug,
@@ -53,17 +66,14 @@ pub enum Severity {
     Log,
 }
 
-impl Severity {
+impl NoticeSeverity {
     pub fn string(&self) -> &'static str {
         match self {
-            Severity::Error => "ERROR",
-            Severity::Fatal => "FATAL",
-            Severity::Panic => "PANIC",
-            Severity::Warning => "WARNING",
-            Severity::Notice => "NOTICE",
-            Severity::Debug => "DEBUG",
-            Severity::Info => "INFO",
-            Severity::Log => "LOG",
+            NoticeSeverity::Warning => "WARNING",
+            NoticeSeverity::Notice => "NOTICE",
+            NoticeSeverity::Debug => "DEBUG",
+            NoticeSeverity::Info => "INFO",
+            NoticeSeverity::Log => "LOG",
         }
     }
 }
@@ -240,8 +250,14 @@ pub enum BackendMessage {
     ParseComplete,
     BindComplete,
     CloseComplete,
+    NoticeResponse {
+        severity: NoticeSeverity,
+        code: &'static str,
+        message: String,
+        detail: Option<String>,
+    },
     ErrorResponse {
-        severity: Severity,
+        severity: ErrorSeverity,
         code: &'static str,
         message: String,
         detail: Option<String>,

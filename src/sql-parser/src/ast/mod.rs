@@ -538,6 +538,7 @@ pub enum Statement {
         url: String,
         schema: Option<SourceSchema>,
         with_options: Vec<SqlOption>,
+        if_not_exists: bool,
     },
     /// `CREATE SOURCES`
     CreateSources {
@@ -552,6 +553,7 @@ pub enum Statement {
         from: ObjectName,
         url: String,
         with_options: Vec<SqlOption>,
+        if_not_exists: bool,
     },
     /// `CREATE VIEW`
     CreateView {
@@ -571,6 +573,7 @@ pub enum Statement {
         columns: Vec<ColumnDef>,
         constraints: Vec<TableConstraint>,
         with_options: Vec<SqlOption>,
+        if_not_exists: bool,
     },
     /// `CREATE INDEX`
     CreateIndex {
@@ -580,6 +583,7 @@ pub enum Statement {
         on_name: ObjectName,
         /// Expressions that form part of the index key
         key_parts: Vec<Expr>,
+        if_not_exists: bool,
     },
     /// `ALTER TABLE`
     AlterTable {
@@ -735,12 +739,17 @@ impl fmt::Display for Statement {
                 url,
                 schema,
                 with_options,
+                if_not_exists,
             } => {
+                write!(f, "CREATE SOURCE ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
                 write!(
                     f,
-                    "CREATE SOURCE {} FROM {}",
-                    name.to_string(),
-                    Value::SingleQuotedString(url.clone()).to_string()
+                    "{} FROM {}",
+                    name,
+                    Value::SingleQuotedString(url.clone())
                 )?;
                 match schema {
                     Some(schema) => {
@@ -787,10 +796,15 @@ impl fmt::Display for Statement {
                 from,
                 url,
                 with_options,
+                if_not_exists,
             } => {
+                write!(f, "CREATE SINK ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
                 write!(
                     f,
-                    "CREATE SINK {} FROM {} INTO {}",
+                    "{} FROM {} INTO {}",
                     name,
                     from,
                     Value::SingleQuotedString(url.clone())
@@ -833,13 +847,13 @@ impl fmt::Display for Statement {
                 columns,
                 constraints,
                 with_options,
+                if_not_exists,
             } => {
-                write!(
-                    f,
-                    "CREATE TABLE {} ({}",
-                    name,
-                    display_comma_separated(columns)
-                )?;
+                write!(f, "CREATE TABLE ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
+                write!(f, "{} ({}", name, display_comma_separated(columns))?;
                 if !constraints.is_empty() {
                     write!(f, ", {}", display_comma_separated(constraints))?;
                 }
@@ -854,10 +868,15 @@ impl fmt::Display for Statement {
                 name,
                 on_name,
                 key_parts,
+                if_not_exists,
             } => {
+                write!(f, "CREATE INDEX ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
                 write!(
                     f,
-                    "CREATE INDEX {} ON {} ({})",
+                    "{} ON {} ({})",
                     name,
                     on_name,
                     display_comma_separated(key_parts),

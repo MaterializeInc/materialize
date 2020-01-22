@@ -412,8 +412,12 @@ where
         plan: Plan,
         conn_id: u32,
     ) -> Result<ExecuteResponse, failure::Error> {
-        Ok(match plan {
-            Plan::CreateTable { name, desc } => {
+        match plan {
+            Plan::CreateTable {
+                name,
+                desc,
+                if_not_exists,
+            } => {
                 let view = View {
                     raw_sql: "<created by CREATE TABLE>".to_string(),
                     relation_expr: OptimizedRelationExpr::declare_optimized(
@@ -422,30 +426,42 @@ where
                     eval_env: EvalEnv::default(),
                     desc,
                 };
-                let view_id = self.register_view(&name, &view)?;
-                self.insert_view(view_id, &view, Some(true));
-                let mut index_name = name.clone();
-                index_name.item += "_primary_idx";
-                let index = view.auto_generate_primary_idx(view_id);
-                let index_id = self.register_index(&index_name, &index)?;
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::CreateLocalInput {
-                        name: name.to_string(),
-                        index_id,
-                        index: index.clone(),
-                        advance_to: self.local_input_time,
-                    },
-                );
-                self.add_index_to_view(index_id, index.desc, None);
-                ExecuteResponse::CreatedTable
+                match self.register_view(&name, &view) {
+                    Ok(view_id) => {
+                        self.insert_view(view_id, &view, Some(true));
+                        let mut index_name = name.clone();
+                        index_name.item += "_primary_idx";
+                        let index = view.auto_generate_primary_idx(view_id);
+                        let index_id = self.register_index(&index_name, &index)?;
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::CreateLocalInput {
+                                name: name.to_string(),
+                                index_id,
+                                index: index.clone(),
+                                advance_to: self.local_input_time,
+                            },
+                        );
+                        self.add_index_to_view(index_id, index.desc, None);
+                        Ok(ExecuteResponse::CreatedTable { existed: false })
+                    }
+                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
+                    Err(err) => Err(err),
+                }
             }
 
-            Plan::CreateSource(name, source) => {
-                let source_id = self.register_source(&name, &source)?;
-                self.sources.insert(source_id, source);
-                ExecuteResponse::CreatedSource
-            }
+            Plan::CreateSource {
+                name,
+                source,
+                if_not_exists,
+            } => match self.register_source(&name, &source) {
+                Ok(source_id) => {
+                    self.sources.insert(source_id, source);
+                    Ok(ExecuteResponse::CreatedSource { existed: false })
+                }
+                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+                Err(err) => Err(err),
+            },
 
             Plan::CreateSources(mut sources) => {
                 sources.retain(|(name, _)| self.catalog.get(name).is_err());
@@ -453,26 +469,34 @@ where
                     let source_id = self.register_source(&name, source)?;
                     self.sources.insert(source_id, source.clone());
                 }
-                send_immediate_rows(
+                Ok(send_immediate_rows(
                     sources
                         .iter()
                         .map(|s| Row::pack(&[Datum::String(&s.0.to_string())]))
                         .collect(),
-                )
+                ))
             }
 
-            Plan::CreateSink(name, sink) => {
-                let id = self
-                    .catalog
-                    .insert(name.clone(), CatalogItem::Sink(sink.clone()))?;
-                self.report_catalog_update(
-                    id,
-                    self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
-                    true,
-                );
-                self.create_sink_dataflow(name.to_string(), id, sink);
-                ExecuteResponse::CreatedSink
-            }
+            Plan::CreateSink {
+                name,
+                sink,
+                if_not_exists,
+            } => match self
+                .catalog
+                .insert(name.clone(), CatalogItem::Sink(sink.clone()))
+            {
+                Ok(id) => {
+                    self.report_catalog_update(
+                        id,
+                        self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
+                        true,
+                    );
+                    self.create_sink_dataflow(name.to_string(), id, sink);
+                    Ok(ExecuteResponse::CreatedSink { existed: false })
+                }
+                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSink { existed: true }),
+                Err(err) => Err(err),
+            },
 
             Plan::CreateView {
                 name,
@@ -484,46 +508,53 @@ where
                 let view = self.optimize_view(view);
                 let id = self.register_view(&name, &view)?;
                 self.create_materialized_view_dataflow(&name, id, view, None)?;
-                ExecuteResponse::CreatedView
+                Ok(ExecuteResponse::CreatedView)
             }
 
-            Plan::CreateIndex(name, index) => {
-                let id = self.register_index(&name, &index)?;
-                self.create_index_dataflow(name.to_string(), id, index);
-                ExecuteResponse::CreatedIndex
-            }
+            Plan::CreateIndex {
+                name,
+                index,
+                if_not_exists,
+            } => match self.register_index(&name, &index) {
+                Ok(id) => {
+                    self.create_index_dataflow(name.to_string(), id, index);
+                    Ok(ExecuteResponse::CreatedIndex { existed: false })
+                }
+                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
+                Err(err) => Err(err),
+            },
 
             Plan::DropItems(ids, item_type) => {
                 self.drop_items(&ids, item_type != ObjectType::Index);
-                match item_type {
+                Ok(match item_type {
                     ObjectType::Source => ExecuteResponse::DroppedSource,
                     ObjectType::View => ExecuteResponse::DroppedView,
                     ObjectType::Table => ExecuteResponse::DroppedTable,
                     ObjectType::Sink => ExecuteResponse::DroppedSink,
                     ObjectType::Index => ExecuteResponse::DroppedIndex,
-                }
+                })
             }
 
-            Plan::EmptyQuery => ExecuteResponse::EmptyQuery,
+            Plan::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
 
             Plan::SetVariable { name, value } => {
                 session.set(&name, &value)?;
-                ExecuteResponse::SetVariable { name }
+                Ok(ExecuteResponse::SetVariable { name })
             }
 
             Plan::StartTransaction => {
                 session.start_transaction();
-                ExecuteResponse::StartTransaction
+                Ok(ExecuteResponse::StartTransaction)
             }
 
             Plan::Commit => {
                 session.end_transaction();
-                ExecuteResponse::Commit
+                Ok(ExecuteResponse::Commit)
             }
 
             Plan::Rollback => {
                 session.end_transaction();
-                ExecuteResponse::Rollback
+                Ok(ExecuteResponse::Rollback)
             }
 
             Plan::Peek {
@@ -556,7 +587,7 @@ where
                         }
                     }
                     finishing.finish(&mut results);
-                    send_immediate_rows(results)
+                    Ok(send_immediate_rows(results))
                 } else {
                     // Peeks describe a source of data and a timestamp at which to view its contents.
                     //
@@ -663,7 +694,7 @@ where
                         })
                         .err_into();
 
-                    ExecuteResponse::SendRows(Box::pin(rows_rx))
+                    Ok(ExecuteResponse::SendRows(Box::pin(rows_rx)))
                 }
             }
 
@@ -694,17 +725,17 @@ where
                     connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                 };
                 self.create_sink_dataflow(sink_name, sink_id, sink);
-                ExecuteResponse::Tailing { rx }
+                Ok(ExecuteResponse::Tailing { rx })
             }
 
-            Plan::SendRows(rows) => send_immediate_rows(rows),
+            Plan::SendRows(rows) => Ok(send_immediate_rows(rows)),
 
             Plan::ExplainPlan(relation_expr, mut eval_env) => {
                 eval_env.wall_time = Some(chrono::Utc::now());
                 let relation_expr = self.optimize(relation_expr, &eval_env);
                 let pretty = relation_expr.as_ref().pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
-                send_immediate_rows(rows)
+                Ok(send_immediate_rows(rows))
             }
 
             Plan::SendDiffs {
@@ -733,13 +764,13 @@ where
                     },
                 );
 
-                match kind {
+                Ok(match kind {
                     MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
                     MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
                     MutationKind::Update => ExecuteResponse::Updated(affected_rows),
-                }
+                })
             }
-        })
+        }
     }
 
     /// Register sources as described by `sources`.

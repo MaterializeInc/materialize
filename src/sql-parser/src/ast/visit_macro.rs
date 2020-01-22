@@ -340,8 +340,9 @@ macro_rules! make_visitor {
                 url: &'ast $($mut)* String,
                 schema: Option<&'ast $($mut)* SourceSchema>,
                 with_options: &'ast $($mut)* Vec<SqlOption>,
+                if_not_exists: bool,
             ) {
-                visit_create_source(self, name, url, schema, with_options)
+                visit_create_source(self, name, url, schema, with_options, if_not_exists)
             }
 
             fn visit_create_sources(
@@ -364,8 +365,9 @@ macro_rules! make_visitor {
                 from: &'ast $($mut)* ObjectName,
                 url: &'ast $($mut)* String,
                 with_options: &'ast $($mut)* Vec<SqlOption>,
+                if_not_exists: bool,
             ) {
-                visit_create_sink(self, name, from, url, with_options)
+                visit_create_sink(self, name, from, url, with_options, if_not_exists)
             }
 
             fn visit_create_view(
@@ -384,9 +386,10 @@ macro_rules! make_visitor {
                 &mut self,
                 name: &'ast $($mut)* Ident,
                 on_name: &'ast $($mut)* ObjectName,
-                key_parts: &'ast $($mut)* Vec<Expr>
+                key_parts: &'ast $($mut)* Vec<Expr>,
+                if_not_exists: bool,
             ){
-                visit_create_index(self, name, on_name, key_parts)
+                visit_create_index(self, name, on_name, key_parts, if_not_exists)
             }
 
             fn visit_create_table(
@@ -395,6 +398,7 @@ macro_rules! make_visitor {
                 columns: &'ast $($mut)* [ColumnDef],
                 constraints: &'ast $($mut)* [TableConstraint],
                 with_options: &'ast $($mut)* [SqlOption],
+                if_not_exists: bool,
             ) {
                 visit_create_table(
                     self,
@@ -402,6 +406,7 @@ macro_rules! make_visitor {
                     columns,
                     constraints,
                     with_options,
+                    if_not_exists,
                 )
             }
 
@@ -590,7 +595,8 @@ macro_rules! make_visitor {
                     url,
                     schema,
                     with_options,
-                } => visitor.visit_create_source(name, url, schema.as_auto_ref(), with_options),
+                    if_not_exists,
+                } => visitor.visit_create_source(name, url, schema.as_auto_ref(), with_options, *if_not_exists),
                 Statement::CreateSources {
                     like,
                     url,
@@ -602,7 +608,8 @@ macro_rules! make_visitor {
                     from,
                     url,
                     with_options,
-                } => visitor.visit_create_sink(name, from, url, with_options),
+                    if_not_exists,
+                } => visitor.visit_create_sink(name, from, url, with_options, *if_not_exists),
                 Statement::CreateView {
                     name,
                     columns,
@@ -615,7 +622,8 @@ macro_rules! make_visitor {
                     name,
                     on_name,
                     key_parts,
-                } => visitor.visit_create_index(name, on_name, key_parts),
+                    if_not_exists,
+                } => visitor.visit_create_index(name, on_name, key_parts, *if_not_exists),
                 Statement::Drop {
                     object_type,
                     if_exists,
@@ -627,11 +635,13 @@ macro_rules! make_visitor {
                     columns,
                     constraints,
                     with_options,
+                    if_not_exists,
                 } => visitor.visit_create_table(
                     name,
                     columns,
                     constraints,
                     with_options,
+                    *if_not_exists,
                 ),
                 Statement::AlterTable { name, operation } => visitor.visit_alter_table(name, operation),
                 Statement::SetVariable {
@@ -1225,6 +1235,7 @@ macro_rules! make_visitor {
             url: &'ast $($mut)* String,
             schema: Option<&'ast $($mut)* SourceSchema>,
             with_options: &'ast $($mut)* Vec<SqlOption>,
+            _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_literal_string(url);
@@ -1269,6 +1280,7 @@ macro_rules! make_visitor {
             from: &'ast $($mut)* ObjectName,
             url: &'ast $($mut)* String,
             with_options: &'ast $($mut)* Vec<SqlOption>,
+            _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_object_name(from);
@@ -1315,6 +1327,7 @@ macro_rules! make_visitor {
             name: &'ast $($mut)* Ident,
             on_name: &'ast $($mut)* ObjectName,
             key_parts: &'ast $($mut)* Vec<Expr>,
+            _if_not_exists: bool,
         ) {
             visitor.visit_ident(name);
             visitor.visit_object_name(on_name);
@@ -1329,6 +1342,7 @@ macro_rules! make_visitor {
             columns: &'ast $($mut)* [ColumnDef],
             constraints: &'ast $($mut)* [TableConstraint],
             with_options: &'ast $($mut)* [SqlOption],
+            _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             for column in columns {

@@ -28,7 +28,8 @@ use sql::Session;
 use crate::codec::Codec;
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::{
-    self, BackendMessage, EncryptionType, FrontendMessage, Severity, VERSIONS, VERSION_3,
+    self, BackendMessage, EncryptionType, ErrorSeverity, FrontendMessage, NoticeSeverity, VERSIONS,
+    VERSION_3,
 };
 use crate::secrets::SecretManager;
 
@@ -608,10 +609,54 @@ where
         }
 
         match response {
-            ExecuteResponse::CreatedIndex => command_complete!("CREATE INDEX"),
-            ExecuteResponse::CreatedSource => command_complete!("CREATE SOURCE"),
-            ExecuteResponse::CreatedSink => command_complete!("CREATE SINK"),
-            ExecuteResponse::CreatedTable => command_complete!("CREATE TABLE"),
+            ExecuteResponse::CreatedIndex { existed } => {
+                if existed {
+                    self.send(BackendMessage::NoticeResponse {
+                        severity: NoticeSeverity::Notice,
+                        code: "42710",
+                        message: "index already exists, skipping".into(),
+                        detail: None,
+                    })
+                    .await?;
+                }
+                command_complete!("CREATE INDEX")
+            }
+            ExecuteResponse::CreatedSource { existed } => {
+                if existed {
+                    self.send(BackendMessage::NoticeResponse {
+                        severity: NoticeSeverity::Notice,
+                        code: "42710",
+                        message: "source already exists, skipping".into(),
+                        detail: None,
+                    })
+                    .await?;
+                }
+                command_complete!("CREATE SOURCE")
+            }
+            ExecuteResponse::CreatedSink { existed } => {
+                if existed {
+                    self.send(BackendMessage::NoticeResponse {
+                        severity: NoticeSeverity::Notice,
+                        code: "42710",
+                        message: "sink already exists, skipping".into(),
+                        detail: None,
+                    })
+                    .await?;
+                }
+                command_complete!("CREATE SINK")
+            }
+            ExecuteResponse::CreatedTable { existed } => {
+                if existed {
+                    self.send(BackendMessage::NoticeResponse {
+                        severity: NoticeSeverity::Notice,
+                        code: "42P07",
+                        message: "relation already exists, skipping".into(),
+                        detail: None,
+                    })
+                    .await?;
+                }
+                command_complete!("CREATE TABLE")
+            }
             ExecuteResponse::CreatedView => command_complete!("CREATE VIEW"),
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
@@ -810,7 +855,7 @@ where
         );
         self.conn
             .send(BackendMessage::ErrorResponse {
-                severity: Severity::Error,
+                severity: ErrorSeverity::Error,
                 code,
                 message,
                 detail: None,
@@ -832,7 +877,7 @@ where
         );
         self.conn
             .send(BackendMessage::ErrorResponse {
-                severity: Severity::Fatal,
+                severity: ErrorSeverity::Fatal,
                 code,
                 message,
                 detail: None,

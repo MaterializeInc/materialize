@@ -1076,6 +1076,7 @@ fn parse_create_table() {
             columns,
             constraints,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("uk_cities", name.to_string());
             assert_eq!(
@@ -1148,6 +1149,7 @@ fn parse_create_table() {
             );
             assert!(constraints.is_empty());
             assert_eq!(with_options, vec![]);
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3254,6 +3256,7 @@ fn parse_create_source_raw_schema() {
             url,
             schema,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3265,6 +3268,7 @@ fn parse_create_source_raw_schema() {
                     value: Value::SingleQuotedString("val".into())
                 },]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3279,6 +3283,7 @@ fn parse_create_source_path_schema_multiple_args() {
             url,
             schema,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3296,6 +3301,7 @@ fn parse_create_source_path_schema_multiple_args() {
                     },
                 ]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3310,6 +3316,7 @@ fn parse_create_source_registry() {
             url,
             schema,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3318,9 +3325,27 @@ fn parse_create_source_registry() {
                 schema.unwrap()
             );
             assert_eq!(with_options, vec![]);
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
+}
+
+#[test]
+fn parse_create_source_if_not_exists() {
+    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' USING SCHEMA ''";
+    match verified_stmt(sql) {
+        Statement::CreateSource { if_not_exists, .. } => {
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE SOURCE IF EXISTS foo FROM 'bar' USING SCHEMA ''");
+    assert_eq!(
+        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
+        res.unwrap_err()
+    );
 }
 
 #[test]
@@ -3373,6 +3398,7 @@ fn parse_create_sink() {
             from,
             url,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", from.to_string());
@@ -3384,9 +3410,27 @@ fn parse_create_sink() {
                     value: Value::SingleQuotedString("val".into())
                 },]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
+}
+
+#[test]
+fn parse_create_sink_if_not_exists() {
+    let sql = "CREATE SINK IF NOT EXISTS foo FROM bar INTO 'baz'";
+    match verified_stmt(sql) {
+        Statement::CreateSink { if_not_exists, .. } => {
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE SINK IF EXISTS foo FROM bar INTO 'baz'");
+    assert_eq!(
+        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
+        res.unwrap_err()
+    );
 }
 
 #[test]
@@ -3397,6 +3441,7 @@ fn parse_create_index() {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("myschema.bar", on_name.to_string());
@@ -3407,6 +3452,7 @@ fn parse_create_index() {
                     Expr::Identifier(Ident::new("b"))
                 ]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3417,6 +3463,7 @@ fn parse_create_index() {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         } => {
             assert_eq!("fizz", name.to_string());
             assert_eq!("baz", on_name.to_string());
@@ -3431,6 +3478,7 @@ fn parse_create_index() {
                 unreachable!();
             }
             assert_eq!(key_parts[3], Expr::Identifier(Ident::new("delta")));
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3441,6 +3489,7 @@ fn parse_create_index() {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         } => {
             assert_eq!("ind", name.to_string());
             assert_eq!("tab", on_name.to_string());
@@ -3452,6 +3501,7 @@ fn parse_create_index() {
                     right: Box::new(Expr::Value(Value::Number("1".to_string())))
                 }))],
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3461,6 +3511,7 @@ fn parse_create_index() {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         } => {
             assert_eq!("qualifiers", name.to_string());
             assert_eq!("no_parentheses", on_name.to_string());
@@ -3471,6 +3522,14 @@ fn parse_create_index() {
                     Ident::new("omega"),
                 ])],
             );
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+    let sql = "CREATE INDEX IF NOT EXISTS foo ON bar (baz)";
+    match verified_stmt(sql) {
+        Statement::CreateIndex { if_not_exists, .. } => {
+            assert!(if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -3488,6 +3547,12 @@ CREATE INDEX myschema.ind ON foo(b)
 Expected ON, found: ."
             .to_string()),
         format!("{}", res.unwrap_err())
+    );
+
+    let res = parse_sql_statements("CREATE INDEX IF EXISTS myschema.ind ON foo(b)");
+    assert_eq!(
+        ParserError::ParserError("Expected NOT, found: EXISTS".to_string()),
+        res.unwrap_err(),
     );
 }
 
@@ -4121,6 +4186,7 @@ fn parse_create_table_with_defaults() {
             columns,
             constraints,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("public.customer", name.to_string());
             assert_eq!(
@@ -4259,6 +4325,7 @@ fn parse_create_table_with_defaults() {
                     },
                 ]
             );
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -4304,6 +4371,23 @@ fn parse_create_table_with_inherit() {
                use_metric boolean DEFAULT true\
                )";
     verified_stmt(sql);
+}
+
+#[test]
+fn parse_create_table_if_not_exists() {
+    let sql = "CREATE TABLE IF NOT EXISTS foo (bar int)";
+    match verified_stmt(sql) {
+        Statement::CreateTable { if_not_exists, .. } => {
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE TABLE IF EXISTS foo (bar int)");
+    assert_eq!(
+        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
+        res.unwrap_err()
+    );
 }
 
 #[ignore] // NOTE(benesch): this test is doomed. COPY data should not be tokenized/parsed.

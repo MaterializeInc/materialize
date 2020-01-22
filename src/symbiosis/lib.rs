@@ -95,6 +95,7 @@ END $$;
                 name,
                 columns,
                 constraints,
+                if_not_exists,
                 ..
             } => {
                 self.client.execute(&*stmt.to_string(), &[]).await?;
@@ -163,7 +164,11 @@ END $$;
                 let desc = RelationDesc::new(typ, names);
                 self.table_types
                     .insert(name.clone(), (sql_types, desc.clone()));
-                Plan::CreateTable { name, desc }
+                Plan::CreateTable {
+                    name,
+                    desc,
+                    if_not_exists: *if_not_exists,
+                }
             }
             Statement::Drop {
                 names,

@@ -1392,6 +1392,12 @@ impl Parser {
     }
 
     pub fn parse_create_source(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = if self.parse_keyword("IF") {
+            self.expect_keywords(&["NOT", "EXISTS"])?;
+            true
+        } else {
+            false
+        };
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let url = self.parse_literal_string()?;
@@ -1411,6 +1417,7 @@ impl Parser {
             url,
             schema,
             with_options,
+            if_not_exists,
         })
     }
 
@@ -1439,6 +1446,12 @@ impl Parser {
     }
 
     pub fn parse_create_sink(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = if self.parse_keyword("IF") {
+            self.expect_keywords(&["NOT", "EXISTS"])?;
+            true
+        } else {
+            false
+        };
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let from = self.parse_object_name()?;
@@ -1450,6 +1463,7 @@ impl Parser {
             from,
             url,
             with_options,
+            if_not_exists,
         })
     }
 
@@ -1481,6 +1495,12 @@ impl Parser {
     }
 
     pub fn parse_create_index(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = if self.parse_keyword("IF") {
+            self.expect_keywords(&["NOT", "EXISTS"])?;
+            true
+        } else {
+            false
+        };
         let name = self.parse_identifier()?;
         self.expect_keyword("ON")?;
         let on_name = self.parse_object_name()?;
@@ -1491,6 +1511,7 @@ impl Parser {
             name,
             on_name,
             key_parts,
+            if_not_exists,
         })
     }
 
@@ -1536,6 +1557,12 @@ impl Parser {
     }
 
     pub fn parse_create_table(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = if self.parse_keyword("IF") {
+            self.expect_keywords(&["NOT", "EXISTS"])?;
+            true
+        } else {
+            false
+        };
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns()?;
@@ -1546,6 +1573,7 @@ impl Parser {
             columns,
             constraints,
             with_options,
+            if_not_exists,
         })
     }
 

@@ -48,10 +48,18 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Err
 pub enum ExecuteResponse {
     /// The current session has been taken out of transaction mode by COMMIT
     Commit,
-    CreatedIndex,
-    CreatedSink,
-    CreatedSource,
-    CreatedTable,
+    CreatedIndex {
+        existed: bool,
+    },
+    CreatedSink {
+        existed: bool,
+    },
+    CreatedSource {
+        existed: bool,
+    },
+    CreatedTable {
+        existed: bool,
+    },
     CreatedView,
     Deleted(usize),
     DroppedSource,
@@ -78,10 +86,24 @@ pub enum ExecuteResponse {
 impl fmt::Debug for ExecuteResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ExecuteResponse::CreatedIndex => f.write_str("ExecuteResponse::CreatedIndex"),
-            ExecuteResponse::CreatedSink => f.write_str("ExecuteResponse::CreatedSink"),
-            ExecuteResponse::CreatedSource => f.write_str("ExecuteResponse::CreatedSource"),
-            ExecuteResponse::CreatedTable => f.write_str("ExecuteResponse::CreatedTable"),
+            ExecuteResponse::CreatedIndex { existed } => write!(
+                f,
+                "ExecuteResponse::CreatedIndex {{ existed: {} }}",
+                existed
+            ),
+            ExecuteResponse::CreatedSink { existed } => {
+                write!(f, "ExecuteResponse::CreatedSink {{ existed: {} }}", existed)
+            }
+            ExecuteResponse::CreatedSource { existed } => write!(
+                f,
+                "ExecuteResponse::CreatedSource {{ existed: {} }}",
+                existed
+            ),
+            ExecuteResponse::CreatedTable { existed } => write!(
+                f,
+                "ExecuteResponse::CreatedTable {{ existed: {} }}",
+                existed
+            ),
             ExecuteResponse::CreatedView => f.write_str("ExecuteResponse::CreatedView"),
             ExecuteResponse::Deleted(n) => write!(f, "ExecuteResponse::Deleted({})", n),
             ExecuteResponse::DroppedIndex => f.write_str("ExecuteResponse::DroppedIndex"),

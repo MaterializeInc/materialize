@@ -74,6 +74,26 @@ impl Codec {
     pub fn reset_decode_state(&mut self) {
         self.decode_state = DecodeState::Startup;
     }
+
+    fn encode_error_notice_response(
+        dst: &mut BytesMut,
+        severity: &'static str,
+        code: &'static str,
+        message: String,
+        detail: Option<String>,
+    ) {
+        dst.put_u8(b'S');
+        dst.put_string(severity);
+        dst.put_u8(b'C');
+        dst.put_string(code);
+        dst.put_u8(b'M');
+        dst.put_string(&message);
+        if let Some(ref detail) = detail {
+            dst.put_u8(b'D');
+            dst.put_string(detail);
+        }
+        dst.put_u8(b'\0');
+    }
 }
 
 impl Default for Codec {
@@ -113,6 +133,7 @@ impl Encoder for Codec {
             BackendMessage::ParseComplete => b'1',
             BackendMessage::BindComplete => b'2',
             BackendMessage::CloseComplete => b'3',
+            BackendMessage::NoticeResponse { .. } => b'N',
             BackendMessage::ErrorResponse { .. } => b'E',
             BackendMessage::CopyOutResponse { .. } => b'H',
             BackendMessage::CopyData(_) => b'd',
@@ -210,19 +231,13 @@ impl Encoder for Codec {
                 code,
                 message,
                 detail,
-            } => {
-                dst.put_u8(b'S');
-                dst.put_string(severity.string());
-                dst.put_u8(b'C');
-                dst.put_string(code);
-                dst.put_u8(b'M');
-                dst.put_string(&message);
-                if let Some(ref detail) = detail {
-                    dst.put_u8(b'D');
-                    dst.put_string(detail);
-                }
-                dst.put_u8(b'\0');
-            }
+            } => Self::encode_error_notice_response(dst, severity.string(), code, message, detail),
+            BackendMessage::NoticeResponse {
+                severity,
+                code,
+                message,
+                detail,
+            } => Self::encode_error_notice_response(dst, severity.string(), code, message, detail),
         }
 
         // Overwrite length placeholder with true length.

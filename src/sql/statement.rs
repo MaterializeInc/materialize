@@ -476,13 +476,14 @@ fn handle_show_create_source(
 }
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let (name, from, url, with_options) = match stmt {
+    let (name, from, url, with_options, if_not_exists) = match stmt {
         Statement::CreateSink {
             name,
             from,
             url,
             with_options,
-        } => (name, from, url, with_options),
+            if_not_exists,
+        } => (name, from, url, with_options, if_not_exists),
         _ => unreachable!(),
     };
     if with_options.is_empty() {
@@ -522,16 +523,21 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         }),
     };
 
-    Ok(Plan::CreateSink(name, sink))
+    Ok(Plan::CreateSink {
+        name,
+        sink,
+        if_not_exists,
+    })
 }
 
 fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let (name, on_name, key_parts) = match stmt {
+    let (name, on_name, key_parts, if_not_exists) = match stmt {
         Statement::CreateIndex {
             name,
             on_name,
             key_parts,
-        } => (name, on_name, key_parts),
+            if_not_exists,
+        } => (name, on_name, key_parts, if_not_exists),
         _ => unreachable!(),
     };
     let on_name = scx.resolve_name(on_name)?;
@@ -543,19 +549,20 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
         .into_iter()
         .map(|x| x.lower_uncorrelated())
         .collect::<Vec<_>>();
-    Ok(Plan::CreateIndex(
-        FullName {
+    Ok(Plan::CreateIndex {
+        name: FullName {
             database: on_name.database.clone(),
             schema: on_name.schema.clone(),
             item: normalize::ident(name),
         },
-        Index::new(
+        index: Index::new(
             catalog_entry.id(),
             keys,
             key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
             catalog_entry.desc()?,
         ),
-    ))
+        if_not_exists,
+    })
 }
 
 fn handle_create_view(
@@ -643,6 +650,7 @@ async fn handle_create_dataflow(
             url,
             schema,
             with_options,
+            if_not_exists,
         } => {
             let source_url = parse_source_url(url)?;
             let mut format = KafkaSchemaFormat::Avro;
@@ -685,7 +693,11 @@ async fn handle_create_dataflow(
                             let source =
                                 build_kafka_source(schema, addr, topic, format, message_name)
                                     .await?;
-                            Ok(Plan::CreateSource(name, source))
+                            Ok(Plan::CreateSource {
+                                name,
+                                source,
+                                if_not_exists: *if_not_exists,
+                            })
                         } else {
                             bail!("Kafka sources require a schema.");
                         }
@@ -812,7 +824,11 @@ async fn handle_create_dataflow(
                     };
                     let name =
                         allocate_name(&current_database, normalize::object_name(name.clone())?);
-                    Ok(Plan::CreateSource(name, source))
+                    Ok(Plan::CreateSource {
+                        name,
+                        source,
+                        if_not_exists: *if_not_exists,
+                    })
                 }
             }
         }
