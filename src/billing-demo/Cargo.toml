@@ -20,7 +20,7 @@ postgres-types = "0.1.0"
 prost = "0.6.0"
 rand = "0.7.3"
 rand_distr = "0.2.2"
-rdkafka = "0.23.1"
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
 structopt = "0.3.7"
 thiserror = "1.0.9"
 tokio = { version = "0.2.9", features = ["full"] }
