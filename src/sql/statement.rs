@@ -791,10 +791,11 @@ async fn handle_create_dataflow(
                             if n_cols == 0 {
                                 bail!("source regex must contain at least one capture group to be useful");
                             }
-                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
-                                .take(n_cols)
-                                .chain(iter::once(ColumnType::new(ScalarType::Int64)))
-                                .collect();
+                            let cols =
+                                iter::repeat(ColumnType::new(ScalarType::String).nullable(true))
+                                    .take(n_cols)
+                                    .chain(iter::once(ColumnType::new(ScalarType::Int64)))
+                                    .collect();
                             (
                                 DataEncoding::Regex { regex },
                                 RelationDesc::new(RelationType::new(cols), names),

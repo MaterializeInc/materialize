@@ -16,6 +16,89 @@ use tokio::runtime::Runtime;
 pub mod util;
 
 #[test]
+fn test_regex_sources() -> Result<(), Box<dyn Error>> {
+    ore::log::init();
+
+    let temp_dir = tempfile::tempdir()?;
+    let config = util::Config::default();
+
+    let (_server, mut client) = util::start_server(config)?;
+
+    let regex_path = Path::join(temp_dir.path(), "request.log");
+    fs::write(
+        &regex_path,
+        r#"123.17.127.5 - - [22/Jan/2020 18:59:52] "GET / HTTP/1.1" 200 -
+8.15.119.56 - - [22/Jan/2020 18:59:52] "GET /detail/nNZpqxzR HTTP/1.1" 200 -
+96.12.83.72 - - [22/Jan/2020 18:59:52] "GET /search/?kw=helper+ins+hennaed HTTP/1.1" 200 -
+"#,
+    )?;
+    // ip, ts, path, search_kw, product_detail_id, code
+    let home_page_row = (
+        Some("123.17.127.5".into()),
+        Some("22/Jan/2020 18:59:52".into()),
+        Some("GET / HTTP/1.1".into()),
+        None,
+        None,
+        Some("200".into()),
+    );
+    let detail_page_row = (
+        Some("8.15.119.56".into()),
+        Some("22/Jan/2020 18:59:52".into()),
+        Some("GET /detail/nNZpqxzR HTTP/1.1".into()),
+        None,
+        Some("nNZpqxzR".into()),
+        Some("200".into()),
+    );
+    let search_page_row = (
+        Some("96.12.83.72".into()),
+        Some("22/Jan/2020 18:59:52".into()),
+        Some("GET /search/?kw=helper+ins+hennaed HTTP/1.1".into()),
+        Some("helper+ins+hennaed".into()),
+        None,
+        Some("200".into()),
+    );
+
+    client.batch_execute(&*format!(
+        "CREATE SOURCE regex_source FROM 'file://{}' WITH (regex='{}')",
+        regex_path.display(),
+        // Regex explained here: https://www.debuggex.com/r/k48kBEt-lTMUZbaw
+        r#"(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -"#
+    ))?;
+    client.batch_execute("CREATE VIEW regex AS SELECT * FROM regex_source")?;
+
+    // TODO(brennan): use blocking SELECT when that exists.
+    thread::sleep(Duration::from_secs(1));
+
+    let all_results: Vec<_> = client
+        .query("SELECT * FROM regex ORDER BY mz_line_no", &[])?
+        .into_iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4), r.get(5)))
+        .collect::<Vec<(
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )>>();
+    assert_eq!(
+        all_results,
+        vec![home_page_row, detail_page_row, search_page_row.clone()]
+    );
+
+    let search_only: Vec<_> = client
+        .query(
+            "SELECT search_kw FROM regex WHERE search_kw IS NOT NULL",
+            &[],
+        )?
+        .into_iter()
+        .map(|r| r.get(0))
+        .collect::<Vec<Option<String>>>();
+    assert_eq!(search_only, vec![search_page_row.3]);
+    Ok(())
+}
+
+#[test]
 fn test_file_sources() -> Result<(), Box<dyn Error>> {
     ore::log::init();
 
@@ -24,7 +107,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
 
     let (server, mut client) = util::start_server(config)?;
 
-    let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
+    let fetch_rows = |client: &mut postgres::Client, source| -> Result<Vec<_>, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
         thread::sleep(Duration::from_secs(1));
         Ok(client
