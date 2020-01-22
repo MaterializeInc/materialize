@@ -82,7 +82,7 @@ impl<'a> fmt::Display for ParserError {
             .find('\n')
             .map(|end| safe_end + end)
             .unwrap_or(self.sql.len());
-        let line = &self.sql[line_start..line_end];
+        let line = &self.sql[line_start..line_end.max(line_start)];
         let underline = std::iter::repeat(' ')
             .take(self.range.start - line_start)
             .chain(std::iter::repeat('^').take(self.range.end - self.range.start))

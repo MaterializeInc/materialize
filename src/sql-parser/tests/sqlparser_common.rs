@@ -4536,6 +4536,45 @@ fn parse_json_ops() {
     }
 }
 
+#[test]
+fn test_multiline_errors() {
+    assert_eq!(
+        parse_sql_statements("SELECT foo FROM\n")
+            .unwrap_err()
+            .to_string(),
+        "\
+Parse error:
+
+^
+Expected identifier, found: EOF"
+            .to_string(),
+    );
+
+    assert_eq!(
+        parse_sql_statements("\n\nSEL\n\nECT")
+            .unwrap_err()
+            .to_string(),
+        "\
+Parse error:
+SEL
+^^^
+Expected a keyword at the beginning of a statement, found: SEL"
+            .to_string(),
+    );
+
+    assert_eq!(
+        parse_sql_statements("SELECT foo \nFROM bar+1 ORDER\n BY")
+            .unwrap_err()
+            .to_string(),
+        "\
+    Parse error:
+FROM bar+1 ORDER
+        ^
+Expected end of statement, found: +"
+            .to_string(),
+    );
+}
+
 pub fn run_parser_method<F, T>(sql: &str, f: F) -> T
 where
     F: Fn(&mut Parser) -> T,
