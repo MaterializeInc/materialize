@@ -67,18 +67,23 @@ use IsLateral::*;
 
 impl<'a> fmt::Display for ParserError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let line_start = self.sql[..self.range.start].rfind('\n').unwrap_or(0);
+        let line_start = self.sql[..self.range.start]
+            .rfind('\n')
+            .map(|start| start + 1)
+            .unwrap_or(0);
         let line_end = self.sql[self.range.end..]
             .find('\n')
+            .map(|end| self.range.end + end - 1)
             .unwrap_or(self.sql.len());
         let line = &self.sql[line_start..line_end];
+        // TODO(jamii) what if `line` contains \n
         let underline = std::iter::repeat(' ')
             .take(self.range.start - line_start)
-            .chain(std::iter::repeat('^').take(line_end - line_start))
+            .chain(std::iter::repeat('^').take(self.range.end - self.range.start))
             .collect::<String>();
         write!(
             f,
-            "Parser error:\n\n{}\n{}\n\n{}",
+            "Parser error:\n{}\n{}\n{}",
             line, underline, self.message,
         )
     }
@@ -107,7 +112,7 @@ impl Parser {
     fn error(&self, message: String) -> ParserError {
         ParserError {
             sql: self.sql.clone(),
-            range: self.tokens[self.index].1.clone(),
+            range: self.tokens[(self.index - 1).max(0)].1.clone(),
             message,
         }
     }
