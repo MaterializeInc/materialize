@@ -106,7 +106,7 @@ $ kafka-ingest format=avro topic=plurals schema=${plurals-schema} timestamp=2
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names, mods, plurals WHERE names.num = mods.num AND names.name = plurals.num;
 
-> PEEK test1;
+> SELECT * FROM test1;
 num name num mod num plurals
 ----------------------------
 1 one 1 odd one sheep
@@ -118,7 +118,7 @@ num name num mod num plurals
   SELECT * FROM names, mods, plurals
   WHERE names.num = mods.num AND names.name = plurals.num AND plurals.num = 'one';
 
-> PEEK test2;
+> SELECT * FROM test2;
 num name num mod num plurals
 ----------------------------
 1 one 1 odd one sheep
@@ -129,7 +129,7 @@ num name num mod num plurals
   RIGHT JOIN mods ON names.num = mods.num
   LEFT JOIN plurals ON names.name = plurals.num;
 
-> PEEK test3;
+> SELECT * FROM test3;
 num name num mod num plurals
 ----------------------------
 <null> <null> 0 even <null> <null>
@@ -142,7 +142,7 @@ num name num mod num plurals
   SELECT * FROM names, mods, plurals as foo
   WHERE names.num = mods.num AND names.name = foo.num AND foo.num = 'one';
 
-> PEEK test4;
+> SELECT * FROM test4;
 num name num mod num plurals
 ----------------------------
 1 one 1 odd one sheep

@@ -29,7 +29,7 @@ use dataflow_types::{
 use expr as relationexpr;
 use interchange::{avro, protobuf};
 use ore::future::MaybeFuture;
-use relationexpr::{EvalEnv, GlobalId, Id};
+use relationexpr::{EvalEnv, GlobalId};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr::like::build_like_regex_from_string;
@@ -157,7 +157,7 @@ pub fn describe_statement(
             }
         }
 
-        Statement::Peek { name, .. } | Statement::Tail { name, .. } => {
+        Statement::Tail { name, .. } => {
             let name = scx.resolve_name(name)?;
             let sql_object = scx.catalog.get(&name)?;
             (Some(sql_object.desc()?.clone()), vec![])
@@ -184,7 +184,6 @@ fn handle_sync_statement(
 ) -> Result<Plan, failure::Error> {
     match stmt {
         Statement::CreateSource { .. } | Statement::CreateSources { .. } => unreachable!(),
-        Statement::Peek { name, immediate } => handle_peek(scx, name, immediate),
         Statement::Tail { name } => handle_tail(scx, name),
         Statement::StartTransaction { .. } => handle_start_transaction(),
         Statement::Commit { .. } => handle_commit_transaction(),
@@ -951,43 +950,6 @@ fn handle_drop_dataflow_core(
     to_remove.sort();
     to_remove.dedup();
     Ok(to_remove)
-}
-
-fn handle_peek(
-    scx: &StatementContext,
-    name: ObjectName,
-    immediate: bool,
-) -> Result<Plan, failure::Error> {
-    let name = scx.resolve_name(name)?;
-    let catalog_entry = scx.catalog.get(&name)?.clone();
-    if !object_type_matches(ObjectType::View, catalog_entry.item()) {
-        bail!("{} is not a view", name);
-    }
-    let typ = catalog_entry.desc()?.typ();
-    Ok(Plan::Peek {
-        source: relationexpr::RelationExpr::Get {
-            id: Id::Global(catalog_entry.id()),
-            typ: typ.clone(),
-        },
-        when: if immediate {
-            PeekWhen::Immediately
-        } else {
-            PeekWhen::EarliestSource
-        },
-        finishing: RowSetFinishing {
-            offset: 0,
-            limit: None,
-            order_by: (0..typ.column_types.len())
-                .map(|column| relationexpr::ColumnOrder {
-                    column,
-                    desc: false,
-                })
-                .collect(),
-            project: (0..typ.column_types.len()).collect(),
-        },
-        eval_env: EvalEnv::default(),
-        materialize: false,
-    })
 }
 
 fn handle_select(

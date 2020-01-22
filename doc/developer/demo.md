@@ -89,13 +89,11 @@ $ mtrlz-shell
 > CREATE SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA REGISTRY 'http://localhost:8081';
 > SHOW COLUMNS FROM quotes;
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
-> PEEK business_insights;
+> SELECT * FROM business_insights;
 ```
 
 Though this doesn't really demonstrate the capabilities of Materialize––it's
-just a toy example––`PEEK` is much faster than the corresponding `SELECT`.
-However, it is worth noting one can query data in Materialize with arbitrary
-`SELECT`s; you aren't limited to _only_ creating materialized views.
+just a toy example––reading from `business_insights` should be quite fast!
 
 ## Aggregate demo
 
@@ -145,7 +143,7 @@ $ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
-> PEEK aggtest;
+> SELECT * FROM aggtest;
 ```
 
 ## Join demo
@@ -240,5 +238,5 @@ $ mtrlz-shell
 > CREATE SOURCE src1 FROM 'kafka://localhost/src1' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE SOURCE src2 FROM 'kafka://localhost/src2' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE MATERIALIZED VIEW jointest AS SELECT a, b, d FROM src1 JOIN src2 ON c = b;
-> PEEK jointest;
+> SELECT * FROM jointest;
 ```

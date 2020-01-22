@@ -65,9 +65,9 @@ impl Action for SqlAction {
         let query = &self.cmd.query;
         print_query(&query);
         let max = match self.stmt {
-            // TODO(benesch): this is horrible. PEEK needs to learn to wait
+            // TODO(benesch): this is horrible. SELECT needs to learn to wait
             // until it's up to date.
-            Statement::Peek { .. } | Statement::Query { .. } => env::var("MZ_TD_MAX_RETRIES")
+            Statement::Query { .. } => env::var("MZ_TD_MAX_RETRIES")
                 .unwrap_or_else(|_| "7".into())
                 .parse()
                 .map_err(|e| format!("invalid MZ_TD_MAX_RETRIES: {}", e))?,

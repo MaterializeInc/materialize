@@ -554,10 +554,6 @@ macro_rules! make_visitor {
 
             fn visit_rollback(&mut self, _chain: bool) {}
 
-            fn visit_peek(&mut self, name: &'ast $($mut)* ObjectName, immediate: bool) {
-                visit_peek(self, name, immediate)
-            }
-
             fn visit_tail(&mut self, name: &'ast $($mut)* ObjectName) {
                 visit_tail(self, name)
             }
@@ -668,9 +664,6 @@ macro_rules! make_visitor {
                 Statement::SetTransaction { modes } => visitor.visit_set_transaction(modes),
                 Statement::Commit { chain } => visitor.visit_commit(*chain),
                 Statement::Rollback { chain } => visitor.visit_rollback(*chain),
-                Statement::Peek { name, immediate } => {
-                    visitor.visit_peek(name, *immediate);
-                }
                 Statement::Tail { name } => {
                     visitor.visit_tail(name);
                 }
@@ -1624,14 +1617,6 @@ macro_rules! make_visitor {
                     visitor.visit_transaction_isolation_level(isolation_level)
                 }
             }
-        }
-
-        pub fn visit_peek<'ast, V: $name<'ast> + ?Sized>(
-            visitor: &mut V,
-            name: &'ast $($mut)* ObjectName,
-            _immediate: bool,
-        ) {
-            visitor.visit_object_name(name);
         }
 
         pub fn visit_tail<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, name: &'ast $($mut)* ObjectName) {

@@ -64,7 +64,7 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp
 
 > CREATE VIEW data_v1_view as SELECT * from data_v1
 
-> PEEK data_v1_view
+> SELECT * FROM data_v1_view
 a
 ---
 1
@@ -80,13 +80,13 @@ $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp
 
 > CREATE VIEW data_v2_view as SELECT * from data_v2
 
-> PEEK data_v1_view
+> SELECT * FROM data_v1_view
 a
 ---
 1
 2
 
-> PEEK data_v2_view
+> SELECT * FROM data_v2_view
 a b
 ----
 1 42
@@ -113,7 +113,7 @@ materialize.public.testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
   UNION
   SELECT * FROM testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
 
-> PEEK create_sources
+> SELECT * FROM create_sources
 
 > CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -188,7 +188,7 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key
 
 > CREATE VIEW data_v3_view as SELECT * from data_v3
 
-> PEEK data_v3_view
+> SELECT * FROM data_v3_view
 a
 ---
 1 42

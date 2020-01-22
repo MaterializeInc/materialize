@@ -665,8 +665,6 @@ pub enum Statement {
     Commit { chain: bool },
     /// `ROLLBACK [ TRANSACTION | WORK ] [ AND [ NO ] CHAIN ]`
     Rollback { chain: bool },
-    /// `PEEK [ IMMEDIATE ]`
-    Peek { name: ObjectName, immediate: bool },
     /// `TAIL`
     Tail { name: ObjectName },
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
@@ -994,13 +992,6 @@ impl fmt::Display for Statement {
             }
             Statement::Rollback { chain } => {
                 write!(f, "ROLLBACK{}", if *chain { " AND CHAIN" } else { "" },)
-            }
-            Statement::Peek { name, immediate } => {
-                f.write_str("PEEK ")?;
-                if *immediate {
-                    f.write_str("IMMEDIATE ")?;
-                }
-                write!(f, "{}", name)
             }
             Statement::Tail { name } => write!(f, "TAIL {}", name),
             Statement::Explain { stage, query } => write!(f, "EXPLAIN {} FOR {}", stage, query),

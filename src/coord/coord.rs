@@ -1171,7 +1171,7 @@ where
             // These two strategies vary in terms of which traces drive the
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
-            PeekWhen::EarliestSource | PeekWhen::Immediately => {
+            PeekWhen::Immediately => {
                 // Form lower bound on available times.
                 let mut upper = Antichain::new();
                 for id in uses_ids.iter() {

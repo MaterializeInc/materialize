@@ -85,9 +85,8 @@ persists. Then, as data comes in from Kafka, Differential workers collaborate to
 maintain the dataflow and its attendant view.
 
 To read data from views (as opposed to ad hoc queries), users target the view
-with `PEEK some_view` (or its equivalent ANSI Standard SQL: `SELECT * FROM
-some_view`); from here, Materialize can simply return the result from the
-already-up-to-date view. No substantive processing necessary.
+with `SELECT * FROM some_view`; from here, Materialize can simply return the
+result from the already-up-to-date view. No substantive processing necessary.
 
 **Reading data vs. creating views**
 
