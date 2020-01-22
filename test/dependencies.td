@@ -215,6 +215,9 @@ catalog item 'v5' does not exist
 ! DROP INDEX i4;
 catalog item 'i4' does not exist
 
+# Test that dropping indexies even with cascade does not cause the underlying view to be dropped
+> DROP INDEX i1 CASCADE;
+
 #cleanup
 > DROP VIEW v2;
 
@@ -249,3 +252,4 @@ cannot drop materialize.public.v3: still depended upon by catalog item 'material
 > CREATE OR REPLACE VIEW v3 AS SELECT 4
 > SELECT * FROM v3
 4
+

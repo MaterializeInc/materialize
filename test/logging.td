@@ -30,7 +30,7 @@
 > SELECT count(*) FROM count_materializations;
 1
 
-> CREATE VIEW count_frontiers AS SELECT count(*) FROM mz_view_frontiers;
+> CREATE VIEW count_frontiers AS SELECT count(*) FROM mz_materialization_frontiers;
 > SELECT count(*) FROM count_frontiers;
 1
 

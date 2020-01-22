@@ -132,6 +132,7 @@ mz_dataflow_channels             SYSTEM
 mz_dataflow_operator_addresses   SYSTEM
 mz_dataflow_operators            SYSTEM
 mz_materialization_dependencies  SYSTEM
+mz_materialization_frontiers     SYSTEM
 mz_materializations              SYSTEM
 mz_peek_active                   SYSTEM
 mz_peek_durations                SYSTEM
@@ -139,5 +140,4 @@ mz_scheduling_elapsed            SYSTEM
 mz_scheduling_histogram          SYSTEM
 mz_scheduling_parks              SYSTEM
 mz_view_foreign_keys             SYSTEM
-mz_view_frontiers                SYSTEM
 mz_view_keys                     SYSTEM

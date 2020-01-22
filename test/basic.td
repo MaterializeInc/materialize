@@ -80,6 +80,7 @@ mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators
 mz_materialization_dependencies
+mz_materialization_frontiers
 mz_materializations
 mz_peek_active
 mz_peek_durations
@@ -87,7 +88,6 @@ mz_scheduling_elapsed
 mz_scheduling_histogram
 mz_scheduling_parks
 mz_view_foreign_keys
-mz_view_frontiers
 mz_view_keys
 
 > CREATE MATERIALIZED VIEW test1 AS
@@ -136,7 +136,7 @@ b  min
 2  1
 
 > CREATE MATERIALIZED VIEW test4 AS
-  SELECT b, max(a) FROM data GROUP BY b;
+  SELECT b, max(a) FROM data_view GROUP BY b;
 
 > SELECT * FROM test4
 b  max
@@ -144,14 +144,43 @@ b  max
 1  3
 2  1
 
+#unmaterialize data view
+> DROP INDEX data_view_primary_idx;
+
+#can continue to select from a 
+> SELECT * FROM test4
+b  max
+------
+1  3
+2  1
+
+> SELECT * FROM test4 where b = 2
+b  max
+------
+2  1
+
+# cannot select from unmaterialized view
+! SELECT * from data_view
+data_view is not materialized
+
+# can create sink from unmaterialized view
+> CREATE SINK not_mat_sink FROM data_view INTO 'kafka://${testdrive.kafka-addr}/data-view-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+
+# can create materialized view from unmaterialized view
 > CREATE MATERIALIZED VIEW test5 AS
-  SELECT b, max(a) AS c FROM data GROUP BY b;
+  SELECT b, max(a) AS c FROM data_view GROUP BY b;
 
 > SELECT * FROM test5
 b  c
 ------
 1  3
 2  1
+
+> SELECT c+b from test5
+c+b
+------
+4
+3
 
 > CREATE INDEX idx1 ON test5(c)
 
@@ -160,6 +189,65 @@ catalog item 'materialize.public.idx1' is an index and so cannot be depended upo
 
 ! SELECT * from idx1
 catalog item 'materialize.public.idx1' is an index and so cannot be depended upon
+
+#if there exists a second primary index, dropping one primary index will not unmaterialize the view
+> DROP INDEX test5_primary_idx;
+
+> SELECT * from test5;
+b  c
+------
+1  3
+2  1
+
+> SELECT c-b from test5;
+c-b
+------
+2
+-1
+
+#unmaterialize test5
+> DROP INDEX idx1;
+
+! SELECT * from test5
+test5 is not materialized
+
+# test that materialized views can be even if it requires multiple layers of recursing through the AST
+# to find a source
+> CREATE MATERIALIZED VIEW test6 AS SELECT (-c + 2*b) AS d FROM test5;
+
+> SELECT * from test6;
+d
+----
+-1
+3
+
+# dependencies have not re-materialized as a result of creating a dependent materialized view
+! SELECT * from test5
+test5 is not materialized
+
+! SELECT * from data_view
+data_view is not materialized
+
+# rematerialize data_view creating an index on it
+> CREATE INDEX data_view_idx on data_view(a)
+
+> SELECT * from data_view
+a b
+---
+1 1
+2 1
+3 1
+1 2
+
+#dependencies have not been affected by the rematerialization
+> SELECT * from test6;
+d
+----
+-1
+3
+
+! SELECT * from test5
+test5 is not materialized
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.

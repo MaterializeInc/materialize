@@ -68,8 +68,8 @@ pub(crate) fn build_local_input<A: Allocate>(
             );
             match context.arrangement(&get_expr, &index.desc.keys) {
                 Some(ArrangementFlavor::Local(local)) => {
-                    manager.set_by_keys(
-                        &index.desc,
+                    manager.set(
+                        index_id,
                         WithDrop::new(local.trace, Rc::new(None::<source::SourceToken>)),
                     );
                 }
@@ -156,7 +156,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
             let mut index_tokens = HashMap::new();
 
             for (id, (index_desc, typ)) in dataflow.index_imports.iter() {
-                if let Some(trace) = manager.get_by_keys_mut(index_desc) {
+                if let Some(trace) = manager.get_mut(id) {
                     let token = trace.to_drop().clone();
                     let (arranged, button) = trace.import_frontier_core(
                         scope,
@@ -217,8 +217,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
                 match context.arrangement(&get_expr, &index_desc.keys) {
                     Some(ArrangementFlavor::Local(local)) => {
-                        manager
-                            .set_by_keys(&index_desc, WithDrop::new(local.trace.clone(), tokens));
+                        manager.set(*export_id, WithDrop::new(local.trace.clone(), tokens));
                     }
                     Some(ArrangementFlavor::Trace(_)) => {
                         // do nothing. there already exists an system

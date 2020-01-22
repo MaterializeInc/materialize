@@ -109,14 +109,14 @@ GROUP BY
 --
 CREATE VIEW mz_perf_dependency_frontiers AS
 SELECT DISTINCT
-     coalesce(mcn.name, view_deps.dataflow) as dataflow,
+     coalesce(mcn.name, index_deps.dataflow) as dataflow,
      coalesce(mcn_source.name, frontier_source.global_id) as source,
      frontier_source.time - frontier_df.time as lag_ms
 FROM
-     mz_materialization_dependencies view_deps
-JOIN mz_view_frontiers frontier_source ON view_deps.source = frontier_source.global_id
-JOIN mz_view_frontiers frontier_df ON view_deps.dataflow = frontier_df.global_id
-LEFT JOIN mz_catalog_names mcn ON mcn.global_id = view_deps.dataflow
+     mz_materialization_dependencies index_deps
+JOIN mz_materialization_frontiers frontier_source ON index_deps.source = frontier_source.global_id
+JOIN mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
+LEFT JOIN mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
 LEFT JOIN mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id;
 
 -- operator operator is due to issue #1217
