@@ -2,6 +2,7 @@
 base = "www"
 publish = "public"
 command = "hugo --gc --baseURL $URL"
+environment = { HUGO_VERSION = "0.58.3" }
 
 [context.deploy-preview]
 command = "hugo --gc --baseURL $DEPLOY_PRIME_URL"
