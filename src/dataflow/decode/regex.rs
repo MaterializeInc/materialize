@@ -51,7 +51,7 @@ where
                         };
                         session.give((
                             Row::pack(captures.iter().skip(1).map(
-                                |m| Into::<Datum>::into( m.map(
+                                |m| Datum::from( m.map(
                                     |m| m.as_str())
                                 )
                             ).chain(iter::once(line_no.map(Datum::Int64).into()))),
