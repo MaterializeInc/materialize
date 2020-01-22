@@ -511,9 +511,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     // Send new schema to registry, get back the schema id for the sink
     let url: Url = schema_registry_url.clone().parse().unwrap();
     let ccsr_client = ccsr::Client::new(url);
-    let schema_id = ccsr_client
-        .publish_schema(&topic, &schema.to_string())
-        .unwrap();
+    let schema_id = ccsr_client.publish_schema(&topic, &schema.to_string())?;
 
     let sink = Sink {
         from: (catalog_entry.id(), relation_desc),
