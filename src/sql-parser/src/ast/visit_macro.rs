@@ -530,11 +530,12 @@ macro_rules! make_visitor {
                 &mut self,
                 extended: bool,
                 full: bool,
+                materialized: bool,
                 object_type: ObjectType,
                 from: Option<&'ast $($mut)* ObjectName>,
                 filter: Option<&'ast $($mut)* ShowStatementFilter>
             ) {
-                visit_show_objects(self, extended, full, object_type, from, filter)
+                visit_show_objects(self, extended, full, materialized, object_type, from, filter)
             }
 
             fn visit_show_indexes(&mut self, extended: bool, table_name: &'ast $($mut)* ObjectName, filter: Option<&'ast $($mut)* ShowStatementFilter>) {
@@ -695,8 +696,8 @@ macro_rules! make_visitor {
                 Statement::ShowDatabases { filter } => {
                     visitor.visit_show_databases(filter.as_auto_ref())
                 }
-                Statement::ShowObjects { object_type, extended, full, from, filter } => {
-                    visitor.visit_show_objects(*extended, *full, *object_type, from.as_auto_ref(), filter.as_auto_ref())
+                Statement::ShowObjects { object_type, extended, full, materialized, from, filter } => {
+                    visitor.visit_show_objects(*extended, *full, *materialized, *object_type, from.as_auto_ref(), filter.as_auto_ref())
                 }
                 Statement::ShowIndexes { table_name, extended, filter } => {
                     visitor.visit_show_indexes(*extended, table_name, filter.as_auto_ref())
@@ -1613,6 +1614,7 @@ macro_rules! make_visitor {
             visitor: &mut V,
             _extended: bool,
             _full: bool,
+            _materialized: bool,
             object_type: ObjectType,
             from: Option<&'ast $($mut)* ObjectName>,
             filter: Option<&'ast $($mut)* ShowStatementFilter>

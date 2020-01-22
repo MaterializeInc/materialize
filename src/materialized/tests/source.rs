@@ -64,7 +64,7 @@ fn test_regex_sources() -> Result<(), Box<dyn Error>> {
         // Regex explained here: https://www.debuggex.com/r/k48kBEt-lTMUZbaw
         r#"(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -"#
     ))?;
-    client.batch_execute("CREATE VIEW regex AS SELECT * FROM regex_source")?;
+    client.batch_execute("CREATE MATERIALIZED VIEW regex AS SELECT * FROM regex_source")?;
 
     // TODO(brennan): use blocking SELECT when that exists.
     thread::sleep(Duration::from_secs(1));
@@ -153,7 +153,8 @@ New York,NY,10004
         "CREATE SOURCE static_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3)",
         static_path.display(),
     ))?;
-    client.batch_execute("CREATE VIEW static_csv AS SELECT * FROM static_csv_source")?;
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW static_csv AS SELECT * FROM static_csv_source")?;
 
     assert_eq!(
         fetch_rows(&mut client, "static_csv")?,
@@ -166,7 +167,9 @@ New York,NY,10004
         "CREATE SOURCE dynamic_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
         dynamic_path.display()
     ))?;
-    client.batch_execute("CREATE VIEW dynamic_csv AS SELECT * FROM dynamic_csv_source")?;
+    client.batch_execute(
+        "CREATE MATERIALIZED VIEW dynamic_csv AS SELECT * FROM dynamic_csv_source",
+    )?;
 
     append(&dynamic_path, b"Rochester,NY,14618\n")?;
     assert_eq!(fetch_rows(&mut client, "dynamic_csv")?, &[line1.clone()]);
@@ -241,7 +244,7 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
         "CREATE SOURCE s FROM 'file://{}' WITH (format = 'text', tail = true)",
         path.display()
     ))?;
-    client.batch_execute("CREATE VIEW v AS SELECT * FROM s")?;
+    client.batch_execute("CREATE MATERIALIZED VIEW v AS SELECT * FROM s")?;
 
     // Launch the ill-fated tail.
     client.copy_out("TAIL v")?;

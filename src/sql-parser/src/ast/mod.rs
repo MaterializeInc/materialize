@@ -650,6 +650,7 @@ pub enum Statement {
         from: Option<ObjectName>,
         extended: bool,
         full: bool,
+        materialized: bool,
         filter: Option<ShowStatementFilter>,
     },
     /// `SHOW INDEX|INDEXES|KEYS`
@@ -987,6 +988,7 @@ impl fmt::Display for Statement {
                 object_type,
                 filter,
                 full,
+                materialized,
                 from,
                 extended,
             } => {
@@ -996,6 +998,9 @@ impl fmt::Display for Statement {
                 }
                 if *full {
                     f.write_str(" FULL")?;
+                }
+                if *materialized {
+                    f.write_str(" MATERIALIZED")?;
                 }
                 write!(
                     f,

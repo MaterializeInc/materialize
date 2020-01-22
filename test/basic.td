@@ -46,9 +46,17 @@ Cannot construct query out of existing materialized views
 
 > CREATE VIEW data_view as SELECT * from data
 
-> SELECT * FROM data_view
-a b
----
+! SELECT * FROM data_view
+Cannot construct query out of existing materialized views
+
+#> CREATE SINK not_mat_sink FROM data_view INTO 'kafka://${testdrive.kafka-addr}/data-view-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+
+> CREATE MATERIALIZED VIEW test1 AS
+  SELECT b, sum(a) FROM data GROUP BY b;
+
+> SELECT * FROM test1
+b  sum
+------
 
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
@@ -60,17 +68,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> SELECT * FROM data_view
-a b
----
-1 1
-2 1
-3 1
-1 2
+> SHOW FULL VIEWS
+name        type     queryable   materialized
+------------------------------------------------
+data_view   USER     false       false
+test1       USER     true        true
 
-
-> SHOW VIEWS
-data_view
+> SHOW MATERIALIZED VIEWS
+test1
 
 > SHOW VIEWS FROM mz_catalog
 mz_arrangement_sharing
@@ -89,9 +94,6 @@ mz_scheduling_histogram
 mz_scheduling_parks
 mz_view_foreign_keys
 mz_view_keys
-
-> CREATE MATERIALIZED VIEW test1 AS
-  SELECT b, sum(a) FROM data GROUP BY b;
 
 > SELECT * FROM test1;
 b  sum
@@ -113,12 +115,13 @@ mz_peek_durations
 data_view
 
 > SHOW CREATE VIEW test1
-View   Create View
-------------------
-materialize.public.test1  "CREATE VIEW test1 AS SELECT b, sum(a) FROM data GROUP BY b"
+View                      Create View
+---------------------------------------------------------------------------------------------------
+materialize.public.test1  "CREATE MATERIALIZED VIEW test1 AS SELECT b, sum(a) FROM data GROUP BY b"
 
+# materialized view can be built on a not-materialized view
 > CREATE MATERIALIZED VIEW test2 AS
-  SELECT b, 1 + sum(a + 1) FROM data GROUP BY b;
+  SELECT b, 1 + sum(a + 1) FROM data_view GROUP BY b;
 
 > SELECT * FROM test2
 b  ?column?
@@ -126,8 +129,19 @@ b  ?column?
 1  10
 2  3
 
-> CREATE MATERIALIZED VIEW test3 AS
-  SELECT b, min(a) FROM data GROUP BY b;
+# materialize data_view
+> CREATE INDEX data_view_idx on data_view(a)
+
+> SELECT * FROM data_view
+a b
+---
+1 1
+2 1
+3 1
+1 2
+
+> CREATE VIEW test3 AS
+  SELECT b, min(a) FROM data_view GROUP BY b;
 
 > SELECT * FROM test3
 b  min
@@ -145,7 +159,7 @@ b  max
 2  1
 
 #unmaterialize data view
-> DROP INDEX data_view_primary_idx;
+> DROP INDEX data_view_idx;
 
 #can continue to select from view that depends on the unmaterialized view
 > SELECT * FROM test4
@@ -164,7 +178,7 @@ b  max
 Cannot construct query out of existing materialized views
 
 # can create sink from unmaterialized view
-> CREATE SINK not_mat_sink FROM data_view INTO 'kafka://${testdrive.kafka-addr}/data-view-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+> CREATE SINK not_mat_sink2 FROM data_view INTO 'kafka://${testdrive.kafka-addr}/data-view2-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
 
 # can create materialized view from unmaterialized view
 > CREATE MATERIALIZED VIEW test5 AS

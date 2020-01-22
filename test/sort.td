@@ -41,7 +41,7 @@ $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> CREATE VIEW foobar_view as SELECT * from foobar
+> CREATE MATERIALIZED VIEW foobar_view as SELECT * from foobar
 
 > SELECT val, quote FROM foobar_view ORDER BY quote LIMIT 5
 val    quote

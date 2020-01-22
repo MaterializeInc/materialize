@@ -2365,9 +2365,25 @@ impl Parser {
 
         let full = self.parse_keyword("FULL");
         if full {
-            self.expect_one_of_keywords(&[
-                "SCHEMAS", "COLUMNS", "TABLES", "VIEWS", "SINKS", "SOURCES",
-            ])?;
+            if extended {
+                self.expect_one_of_keywords(&["SCHEMAS", "COLUMNS", "TABLES"])?;
+            } else {
+                self.expect_one_of_keywords(&[
+                    "SCHEMAS",
+                    "COLUMNS",
+                    "TABLES",
+                    "VIEWS",
+                    "SINKS",
+                    "SOURCES",
+                    "MATERIALIZED",
+                ])?;
+            }
+            self.prev_token();
+        }
+
+        let materialized = self.parse_keyword("MATERIALIZED");
+        if materialized {
+            self.expect_one_of_keywords(&["VIEWS"])?;
             self.prev_token();
         }
 
@@ -2390,6 +2406,7 @@ impl Parser {
                 },
                 extended,
                 full,
+                materialized,
                 from: if self.parse_one_of_keywords(&["FROM", "IN"]).is_some() {
                     Some(self.parse_object_name()?)
                 } else {

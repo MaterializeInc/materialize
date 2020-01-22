@@ -92,7 +92,7 @@ catalog item 'test2' does not exist
 # Test that CASCADE causes all dependent views to be dropped along with the
 # named source.
 
-> CREATE VIEW test4 as SELECT * FROM s;
+> CREATE MATERIALIZED VIEW test4 as SELECT * FROM s;
 
 > DROP SOURCE s CASCADE;
 

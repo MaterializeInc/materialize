@@ -519,6 +519,7 @@ where
                 name,
                 view,
                 replace,
+                materialize,
             } => {
                 if let Some(id) = replace {
                     let drops = self.catalog.drop_items(&[id])?;
@@ -526,14 +527,16 @@ where
                 }
                 let view = self.optimize_view(view);
                 let id = self.register_view(&name, &view)?;
-                let mut index_name = name.clone();
                 self.insert_view(id, &view);
-                let mut dataflow = DataflowDesc::new(name.to_string());
-                self.build_view_collection(&id, &view, &mut dataflow);
-                let index = view.auto_generate_primary_idx(id);
-                index_name.item += "_primary_idx";
-                let index_id = self.register_index(&index_name, &index)?;
-                self.build_arrangement(&index_id, index, dataflow);
+                if materialize {
+                    let mut index_name = name.clone();
+                    let mut dataflow = DataflowDesc::new(name.to_string());
+                    self.build_view_collection(&id, &view, &mut dataflow);
+                    let index = view.auto_generate_primary_idx(id);
+                    index_name.item += "_primary_idx";
+                    let index_id = self.register_index(&index_name, &index)?;
+                    self.build_arrangement(&index_id, index, dataflow);
+                }
                 Ok(ExecuteResponse::CreatedView)
             }
 
@@ -822,6 +825,62 @@ where
                     MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
                     MutationKind::Update => ExecuteResponse::Updated(affected_rows),
                 })
+            }
+
+            Plan::ShowViews {
+                ids,
+                full,
+                materialized: show_materialized,
+            } => {
+                let view_information = ids
+                    .into_iter()
+                    .map(|(name, id)| {
+                        let class = match id {
+                            GlobalId::System(_) => "SYSTEM",
+                            GlobalId::User(_) => "USER",
+                        };
+                        if let Some(view_state) = self.views.get(&id) {
+                            (
+                                name,
+                                class,
+                                view_state.queryable,
+                                view_state.default_idx.is_some(),
+                                true,
+                            )
+                        } else {
+                            (name, class, false, false, false)
+                        }
+                    })
+                    .filter(|(_, _, _, materialized, valid)| {
+                        if show_materialized {
+                            *materialized && *valid
+                        } else {
+                            *valid
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut rows = view_information
+                    .into_iter()
+                    .map(|(name, class, queryable, materialized, _)| {
+                        if full {
+                            if show_materialized {
+                                Row::pack(&[Datum::from(name.as_str()), Datum::from(class)])
+                            } else {
+                                Row::pack(&[
+                                    Datum::from(name.as_str()),
+                                    Datum::from(class),
+                                    Datum::from(queryable),
+                                    Datum::from(materialized),
+                                ])
+                            }
+                        } else {
+                            Row::pack(&[Datum::from(name.as_str())])
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
+                Ok(send_immediate_rows(rows))
             }
         }
     }

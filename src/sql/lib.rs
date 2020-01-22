@@ -70,6 +70,8 @@ pub enum Plan {
         view: View<RelationExpr>,
         /// The ID of the object that this view is replacing, if any.
         replace: Option<GlobalId>,
+        /// whether we should auto-materialize the view
+        materialize: bool,
     },
     DropDatabase {
         name: String,
@@ -115,6 +117,11 @@ pub enum Plan {
         updates: Vec<(Row, isize)>,
         affected_rows: usize,
         kind: MutationKind,
+    },
+    ShowViews {
+        ids: Vec<(String, GlobalId)>,
+        full: bool,
+        materialized: bool,
     },
 }
 

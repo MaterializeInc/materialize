@@ -51,7 +51,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 > CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
   USING SCHEMA '${schema}'
 
-> CREATE VIEW data_view as SELECT * from data
+> CREATE MATERIALIZED VIEW data_view as SELECT * from data
 
 > SELECT * FROM data_view
 2019-08-27 "2019-08-27 00:17:09.000877"

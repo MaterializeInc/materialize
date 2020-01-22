@@ -78,7 +78,17 @@ $ set plurals-schema={
 > CREATE SOURCE plurals FROM 'kafka://${testdrive.kafka-addr}/testdrive-plurals-${testdrive.seed}'
   USING SCHEMA '${plurals-schema}'
 
-> CREATE MATERIALIZED VIEW test1 AS SELECT 1
+> CREATE MATERIALIZED VIEW names_view as SELECT * from names;
+
+> CREATE MATERIALIZED VIEW mods_view as SELECT * from mods;
+
+> CREATE VIEW plurals_view as SELECT * from plurals;
+
+> CREATE VIEW test1 AS
+  SELECT * FROM names_view, mods_view WHERE names_view.num = mods_view.num AND mods_view.mod = 'even';
+
+> CREATE VIEW test2 AS
+  SELECT * FROM names_view, mods_view, plurals_view WHERE names_view.num = mods_view.num AND names_view.name = plurals_view.num;
 
 > SHOW SOURCES
 SOURCES
@@ -99,17 +109,29 @@ plurals  USER
 > SHOW VIEWS
 VIEWS
 -----
+mods_view
+names_view
+plurals_view
 test1
+test2
 
 > SHOW VIEWS FROM public
 VIEWS
 -----
+mods_view
+names_view
+plurals_view
 test1
+test2
 
 > SHOW VIEWS FROM materialize.public
 VIEWS
 -----
+mods_view
+names_view
+plurals_view
 test1
+test2
 
 ! SHOW VIEWS FROM noexist
 schema 'noexist' does not exist
@@ -117,27 +139,98 @@ schema 'noexist' does not exist
 ! SHOW VIEWS FROM noexist.noexist
 unknown database 'noexist'
 
+! SHOW EXTENDED VIEWS
+Expected one of SCHEMAS or INDEX or INDEXES or KEYS or TABLES or COLUMNS or FULL, found: VIEWS
+
+! SHOW EXTENDED FULL VIEWS
+Expected one of SCHEMAS or COLUMNS or TABLES, found: VIEWS
+
 > SHOW FULL VIEWS
-VIEWS  TYPE
------------
-test1  USER
+VIEWS        TYPE QUERYABLE MATERIALIZED
+----------------------------------
+mods_view    USER true      true
+names_view   USER true      true
+plurals_view USER false     false
+test1        USER true      false
+test2        USER false     false
+
+> SHOW FULL MATERIALIZED VIEWS
+VIEWS        TYPE
+-----------------
+mods_view    USER
+names_view   USER
+
+> SHOW MATERIALIZED VIEWS LIKE '%name%'
+VIEWS
+-----
+names_view
 
 > SHOW FULL VIEWS FROM mz_catalog
-VIEWS                            TYPE
----------------------------------------
-mz_arrangement_sharing           SYSTEM
-mz_arrangement_sizes             SYSTEM
-mz_catalog_names                 SYSTEM
-mz_dataflow_channels             SYSTEM
-mz_dataflow_operator_addresses   SYSTEM
-mz_dataflow_operators            SYSTEM
-mz_materialization_dependencies  SYSTEM
-mz_materialization_frontiers     SYSTEM
-mz_materializations              SYSTEM
-mz_peek_active                   SYSTEM
-mz_peek_durations                SYSTEM
-mz_scheduling_elapsed            SYSTEM
-mz_scheduling_histogram          SYSTEM
-mz_scheduling_parks              SYSTEM
-mz_view_foreign_keys             SYSTEM
-mz_view_keys                     SYSTEM
+VIEWS                            TYPE   QUERYABLE MATERIALIZED
+--------------------------------------------------------------
+mz_arrangement_sharing           SYSTEM true      true
+mz_arrangement_sizes             SYSTEM true      true
+mz_catalog_names                 SYSTEM true      true
+mz_dataflow_channels             SYSTEM true      true
+mz_dataflow_operator_addresses   SYSTEM true      true
+mz_dataflow_operators            SYSTEM true      true
+mz_materialization_dependencies  SYSTEM true      true
+mz_materialization_frontiers     SYSTEM true      true
+mz_materializations              SYSTEM true      true
+mz_peek_active                   SYSTEM true      true
+mz_peek_durations                SYSTEM true      true
+mz_scheduling_elapsed            SYSTEM true      true
+mz_scheduling_histogram          SYSTEM true      true
+mz_scheduling_parks              SYSTEM true      true
+mz_view_foreign_keys             SYSTEM true      true
+mz_view_keys                     SYSTEM true      true
+
+# test that information in shows correctly responds to materialization and unmaterialization
+
+> CREATE INDEX plurals_idx ON plurals_view(noun)
+
+> SHOW FULL VIEWS
+VIEWS        TYPE QUERYABLE MATERIALIZED
+----------------------------------
+mods_view    USER true      true
+names_view   USER true      true
+plurals_view USER true      true
+test1        USER true      false
+test2        USER true      false
+
+> SHOW FULL MATERIALIZED VIEWS
+VIEWS        TYPE
+-----------------
+mods_view    USER
+names_view   USER
+plurals_view USER
+
+> SHOW MATERIALIZED VIEWS
+VIEWS
+--------
+mods_view
+names_view
+plurals_view
+
+> DROP INDEX names_view_primary_idx
+
+> SHOW FULL VIEWS
+VIEWS        TYPE QUERYABLE MATERIALIZED
+----------------------------------
+mods_view    USER true      true
+names_view   USER false     false
+plurals_view USER true      true
+test1        USER false     false
+test2        USER false     false
+
+> SHOW FULL MATERIALIZED VIEWS
+VIEWS        TYPE
+-----------------
+mods_view    USER
+plurals_view USER
+
+> SHOW MATERIALIZED VIEWS
+VIEWS
+--------
+mods_view
+plurals_view

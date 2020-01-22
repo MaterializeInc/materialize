@@ -134,14 +134,23 @@ pub fn describe_statement(
         ),
 
         Statement::ShowObjects {
-            object_type, full, ..
+            object_type,
+            full,
+            materialized,
+            ..
         } => {
             let col_name = object_type_as_plural_str(object_type);
             (
                 Some(if full {
-                    RelationDesc::empty()
+                    let mut relation_desc = RelationDesc::empty()
                         .add_column(col_name, ScalarType::String)
-                        .add_column("TYPE", ScalarType::String)
+                        .add_column("TYPE", ScalarType::String);
+                    if ObjectType::View == object_type && !materialized {
+                        relation_desc = relation_desc
+                            .add_column("QUERYABLE", ScalarType::Bool)
+                            .add_column("MATERIALIZED", ScalarType::Bool);
+                    }
+                    relation_desc
                 } else {
                     RelationDesc::empty().add_column(col_name, ScalarType::String)
                 }),
@@ -229,8 +238,9 @@ fn handle_sync_statement(
             full,
             object_type: ot,
             from,
+            materialized,
             filter,
-        } => handle_show_objects(scx, extended, full, ot, from, filter),
+        } => handle_show_objects(scx, extended, full, materialized, ot, from, filter),
         Statement::ShowIndexes {
             extended,
             table_name,
@@ -349,6 +359,7 @@ fn handle_show_objects(
     scx: &StatementContext,
     extended: bool,
     full: bool,
+    materialized: bool,
     object_type: ObjectType,
     from: Option<ObjectName>,
     filter: Option<ShowStatementFilter>,
@@ -365,7 +376,7 @@ fn handle_show_objects(
         }
     };
 
-    let mut rows = if let ObjectType::Schema = object_type {
+    if let ObjectType::Schema = object_type {
         if filter.is_some() {
             bail!("SHOW SCHEMAS ... {LIKE | WHERE} is not supported");
         }
@@ -405,7 +416,8 @@ fn handle_show_objects(
                 rows.push(make_row(name, "SYSTEM"));
             }
         }
-        rows
+        rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
+        Ok(Plan::SendRows(rows))
     } else {
         let like_regex = match filter {
             Some(ShowStatementFilter::Like(pattern)) => build_like_regex_from_string(&pattern)?,
@@ -440,18 +452,30 @@ fn handle_show_objects(
                 .map_or_else(|| &empty_schema, |schema| &schema.items)
         };
 
-        items
+        let filtered_items = items
             .iter()
             .map(|(name, id)| (name, scx.catalog.get_by_id(id)))
             .filter(|(_name, entry)| {
                 object_type_matches(object_type, entry.item())
                     && like_regex.is_match(&entry.name().to_string())
+            });
+
+        if object_type == ObjectType::View {
+            Ok(Plan::ShowViews {
+                ids: filtered_items
+                    .map(|(name, entry)| (name.clone(), entry.id()))
+                    .collect::<Vec<_>>(),
+                full,
+                materialized,
             })
-            .map(|(name, entry)| make_row(name, classify_id(entry.id())))
-            .collect()
-    };
-    rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
-    Ok(Plan::SendRows(rows))
+        } else {
+            let mut rows = filtered_items
+                .map(|(name, entry)| make_row(name, classify_id(entry.id())))
+                .collect::<Vec<_>>();
+            rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
+            Ok(Plan::SendRows(rows))
+        }
+    }
 }
 
 fn handle_show_indexes(
@@ -763,7 +787,7 @@ fn handle_create_view(
             desc.set_name(i, Some(normalize::column_name(name.clone())));
         }
     }
-    *materialized = false; // Normalize for `raw_sql` below.
+    let materialize = *materialized; // Normalize for `raw_sql` below.
     let view = View {
         raw_sql: stmt.to_string(),
         relation_expr,
@@ -774,6 +798,7 @@ fn handle_create_view(
         name,
         view,
         replace,
+        materialize,
     })
 }
 

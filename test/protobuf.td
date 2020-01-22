@@ -7,7 +7,7 @@
   USING SCHEMA '${testdrive.protobuf-descriptors}'
   WITH (format = 'protobuf-descriptor', message_name = '.Struct')
 
-> CREATE VIEW pm AS SELECT * FROM protomessages
+> CREATE MATERIALIZED VIEW pm AS SELECT * FROM protomessages
 
 $ kafka-ingest format=protobuf topic=messages message=.Struct timestamp=1
 {"int": 1, "bad_int": 1, "bin": "One", "st": "my-string"}
