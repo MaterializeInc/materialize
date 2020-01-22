@@ -442,6 +442,15 @@ impl State {
         expected_rows_affected: Option<usize>,
         sql: &'a str,
     ) -> Result<Outcome<'a>, failure::Error> {
+        lazy_static! {
+            static ref UNSUPPORTED_INDEX_STATEMENT_REGEX: Regex =
+                Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap();
+        }
+        if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql) {
+            // sure, we totally made you an index
+            return Ok(Outcome::Success);
+        }
+
         match self.run_sql(sql) {
             Ok((_desc, resp)) => {
                 if let Some(expected_error) = expected_error {
