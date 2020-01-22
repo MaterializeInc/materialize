@@ -334,6 +334,22 @@ macro_rules! make_visitor {
 
             fn visit_literal_string(&mut self, _string: &'ast $($mut)* String) {}
 
+            fn visit_create_database(
+                &mut self,
+                name: &'ast $($mut)* Ident,
+                if_not_exists: bool,
+            ) {
+                visit_create_database(self, name, if_not_exists)
+            }
+
+            fn visit_create_schema(
+                &mut self,
+                name: &'ast $($mut)* ObjectName,
+                if_not_exists: bool,
+            ) {
+                visit_create_schema(self, name, if_not_exists)
+            }
+
             fn visit_create_source(
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
@@ -590,6 +606,12 @@ macro_rules! make_visitor {
                     table_name,
                     selection,
                 } => visitor.visit_delete(table_name, selection.as_auto_ref()),
+                Statement::CreateDatabase { name, if_not_exists } => {
+                    visitor.visit_create_database(name, *if_not_exists)
+                }
+                Statement::CreateSchema { name, if_not_exists } => {
+                    visitor.visit_create_schema(name, *if_not_exists)
+                }
                 Statement::CreateSource {
                     name,
                     url,
@@ -1227,6 +1249,22 @@ macro_rules! make_visitor {
             if let Some(selection) = selection {
                 visitor.visit_where(selection);
             }
+        }
+
+        pub fn visit_create_database<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            name: &'ast $($mut)* Ident,
+            _if_not_exists: bool,
+        ) {
+            visitor.visit_ident(name);
+        }
+
+        pub fn visit_create_schema<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            name: &'ast $($mut)* ObjectName,
+            _if_not_exists: bool,
+        ) {
+            visitor.visit_object_name(name);
         }
 
         pub fn visit_create_source<'ast, V: $name<'ast> + ?Sized>(

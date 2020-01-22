@@ -3147,6 +3147,74 @@ Expected SELECT, VALUES, or a subquery in the query body, found: NULL"
 }
 
 #[test]
+fn parse_create_database() {
+    match verified_stmt("CREATE DATABASE foo") {
+        Statement::CreateDatabase {
+            name,
+            if_not_exists,
+        } => {
+            assert_eq!(name.to_string(), "foo");
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    match verified_stmt("CREATE DATABASE IF NOT EXISTS foo") {
+        Statement::CreateDatabase {
+            name,
+            if_not_exists,
+        } => {
+            assert_eq!(name.to_string(), "foo");
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE DATABASE IF EXISTS foo");
+    assert_eq!(
+        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
+        res.unwrap_err()
+    );
+
+    let res = parse_sql_statements("CREATE DATABASE foo.bar");
+    assert_eq!(
+        ParserError::ParserError("Expected end of statement, found: .".into()),
+        res.unwrap_err()
+    );
+}
+
+#[test]
+fn parse_create_schema() {
+    match verified_stmt("CREATE SCHEMA foo.bar") {
+        Statement::CreateSchema {
+            name,
+            if_not_exists,
+        } => {
+            assert_eq!(name.to_string(), "foo.bar");
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    match verified_stmt("CREATE SCHEMA IF NOT EXISTS foo") {
+        Statement::CreateSchema {
+            name,
+            if_not_exists,
+        } => {
+            assert_eq!(name.to_string(), "foo");
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+
+    let res = parse_sql_statements("CREATE SCHEMA IF EXISTS foo");
+    assert_eq!(
+        ParserError::ParserError("Expected NOT, found: EXISTS".into()),
+        res.unwrap_err()
+    );
+}
+
+#[test]
 fn parse_create_view() {
     let sql = "CREATE VIEW myschema.myview AS SELECT foo FROM bar";
     match verified_stmt(sql) {

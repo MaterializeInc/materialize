@@ -145,6 +145,7 @@ define_keywords!(
     CURRENT_USER,
     CURSOR,
     CYCLE,
+    DATABASE,
     DATAFLOW,
     DATE,
     DAY,

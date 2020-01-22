@@ -1366,7 +1366,11 @@ impl Parser {
 
     /// Parse a SQL CREATE statement
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
-        if self.parse_keyword("TABLE") {
+        if self.parse_keyword("DATABASE") {
+            self.parse_create_database()
+        } else if self.parse_keyword("SCHEMA") {
+            self.parse_create_schema()
+        } else if self.parse_keyword("TABLE") {
             self.parse_create_table()
         } else if self.parse_keyword("MATERIALIZED")
             || self.parse_keyword("OR")
@@ -1385,10 +1389,38 @@ impl Parser {
         } else {
             self.expected(
                 self.peek_range(),
-                "TABLE, VIEW, SOURCE, SINK, or INDEX after CREATE",
+                "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, or INDEX after CREATE",
                 self.peek_token(),
             )
         }
+    }
+
+    pub fn parse_create_database(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = if self.parse_keyword("IF") {
+            self.expect_keywords(&["NOT", "EXISTS"])?;
+            true
+        } else {
+            false
+        };
+        let name = self.parse_identifier()?;
+        Ok(Statement::CreateDatabase {
+            name,
+            if_not_exists,
+        })
+    }
+
+    pub fn parse_create_schema(&mut self) -> Result<Statement, ParserError> {
+        let if_not_exists = if self.parse_keyword("IF") {
+            self.expect_keywords(&["NOT", "EXISTS"])?;
+            true
+        } else {
+            false
+        };
+        let name = self.parse_object_name()?;
+        Ok(Statement::CreateSchema {
+            name,
+            if_not_exists,
+        })
     }
 
     pub fn parse_create_source(&mut self) -> Result<Statement, ParserError> {

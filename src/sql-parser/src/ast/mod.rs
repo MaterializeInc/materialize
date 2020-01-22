@@ -532,6 +532,13 @@ pub enum Statement {
         /// `WHERE`
         selection: Option<Expr>,
     },
+    /// `CREATE DATABASE`
+    CreateDatabase { name: Ident, if_not_exists: bool },
+    /// `CREATE SCHEMA`
+    CreateSchema {
+        name: ObjectName,
+        if_not_exists: bool,
+    },
     /// `CREATE SOURCE`
     CreateSource {
         name: ObjectName,
@@ -733,6 +740,26 @@ impl fmt::Display for Statement {
                     write!(f, " WHERE {}", selection)?;
                 }
                 Ok(())
+            }
+            Statement::CreateDatabase {
+                name,
+                if_not_exists,
+            } => {
+                write!(f, "CREATE DATABASE ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
+                write!(f, "{}", name)
+            }
+            Statement::CreateSchema {
+                name,
+                if_not_exists,
+            } => {
+                write!(f, "CREATE SCHEMA ")?;
+                if *if_not_exists {
+                    write!(f, "IF NOT EXISTS ")?;
+                }
+                write!(f, "{}", name)
             }
             Statement::CreateSource {
                 name,
