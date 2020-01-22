@@ -479,7 +479,7 @@ impl IntoIterator for DateTimeField {
 }
 
 impl FromStr for DateTimeField {
-    type Err = failure::Error;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_ref() {
@@ -489,7 +489,7 @@ impl FromStr for DateTimeField {
             "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
             "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
             "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
-            _ => failure::bail!("invalid DateTimeField: {}", s),
+            _ => Err(format!("invalid DateTimeField: {}", s)),
         }
     }
 }

@@ -46,8 +46,6 @@ pub mod visit_mut {
     make_visitor!(VisitMut: &mut);
 }
 
-use crate::parser::ParserError;
-
 use std::fmt;
 use std::str::FromStr;
 
@@ -441,17 +439,14 @@ impl fmt::Display for WindowFrameUnits {
 }
 
 impl FromStr for WindowFrameUnits {
-    type Err = ParserError;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "ROWS" => Ok(WindowFrameUnits::Rows),
             "RANGE" => Ok(WindowFrameUnits::Range),
             "GROUPS" => Ok(WindowFrameUnits::Groups),
-            _ => Err(ParserError::ParserError(format!(
-                "Expected ROWS, RANGE, or GROUPS, found: {}",
-                s
-            ))),
+            _ => Err(format!("Expected ROWS, RANGE, or GROUPS, found: {}", s)),
         }
     }
 }

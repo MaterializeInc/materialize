@@ -15,7 +15,7 @@
 #![deny(missing_docs)]
 
 use crate::ast::{DateTimeFieldValue, ParsedDateTime};
-use crate::parser::{DateTimeField, ParserError};
+use crate::parser::DateTimeField;
 use log::warn;
 use std::str::FromStr;
 
@@ -26,7 +26,7 @@ use std::str::FromStr;
 /// * `value` is a PostgreSQL-compatible timestamp-like string, e.g `TIMESTAMP 'value'`.
 ///     This can be either a `timestamp`, `timestamptz`, or `date`. `TIME` is not supported yet and
 ///     requires this function to be refactored.
-pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime, ParserError> {
+pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime, String> {
     use TimeStrToken::*;
 
     let mut pdt = ParsedDateTime::default();
@@ -36,7 +36,7 @@ pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateT
     let value_split = value.trim().split_whitespace().collect::<Vec<&str>>();
 
     if value_split.len() > 2 {
-        return parser_err!("Invalid DATE/TIME '{}'; unknown format", value);
+        return Err(format!("Invalid DATE/TIME '{}'; unknown format", value));
     }
     for s in value_split {
         value_parts.push(tokenize_time_str(s)?);
@@ -64,7 +64,7 @@ pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateT
         DateTimeField::Year,
         1,
     ) {
-        return parser_err!("Invalid DATE/TIME '{}'; {}", value, e);
+        return Err(format!("Invalid DATE/TIME '{}'; {}", value, e));
     }
 
     // Only parse time-component of TIMESTAMP if present.
@@ -87,10 +87,10 @@ pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateT
                     leading_field,
                     1,
                 ) {
-                    return parser_err!("Invalid: DATE/TIME '{}'; {}", value, e);
+                    return Err(format!("Invalid: DATE/TIME '{}'; {}", value, e));
                 }
             }
-            _ => return parser_err!("Invalid DATE/TIME '{}'; unknown format", value),
+            _ => return Err(format!("Invalid DATE/TIME '{}'; unknown format", value)),
         }
     }
 
@@ -108,7 +108,7 @@ pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateT
 pub(crate) fn build_parsed_datetime_interval(
     value: &str,
     ambiguous_resolver: DateTimeField,
-) -> Result<ParsedDateTime, ParserError> {
+) -> Result<ParsedDateTime, String> {
     use DateTimeField::*;
 
     let mut pdt = ParsedDateTime::default();
@@ -170,11 +170,11 @@ pub(crate) fn build_parsed_datetime_interval(
                 tokens: part.clone(),
             }),
             None => {
-                return parser_err!(
+                return Err(format!(
                     "Invalid INTERVAL '{}': cannot determine format of all parts. Add \
                      explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
                     value
-                )
+                ))
             }
         }
     }
@@ -206,30 +206,30 @@ fn fill_pdt_sql_standard(
     leading_field: DateTimeField,
     value: &str,
     mut pdt: &mut ParsedDateTime,
-) -> Result<(), ParserError> {
+) -> Result<(), String> {
     use DateTimeField::*;
 
     // Ensure that no fields have been previously modified.
     match leading_field {
         Year | Month => {
             if pdt.year.is_some() || pdt.month.is_some() {
-                return parser_err!(
+                return Err(format!(
                     "Invalid INTERVAL '{}': YEAR or MONTH field set twice",
                     value
-                );
+                ));
             }
         }
         Day => {
             if pdt.day.is_some() {
-                return parser_err!("Invalid INTERVAL '{}': DAY field set twice", value);
+                return Err(format!("Invalid INTERVAL '{}': DAY field set twice", value));
             }
         }
         Hour | Minute | Second => {
             if pdt.hour.is_some() || pdt.minute.is_some() || pdt.second.is_some() {
-                return parser_err!(
+                return Err(format!(
                     "Invalid INTERVAL '{}': HOUR, MINUTE, SECOND field set twice",
                     value
-                );
+                ));
             }
         }
     }
@@ -242,7 +242,7 @@ fn fill_pdt_sql_standard(
 
     if let Err(e) = fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, sign)
     {
-        return parser_err!("Invalid INTERVAL '{}': {}", value, e);
+        return Err(format!("Invalid INTERVAL '{}': {}", value, e));
     }
 
     // Do not allow any fields in the group to be modified afterward, and check
@@ -258,12 +258,11 @@ fn fill_pdt_sql_standard(
                 None => pdt.month = Some(DateTimeFieldValue::default()),
                 Some(m) => {
                     if m.unit >= 12 {
-                        return parser_err!(
+                        return Err(format!(
                             "Invalid INTERVAL '{}': MONTH field out range; \
                              must be < 12, have {}",
-                            value,
-                            m.unit
-                        );
+                            value, m.unit
+                        ));
                     }
                 }
             }
@@ -282,12 +281,11 @@ fn fill_pdt_sql_standard(
                 None => pdt.minute = Some(DateTimeFieldValue::default()),
                 Some(m) => {
                     if m.unit >= 60 {
-                        return parser_err!(
+                        return Err(format!(
                             "Invalid INTERVAL '{}': MINUTE field out range; \
                              must be < 60, have {}",
-                            value,
-                            m.unit
-                        );
+                            value, m.unit
+                        ));
                     }
                 }
             }
@@ -296,12 +294,11 @@ fn fill_pdt_sql_standard(
                 None => pdt.second = Some(DateTimeFieldValue::default()),
                 Some(s) => {
                     if s.unit >= 60 {
-                        return parser_err!(
+                        return Err(format!(
                             "Invalid INTERVAL '{}': SECOND field out range; \
                              must be < 60, have {}",
-                            value,
-                            s.unit
-                        );
+                            value, s.unit
+                        ));
                     }
                 }
             }
@@ -326,7 +323,7 @@ fn fill_pdt_pg(
     time_unit: DateTimeField,
     value: &str,
     mut pdt: &mut ParsedDateTime,
-) -> Result<(), ParserError> {
+) -> Result<(), String> {
     use TimeStrToken::*;
 
     let mut actual = tokens.iter().peekable();
@@ -339,7 +336,7 @@ fn fill_pdt_pg(
     let sign = trim_interval_chars_return_sign(&mut actual);
 
     if let Err(e) = fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, time_unit, sign) {
-        return parser_err!("Invalid INTERVAL '{}': {}", value, e);
+        return Err(format!("Invalid INTERVAL '{}': {}", value, e));
     }
 
     Ok(())
@@ -536,7 +533,7 @@ struct AnnotatedIntervalPart {
 fn determine_format_w_datetimefield(
     toks: &[TimeStrToken],
     interval_str: &str,
-) -> Result<Option<TimePartFormat>, ParserError> {
+) -> Result<Option<TimePartFormat>, String> {
     use DateTimeField::*;
     use TimePartFormat::*;
     use TimeStrToken::*;
@@ -576,20 +573,20 @@ fn determine_format_w_datetimefield(
                 // Implies {M:S.NS}
                 Some(Dot) => Ok(Some(SQLStandard(Minute))),
                 _ => {
-                    return parser_err!(
+                    return Err(format!(
                         "Invalid date-time type string '{}': cannot determine format",
                         interval_str,
-                    )
+                    ))
                 }
             }
         }
         // Implies {Num}?{TimeUnit}
         Some(TimeUnit(f)) => Ok(Some(PostgreSQL(*f))),
         _ => {
-            return parser_err!(
+            return Err(format!(
                 "Invalid date-time type string '{}': cannot determine format",
                 interval_str,
-            )
+            ))
         }
     }
 }
@@ -700,33 +697,27 @@ pub(crate) enum TimeStrToken {
 /// - Any sequence of alphabetic characters cannot be cast into a DateTimeField.
 /// - Any sequence of numeric characters cannot be cast into an i64.
 /// - Any non-alpha numeric character cannot be cast into a TimeStrToken, e.g. `%`.
-pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, ParserError> {
+pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, String> {
     let mut toks = vec![];
     let mut num_buf = String::with_capacity(4);
     let mut char_buf = String::with_capacity(7);
-    fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken, ParserError> {
+    fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken, String> {
         Ok(TimeStrToken::Num(n.parse().map_err(|e| {
-            ParserError::ParserError(format!(
-                "Unable to parse value as a number at index {}: {}",
-                idx, e
-            ))
+            format!("Unable to parse value as a number at index {}: {}", idx, e)
         })?))
     };
     fn maybe_tokenize_num_buf(
         n: &mut String,
         i: usize,
         t: &mut Vec<TimeStrToken>,
-    ) -> Result<(), ParserError> {
+    ) -> Result<(), String> {
         if !n.is_empty() {
             t.push(parse_num(&n, i)?);
             n.clear();
         }
         Ok(())
     }
-    fn maybe_tokenize_char_buf(
-        c: &mut String,
-        t: &mut Vec<TimeStrToken>,
-    ) -> Result<(), ParserError> {
+    fn maybe_tokenize_char_buf(c: &mut String, t: &mut Vec<TimeStrToken>) -> Result<(), String> {
         if !c.is_empty() {
             t.push(TimeStrToken::TimeUnit(DateTimeField::from_str(
                 &c.to_uppercase(),
@@ -738,10 +729,10 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, Parser
     let mut last_field_is_frac = false;
     for (i, chr) in value.chars().enumerate() {
         if !num_buf.is_empty() && !char_buf.is_empty() {
-            return Err(ParserError::TokenizerError(format!(
+            return Err(format!(
                 "Invalid string in time-like type '{}': could not tokenize",
                 value
-            )));
+            ));
         }
         match chr {
             '+' => {
@@ -779,10 +770,10 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, Parser
                 char_buf.push(chr)
             }
             chr => {
-                return Err(ParserError::TokenizerError(format!(
+                return Err(format!(
                     "Invalid character at offset {} in {}: {:?}",
                     i, value, chr
-                )))
+                ))
             }
         }
     }
@@ -803,9 +794,9 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, Parser
                 num_buf = num_buf[..default_precision].to_string();
                 chars = default_precision;
             }
-            let raw: i64 = num_buf.parse().map_err(|e| {
-                ParserError::ParserError(format!("couldn't parse fraction {}: {}", num_buf, e))
-            })?;
+            let raw: i64 = num_buf
+                .parse()
+                .map_err(|e| format!("couldn't parse fraction {}: {}", num_buf, e))?;
             let multiplicand = 1_000_000_000 / 10_i64.pow(chars as u32);
 
             toks.push(TimeStrToken::Nanos(raw * multiplicand));
@@ -816,7 +807,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, Parser
     Ok(toks)
 }
 
-fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, ParserError> {
+fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
     let mut toks: Vec<TimeStrToken> = vec![];
     let mut num_buf = String::with_capacity(4);
     // If the timezone string has a colon, we need to parse all numbers naively.
@@ -830,7 +821,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, ParserError> {
         n: &str,
         split_nums: bool,
         idx: usize,
-    ) -> Result<(), ParserError> {
+    ) -> Result<(), String> {
         if n.is_empty() {
             return Ok(());
         }
@@ -843,18 +834,18 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, ParserError> {
         };
 
         toks.push(TimeStrToken::Num(first.parse().map_err(|e| {
-                ParserError::ParserError(format!(
+                format!(
                     "Error tokenizing timezone string: unable to parse value {} as a number at index {}: {}",
                     first, idx, e
-                ))
+                )
             })?));
 
         if let Some(second) = second {
             toks.push(TimeStrToken::Num(second.parse().map_err(|e| {
-                ParserError::ParserError(format!(
+                format!(
                     "Error tokenizing timezone string: unable to parse value {} as a number at index {}: {}",
                     second, idx, e
-                ))
+                )
             })?));
         }
 
@@ -895,10 +886,10 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, ParserError> {
                 return Ok(toks);
             }
             chr => {
-                return Err(ParserError::TokenizerError(format!(
+                return Err(format!(
                     "Error tokenizing timezone string ({}): invalid character {:?} at offset {}",
                     value, chr, i
-                )))
+                ))
             }
         }
     }
@@ -906,7 +897,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, ParserError> {
     Ok(toks)
 }
 
-fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<i64, ParserError> {
+fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<i64, String> {
     use TimeStrToken::*;
     let all_formats = [
         vec![Plus, Num(0), Colon, Num(0)],
@@ -945,36 +936,36 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                             // We can return an error here because in all the
                             // formats with numbers we require the first number
                             // to be an hour and we require it to be <= 24
-                            return Err(ParserError::ParserError(format!(
+                            return Err(format!(
                                 "Error parsing timezone string ({}): timezone hour invalid {}",
                                 value, val
-                            )));
+                            ));
                         }
                         (Some(_), None) => if val <= 60 {
                             minute_offset = Some(val as i64);
                         } else {
-                            return Err(ParserError::ParserError(format!(
+                            return Err(format!(
                                 "Error parsing timezone string ({}): timezone minute invalid {}",
                                 value, val
-                            )));
+                            ));
                         },
                         // We've already seen an hour and a minute so we should
                         // never see another number
-                        (Some(_), Some(_)) => return Err(ParserError::ParserError(format!(
+                        (Some(_), Some(_)) => return Err(format!(
                             "Error parsing timezone string ({}): invalid value {} at token index {}", value,
                             val, i
-                        ))),
+                        )),
                         (None, Some(_)) => unreachable!("parsed a minute before an hour!"),
                     }
                 }
                 (Zulu, Zulu) => return Ok(0 as i64),
                 (TzName(val), TzName(_)) => {
                     // For now, we don't support named timezones
-                    return Err(ParserError::ParserError(format!(
+                    return Err(format!(
                         "Error parsing timezone string ({}): named timezones are not supported. \
                          Failed to parse {} at token index {}",
                         value, val, i
-                    )));
+                    ));
                 }
                 (_, _) => {
                     // Theres a mismatch between this format and the actual
@@ -1003,7 +994,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
         }
     }
 
-    Err(ParserError::ParserError("It didnt work".into()))
+    Err("It didnt work".into())
 }
 
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
@@ -1051,7 +1042,7 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
     }
 }
 
-pub(crate) fn parse_timezone_offset_second(value: &str) -> Result<i64, ParserError> {
+pub(crate) fn parse_timezone_offset_second(value: &str) -> Result<i64, String> {
     let toks = tokenize_timezone(value)?;
     Ok(build_timezone_offset_second(&toks, value)?)
 }

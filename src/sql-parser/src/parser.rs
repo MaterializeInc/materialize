@@ -33,20 +33,23 @@ use crate::tokenizer::*;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
-    ($MSG:expr) => {
-        Err(ParserError::ParserError($MSG.to_string()))
+    ($parser:expr, $MSG:expr) => {
+        Err($parser.error($MSG.to_string()))
     };
-    ($($arg:tt)*) => {
-        Err(ParserError::ParserError(format!($($arg)*)))
+    ($parser:expr, $($arg:tt)*) => {
+        Err($parser.error(format!($($arg)*)))
     };
 }
 
 mod datetime;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ParserError {
-    TokenizerError(String),
-    ParserError(String),
+pub struct ParserError {
+    /// Original query so we can easily print an error
+    pub sql: String,
+    /// Range at which the parser was looking at the time
+    pub range: Range<usize>,
+    pub message: String,
 }
 
 #[derive(PartialEq)]
@@ -62,35 +65,30 @@ pub enum IsLateral {
 }
 use IsLateral::*;
 
-impl From<TokenizerError> for ParserError {
-    fn from(e: TokenizerError) -> Self {
-        ParserError::TokenizerError(format!("{}", e))
-    }
-}
-
-impl fmt::Display for ParserError {
+impl<'a> fmt::Display for ParserError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let line_start = self.sql[..self.range.start].rfind('\n').unwrap_or(0);
+        let line_end = self.sql[self.range.end..]
+            .find('\n')
+            .unwrap_or(self.sql.len());
+        let line = &self.sql[line_start..line_end];
+        let underline = std::iter::repeat(' ')
+            .take(self.range.start - line_start)
+            .chain(std::iter::repeat('^').take(line_end - line_start))
+            .collect::<String>();
         write!(
             f,
-            "sql parser error: {}",
-            match self {
-                ParserError::TokenizerError(s) => s,
-                ParserError::ParserError(s) => s,
-            }
+            "Parser error:\n\n{}\n{}\n\n{}",
+            line, underline, self.message,
         )
     }
 }
 
-impl From<failure::Error> for ParserError {
-    fn from(err: failure::Error) -> Self {
-        Self::ParserError(err.to_string())
-    }
-}
-
-impl Error for ParserError {}
+impl<'a> Error for ParserError {}
 
 /// SQL Parser
 pub struct Parser {
+    sql: String,
     tokens: Vec<(Token, Range<usize>)>,
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
@@ -98,18 +96,30 @@ pub struct Parser {
 
 impl Parser {
     /// Parse the specified tokens
-    pub fn new(tokens: Vec<(Token, Range<usize>)>) -> Self {
-        Parser { tokens, index: 0 }
+    pub fn new(sql: String, tokens: Vec<(Token, Range<usize>)>) -> Self {
+        Parser {
+            sql,
+            tokens,
+            index: 0,
+        }
+    }
+
+    fn error(&self, message: String) -> ParserError {
+        ParserError {
+            sql: self.sql.clone(),
+            range: self.tokens[self.index].1.clone(),
+            message,
+        }
     }
 
     /// Parse a SQL statement and produce an Abstract Syntax Tree (AST)
     pub fn parse_sql(sql: String) -> Result<Vec<Statement>, ParserError> {
+        debug!("Parsing sql '{}'...", &sql);
         let mut tokenizer = Tokenizer::new(&sql);
         let tokens = tokenizer.tokenize()?;
-        let mut parser = Parser::new(tokens);
+        let mut parser = Parser::new(sql, tokens);
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
-        debug!("Parsing sql '{}'...", sql);
         loop {
             // ignore empty statements (between successive statement delimiters)
             while parser.consume_token(&Token::SemiColon) {
@@ -164,10 +174,13 @@ impl Parser {
                     }),
                     "EXPLAIN" => Ok(self.parse_explain()?),
                     "FLUSH" => Ok(self.parse_flush()?),
-                    _ => parser_err!(format!(
-                        "Unexpected keyword {:?} at the beginning of a statement",
-                        w.to_string()
-                    )),
+                    _ => parser_err!(
+                        self,
+                        format!(
+                            "Unexpected keyword {:?} at the beginning of a statement",
+                            w.to_string()
+                        )
+                    ),
                 },
                 Token::LParen => {
                     self.prev_token();
@@ -208,7 +221,7 @@ impl Parser {
     pub fn parse_prefix(&mut self) -> Result<Expr, ParserError> {
         let tok = self
             .next_token()
-            .ok_or_else(|| ParserError::ParserError("Unexpected EOF".to_string()))?;
+            .ok_or_else(|| self.error("Unexpected EOF".to_string()))?;
         let expr = match tok {
             Token::Word(w) => match w.keyword.as_ref() {
                 "TRUE" | "FALSE" | "NULL" => {
@@ -284,7 +297,7 @@ impl Parser {
             }
             Token::Parameter(s) => Ok(Expr::Parameter(match s.parse() {
                 Ok(n) => n,
-                Err(err) => return parser_err!("unable to parse parameter: {}", err),
+                Err(err) => return parser_err!(self, "unable to parse parameter: {}", err),
             })),
             Token::LParen => {
                 let expr = if self.parse_keyword("SELECT") || self.parse_keyword("WITH") {
@@ -314,10 +327,13 @@ impl Parser {
         let all = self.parse_keyword("ALL");
         let distinct = self.parse_keyword("DISTINCT");
         if all && distinct {
-            return parser_err!(format!(
-                "Cannot specify both ALL and DISTINCT in function: {}",
-                name.to_string(),
-            ));
+            return parser_err!(
+                self,
+                format!(
+                    "Cannot specify both ALL and DISTINCT in function: {}",
+                    name.to_string(),
+                )
+            );
         }
         let args = self.parse_optional_args()?;
         let over = if self.parse_keyword("OVER") {
@@ -361,7 +377,10 @@ impl Parser {
 
     pub fn parse_window_frame(&mut self) -> Result<WindowFrame, ParserError> {
         let units = match self.next_token() {
-            Some(Token::Word(w)) => w.keyword.parse::<WindowFrameUnits>()?,
+            Some(Token::Word(w)) => w
+                .keyword
+                .parse::<WindowFrameUnits>()
+                .map_err(|e| self.error(e))?,
             unexpected => return self.expected("ROWS, RANGE, GROUPS", unexpected),
         };
         let (start_bound, end_bound) = if self.parse_keyword("BETWEEN") {
@@ -480,25 +499,23 @@ impl Parser {
         use std::convert::TryInto;
 
         let value = self.parse_literal_string()?;
-        let pdt = Self::parse_timestamp_string(&value, false)?;
+        let pdt = self.parse_timestamp_string(&value, false)?;
 
         // pdt.hour, pdt.minute, pdt.second are all dropped, which is allowed by
         // PostgreSQL.
         match (pdt.year, pdt.month, pdt.day) {
             (Some(year), Some(month), Some(day)) => {
                 let p_err = |e: std::num::TryFromIntError, field: &str| {
-                    ParserError::ParserError(format!(
-                        "{} in date '{}' is invalid: {}",
-                        field, value, e
-                    ))
+                    self.error(format!("{} in date '{}' is invalid: {}", field, value, e))
                 };
 
                 if year.unit == 0 {
-                    return parser_err!("YEAR in DATE '{}' cannot be zero.", value,);
+                    return parser_err!(self, "YEAR in DATE '{}' cannot be zero.", value,);
                 }
 
                 if month.unit > 12 || month.unit <= 0 {
                     return parser_err!(
+                        self,
                         "MONTH in DATE '{}' must be a number between 1 and 12, got: {}",
                         value,
                         month.unit
@@ -507,7 +524,7 @@ impl Parser {
                 let month: u8 = month.unit.try_into().expect("invalid month");
                 let day: u8 = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
                 if day == 0 {
-                    return parser_err!("DAY in DATE '{}' cannot be zero", value);
+                    return parser_err!(self, "DAY in DATE '{}' cannot be zero", value);
                 }
                 Ok(Value::Date(
                     value,
@@ -520,6 +537,7 @@ impl Parser {
             }
             (_, _, _) => {
                 return parser_err!(
+                    self,
                     "YEAR, MONTH, DAY are all required for DATE, got: '{}'",
                     value
                 );
@@ -545,7 +563,7 @@ impl Parser {
         use std::convert::TryInto;
 
         let value = self.parse_literal_string()?;
-        let pdt = Self::parse_timestamp_string(&value, parse_timezone)?;
+        let pdt = self.parse_timestamp_string(&value, parse_timezone)?;
 
         match (
             pdt.year,
@@ -558,14 +576,12 @@ impl Parser {
         ) {
             (Some(year), Some(month), Some(day), hour, minute, second, timezone_offset_second) => {
                 let p_err = |e: std::num::TryFromIntError, field: &str| {
-                    ParserError::ParserError(format!(
-                        "{} in date '{}' is invalid: {}",
-                        field, value, e
-                    ))
+                    self.error(format!("{} in date '{}' is invalid: {}", field, value, e))
                 };
 
                 if month.unit > 12 || month.unit <= 0 {
                     return parser_err!(
+                        self,
                         "Month in date '{}' must be a number between 1 and 12, got: {}",
                         value,
                         month.unit
@@ -574,7 +590,12 @@ impl Parser {
                 let month: u8 = month.unit.try_into().expect("invalid month");
                 let day: u8 = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
                 if day == 0 {
-                    return parser_err!("Day in timestamp '{}' cannot be zero: {}", value, day);
+                    return parser_err!(
+                        self,
+                        "Day in timestamp '{}' cannot be zero: {}",
+                        value,
+                        day
+                    );
                 }
 
                 let hour = match hour {
@@ -582,6 +603,7 @@ impl Parser {
                         let hour: u8 = hour.unit.try_into().map_err(|e| p_err(e, "Hour"))?;
                         if hour > 23 {
                             return parser_err!(
+                                self,
                                 "Hour in timestamp '{}' cannot be > 23: {}",
                                 value,
                                 hour
@@ -597,6 +619,7 @@ impl Parser {
                         let minute: u8 = minute.unit.try_into().map_err(|e| p_err(e, "Minute"))?;
                         if minute > 59 {
                             return parser_err!(
+                                self,
                                 "Minute in timestamp '{}' cannot be > 59: {}",
                                 value,
                                 minute
@@ -616,6 +639,7 @@ impl Parser {
                         let second: u8 = second.unit.try_into().map_err(|e| p_err(e, "Minute"))?;
                         if second > 60 {
                             return parser_err!(
+                                self,
                                 "Second in timestamp '{}' cannot be > 60: {}",
                                 value,
                                 second
@@ -657,7 +681,7 @@ impl Parser {
                     },
                 ))
             }
-            _ => Err(ParserError::ParserError(format!(
+            _ => Err(self.error(format!(
                 "timestamp is missing fields, year through day are all required, got: '{}'",
                 value
             ))),
@@ -693,14 +717,17 @@ impl Parser {
                             "DAYS", "HOURS", "MINUTES", "SECONDS",
                         ])?;
 
-                        let high = DateTimeField::from_str(d)?;
-                        let low = DateTimeField::from_str(e)?;
+                        let high =
+                            DateTimeField::from_str(d).map_err(|e| self.error(e.to_string()))?;
+                        let low =
+                            DateTimeField::from_str(e).map_err(|e| self.error(e.to_string()))?;
 
                         // Check for invalid ranges, i.e. precision_high is the same
                         // as or a less significant DateTimeField than
                         // precision_low.
                         if high >= low {
                             return parser_err!(
+                                self,
                                 "Invalid field range in INTERVAL '{}' {} TO {}; the value in the \
                                  position of {} should be more significant than {}.",
                                 raw_value,
@@ -719,7 +746,8 @@ impl Parser {
 
                         (high, low, fsec_max_precision)
                     } else {
-                        let low = DateTimeField::from_str(d)?;
+                        let low =
+                            DateTimeField::from_str(d).map_err(|e| self.error(e.to_string()))?;
                         let fsec_max_precision = if low == DateTimeField::Second {
                             self.parse_optional_precision()?
                         } else {
@@ -736,7 +764,7 @@ impl Parser {
         // after determining the TimeUnit range so you can use `precision_low` in cases
         // where `raw_value` is ambiguous (e.g. `INTERVAL '1'`) to annotate the desired
         // TimeUnit (e.g. `INTERVAL '1' HOUR`).
-        let parsed = Self::parse_interval_string(&raw_value, precision_low)?;
+        let parsed = self.parse_interval_string(&raw_value, precision_low)?;
 
         Ok(Expr::Value(Value::Interval(IntervalValue {
             value: raw_value,
@@ -880,14 +908,16 @@ impl Parser {
     ///   | <seconds value>
     /// ```
     pub fn parse_interval_string(
+        &self,
         value: &str,
         ambiguous_resolver: DateTimeField,
     ) -> Result<ParsedDateTime, ParserError> {
         if value.is_empty() {
-            return parser_err!("Interval date string is empty!");
+            return parser_err!(self, "Interval date string is empty!");
         }
 
         datetime::build_parsed_datetime_interval(value, ambiguous_resolver)
+            .map_err(|e| self.error(e))
     }
 
     /// parse
@@ -904,20 +934,23 @@ impl Parser {
     ///     <sign> <hours value> <colon> <minutes value>
     /// ```
     pub fn parse_timestamp_string(
+        &self,
         value: &str,
         parse_timezone: bool,
     ) -> Result<ParsedDateTime, ParserError> {
         if value.is_empty() {
-            return parser_err!("Timestamp string is empty!");
+            return parser_err!(self, "Timestamp string is empty!");
         }
 
         let (ts_string, tz_string) = datetime::split_timestamp_string(value);
 
-        let mut pdt = datetime::build_parsed_datetime_timestamp(ts_string)?;
+        let mut pdt =
+            datetime::build_parsed_datetime_timestamp(ts_string).map_err(|e| self.error(e))?;
         if !parse_timezone || tz_string.is_empty() {
             return Ok(pdt);
         }
-        pdt.timezone_offset_second = Some(datetime::parse_timezone_offset_second(tz_string)?);
+        pdt.timezone_offset_second =
+            Some(datetime::parse_timezone_offset_second(tz_string).map_err(|e| self.error(e))?);
         Ok(pdt)
     }
 
@@ -1077,11 +1110,14 @@ impl Parser {
 
     /// Report unexpected token
     fn expected<T>(&self, expected: &str, found: Option<Token>) -> Result<T, ParserError> {
-        parser_err!(format!(
-            "Expected {}, found: {}",
-            expected,
-            found.map_or_else(|| "EOF".to_string(), |t| format!("{}", t))
-        ))
+        parser_err!(
+            self,
+            format!(
+                "Expected {}, found: {}",
+                expected,
+                found.map_or_else(|| "EOF".to_string(), |t| format!("{}", t))
+            )
+        )
     }
 
     /// Look for an expected keyword and consume it if it exists
@@ -1351,7 +1387,7 @@ impl Parser {
         let cascade = self.parse_keyword("CASCADE");
         let restrict = self.parse_keyword("RESTRICT");
         if cascade && restrict {
-            return parser_err!("Cannot specify both CASCADE and RESTRICT in DROP");
+            return parser_err!(self, "Cannot specify both CASCADE and RESTRICT in DROP");
         }
         Ok(Statement::Drop {
             object_type,
@@ -1612,7 +1648,10 @@ impl Parser {
                     "NULL" => Ok(Value::Null),
                     "ARRAY" => self.parse_array(),
                     _ => {
-                        return parser_err!(format!("No value parser for keyword {}", k.keyword));
+                        return parser_err!(
+                            self,
+                            format!("No value parser for keyword {}", k.keyword)
+                        );
                     }
                 },
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
@@ -1621,9 +1660,9 @@ impl Parser {
                     Ok(Value::NationalStringLiteral(s.to_string()))
                 }
                 Token::HexStringLiteral(ref s) => Ok(Value::HexStringLiteral(s.to_string())),
-                _ => parser_err!(format!("Unsupported value: {:?}", t)),
+                _ => parser_err!(self, format!("Unsupported value: {:?}", t)),
             },
-            None => parser_err!("Expecting a value, but found EOF"),
+            None => parser_err!(self, "Expecting a value, but found EOF"),
         }
     }
 
@@ -1656,9 +1695,9 @@ impl Parser {
     /// Parse an unsigned literal integer/long
     pub fn parse_literal_uint(&mut self) -> Result<u64, ParserError> {
         match self.next_token() {
-            Some(Token::Number(s)) => s.parse::<u64>().map_err(|e| {
-                ParserError::ParserError(format!("Could not parse '{}' as u64: {}", s, e))
-            }),
+            Some(Token::Number(s)) => s
+                .parse::<u64>()
+                .map_err(|e| self.error(format!("Could not parse '{}' as u64: {}", s, e))),
             other => self.expected("literal int", other),
         }
     }
@@ -2006,7 +2045,7 @@ impl Parser {
         let all = self.parse_keyword("ALL");
         let distinct = self.parse_keyword("DISTINCT");
         if all && distinct {
-            return parser_err!("Cannot specify both ALL and DISTINCT in SELECT");
+            return parser_err!(self, "Cannot specify both ALL and DISTINCT in SELECT");
         }
         let projection = self.parse_comma_separated(Parser::parse_select_item)?;
 
@@ -2606,7 +2645,7 @@ mod tests {
         let sql = "SELECT version";
         let mut tokenizer = Tokenizer::new(sql);
         let tokens = tokenizer.tokenize().unwrap();
-        let mut parser = Parser::new(tokens);
+        let mut parser = Parser::new(sql.to_string(), tokens);
         assert_eq!(parser.peek_token(), Some(Token::make_keyword("SELECT")));
         assert_eq!(parser.next_token(), Some(Token::make_keyword("SELECT")));
         parser.prev_token();
