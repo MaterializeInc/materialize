@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-source misc/shlib/shlib.bash
+. misc/shlib/shlib.bash
 
 docker pull "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID"
 
@@ -19,6 +19,8 @@ for tag in "unstable-$BUILDKITE_COMMIT" latest; do
     runv docker push "materialize/materialized:$tag"
 done
 
+# Keep archive building in sync with macos.sh.
+# TODO(benesch): extract into shared script.
 runv docker run --rm --entrypoint bash materialize/materialized -c "
     set -euo pipefail
     mkdir -p scratch/materialized/{bin,etc/materialized}
