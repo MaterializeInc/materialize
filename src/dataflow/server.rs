@@ -683,10 +683,13 @@ impl PendingPeek {
     fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> bool {
         self.trace.read_upper(upper);
         if !upper.less_equal(&self.timestamp) {
-            let rows = self.collect_finished_data();
+            let response = match self.collect_finished_data() {
+                Ok(rows) => PeekResponse::Rows(rows),
+                Err(text) => PeekResponse::Error(text),
+            };
 
             let mut tx = block_on(self.tx.connect()).unwrap();
-            block_on(tx.send(PeekResponse::Rows(rows))).unwrap();
+            block_on(tx.send(response)).unwrap();
 
             true
         } else {
@@ -695,7 +698,7 @@ impl PendingPeek {
     }
 
     /// Collects data for a known-complete peek.
-    fn collect_finished_data(&mut self) -> Vec<Row> {
+    fn collect_finished_data(&mut self) -> Result<Vec<Row>, String> {
         let (mut cursor, storage) = self.trace.cursor();
         let mut results = Vec::new();
 
@@ -728,13 +731,13 @@ impl PendingPeek {
                             copies += diff;
                         }
                     });
-                    assert!(
-                        copies >= 0,
-                        "Negative multiplicity: {} for {:?} in view {}",
-                        copies,
-                        row.unpack(),
-                        self.id
-                    );
+                    if copies < 0 {
+                        return Result::Err(format!(
+                            "Negative multiplicity: {} for {:?}",
+                            copies,
+                            row.unpack(),
+                        ));
+                    }
 
                     // TODO: We could push a count here, as we create owned output later.
                     for _ in 0..copies {
@@ -773,7 +776,7 @@ impl PendingPeek {
             }
         }
 
-        if let Some(columns) = &self.project {
+        Ok(if let Some(columns) = &self.project {
             results
                 .iter()
                 .map({
@@ -785,6 +788,6 @@ impl PendingPeek {
                 .collect()
         } else {
             results.iter().map(|row| (*row).clone()).collect()
-        }
+        })
     }
 }

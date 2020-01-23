@@ -686,6 +686,7 @@ where
                         self.error(session, "57014", "canceling statement due to user request")
                             .await
                     }
+                    PeekResponse::Error(text) => self.error(session, "99999", text).await,
                     PeekResponse::Rows(rows) => {
                         self.send_rows(session, row_desc, portal_name, rows, max_rows)
                             .await
