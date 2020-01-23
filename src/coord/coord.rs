@@ -31,7 +31,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem};
+use catalog::{Catalog, CatalogItem, CatalogOp};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -416,8 +416,14 @@ where
             Plan::CreateDatabase {
                 name,
                 if_not_exists,
-            } => match self.catalog.create_database(name) {
-                Ok(()) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
+            } => match self.catalog.transact(vec![
+                CatalogOp::CreateDatabase { name: name.clone() },
+                CatalogOp::CreateSchema {
+                    database_name: name,
+                    schema_name: "public".into(),
+                },
+            ]) {
+                Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
                 Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
                 Err(err) => Err(err),
             },
@@ -426,8 +432,11 @@ where
                 database_name,
                 schema_name,
                 if_not_exists,
-            } => match self.catalog.create_schema(database_name, schema_name) {
-                Ok(()) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
+            } => match self.catalog.transact(vec![CatalogOp::CreateSchema {
+                database_name,
+                schema_name,
+            }]) {
+                Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
                 Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
                 Err(err) => Err(err),
             },
@@ -502,7 +511,7 @@ where
                 if_not_exists,
             } => match self
                 .catalog
-                .insert(name.clone(), CatalogItem::Sink(sink.clone()))
+                .create_item(name.clone(), CatalogItem::Sink(sink.clone()))
             {
                 Ok(id) => {
                     self.report_catalog_update(
@@ -804,7 +813,7 @@ where
     ) -> Result<GlobalId, failure::Error> {
         let id = self
             .catalog
-            .insert(name.clone(), CatalogItem::Source(source.clone()))?;
+            .create_item(name.clone(), CatalogItem::Source(source.clone()))?;
         self.report_catalog_update(
             id,
             self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
@@ -820,7 +829,7 @@ where
     ) -> Result<GlobalId, failure::Error> {
         let id = self
             .catalog
-            .insert(name.clone(), CatalogItem::View(view.clone()))?;
+            .create_item(name.clone(), CatalogItem::View(view.clone()))?;
         self.report_catalog_update(
             id,
             self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
@@ -836,7 +845,7 @@ where
     ) -> Result<GlobalId, failure::Error> {
         let id = self
             .catalog
-            .insert(name.clone(), CatalogItem::Index(index.clone()))?;
+            .create_item(name.clone(), CatalogItem::Index(index.clone()))?;
         self.report_catalog_update(
             id,
             self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
@@ -1034,8 +1043,11 @@ where
                 self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
                 false,
             );
-            self.catalog.remove(*id);
         }
+
+        self.catalog
+            .transact(ids.iter().map(|id| CatalogOp::DropItem(*id)).collect())
+            .unwrap();
 
         if !sources_to_drop.is_empty() {
             broadcast(

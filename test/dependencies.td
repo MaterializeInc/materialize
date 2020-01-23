@@ -31,7 +31,7 @@ $ set schema={
 > CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
 ! CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' USING SCHEMA '${schema}'
-catalog item 'materialize.public.s' already exists
+catalog item 's' already exists
 
 > CREATE SOURCE IF NOT EXISTS s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' USING SCHEMA '${schema}'
 
@@ -104,7 +104,7 @@ catalog item 'test4' does not exist
 > CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
 
 ! CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v2' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
-catalog item 'materialize.public.s1' already exists
+catalog item 's1' already exists
 
 > CREATE SINK IF NOT EXISTS s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v2' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
 
