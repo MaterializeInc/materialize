@@ -42,6 +42,7 @@ pub enum PeekWhen {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
     Rows(Vec<Row>),
+    Error(String),
     Canceled,
 }
 
@@ -49,8 +50,8 @@ impl PeekResponse {
     pub fn unwrap_rows(self) -> Vec<Row> {
         match self {
             PeekResponse::Rows(rows) => rows,
-            PeekResponse::Canceled => {
-                panic!("PeekResponse::unwrap_rows called on PeekResponse::Canceled")
+            PeekResponse::Error(_) | PeekResponse::Canceled => {
+                panic!("PeekResponse::unwrap_rows called on an invalid response")
             }
         }
     }
