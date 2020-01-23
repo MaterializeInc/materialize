@@ -414,7 +414,6 @@ impl RelationExpr {
                     .collect();
                 let applied_aggregates = aggregates
                     .into_iter()
-                    // TODO(jamii) how do we deal with the extra columns here?
                     .map(|aggregate| {
                         Ok(aggregate.applied_to(id_gen, get_outer.arity(), &mut input)?)
                     })
@@ -424,6 +423,7 @@ impl RelationExpr {
                     .iter()
                     .map(|agg| (agg.func.default(), agg.typ(&input_type)))
                     .collect();
+                // NOTE we don't need to remove any extra columns from aggregate.applied_to above because the reduce will do that anyway
                 let mut reduced = input.reduce(applied_group_key, applied_aggregates);
                 if group_key.is_empty() {
                     reduced = get_outer.lookup(id_gen, reduced, default);
