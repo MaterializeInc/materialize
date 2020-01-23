@@ -14,6 +14,9 @@ CREATE SOURCE requests FROM 'file:///log/requests' WITH ( regex='(?P<ip>\d{1,3}\
 CREATE VIEW avg_dps_for_searcher AS SELECT avg(dp_hits) FROM (SELECT ip, count(product_detail_id) AS dp_hits, count(search_kw) AS search_hits FROM requests GROUP BY ip) WHERE search_hits > 0;
 
 -- Number of unique IP hits
+-- This could just be SELECT count(distinct(ip)) FROM requests
+-- once https://github.com/MaterializeInc/materialize/issues/676
+-- is addressed.
 CREATE VIEW unique_visitors AS SELECT count(*) FROM (SELECT ip FROM requests GROUP BY ip);
 
 -- 40 products with the most hits
