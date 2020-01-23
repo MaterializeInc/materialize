@@ -42,7 +42,7 @@ Source   Create Source
 materialize.public.data  "kafka://${testdrive.kafka-addr-resolved}/testdrive-data-${testdrive.seed}"
 
 ! SELECT * FROM data
-Query input materialize.public.data is not materialized
+Cannot construct query out of existing materialized views
 
 > CREATE VIEW data_view as SELECT * from data
 
@@ -161,7 +161,7 @@ b  max
 
 # cannot select from unmaterialized view
 ! SELECT * from data_view
-data_view is not materialized
+Cannot construct query out of existing materialized views
 
 # can create sink from unmaterialized view
 > CREATE SINK not_mat_sink FROM data_view INTO 'kafka://${testdrive.kafka-addr}/data-view-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
@@ -209,7 +209,7 @@ c-b
 > DROP INDEX idx1;
 
 ! SELECT * from test5
-test5 is not materialized
+Cannot construct query out of existing materialized views
 
 # test that materialized views can be even if it requires multiple layers of recursing through the AST
 # to find a source
@@ -223,10 +223,10 @@ d
 
 # dependencies have not re-materialized as a result of creating a dependent materialized view
 ! SELECT * from test5
-test5 is not materialized
+Cannot construct query out of existing materialized views
 
 ! SELECT * from data_view
-data_view is not materialized
+Cannot construct query out of existing materialized views
 
 # rematerialize data_view creating an index on it
 > CREATE INDEX data_view_idx on data_view(a)
@@ -239,15 +239,19 @@ a b
 3 1
 1 2
 
-#dependencies have not been affected by the rematerialization
+#existing materialized dependencies can be selected from as normal
 > SELECT * from test6;
 d
 ----
 -1
 3
 
-! SELECT * from test5
-test5 is not materialized
+#dependencies can be selected from again if they do not depend on any other raw source
+> SELECT * from test5
+b  c
+------
+1  3
+2  1
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.

@@ -1167,6 +1167,43 @@ where
         }
     }
 
+    fn find_dependent_indexes(&self, get_id: &GlobalId) -> Result<Vec<GlobalId>, failure::Error> {
+        if self.sources.get(get_id).is_some() {
+            bail!("Cannot construct query out of existing materialized views")
+        } else {
+            let view_item = self.catalog.get_by_id(get_id).item().clone();
+            if let Some((index_id, _)) = &self.views[get_id].default_idx {
+                Ok(vec![*index_id])
+            } else {
+                match view_item {
+                    CatalogItem::View(view) => {
+                        let mut index_per_view = Vec::new();
+                        view.relation_expr.as_ref().visit(&mut |e| {
+                            if let RelationExpr::Get {
+                                id: Id::Global(id),
+                                typ: _,
+                            } = e
+                            {
+                                index_per_view.push(self.find_dependent_indexes(&id));
+                            }
+                        });
+                        let mut results = Vec::new();
+                        for index_set in index_per_view {
+                            if let Ok(mut index_set) = index_set {
+                                results.append(&mut index_set);
+                            } else {
+                                // return error
+                                return index_set;
+                            }
+                        }
+                        Ok(results)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
     /// A policy for determining the timestamp for a peek.
     ///
     /// The result may be `None` in the case that the `when` policy cannot be satisfied,
@@ -1202,23 +1239,11 @@ where
         source.global_uses(&mut uses_ids);
         uses_ids.sort();
         uses_ids.dedup();
-        uses_ids = uses_ids
+        let index_per_view = uses_ids
             .into_iter()
-            .map(|view_id| {
-                if let Some(Some((index_id, _))) = self
-                    .views
-                    .get(&view_id)
-                    .map(|view_state| &view_state.default_idx)
-                {
-                    Ok(*index_id)
-                } else {
-                    bail!(
-                        "Query input {} is not materialized",
-                        self.catalog.humanize_id(expr::Id::Global(view_id)).unwrap()
-                    )
-                }
-            })
-            .collect::<Result<Vec<GlobalId>, failure::Error>>()?;
+            .map(|view_id| self.find_dependent_indexes(&view_id))
+            .collect::<Result<Vec<Vec<GlobalId>>, failure::Error>>()?;
+        uses_ids = index_per_view.into_iter().flat_map(|ids| ids).collect();
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
