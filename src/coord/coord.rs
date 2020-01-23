@@ -413,6 +413,25 @@ where
         conn_id: u32,
     ) -> Result<ExecuteResponse, failure::Error> {
         match plan {
+            Plan::CreateDatabase {
+                name,
+                if_not_exists,
+            } => match self.catalog.create_database(name) {
+                Ok(()) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
+                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
+                Err(err) => Err(err),
+            },
+
+            Plan::CreateSchema {
+                database_name,
+                schema_name,
+                if_not_exists,
+            } => match self.catalog.create_schema(database_name, schema_name) {
+                Ok(()) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
+                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
+                Err(err) => Err(err),
+            },
+
             Plan::CreateTable {
                 name,
                 desc,

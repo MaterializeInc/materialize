@@ -35,6 +35,15 @@ pub use query::scalar_type_from_sql;
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
+    CreateDatabase {
+        name: String,
+        if_not_exists: bool,
+    },
+    CreateSchema {
+        database_name: String,
+        schema_name: String,
+        if_not_exists: bool,
+    },
     CreateIndex {
         name: FullName,
         index: Index,

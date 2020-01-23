@@ -54,13 +54,13 @@ pub struct Catalog {
 
 #[derive(Debug)]
 struct Database {
-    id: i32,
+    id: i64,
     schemas: HashMap<String, Schema>,
 }
 
 #[derive(Debug)]
 pub struct Schema {
-    pub id: i32,
+    pub id: i64,
     pub items: HashMap<String, GlobalId>,
 }
 
@@ -326,6 +326,54 @@ impl Catalog {
         }
     }
 
+    pub fn create_database(&mut self, name: String) -> Result<(), failure::Error> {
+        if self.by_name.contains_key(&name) {
+            bail!("database '{}' already exists", &name);
+        }
+        info!("create database {}", name);
+        let (database_id, schema_id) = self.storage.insert_database(&name)?;
+        let mut schemas = HashMap::new();
+        schemas.insert(
+            "public".into(),
+            Schema {
+                id: schema_id,
+                items: HashMap::new(),
+            },
+        );
+        self.by_name.insert(
+            name,
+            Database {
+                id: database_id,
+                schemas,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn create_schema(
+        &mut self,
+        database_name: String,
+        schema_name: String,
+    ) -> Result<(), failure::Error> {
+        let database = match self.by_name.get_mut(&database_name) {
+            None => bail!("unknown database '{}'", database_name),
+            Some(database) => database,
+        };
+        if database.schemas.contains_key(&schema_name) {
+            bail!("schema '{}.{}' already exists", database_name, schema_name);
+        }
+        info!("create schema {}.{}", database_name, schema_name);
+        let id = self.storage.insert_schema(database.id, &schema_name)?;
+        database.schemas.insert(
+            schema_name,
+            Schema {
+                id,
+                items: HashMap::new(),
+            },
+        );
+        Ok(())
+    }
+
     /// Inserts a new catalog item, returning an error if a catalog item with
     /// the same name already exists.
     ///
@@ -378,7 +426,7 @@ impl Catalog {
     }
 
     fn insert_id_core(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
-        info!("new {} {} ({})", item.type_string(), name, id);
+        info!("create {} {} ({})", item.type_string(), name, id);
         let entry = CatalogEntry {
             inner: item,
             name,
@@ -468,7 +516,7 @@ impl Catalog {
     pub fn remove(&mut self, id: GlobalId) {
         if let Some(metadata) = self.by_id.remove(&id) {
             info!(
-                "remove {} {} ({})",
+                "drop {} {} ({})",
                 metadata.inner.type_string(),
                 metadata.name,
                 id
