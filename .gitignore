@@ -16,3 +16,5 @@ miri-target
 **/*.rs.bk
 .netlify
 mzdata
+__pycache__
+venv
