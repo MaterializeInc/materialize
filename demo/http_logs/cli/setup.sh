@@ -14,7 +14,7 @@ CREATE SOURCE requests FROM 'file:///log/requests' WITH ( regex='(?P<ip>\d{1,3}\
 CREATE VIEW avg_dps_for_searcher AS SELECT avg(dp_hits) FROM (SELECT ip, count(product_detail_id) AS dp_hits, count(search_kw) AS search_hits FROM requests GROUP BY ip) WHERE search_hits > 0;
 
 -- Number of unique IP hits
-CREATE VIEW unique_visitors AS SELECT count(distinct(ip)) FROM requests;
+CREATE VIEW unique_visitors AS SELECT count(*) FROM (SELECT ip FROM requests GROUP BY ip);
 
 -- 40 products with the most hits
 CREATE VIEW top_products AS SELECT count(product_detail_id) ct, product_detail_id from requests GROUP BY product_detail_id ORDER BY ct DESC LIMIT 40;
