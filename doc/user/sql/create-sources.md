@@ -4,6 +4,8 @@ description: "`CREATE SOURCES` connects Materialize to Kafka, and defines the da
 menu:
   main:
     parent: 'sql'
+aliases:
+    - /docs/sql/create-source
 ---
 
 `CREATE SOURCES` connects Materialize to some data source, and lets you interact
@@ -12,12 +14,14 @@ with its data as if it were in a SQL table.
 ## Conceptual framework
 
 To provide data to Materialze, you must create "sources", which is a catchall
-term for a resource Materialize can read data from.
+term for a resource Materialize can read data from. For more detail about how
+sources work within the rest of Materialze, check out our [architecture
+overview](/docs/overview/architecture/).
 
-There are two types of sources within Materialize:
+Materialize supports the following types of sources:
 
 - Streaming sources like Kafka
-- Static sources like CSV files
+- File sources like `.csv` or unstructured log files
 
 ### Streaming sources
 
@@ -36,12 +40,15 @@ step.
 After you create the source, Materialize automatically collects all of the data
 that streams in, which is then used to supply your queries and views with data.
 
-### Static sources
+### File sources
 
-Materialize can ingest a static data set from a source like a `.csv` file. In
-doing this, Materialize simply reads the file, and writes the contents to its
-underlying Differential dataflow engine. Once the data's been ingested, you can
-query it as you would any normal relational data.
+Materialize can ingest data set from sources like `.csv` files or unstructured
+log file, in one of two ways:
+
+- Static files, which Materialize reads once and makes available for views.
+- Dynamic files, which Materialize regularly reads and propagates new values to
+  views that use the source. We call this "tailing a file" because it's similar
+  to running `tail` and looking for new lines at its end.
 
 ## Syntax
 
@@ -60,7 +67,7 @@ _avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/sp
 
 ### Create single source
 
-`CREATE SOURCE` can be used to create streaming or static sources.
+`CREATE SOURCE` can be used to create streaming or file sources.
 
 {{< diagram "create-source.html" >}}
 
@@ -71,7 +78,7 @@ _src&lowbar;name_ | The name for the source, which is used as its table name wit
 **FROM** _local&lowbar;file_ | The absolute path to the local file you want to use as a source (begins with `file://`).
 **REGISTRY** _registry&lowbar;src_ | Use the Confluent schema registry at _registry&lowbar;src_ to define the structure of the Kafka source.
 _avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/spec.html) for the topic.
-**WITH (** _option&lowbar;list_ **)** | Instructions for parsing your static source file. For more detail, see [`WITH` options](#with-options).
+**WITH (** _option&lowbar;list_ **)** | Instructions for parsing your file sources. For more detail, see [`WITH` options](#with-options).
 
 #### `WITH` options
 
@@ -79,8 +86,10 @@ The following options are valid within the `WITH` clause.
 
 Field | Value
 ------|-----
-`format` | _(Required)_ The static source's format. Currently, `csv` is the only supported format.
-`columns` | _(Required)_ The number of columns to read from the source.
+`tail` | Continually check the file for new content; as new content arrives, process it using other `WITH` options.
+`regex` | Use the provided regex to populate data (i.e. columns) in the source. For more info, see [Regex on file sources](#regex-on-file-sources).
+`format` | The file source's format. Currently, `csv` is the only supported format. Unstructured files should _not_ use this option and should rely on the `regex` option instead. For more info, see [CSV sources](#csv-sources).
+`columns` | The number of columns to read from the source; Materialize discards rows with other numbers of fields. When used with `csv`, this must be equal to the number of fields in the CSV's row.
 
 All field names are case-sensitive.
 
@@ -152,20 +161,40 @@ which works independently from the Kafka stream's retention period.
 When [creating views](../create-views), they are populated with all of the data
 from their sources that are available from the arrangements within Differential.
 
-## Static source details
+## File source details
 
-Creating static sources is more straightforward than streaming ones, though
-there are still a number of caveats.
+File sources have the following caveats, in addition to any details of the
+specific file type you're using:
+
+- File path must be prefixed with `file://`, and be the file's absolute path.
+- All data in file sources are treated as [`string`](./data-types/string).
 
 ### CSV sources
 
-- File path must be prefixed with `file://`, and be the file's absolute path.
 - Every line of the CSV is treated as a row, i.e. there is no concept of
   headers.
-- All data in the CSV are treated as `string`.
 - Columns in the source are named `column1`, `column2`, etc.
-- You must specify the number of columns. Any row with a different number of
-  columns gets discarded, though Materialize will log an error.
+- You must specify the number of columns using `WITH ( format = 'csv', columns =
+  n )`. Any row with a different number of columns gets discarded, though
+  Materialize will log an error.
+
+### Regex on file sources
+
+By using the `regex` flag in the `WITH` option list, you can apply a structure
+to a string of text that gets read from a file. This is particularly useful when
+processing unstructured log files.
+
+- To parse regex strings, Materialize uses
+  [rust-lang/regex](https://github.com/rust-lang/regex). The API this library
+  provides is similar to Python's built-in regex library.
+- To create a column in the source, create a capture group, i.e. a parenthesized
+  expression, e.g. `([0-9a-f]{8})`.
+    - Name columns by creating named captured groups, e.g. `?P<offset>` in
+      `(?P<offset>[0-9a-f]{8})` creates a column named `offset`.
+    - Unnamed capture groups are named `column1`, `column2`, etc.
+- We discard all data not included in a capture group. You can create
+  non-capturing groups using `?:` as the leading pattern in the group, e.g.
+  `(?:[0-9a-f]{4} ){8}`.
 
 ## Examples
 
@@ -206,15 +235,57 @@ USING SCHEMA '{
 }';
 ```
 
-### Creating CSV source
+### Creating a source from a static CSV
 
 ```sql
-CREATE SOURCE test FROM 'file:///test.csv' WITH (format = 'csv', columns = 5);
+CREATE SOURCE test
+FROM 'file:///test.csv'
+WITH (
+    format='csv',
+    columns=5
+);
 ```
 
 - The prefix for the file is `file://`, which is followed by the absolute path
   to the file (`/test.csv` in this example), resulting in `file:///test.csv`.
 - The `WITH` clause's `format` and `csv` fields are required and case-sensitive.
+
+### Creating a source from a dynamic, unstructured file
+
+In this example, we'll assume we have [`xxd`](https://linux.die.net/man/1/xxd) creating hex dumps for some incoming files. Its output might look like this:
+
+```nofmt
+00000000: 7f45 4c46 0201 0100 0000 0000 0000 0000  .ELF............
+00000010: 0300 3e00 0100 0000 105b 0000 0000 0000  ..>......[......
+00000020: 4000 0000 0000 0000 7013 0200 0000 0000  @.......p.......
+```
+
+We'll create a source that takes in these entire lines and extracts the file offset, as well as the decoded value.
+
+```sql
+CREATE SOURCE hex
+FROM  'file:///xxd.log'
+WITH (
+    regex='(?P<offset>[0-9a-f]{8}): (?:[0-9a-f]{4} ){8} (?P<decoded>.*)$',
+    tail=true
+);
+```
+
+This creates a source...
+
+- With two columns: `offset` and `decoded`.
+- That discards the second group, i.e. `(?:[0-9a-f]{4} ){8}`.
+- That Materialize dynamically polls for new entries.
+
+Using the above example, this would generate:
+
+```nofmt
+ offset  |     decoded
+---------+------------------
+00000000 | .ELF............
+00000010 | ..>......[......
+00000020 | @.......p.......
+```
 
 ## Related pages
 

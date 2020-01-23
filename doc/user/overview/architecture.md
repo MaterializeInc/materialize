@@ -14,7 +14,7 @@ the outside world by interfacing with:
 - **SQL shells** for interacting with clients, including defining sources,
   creating views, and querying data.
 - **Sources** to ingest data, i.e. writes. We'll focus on streaming sources like
-  Kafka, though Materialize also supports static sources.
+  Kafka, though Materialize also supports file sources.
 
 ## Diagrams
 
@@ -112,9 +112,9 @@ For Materialize to ingest data, it must read it from a source, of which there
 are two varieties:
 
 - Streaming sources, like Kakfa
-- Static sources, like CSV files
+- File sources, like `.csv` or generic log files
 
-Static sources are more straightforward, so we'll focus on streaming sources.
+File sources are more straightforward, so we'll focus on streaming sources.
 
 When using a streaming source, Materialize subscribes to Kafka topics and
 monitors the stream for data it should ingest.
@@ -137,7 +137,7 @@ Implicit in this design are a few key points:
   all of the data.
 - Streaming sources must receive all of their data from the stream itself; there
   is no way to "seed" a streaming source with static data. However, you can
-  union streaming and static sources in views, which accomplishes a similar
+  union streaming and file sources in views, which accomplishes a similar
   outcome.
 
 ## Learn more
