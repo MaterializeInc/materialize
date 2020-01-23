@@ -41,7 +41,7 @@ However, continually re-executing queries is expensive, so another implementatio
 
 Materialized views are often maintained with some periodicity and don't reflect the underlying data with total fidelity. This essentially makes them snapshots of the results, meaning any updates that have happened since the snapshot was generated will not be reflected in the materialized view. It's easy to liken this to the batch processing strategy discussed above; you occasionally perform some expensive computation and cache the results.
 
-However, it's also possible that if you were to describe the changes that happened in the underlying database that you would be able to reflect those changes in materialized views without needing to periodically recompute the answer to the query in total. Instead, each successful operation could be passed to an engine that could then parse the operation and, if necessary, update the materialized view. This is known as an incrementally updated materialized view.
+However, it's also possible that if you were to describe the changes that happened in the underlying database that you would be able to reflect those changes in materialized views without needing to periodically recompute the answer to the query in total. Instead, each successful operation could be passed to an engine that could then parse the operation and, if necessary, update the materialized view. This is known as an **incrementally updated materialized view**.
 
 ### Streaming
 

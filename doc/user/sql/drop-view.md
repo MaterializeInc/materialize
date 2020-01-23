@@ -6,7 +6,7 @@ menu:
     parent: 'sql'
 ---
 
-`DROP VIEW` removes a view from your Materialize instances.
+`DROP VIEW` removes a view from your Materialize instances. This works on both materialized and non-materialized views.
 
 ## Conceptual framework
 

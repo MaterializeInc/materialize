@@ -24,4 +24,5 @@ my_view
 ## Related pages
 
 - [`SHOW CREATE VIEW`](../show-create-view)
+- [`SHOW INDEX`](../show-index)
 - [`CREATE VIEW`](../create-view)
