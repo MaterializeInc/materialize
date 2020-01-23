@@ -1,0 +1,2 @@
+func_extract ::=
+  'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' ts_val ')'

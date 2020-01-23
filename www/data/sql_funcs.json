@@ -138,6 +138,11 @@
         "description": "Time functions take a time-like type, e.g. [`date`](../types/date), [`timestamp`](../types/timestamp), [`timestamptz`](../types/timestamptz).",
         "functions": [
             {
+                "signature": "date_trunc(time_component: str, val: timestamp) -> timestamp",
+                "description": "Largest `time_component` <= `val`",
+                "url": "date-trunc"
+            },
+            {
                 "signature": "EXTRACT(extract_expr) -> float",
                 "description": "Specified time component from value",
                 "url": "extract"
