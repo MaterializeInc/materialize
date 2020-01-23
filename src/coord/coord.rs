@@ -206,8 +206,8 @@ where
                     CatalogItem::Source(source) => {
                         coord.sources.insert(id, source);
                     }
-                    CatalogItem::View(_view) => {
-                        coord.insert_view(id);
+                    CatalogItem::View(view) => {
+                        coord.insert_view(id, &view);
                     }
                     CatalogItem::Sink(sink) => {
                         coord.create_sink_dataflow(name.to_string(), id, sink);
@@ -445,7 +445,7 @@ where
                 };
                 match self.register_view(&name, &view) {
                     Ok(view_id) => {
-                        self.insert_view(view_id);
+                        self.insert_view(view_id, &view);
                         let mut index_name = name.clone();
                         index_name.item += "_primary_idx";
                         let index = view.auto_generate_primary_idx(view_id);
@@ -527,7 +527,7 @@ where
                 let view = self.optimize_view(view);
                 let id = self.register_view(&name, &view)?;
                 let mut index_name = name.clone();
-                self.insert_view(id);
+                self.insert_view(id, &view);
                 let mut dataflow = DataflowDesc::new(name.to_string());
                 self.build_view_collection(&id, &view, &mut dataflow);
                 let index = view.auto_generate_primary_idx(id);
@@ -1083,6 +1083,10 @@ where
                 }
                 if let Some(view_state) = self.views.get_mut(&index_state.desc.on_id) {
                     view_state.drop_primary_idx(&index_state.desc.keys);
+                    if view_state.default_idx.is_none() {
+                        view_state.queryable = false;
+                        self.propagate_queryability(&index_state.desc.on_id);
+                    }
                 }
                 trace_keys.push(name);
             }
@@ -1167,41 +1171,43 @@ where
         }
     }
 
-    fn find_dependent_indexes(&self, get_id: &GlobalId) -> Result<Vec<GlobalId>, failure::Error> {
-        if self.sources.get(get_id).is_some() {
-            bail!("Cannot construct query out of existing materialized views")
-        } else {
-            let view_item = self.catalog.get_by_id(get_id).item().clone();
-            if let Some((index_id, _)) = &self.views[get_id].default_idx {
-                Ok(vec![*index_id])
-            } else {
-                match view_item {
-                    CatalogItem::View(view) => {
-                        let mut index_per_view = Vec::new();
-                        view.relation_expr.as_ref().visit(&mut |e| {
-                            if let RelationExpr::Get {
-                                id: Id::Global(id),
-                                typ: _,
-                            } = e
-                            {
-                                index_per_view.push(self.find_dependent_indexes(&id));
-                            }
-                        });
-                        let mut results = Vec::new();
-                        for index_set in index_per_view {
-                            if let Ok(mut index_set) = index_set {
-                                results.append(&mut index_set);
-                            } else {
-                                // return error
-                                return index_set;
-                            }
-                        }
-                        Ok(results)
+    fn propagate_queryability(&mut self, id: &GlobalId) {
+        let mut ids_to_propagate = Vec::new();
+        for used_by_id in self.catalog.get_by_id(id).used_by().to_owned() {
+            if self.views.contains_key(&used_by_id) && self.views[&used_by_id].default_idx.is_none()
+            {
+                let new_queryability = self.views[&used_by_id]
+                    .uses_views
+                    .iter()
+                    .all(|id| self.views[id].queryable);
+                if let Some(view_state) = self.views.get_mut(&used_by_id) {
+                    if view_state.queryable != new_queryability {
+                        ids_to_propagate.push(used_by_id);
+                        view_state.queryable = new_queryability;
                     }
-                    _ => unreachable!(),
                 }
             }
         }
+        for id in ids_to_propagate {
+            self.propagate_queryability(&id);
+        }
+    }
+
+    fn find_dependent_indexes(&self, id: &GlobalId) -> Vec<GlobalId> {
+        let mut results = Vec::new();
+        let view_state = &self.views[id];
+        if view_state.primary_idxes.is_empty() {
+            for id in view_state.uses_views.iter() {
+                results.append(&mut self.find_dependent_indexes(id));
+            }
+        } else {
+            for id in view_state.primary_idxes.values() {
+                results.push(*id);
+            }
+        }
+        results.sort();
+        results.dedup();
+        results
     }
 
     /// A policy for determining the timestamp for a peek.
@@ -1239,11 +1245,19 @@ where
         source.global_uses(&mut uses_ids);
         uses_ids.sort();
         uses_ids.dedup();
-        let index_per_view = uses_ids
+        if uses_ids.iter().any(|id| {
+            if let Some(view_state) = self.views.get(id) {
+                !view_state.queryable
+            } else {
+                true
+            }
+        }) {
+            bail!("Cannot construct query out of existing materialized views");
+        }
+        uses_ids = uses_ids
             .into_iter()
-            .map(|view_id| self.find_dependent_indexes(&view_id))
-            .collect::<Result<Vec<Vec<GlobalId>>, failure::Error>>()?;
-        uses_ids = index_per_view.into_iter().flat_map(|ids| ids).collect();
+            .flat_map(|id| self.find_dependent_indexes(&id))
+            .collect();
 
         // First determine the candidate timestamp, which is either the explicitly requested
         // timestamp, or the latest timestamp known to be immediately available.
@@ -1381,15 +1395,27 @@ where
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    fn insert_view(&mut self, view_id: GlobalId) {
+    fn insert_view(&mut self, view_id: GlobalId, view: &View<OptimizedRelationExpr>) {
         self.views.remove(&view_id);
-        self.views.insert(view_id, ViewState::default());
+        let mut out = Vec::new();
+        view.relation_expr.as_ref().global_uses(&mut out);
+        out.sort();
+        out.dedup();
+        out = out
+            .into_iter()
+            .filter(|id| self.views.contains_key(&id))
+            .collect();
+        self.views.insert(view_id, ViewState::new(out));
     }
 
     /// Add an index to a view in the coordinator.
     fn insert_index(&mut self, id: GlobalId, desc: IndexDesc, latency_ms: Option<Timestamp>) {
         if let Some(viewstate) = self.views.get_mut(&desc.on_id) {
             viewstate.add_primary_idx(&desc.keys, id);
+            if !viewstate.queryable {
+                viewstate.queryable = true;
+                self.propagate_queryability(&desc.on_id);
+            }
         } // else the view is temporary
         let mut index_state = IndexState::new(desc, self.num_timely_workers);
         if latency_ms.is_some() {
@@ -1550,6 +1576,9 @@ impl IndexState {
 
 /// Per-view state.
 pub struct ViewState {
+    /// Only views, not sources, on which the view depends
+    uses_views: Vec<GlobalId>,
+    queryable: bool,
     /// keys of default index
     default_idx: Option<(GlobalId, Vec<ScalarExpr>)>,
     // TODO(andiwang): only allow one primary index?
@@ -1559,17 +1588,17 @@ pub struct ViewState {
     // secondary_idxes: HashMap<Vec<ScalarExpr>, GlobalId>,
 }
 
-impl Default for ViewState {
-    fn default() -> Self {
+impl ViewState {
+    fn new(uses_views: Vec<GlobalId>) -> Self {
         ViewState {
+            queryable: false,
+            uses_views,
             default_idx: None,
             primary_idxes: HashMap::new(),
             //secondary_idxes: HashMap::new(),
         }
     }
-}
 
-impl ViewState {
     pub fn add_primary_idx(&mut self, primary_idx: &[ScalarExpr], id: GlobalId) {
         if self.default_idx.is_none() {
             self.default_idx = Some((id, primary_idx.to_owned()));
