@@ -19,14 +19,13 @@ limitations under the License.
 
 #include "DbcTools.h"
 #include "Log.h"
-#include "dialect/DialectStrategy.h"
 
-bool Queries::prepareStatements(SQLHDBC& hDBC) {
+bool Queries::prepareStatements(Dialect* dialect, SQLHDBC& hDBC) {
 
     for (int i = 0; i < 22; i++) {
         if (!DbcTools::allocAndPrepareStmt(
                 hDBC, odbc_queries[i],
-                DialectStrategy::getInstance()->getTpchQueryStrings()[i])) {
+                dialect->getTpchQueryStrings()[i])) {
             Log::l2() << Log::tm() << "-prepare statements failed\n";
             return false;
         }

@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+#include "MySqlDialect.h"
+#include "HanaDialect.h"
 #include "Random.h"
 #include "Config.h"
 #include "mz-config.h"
@@ -48,6 +50,16 @@ static chRandom::int_distribution get_int_dist(libconfig::Setting& setting) {
 mz::Config Config::get_config(libconfig::Config &config) {
     using libconfig::Setting;
     mz::Config ret = mz::defaultConfig();
+    if (config.exists("dialect")) {
+        const std::string dialect = config.lookup("dialect");
+        if (dialect == "mysql") {
+            ret.dialect = new MySqlDialect();
+        } else if (dialect == "hana") {
+            ret.dialect = new HanaDialect();
+        } else {
+            throw Config::UnrecognizedDialectException {dialect};
+        }
+    }
     if (config.exists("all_queries")) {
         const Setting& all_queries = config.lookup("all_queries");
         for (const auto& query: all_queries) {
@@ -94,3 +106,11 @@ const char* Config::UnrecognizedDistributionException::what() const noexcept {
 
 Config::UnrecognizedDistributionException::UnrecognizedDistributionException(const std::string &distribution) :
  what_rendered { "Unrecognized distribution: " + distribution } {}
+
+const char* Config::UnrecognizedDialectException::what() const noexcept {
+    return what_rendered.c_str();
+}
+
+Config::UnrecognizedDialectException::UnrecognizedDialectException(const std::string &dialect) :
+ what_rendered { "Unrecognized dialect: " + dialect } {}
+

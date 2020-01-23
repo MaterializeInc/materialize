@@ -19,7 +19,6 @@ limitations under the License.
 
 #include "DbcTools.h"
 #include "Log.h"
-#include "dialect/DialectStrategy.h"
 
 #include <string>
 
@@ -43,16 +42,16 @@ bool Schema::check(SQLHSTMT& hStmt, const char* query, int& cnt) {
     return true;
 }
 
-bool Schema::createSchema(SQLHSTMT& hStmt) {
+bool Schema::createSchema(Dialect* dialect, SQLHSTMT& hStmt) {
 
-    for (const char* stmt: DialectStrategy::getInstance()->getDropExistingSchemaStatements()) {
+    for (const char* stmt: dialect->getDropExistingSchemaStatements()) {
         DbcTools::executeServiceStatement(
             hStmt,
             stmt,
             false);
     }
 
-    for (const char* stmt : DialectStrategy::getInstance()->getCreateSchemaStatements()) {
+    for (const char* stmt : dialect->getCreateSchemaStatements()) {
         if (!DbcTools::executeServiceStatement(
                 hStmt, stmt)) {
             Log::l2() << Log::tm() << "-failed\n";
@@ -64,10 +63,9 @@ bool Schema::createSchema(SQLHSTMT& hStmt) {
     return true;
 }
 
-bool Schema::importCSV(SQLHSTMT& hStmt, const std::string& genDir) {
+bool Schema::importCSV(Dialect* dialect, SQLHSTMT& hStmt, const std::string& genDir) {
 
-    if (DialectStrategy::getInstance()->getImportPrefix().size() !=
-        DialectStrategy::getInstance()->getImportSuffix().size()) {
+    if (dialect->getImportPrefix().size() != dialect->getImportSuffix().size()) {
         Log::l2()
             << Log::tm()
             << "-failed (different size of ImportPrefix and ImportSuffix vector in dialect class)\n";
@@ -75,13 +73,13 @@ bool Schema::importCSV(SQLHSTMT& hStmt, const std::string& genDir) {
     }
 
     for (size_t i = 0;
-         i < DialectStrategy::getInstance()->getImportPrefix().size(); i++) {
+         i < dialect->getImportPrefix().size(); i++) {
         if (!DbcTools::executeServiceStatement(
                 hStmt,
                 std::string(
-                    DialectStrategy::getInstance()->getImportPrefix()[i] +
+                    dialect->getImportPrefix()[i] +
                     genDir +
-                    DialectStrategy::getInstance()->getImportSuffix()[i])
+                    dialect->getImportSuffix()[i])
                     .c_str())) {
             Log::l2() << Log::tm() << "-failed\n";
             return false;
@@ -92,15 +90,14 @@ bool Schema::importCSV(SQLHSTMT& hStmt, const std::string& genDir) {
     return true;
 }
 
-bool Schema::check(SQLHSTMT& hStmt) {
-
+bool Schema::check(Dialect* dialect, SQLHSTMT& hStmt) {
     int wh = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountWarehouse(),
+    if (!check(hStmt, dialect->getSelectCountWarehouse(),
                wh))
         return false;
 
     int ds = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountDistrict(),
+    if (!check(hStmt, dialect->getSelectCountDistrict(),
                ds))
         return false;
     if (ds != 10 * wh) {
@@ -109,7 +106,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int cs = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountCustomer(),
+    if (!check(hStmt, dialect->getSelectCountCustomer(),
                cs))
         return false;
     if (cs != 30000 * wh) {
@@ -118,7 +115,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int od = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountOrder(),
+    if (!check(hStmt, dialect->getSelectCountOrder(),
                od))
         return false;
     if (od != 30000 * wh) {
@@ -127,7 +124,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int ol = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountOrderline(),
+    if (!check(hStmt, dialect->getSelectCountOrderline(),
                ol))
         return false;
     if (ol != 300000 * wh) {
@@ -136,7 +133,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int no = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountNeworder(),
+    if (!check(hStmt, dialect->getSelectCountNeworder(),
                no))
         return false;
     if (no != 9000 * wh) {
@@ -145,7 +142,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int hs = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountHistory(),
+    if (!check(hStmt, dialect->getSelectCountHistory(),
                hs))
         return false;
     if (hs != 30000 * wh) {
@@ -154,7 +151,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int st = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountStock(),
+    if (!check(hStmt, dialect->getSelectCountStock(),
                st))
         return false;
     if (st != 100000 * wh) {
@@ -163,7 +160,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int it = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountItem(), it))
+    if (!check(hStmt, dialect->getSelectCountItem(), it))
         return false;
     if (it != 100000) {
         Log::l2() << Log::tm() << "-check failed (#ITEM: " << it << ")\n";
@@ -171,7 +168,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int sp = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountSupplier(),
+    if (!check(hStmt, dialect->getSelectCountSupplier(),
                sp))
         return false;
     if (sp != 10000) {
@@ -180,7 +177,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int na = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountNation(),
+    if (!check(hStmt, dialect->getSelectCountNation(),
                na))
         return false;
     if (na != 62) {
@@ -189,7 +186,7 @@ bool Schema::check(SQLHSTMT& hStmt) {
     }
 
     int rg = 0;
-    if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountRegion(),
+    if (!check(hStmt, dialect->getSelectCountRegion(),
                rg))
         return false;
     if (rg != 5) {
@@ -201,9 +198,9 @@ bool Schema::check(SQLHSTMT& hStmt) {
     return true;
 }
 
-bool Schema::additionalPreparation(SQLHSTMT& hStmt) {
+bool Schema::additionalPreparation(Dialect* dialect, SQLHSTMT& hStmt) {
 
-    for (auto stmt: DialectStrategy::getInstance()
+    for (auto stmt: dialect
                                      ->getAdditionalPreparationStatements()) {
         if (!DbcTools::executeServiceStatement(
                 hStmt, stmt)) {

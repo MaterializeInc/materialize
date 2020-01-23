@@ -27,6 +27,14 @@ namespace mz {
 namespace Config {
 class ConfigException : public std::exception {};
 
+class UnrecognizedDialectException : public ConfigException {
+    std::string what_rendered;
+public:
+    const char *what() const noexcept override;
+
+    explicit UnrecognizedDialectException(const std::string &dialect);
+};
+
 class UnrecognizedDistributionException : public ConfigException {
     std::string what_rendered;
 public:

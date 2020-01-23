@@ -22,6 +22,7 @@ limitations under the License.
 #include <vector>
 #include "materialized.h"
 #include "Config.h"
+#include "Dialect.h"
 #include "Random.h"
 
 namespace mz {
@@ -34,6 +35,7 @@ struct Config {
     std::string schemaRegistryUrl;
     std::vector<std::pair<const std::string, ViewDefinition>*> hQueries; // pointers into allQueries
     std::unordered_map<std::string, ViewDefinition> allQueries;
+    Dialect* dialect;
     chRandom::int_distribution hist_date_offset_millis;
     chRandom::int_distribution order_entry_date_offset_millis;
     chRandom::int_distribution orderline_delivery_date_offset_millis;
