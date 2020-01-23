@@ -222,7 +222,7 @@ query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
 Let {
-  l0 = Join {
+  l7 = Join {
     variables: [[(0, 0), (1, 0)]],
     Get { materialize.public.t1 (u37) },
     Get { materialize.public.t3 (u41) }
@@ -234,13 +234,13 @@ Project {
     scalars: [true],
     Join {
       variables: [[(0, 2), (1, 0)]],
-      Get { l0 },
+      Get { l7 },
       Distinct {
         group_key: [#1],
         Join {
           variables: [[(0, 0), (1, 0)]],
           Get { materialize.public.t2 (u39) },
-          Distinct { group_key: [#2], Get { l0 } }
+          Distinct { group_key: [#2], Get { l7 } }
         }
       }
     }

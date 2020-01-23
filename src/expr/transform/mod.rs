@@ -111,8 +111,8 @@ impl Default for Optimizer {
             Box::new(crate::transform::fusion::join::Join),
             Box::new(crate::transform::join_elision::JoinElision),
             Box::new(crate::transform::empty_map::EmptyMap),
-            // Unbinding increases the complexity, but exposes more optimization opportunities.
-            Box::new(crate::transform::binding::Unbind),
+            // Unbinding risks exponential blow-up on queries with deep let bindings.
+            // Box::new(crate::transform::binding::Unbind),
             Box::new(crate::transform::binding::Deduplicate),
             // Early actions include "no-brainer" transformations that reduce complexity in linear passes.
             Box::new(crate::transform::join_elision::JoinElision),
