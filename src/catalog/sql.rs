@@ -18,28 +18,28 @@ use crate::CatalogItem;
 const APPLICATION_ID: i32 = 0x1854_47dc;
 
 const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS databases (
-    id   int PRIMARY KEY,
+CREATE TABLE databases (
+    id   integer PRIMARY KEY,
     name text NOT NULL UNIQUE
 );
 
-CREATE TABLE IF NOT EXISTS schemas (
-    id          int PRIMARY KEY,
-    database_id int REFERENCES databases,
+CREATE TABLE schemas (
+    id          integer PRIMARY KEY,
+    database_id integer REFERENCES databases,
     name        text NOT NULL,
     UNIQUE (database_id, name)
 );
 
-CREATE TABLE IF NOT EXISTS items (
+CREATE TABLE items (
     gid        blob PRIMARY KEY,
-    schema_id  int REFERENCES schemas,
+    schema_id  integer REFERENCES schemas,
     name       text NOT NULL,
     definition blob NOT NULL,
     UNIQUE (schema_id, name)
 );
 
-REPLACE INTO databases VALUES (1, 'materialize');
-REPLACE INTO schemas VALUES
+INSERT INTO databases VALUES (1, 'materialize');
+INSERT INTO schemas VALUES
     (1, NULL, 'mz_catalog'),
     (2, NULL, 'pg_catalog'),
     (3, 1, 'public');
@@ -53,26 +53,27 @@ pub struct Connection {
 
 impl Connection {
     pub fn open(path: Option<&Path>) -> Result<Connection, failure::Error> {
-        let sqlite = match path {
+        let mut sqlite = match path {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
         };
 
-        let app_id: i32 = sqlite.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
+        let tx = sqlite.transaction()?;
+        let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
         let bootstrapped = if app_id == 0 {
-            sqlite.execute(
+            tx.execute(
                 &format!("PRAGMA application_id = {}", APPLICATION_ID),
                 params![],
             )?;
+            // Create the on-disk schema, since it doesn't already exist.
+            tx.execute_batch(&SCHEMA)?;
             true
         } else if app_id == APPLICATION_ID {
             false
         } else {
             bail!("incorrect application_id in catalog");
         };
-
-        // Create the on-disk schema, if it doesn't already exist.
-        sqlite.execute_batch(&SCHEMA)?;
+        tx.commit()?;
 
         Ok(Connection {
             inner: sqlite,
@@ -80,18 +81,18 @@ impl Connection {
         })
     }
 
-    pub fn load_databases(&self) -> Result<Vec<(i32, String)>, failure::Error> {
+    pub fn load_databases(&self) -> Result<Vec<(i64, String)>, failure::Error> {
         self.inner
             .prepare("SELECT id, name FROM databases")?
             .query_and_then(params![], |row| -> Result<_, failure::Error> {
-                let id: i32 = row.get(0)?;
+                let id: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
                 Ok((id, name))
             })?
             .collect()
     }
 
-    pub fn load_schemas(&self) -> Result<Vec<(i32, Option<String>, String)>, failure::Error> {
+    pub fn load_schemas(&self) -> Result<Vec<(i64, Option<String>, String)>, failure::Error> {
         self.inner
             .prepare(
                 "SELECT schemas.id, databases.name, schemas.name
@@ -99,7 +100,7 @@ impl Connection {
                 LEFT JOIN databases ON schemas.database_id = databases.id",
             )?
             .query_and_then(params![], |row| -> Result<_, failure::Error> {
-                let id: i32 = row.get(0)?;
+                let id: i64 = row.get(0)?;
                 let database_name: Option<String> = row.get(1)?;
                 let schema_name: String = row.get(2)?;
                 Ok((id, database_name, schema_name))
@@ -135,10 +136,40 @@ impl Connection {
             .collect()
     }
 
+    /// Inserts a new database with a default schema named "public". Returns
+    /// the ID of the new database and the ID of the public schema.
+    ///
+    // TODO(benesch): if we exposed a transactional API, the caller could
+    // manually call `insert_schema`, so we wouldn't need to hardcode the
+    // creation of the public schema here.
+    pub fn insert_database(&mut self, database_name: &str) -> Result<(i64, i64), failure::Error> {
+        self.inner
+            .prepare_cached("INSERT INTO databases (name) VALUES (?)")?
+            .execute(params![database_name])?;
+        let database_id = self.inner.last_insert_rowid();
+        self.inner
+            .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, 'public')")?
+            .execute(params![database_id])?;
+        let schema_id = self.inner.last_insert_rowid();
+        Ok((database_id, schema_id))
+    }
+
+    pub fn insert_schema(
+        &mut self,
+        database_id: i64,
+        schema_name: &str,
+    ) -> Result<i64, failure::Error> {
+        let mut stmt = self
+            .inner
+            .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, ?)")?;
+        stmt.execute(params![database_id, schema_name])?;
+        Ok(self.inner.last_insert_rowid())
+    }
+
     pub fn insert_item(
         &self,
         id: GlobalId,
-        schema_id: i32,
+        schema_id: i64,
         item_name: &str,
         item: &CatalogItem,
     ) -> Result<(), failure::Error> {

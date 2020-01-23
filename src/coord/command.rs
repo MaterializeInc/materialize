@@ -48,6 +48,12 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Err
 pub enum ExecuteResponse {
     /// The current session has been taken out of transaction mode by COMMIT
     Commit,
+    CreatedDatabase {
+        existed: bool,
+    },
+    CreatedSchema {
+        existed: bool,
+    },
     CreatedIndex {
         existed: bool,
     },
@@ -86,6 +92,16 @@ pub enum ExecuteResponse {
 impl fmt::Debug for ExecuteResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            ExecuteResponse::CreatedDatabase { existed } => write!(
+                f,
+                "ExecuteResponse::CreatedDatabase {{ existed: {} }}",
+                existed
+            ),
+            ExecuteResponse::CreatedSchema { existed } => write!(
+                f,
+                "ExecuteResponse::CreatedSchema {{ existed: {} }}",
+                existed
+            ),
             ExecuteResponse::CreatedIndex { existed } => write!(
                 f,
                 "ExecuteResponse::CreatedIndex {{ existed: {} }}",

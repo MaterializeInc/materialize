@@ -23,23 +23,32 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         let (_server, mut client) = util::start_server(config.clone())?;
         // TODO(benesch): when file sources land, use them here. Creating a
         // populated Kafka source here is too annoying.
-        client.execute("CREATE VIEW constant AS SELECT 1", &[])?;
-        client.execute(
+        client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
+        client.batch_execute(
             "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
-            &[],
         )?;
+        client.batch_execute("CREATE DATABASE d")?;
+        client.batch_execute("CREATE SCHEMA d.s")?;
+        client.batch_execute("CREATE VIEW d.s.v AS SELECT 1")?;
     }
 
     {
         let (_server, mut client) = util::start_server(config)?;
-        let rows: Vec<String> = client
-            .query("SHOW VIEWS", &[])?
-            .into_iter()
-            .map(|row| row.get(0))
-            .collect();
         assert_eq!(
-            rows,
+            client
+                .query("SHOW VIEWS", &[])?
+                .into_iter()
+                .map(|row| row.get(0))
+                .collect::<Vec<String>>(),
             &["bootstrap1", "bootstrap2", "constant", "logging_derived"]
+        );
+        assert_eq!(
+            client
+                .query("SHOW VIEWS FROM d.s", &[])?
+                .into_iter()
+                .map(|row| row.get(0))
+                .collect::<Vec<String>>(),
+            &["v"]
         );
     }
 

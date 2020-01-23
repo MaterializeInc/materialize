@@ -45,7 +45,9 @@ pub fn describe_statement(
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
     let scx = &StatementContext { catalog, session };
     Ok(match stmt {
-        Statement::CreateIndex { .. }
+        Statement::CreateDatabase { .. }
+        | Statement::CreateSchema { .. }
+        | Statement::CreateIndex { .. }
         | Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
@@ -193,8 +195,16 @@ fn handle_sync_statement(
         Statement::Tail { name } => handle_tail(scx, name),
         Statement::StartTransaction { .. } => handle_start_transaction(),
         Statement::Commit { .. } => handle_commit_transaction(),
-        Statement::CreateView { .. } => handle_create_view(scx, stmt, params),
         Statement::Rollback { .. } => handle_rollback_transaction(),
+        Statement::CreateDatabase {
+            name,
+            if_not_exists,
+        } => handle_create_database(scx, name, if_not_exists),
+        Statement::CreateSchema {
+            name,
+            if_not_exists,
+        } => handle_create_schema(scx, name, if_not_exists),
+        Statement::CreateView { .. } => handle_create_view(scx, stmt, params),
         Statement::CreateSink { .. } => handle_create_sink(scx, stmt),
         Statement::CreateIndex { .. } => handle_create_index(scx, stmt),
         Statement::DropObjects { .. } => handle_drop_dataflow(scx, stmt),
@@ -650,6 +660,42 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
             key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
             catalog_entry.desc()?,
         ),
+        if_not_exists,
+    })
+}
+
+fn handle_create_database(
+    _scx: &StatementContext,
+    name: Ident,
+    if_not_exists: bool,
+) -> Result<Plan, failure::Error> {
+    Ok(Plan::CreateDatabase {
+        name: normalize::ident(name),
+        if_not_exists,
+    })
+}
+
+fn handle_create_schema(
+    scx: &StatementContext,
+    mut name: ObjectName,
+    if_not_exists: bool,
+) -> Result<Plan, failure::Error> {
+    if name.0.len() > 2 {
+        bail!("schema name {} has more than two components", name);
+    }
+    let schema_name = normalize::ident(
+        name.0
+            .pop()
+            .expect("names always have at least one component"),
+    );
+    let database_name = name
+        .0
+        .pop()
+        .map(normalize::ident)
+        .unwrap_or_else(|| scx.session.database().to_owned());
+    Ok(Plan::CreateSchema {
+        database_name,
+        schema_name,
         if_not_exists,
     })
 }

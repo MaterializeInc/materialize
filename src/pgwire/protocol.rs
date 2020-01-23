@@ -608,55 +608,28 @@ where
             }};
         }
 
+        macro_rules! created {
+            ($existed:expr, $code:expr, $type:expr) => {{
+                if $existed {
+                    self.send(BackendMessage::NoticeResponse {
+                        severity: NoticeSeverity::Notice,
+                        code: $code,
+                        message: concat!($type, " already exists, skipping").into(),
+                        detail: None,
+                    })
+                    .await?;
+                }
+                command_complete!("CREATE {}", $type.to_uppercase())
+            }};
+        }
+
         match response {
-            ExecuteResponse::CreatedIndex { existed } => {
-                if existed {
-                    self.send(BackendMessage::NoticeResponse {
-                        severity: NoticeSeverity::Notice,
-                        code: "42710",
-                        message: "index already exists, skipping".into(),
-                        detail: None,
-                    })
-                    .await?;
-                }
-                command_complete!("CREATE INDEX")
-            }
-            ExecuteResponse::CreatedSource { existed } => {
-                if existed {
-                    self.send(BackendMessage::NoticeResponse {
-                        severity: NoticeSeverity::Notice,
-                        code: "42710",
-                        message: "source already exists, skipping".into(),
-                        detail: None,
-                    })
-                    .await?;
-                }
-                command_complete!("CREATE SOURCE")
-            }
-            ExecuteResponse::CreatedSink { existed } => {
-                if existed {
-                    self.send(BackendMessage::NoticeResponse {
-                        severity: NoticeSeverity::Notice,
-                        code: "42710",
-                        message: "sink already exists, skipping".into(),
-                        detail: None,
-                    })
-                    .await?;
-                }
-                command_complete!("CREATE SINK")
-            }
-            ExecuteResponse::CreatedTable { existed } => {
-                if existed {
-                    self.send(BackendMessage::NoticeResponse {
-                        severity: NoticeSeverity::Notice,
-                        code: "42P07",
-                        message: "relation already exists, skipping".into(),
-                        detail: None,
-                    })
-                    .await?;
-                }
-                command_complete!("CREATE TABLE")
-            }
+            ExecuteResponse::CreatedDatabase { existed } => created!(existed, "42P04", "database"),
+            ExecuteResponse::CreatedSchema { existed } => created!(existed, "42P06", "schema"),
+            ExecuteResponse::CreatedTable { existed } => created!(existed, "42P07", "table"),
+            ExecuteResponse::CreatedIndex { existed } => created!(existed, "42710", "index"),
+            ExecuteResponse::CreatedSource { existed } => created!(existed, "42710", "source"),
+            ExecuteResponse::CreatedSink { existed } => created!(existed, "42710", "sink"),
             ExecuteResponse::CreatedView => command_complete!("CREATE VIEW"),
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
