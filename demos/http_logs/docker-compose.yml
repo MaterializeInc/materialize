@@ -22,7 +22,7 @@ services:
     command: -w4 --bootstrap-sql=/usr/local/etc/materialized/bootstrap.sql
     volumes:
       - logfile:/log
-  
+
   server:
     init: true
     build: server

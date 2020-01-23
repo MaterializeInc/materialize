@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+# Copyright 2020 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
 import requests
 import time
 import random
@@ -8,7 +13,6 @@ from enum import Enum, auto
 from collections import namedtuple
 import string
 import numpy as np
-import words
 import time
 import sys
 
@@ -71,11 +75,14 @@ DEFAULT_NEW_USERS_PER_TICK = 100
 
 DEFAULT_TICK_SLEEP_SECONDS = 1
 
+with open('./words.txt') as f:
+    WORDS = f.readlines()
+
 def path_for_state(state):
     if state == State.GATEWAY:
         return "/"
     if state == State.SEARCH:
-        return "/search/?kw={}+{}+{}".format(random.choice(words.WORDS), random.choice(words.WORDS), random.choice(words.WORDS))
+        return "/search/?kw={}+{}+{}".format(random.choice(WORDS), random.choice(WORDS), random.choice(WORDS))
     if state == State.DETAIL:
         return "/detail/{}".format(get_item(DEFAULT_ITEMS))
     assert False  # This should not be called for other states
