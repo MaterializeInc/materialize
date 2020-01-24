@@ -795,9 +795,9 @@ where
                 .map({
                     let env = env.clone();
                     let group_key = group_key.clone();
-                    let temp_storage = RowArena::new();
                     move |row| {
                         let datums = row.unpack();
+                        let temp_storage = RowArena::new();
 
                         let keys = Row::pack(
                             group_key
