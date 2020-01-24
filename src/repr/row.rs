@@ -11,7 +11,7 @@ use std::mem::{size_of, transmute};
 use crate::decimal::Significand;
 use crate::scalar::Interval;
 use crate::Datum;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
@@ -146,6 +146,7 @@ enum Tag {
     Float64,
     Decimal,
     Date,
+    Time,
     Timestamp,
     TimestampTz,
     Interval,
@@ -240,6 +241,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let d = read_copy::<NaiveDate>(data, offset);
             Datum::Date(d)
         }
+        Tag::Time => {
+            let t = read_copy::<NaiveTime>(data, offset);
+            Datum::Time(t)
+        }
         Tag::Timestamp => {
             let t = read_copy::<NaiveDateTime>(data, offset);
             Datum::Timestamp(t)
@@ -331,6 +336,10 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             data.push(Tag::Date as u8);
             push_copy!(data, d, NaiveDate);
         }
+        Datum::Time(t) => {
+            data.push(Tag::Time as u8);
+            push_copy!(data, t, NaiveTime);
+        }
         Datum::Timestamp(t) => {
             data.push(Tag::Timestamp as u8);
             push_copy!(data, t, NaiveDateTime);
@@ -383,6 +392,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Float32(_) => 1 + size_of::<u32>(),
         Datum::Float64(_) => 1 + size_of::<u64>(),
         Datum::Date(_) => 1 + size_of::<NaiveDate>(),
+        Datum::Time(_) => 1 + size_of::<NaiveTime>(),
         Datum::Timestamp(_) => 1 + size_of::<NaiveDateTime>(),
         Datum::TimestampTz(_) => 1 + size_of::<DateTime<Utc>>(),
         Datum::Interval(_) => {

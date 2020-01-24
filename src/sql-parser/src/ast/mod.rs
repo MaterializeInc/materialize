@@ -60,7 +60,7 @@ pub use self::query::{
 };
 pub use self::value::{
     DateTimeField, DateTimeFieldValue, ExtractField, Interval, IntervalValue, ParsedDate,
-    ParsedDateTime, ParsedTimestamp, Value,
+    ParsedDateTime, ParsedTime, ParsedTimestamp, Value,
 };
 use std::path::PathBuf;
 

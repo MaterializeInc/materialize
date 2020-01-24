@@ -19,30 +19,19 @@ use crate::parser::DateTimeField;
 use log::warn;
 use std::str::FromStr;
 
-/// Builds a ParsedDateTime from a timestamp-like string (`value`).
+/// Builds a ParsedDateTime from a DATE string (`value`).
 ///
 /// # Arguments
 ///
-/// * `value` is a PostgreSQL-compatible timestamp-like string, e.g `TIMESTAMP 'value'`.
-///     This can be either a `timestamp`, `timestamptz`, or `date`. `TIME` is not supported yet and
-///     requires this function to be refactored.
-pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime, String> {
+/// * `value` is a SQL-formatted DATE string.
+pub(crate) fn build_parsed_datetime_date(value: &str) -> Result<ParsedDateTime, String> {
     use TimeStrToken::*;
 
     let mut pdt = ParsedDateTime::default();
 
-    let mut value_parts = Vec::new();
+    let date_actual = tokenize_time_str(value)?;
 
-    let value_split = value.trim().split_whitespace().collect::<Vec<&str>>();
-
-    if value_split.len() > 2 {
-        return Err(format!("Invalid DATE/TIME '{}'; unknown format", value));
-    }
-    for s in value_split {
-        value_parts.push(tokenize_time_str(s)?);
-    }
-
-    let mut date_actual = value_parts[0].iter().peekable();
+    let mut date_actual = date_actual.iter().peekable();
     // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
     while let Some(Colon) = date_actual.peek() {
         date_actual.next();
@@ -67,31 +56,24 @@ pub(crate) fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateT
         return Err(format!("Invalid DATE/TIME '{}'; {}", value, e));
     }
 
-    // Only parse time-component of TIMESTAMP if present.
-    if value_parts.len() == 2 {
-        match determine_format_w_datetimefield(&value_parts[1].clone(), value)? {
-            Some(TimePartFormat::SQLStandard(leading_field)) => {
-                let mut time_actual = value_parts[1].iter().peekable();
+    Ok(pdt)
+}
 
-                // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
-                while let Some(Colon) = time_actual.peek() {
-                    time_actual.next();
-                }
-                let time_expected = expected_dur_like_tokens(leading_field);
-                let mut time_expected = time_expected.iter().peekable();
+/// Builds a ParsedDateTime from a TIME string (`value`).
+///
+/// # Arguments
+///
+/// * `value` is a SQL-formatted TIME string.
+pub(crate) fn build_parsed_datetime_time(value: &str) -> Result<ParsedDateTime, String> {
+    let mut pdt = ParsedDateTime::default();
 
-                if let Err(e) = fill_pdt_from_tokens(
-                    &mut pdt,
-                    &mut time_actual,
-                    &mut time_expected,
-                    leading_field,
-                    1,
-                ) {
-                    return Err(format!("Invalid: DATE/TIME '{}'; {}", value, e));
-                }
-            }
-            _ => return Err(format!("Invalid DATE/TIME '{}'; unknown format", value)),
+    let time_actual = tokenize_time_str(value)?;
+
+    match determine_format_w_datetimefield(&time_actual.clone(), value)? {
+        Some(TimePartFormat::SQLStandard(leading_field)) => {
+            fill_pdt_sql_standard(&time_actual, leading_field, value, &mut pdt)?
         }
+        _ => return Err(format!("Invalid DATE/TIME '{}'; unknown format", value)),
     }
 
     Ok(pdt)
@@ -1707,7 +1689,7 @@ mod test {
     }
 
     #[test]
-    fn fill_pdt_sql_standard_errors() {
+    fn test_fill_pdt_sql_standard_errors() {
         use DateTimeField::*;
         let test_cases = [
             // Invalid syntax
@@ -1750,119 +1732,87 @@ mod test {
     }
 
     #[test]
-    fn test_build_parsed_datetime_timestamp() {
-        let test_cases = [
-            (
-                "2000-01-02",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    day: Some(DateTimeFieldValue::new(2, 0)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000-01-02 3:4:5.6",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    day: Some(DateTimeFieldValue::new(2, 0)),
-                    hour: Some(DateTimeFieldValue::new(3, 0)),
-                    minute: Some(DateTimeFieldValue::new(4, 0)),
-                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000 3:4:5.6",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    hour: Some(DateTimeFieldValue::new(3, 0)),
-                    minute: Some(DateTimeFieldValue::new(4, 0)),
-                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000-1 3:4:5.6",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    hour: Some(DateTimeFieldValue::new(3, 0)),
-                    minute: Some(DateTimeFieldValue::new(4, 0)),
-                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000-1- 3:4:5.6",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    hour: Some(DateTimeFieldValue::new(3, 0)),
-                    minute: Some(DateTimeFieldValue::new(4, 0)),
-                    second: Some(DateTimeFieldValue::new(5, 600_000_000)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000-01-02 3:4",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    day: Some(DateTimeFieldValue::new(2, 0)),
-                    hour: Some(DateTimeFieldValue::new(3, 0)),
-                    minute: Some(DateTimeFieldValue::new(4, 0)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000-01-02 3:4.5",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    day: Some(DateTimeFieldValue::new(2, 0)),
-                    minute: Some(DateTimeFieldValue::new(3, 0)),
-                    second: Some(DateTimeFieldValue::new(4, 500_000_000)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000-01-02 0::4.5",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    day: Some(DateTimeFieldValue::new(2, 0)),
-                    hour: Some(DateTimeFieldValue::new(0, 0)),
-                    second: Some(DateTimeFieldValue::new(4, 500_000_000)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000-01-02 0::.5",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    day: Some(DateTimeFieldValue::new(2, 0)),
-                    hour: Some(DateTimeFieldValue::new(0, 0)),
-                    second: Some(DateTimeFieldValue::new(0, 500_000_000)),
-                    ..Default::default()
-                },
-            ),
-            (
-                "2000-1- 0::.5",
-                ParsedDateTime {
-                    year: Some(DateTimeFieldValue::new(2000, 0)),
-                    month: Some(DateTimeFieldValue::new(1, 0)),
-                    hour: Some(DateTimeFieldValue::new(0, 0)),
-                    second: Some(DateTimeFieldValue::new(0, 500_000_000)),
-                    ..Default::default()
-                },
-            ),
-        ];
+    fn test_build_parsed_datetime_date() {
+        run_test_build_parsed_datetime_date(
+            "2000-01-02",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_date(
+            "2000",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_date(
+            "2000-1-",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                ..Default::default()
+            },
+        );
 
-        for test in test_cases.iter() {
-            assert_eq!(build_parsed_datetime_timestamp(test.0), Ok(test.1.clone()));
+        fn run_test_build_parsed_datetime_date(test: &str, res: ParsedDateTime) {
+            assert_eq!(build_parsed_datetime_date(test), Ok(res));
+        }
+    }
+
+    #[test]
+    fn test_build_parsed_datetime_time() {
+        run_test_build_parsed_datetime_time(
+            "3:4:5.6",
+            ParsedDateTime {
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_time(
+            "3:4",
+            ParsedDateTime {
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(0, 0)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_time(
+            "3:4.5",
+            ParsedDateTime {
+                hour: Some(DateTimeFieldValue::new(0, 0)),
+                minute: Some(DateTimeFieldValue::new(3, 0)),
+                second: Some(DateTimeFieldValue::new(4, 500_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_time(
+            "0::4.5",
+            ParsedDateTime {
+                hour: Some(DateTimeFieldValue::new(0, 0)),
+                minute: Some(DateTimeFieldValue::new(0, 0)),
+                second: Some(DateTimeFieldValue::new(4, 500_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_time(
+            "0::.5",
+            ParsedDateTime {
+                hour: Some(DateTimeFieldValue::new(0, 0)),
+                minute: Some(DateTimeFieldValue::new(0, 0)),
+                second: Some(DateTimeFieldValue::new(0, 500_000_000)),
+                ..Default::default()
+            },
+        );
+
+        fn run_test_build_parsed_datetime_time(test: &str, res: ParsedDateTime) {
+            assert_eq!(build_parsed_datetime_time(test), Ok(res));
         }
     }
 

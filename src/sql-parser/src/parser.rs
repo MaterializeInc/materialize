@@ -250,7 +250,7 @@ impl Parser {
                     op: UnaryOperator::Not,
                     expr: Box::new(self.parse_subexpr(Self::UNARY_NOT_PREC)?),
                 }),
-                "TIME" => Ok(Expr::Value(Value::Time(self.parse_literal_string()?))),
+                "TIME" => Ok(Expr::Value(self.parse_time()?)),
                 "TIMESTAMP" => self.parse_timestamp(),
                 "TIMESTAMPTZ" => self.parse_timestamptz(),
                 // Here `w` is a word, check if it's a part of a multi-part
@@ -526,6 +526,10 @@ impl Parser {
         let range = self.peek_prev_range();
         let pdt = self.parse_timestamp_string(&value, range.clone(), false)?;
 
+        if let Err(e) = pdt.validate_datelike_ymd() {
+            return parser_err!(self, range, "Invalid DATE '{}': {}", value, e);
+        }
+
         // pdt.hour, pdt.minute, pdt.second are all dropped, which is allowed by
         // PostgreSQL.
         match (pdt.year, pdt.month, pdt.day) {
@@ -538,28 +542,14 @@ impl Parser {
                         )
                     }
                 };
-
-                if year.unit == 0 {
-                    return parser_err!(self, range, "YEAR in DATE '{}' cannot be zero.", value,);
-                }
-
-                if month.unit > 12 || month.unit <= 0 {
-                    return parser_err!(
-                        self,
-                        range,
-                        "MONTH in DATE '{}' must be a number between 1 and 12, got: {}",
-                        value,
-                        month.unit
-                    );
+                if let Err(e) = pdt.validate_datelike_ymd() {
+                    return parser_err!(self, range, "INVALID DATE '{}'; {}", value, e);
                 }
                 let month: u8 = month.unit.try_into().expect("invalid month");
                 let day: u8 = day.unit.try_into().map_err(|e| {
                     let range = range.clone();
                     p_err(range, e, "Day")
                 })?;
-                if day == 0 {
-                    return parser_err!(self, range, "DAY in DATE '{}' cannot be zero", value);
-                }
                 Ok(Value::Date(
                     value,
                     ParsedDate {
@@ -578,6 +568,67 @@ impl Parser {
                 );
             }
         }
+    }
+
+    fn parse_time(&mut self) -> Result<Value, ParserError> {
+        use std::convert::TryInto;
+
+        let value = self.parse_literal_string()?;
+        let range = self.peek_prev_range();
+        let pdt = self.parse_time_string(&value, range.clone())?;
+
+        if let Err(e) = pdt.validate_timelike_hms() {
+            return parser_err!(self, range, "Invalid DATE '{}': {}", value, e);
+        }
+        let p_err = {
+            |range: Range<usize>, e: std::num::TryFromIntError, field: &str| {
+                self.error(
+                    range,
+                    format!("{} in date '{}' is invalid: {}", field, value, e),
+                )
+            }
+        };
+
+        let hour = match pdt.hour {
+            Some(hour) => hour.unit.try_into().map_err({
+                let range = range.clone();
+                |e| p_err(range, e, "Hour")
+            })?,
+            None => 0,
+        };
+
+        let minute = match pdt.minute {
+            Some(minute) => minute.unit.try_into().map_err({
+                let range = range.clone();
+                |e| p_err(range, e, "Minute")
+            })?,
+            None => 0,
+        };
+
+        let (second, nano) = match pdt.second {
+            Some(second) => {
+                let nano: u32 = second.fraction.try_into().map_err({
+                    let range = range.clone();
+                    |e| p_err(range, e, "Nanosecond")
+                })?;
+                let second: u8 = second.unit.try_into().map_err({
+                    let range = range;
+                    |e| p_err(range, e, "Minute")
+                })?;
+                (second, nano)
+            }
+            None => (0, 0),
+        };
+
+        Ok(Value::Time(
+            value,
+            ParsedTime {
+                hour,
+                minute,
+                second,
+                nano,
+            },
+        ))
     }
 
     fn parse_timestamp(&mut self) -> Result<Expr, ParserError> {
@@ -600,7 +651,6 @@ impl Parser {
         let value = self.parse_literal_string()?;
         let range = self.peek_prev_range();
         let pdt = self.parse_timestamp_string(&value, range.clone(), parse_timezone)?;
-
         match (
             pdt.year,
             pdt.month,
@@ -620,29 +670,14 @@ impl Parser {
                     }
                 };
 
-                if month.unit > 12 || month.unit <= 0 {
-                    return parser_err!(
-                        self,
-                        range,
-                        "Month in date '{}' must be a number between 1 and 12, got: {}",
-                        value,
-                        month.unit
-                    );
+                if let Err(e) = pdt.validate_datelike_ymd() {
+                    return parser_err!(self, range, "Invalid TIMESTAMP '{}'; {}", value, e);
                 }
                 let month: u8 = month.unit.try_into().expect("invalid month");
                 let day: u8 = day.unit.try_into().map_err(|e| {
                     let range = range.clone();
                     p_err(range, e, "Day")
                 })?;
-                if day == 0 {
-                    return parser_err!(
-                        self,
-                        range,
-                        "Day in timestamp '{}' cannot be zero: {}",
-                        value,
-                        day
-                    );
-                }
 
                 let hour = match hour {
                     Some(hour) => {
@@ -650,15 +685,6 @@ impl Parser {
                             let range = range.clone();
                             |e| p_err(range, e, "Hour")
                         })?;
-                        if hour > 23 {
-                            return parser_err!(
-                                self,
-                                range,
-                                "Hour in timestamp '{}' cannot be > 23: {}",
-                                value,
-                                hour
-                            );
-                        }
                         hour
                     }
                     None => 0,
@@ -670,15 +696,6 @@ impl Parser {
                             let range = range.clone();
                             |e| p_err(range, e, "Minute")
                         })?;
-                        if minute > 59 {
-                            return parser_err!(
-                                self,
-                                range,
-                                "Minute in timestamp '{}' cannot be > 59: {}",
-                                value,
-                                minute
-                            );
-                        }
                         minute
                     }
                     None => 0,
@@ -691,18 +708,9 @@ impl Parser {
                             |e| p_err(range, e, "Nanosecond")
                         })?;
                         let second: u8 = second.unit.try_into().map_err({
-                            let range = range.clone();
+                            let range = range;
                             |e| p_err(range, e, "Minute")
                         })?;
-                        if second > 60 {
-                            return parser_err!(
-                                self,
-                                range,
-                                "Second in timestamp '{}' cannot be > 60: {}",
-                                value,
-                                second
-                            );
-                        }
 
                         (second, nano)
                     }
@@ -997,14 +1005,33 @@ impl Parser {
 
     /// parse
     ///
+    /// <time value> ::=
+    ///     <hours value> <colon> <minutes value> <colon> <seconds integer value>
+    ///     [ <period> [ <seconds fraction> ] ]
+    pub fn parse_time_string(
+        &self,
+        value: &str,
+        range: Range<usize>,
+    ) -> Result<ParsedDateTime, ParserError> {
+        if value.is_empty() {
+            return parser_err!(self, range, "Time string is empty!");
+        }
+
+        let pdt = datetime::build_parsed_datetime_time(value).map_err({
+            let range = range;
+            |e| self.error(range, e)
+        })?;
+
+        Ok(pdt)
+    }
+
+    /// parse
+    ///
     /// ```test
     /// <unquoted timestamp string> ::=
     ///     <date value> <space> <time value> [ <time zone interval> ]
     /// <date value> ::=
     ///     <years value> <minus sign> <months value> <minus sign> <days value>
-    /// <time value> ::=
-    ///     <hours value> <colon> <minutes value> <colon> <seconds integer value>
-    ///     [ <period> [ <seconds fraction> ] ]
     /// <time zone interval> ::=
     ///     <sign> <hours value> <colon> <minutes value>
     /// ```
@@ -1029,11 +1056,33 @@ impl Parser {
                 tz_string
             );
         }
+        // Split timestamp into date and time components.
+        let ts_value_split = ts_string.trim().split_whitespace().collect::<Vec<&str>>();
 
-        let mut pdt = datetime::build_parsed_datetime_timestamp(ts_string).map_err({
+        if ts_value_split.len() > 2 {
+            return parser_err!(self, range, "Invalid TIMESTAMP '{}'; unknown format", value);
+        }
+
+        let mut pdt = datetime::build_parsed_datetime_date(ts_value_split[0]).map_err({
             let range = range.clone();
             |e| self.error(range, e)
         })?;
+
+        // Only parse time-component of TIMESTAMP if present.
+        if ts_value_split.len() == 2 {
+            if pdt.hour.is_some() || pdt.minute.is_some() || pdt.second.is_some() {
+                return parser_err!(self, range, "Invalid TIMESTAMP '{}'; unknown format", value);
+            }
+            let time_pdt = self.parse_time_string(ts_value_split[1], range.clone())?;
+
+            if time_pdt.year.is_some() || time_pdt.month.is_some() || time_pdt.day.is_some() {
+                return parser_err!(self, range, "Invalid TIMESTAMP '{}'; unknown format", value);
+            }
+
+            pdt.hour = time_pdt.hour;
+            pdt.minute = time_pdt.minute;
+            pdt.second = time_pdt.second;
+        }
         if !parse_timezone || tz_string.is_empty() {
             return Ok(pdt);
         }

@@ -30,6 +30,8 @@ pub enum Type {
     Numeric,
     /// A variable-length string.
     Text,
+    /// A time of day without a day.
+    Time,
     /// A date and time, without a timezone.
     Timestamp,
     /// A date and time, with a timezone.
@@ -52,6 +54,7 @@ impl Type {
             Type::Jsonb => &postgres_types::Type::JSONB,
             Type::Numeric => &postgres_types::Type::NUMERIC,
             Type::Text => &postgres_types::Type::TEXT,
+            Type::Time => &postgres_types::Type::TIME,
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::Unknown => &postgres_types::Type::UNKNOWN,
@@ -85,6 +88,7 @@ impl Type {
             Type::Jsonb => -1,
             Type::Numeric => -1,
             Type::Text => -1,
+            Type::Time => 4,
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::Unknown => -1,
@@ -103,6 +107,7 @@ impl From<ScalarType> for Type {
             ScalarType::Float64 => Type::Float8,
             ScalarType::Decimal(_, _) => Type::Numeric,
             ScalarType::Date => Type::Date,
+            ScalarType::Time => Type::Time,
             ScalarType::Timestamp => Type::Timestamp,
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Interval => Type::Interval,

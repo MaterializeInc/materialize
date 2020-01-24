@@ -1372,7 +1372,7 @@ fn parse_literal_date() {
 Parse error:
 SELECT DATE '0-00-00'
             ^^^^^^^^^
-YEAR in DATE \'0-00-00\' cannot be zero."
+Invalid DATE \'0-00-00\': YEAR cannot be zero."
             .to_string(),
         parse_sql_statements("SELECT DATE '0-00-00'")
             .unwrap_err()
@@ -1384,7 +1384,7 @@ YEAR in DATE \'0-00-00\' cannot be zero."
 Parse error:
 SELECT DATE '1-00-00'
             ^^^^^^^^^
-MONTH in DATE \'1-00-00\' must be a number between 1 and 12, got: 0"
+Invalid DATE \'1-00-00\': MONTH must be (1, 12), got 0"
             .to_string()),
         parse_sql_statements("SELECT DATE '1-00-00'")
             .unwrap_err()
@@ -1395,7 +1395,7 @@ MONTH in DATE \'1-00-00\' must be a number between 1 and 12, got: 0"
 Parse error:
 SELECT DATE '1-01-00'
             ^^^^^^^^^
-DAY in DATE \'1-01-00\' cannot be zero"
+Invalid DATE \'1-01-00\': DAY cannot be zero."
             .to_string()),
         parse_sql_statements("SELECT DATE '1-01-00'")
             .unwrap_err()
@@ -1420,7 +1420,60 @@ fn parse_literal_time() {
     let sql = "SELECT TIME '01:23:34'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Time("01:23:34".into())),
+        &Expr::Value(Value::Time(
+            "01:23:34".into(),
+            ParsedTime {
+                hour: 1,
+                minute: 23,
+                second: 34,
+                nano: 0,
+            }
+        )),
+        expr_from_projection(only(&select.projection)),
+    );
+
+    let sql = "SELECT TIME '01:23'";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Value(Value::Time(
+            "01:23".into(),
+            ParsedTime {
+                hour: 1,
+                minute: 23,
+                second: 0,
+                nano: 0,
+            }
+        )),
+        expr_from_projection(only(&select.projection)),
+    );
+
+    let sql = "SELECT TIME '01:23.45'";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Value(Value::Time(
+            "01:23.45".into(),
+            ParsedTime {
+                hour: 0,
+                minute: 1,
+                second: 23,
+                nano: 450_000_000,
+            }
+        )),
+        expr_from_projection(only(&select.projection)),
+    );
+
+    let sql = "SELECT TIME '01:23:34.56'";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Value(Value::Time(
+            "01:23:34.56".into(),
+            ParsedTime {
+                hour: 1,
+                minute: 23,
+                second: 34,
+                nano: 560_000_000,
+            }
+        )),
         expr_from_projection(only(&select.projection)),
     );
 }
