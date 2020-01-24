@@ -48,3 +48,11 @@ for tag in "unstable-$BUILDKITE_COMMIT" latest; do
     runv docker tag "materialize/ci-peeker:$MATERIALIZED_IMAGE_ID" "materialize/peeker:$tag"
     runv docker push "materialize/peeker:$tag"
 done
+
+docker pull "materialize/ci-billing-demo:$MATERIALIZED_IMAGE_ID"
+
+for tag in "unstable-$BUILDKITE_COMMIT" latest; do
+    echo "Processing docker tag for billing-demo: $tag"
+    runv docker tag "materialize/ci-billing-demo:$MATERIALIZED_IMAGE_ID" "materialize/billing-demo:$tag"
+    runv docker push "materialize/billing-demo:$tag"
+done

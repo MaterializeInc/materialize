@@ -101,6 +101,7 @@ ci_collapsed_heading "Preparing Docker context"
     mv target/release/testdrive misc/docker/ci-testdrive
     mv target/release/sqllogictest misc/docker/ci-sqllogictest
     mv target/release/peeker misc/docker/ci-peeker
+    mv target/release/billing-demo misc/docker/ci-billing-demo
 }
 
 images=(
@@ -108,6 +109,7 @@ images=(
     testdrive
     sqllogictest
     peeker
+    billing-demo
     cargo-test
 )
 
