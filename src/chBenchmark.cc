@@ -529,8 +529,6 @@ static int run(int argc, char* argv[]) {
         errx(1, "--mz-views requires --mz-sources");
     if (peekConns < 0)
         errx(1, "peek threads cannot be negative");
-    if (mzCfg.hQueries.empty() && peekConns)
-        errx(1, "--peek-conns requires --mz-sources and configured views");
 
     if (logFile)
         Log::open(logFile);
@@ -632,6 +630,8 @@ static int run(int argc, char* argv[]) {
                 errx(1, "No such view: %s", view.c_str());
             }
         }
+        if (mzCfg.hQueries.empty() && peekConns)
+            errx(1, "--peek-conns requires --mz-sources and configured views");
         // TODO - kick off peeks
         std::thread(materializeThread,
                     mzCfg,
