@@ -4,10 +4,10 @@
 // distributed without the express permission of Materialize, Inc.
 
 use chrono::prelude::*;
-use rand::distributions::Distribution;
 use rand::seq::SliceRandom;
+use rand::distributions::Distribution;
 use rand::Rng;
-use rand_distr::{Cauchy, Normal};
+use rand_distr::{Normal};
 use uuid_b64::UuidB64;
 
 use crate::proto;
@@ -66,14 +66,8 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
         ))
         .unwrap();
 
-    static POSSIBLE_METERS: &[&str] = &["user", "org", "cluster", "instance"];
+    static POSSIBLE_METERS: &[&str] = &["execution_time_ms"];
     let meter = POSSIBLE_METERS.choose(rng).unwrap().to_string();
-
-    let count = rng.gen_range(1, 10);
-    let mut measurements = Vec::with_capacity(count);
-    for _ in 0..count {
-        measurements.push(proto::Measurement::random(rng))
-    }
 
     let n = Normal::new(50.0, 10.0).unwrap();
     let mut val;
@@ -85,51 +79,26 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
     }
 
     proto::Record {
+        id: UuidB64::new().to_string(),
         interval_start: interval_start.to_rfc3339(),
         interval_end: interval_end.to_rfc3339(),
         meter,
         value: val as u32,
-        measurements,
+        info: Some(proto::ResourceInfo::random(rng)),
     }
 }
 
-impl Randomizer for proto::Measurement {
-    fn random(rng: &mut impl Rng) -> proto::Measurement {
-        let c: Cauchy<f64> = Cauchy::new(100.0, 15.0).unwrap();
-        let mut val;
-        loop {
-            val = c.sample(rng);
-            if (1.0..1000.0).contains(&val) {
-                break;
-            }
+impl Randomizer for proto::ResourceInfo {
+    fn random(rng: &mut impl Rng) -> proto::ResourceInfo {
+        static POSSIBLE_CPUS: &[i32] = &[1, 2];
+        static POSSIBLE_MEM: &[i32] = &[8, 16];
+        static POSSIBLE_DISK: &[i32] = &[128];
+        proto::ResourceInfo {
+            cpu_num: *POSSIBLE_CPUS.choose(rng).unwrap(),
+            memory_gb: *POSSIBLE_MEM.choose(rng).unwrap(),
+            disk_gb: *POSSIBLE_DISK.choose(rng).unwrap(),
+            client_id: rng.gen_range(1, 100),
+            vm_id: rng.gen_range(1000, 2000),
         }
-        proto::Measurement {
-            resource: proto::Resource::random(rng).into(),
-            measured_value: val as i64,
-        }
-    }
-}
-
-impl Randomizer for proto::Resource {
-    fn random(rng: &mut impl Rng) -> proto::Resource {
-        static RAND_POOL: &[proto::Resource] = &[
-            proto::Resource::Cpu,
-            proto::Resource::Mem,
-            proto::Resource::Disk,
-        ];
-
-        *RAND_POOL.choose(rng).unwrap()
-    }
-}
-
-impl Randomizer for proto::Units {
-    fn random(rng: &mut impl Rng) -> proto::Units {
-        static RAND_POOL: &[proto::Units] = &[
-            proto::Units::Bytes,
-            proto::Units::Millis,
-            proto::Units::Units,
-        ];
-
-        *RAND_POOL.choose(rng).unwrap()
     }
 }

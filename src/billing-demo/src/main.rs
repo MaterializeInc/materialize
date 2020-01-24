@@ -112,18 +112,14 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
                 proto::BILLING_MESSAGE_NAME,
             )
             .await?;
-        let q = format!(
-            "CREATE VIEW {} AS SELECT id, interval_start, interval_end FROM {}",
-            config.view_name, config.source_name
-        );
-        if let Err(e) = client.execute(&q, &[]).await {
-            log::error!("{} executing query {}", e, q);
-        }
-        // exec_query!(client, config, "billing_records");
-        // exec_query!(client, config, "billing_measurements");
-        // exec_query!(client, "sum_by_minute");
-        // exec_query!(client, "sum_by_hour");
-        exec_query!(client, config, "sum_by_minute_thin");
+        
+        exec_query!(client, config, "billing_batches");
+        exec_query!(client, "billing_records");
+        exec_query!(client, "billing_agg_by_minute");
+        exec_query!(client, "billing_agg_by_hour");
+        exec_query!(client, "billing_agg_by_day");
+        exec_query!(client, "billing_agg_by_month");
+        exec_query!(client, config, "billing_raw_data");
     } else {
         log::info!(
             "source '{}' already exists, not recreating",
