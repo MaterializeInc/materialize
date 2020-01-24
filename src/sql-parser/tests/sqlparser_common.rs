@@ -1331,7 +1331,7 @@ fn parse_literal_string() {
     );
     assert_eq!(
         &Expr::Value(Value::HexStringLiteral("deadBEEF".to_string())),
-        expr_from_projection(&select.projection[2])
+        expr_from_projection(&select.projection[1])
     );
 
     one_statement_parses_to("SELECT x'deadBEEF'", "SELECT X'deadBEEF'");
