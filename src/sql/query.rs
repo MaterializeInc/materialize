@@ -2732,9 +2732,6 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             }
         }
         Value::SingleQuotedString(s) => (Datum::String(s), ScalarType::String),
-        Value::NationalStringLiteral(_) => {
-            bail!("n'' string literals are not supported: {}", l.to_string())
-        }
         Value::HexStringLiteral(_) => {
             bail!("x'' string literals are not supported: {}", l.to_string())
         }

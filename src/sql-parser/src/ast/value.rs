@@ -44,8 +44,6 @@ pub enum Value {
     Number(String),
     /// 'string value'
     SingleQuotedString(String),
-    /// N'string value'
-    NationalStringLiteral(String),
     /// X'hex value'
     HexStringLiteral(String),
     /// Boolean value true or false
@@ -78,7 +76,6 @@ impl fmt::Display for Value {
         match self {
             Value::Number(v) => write!(f, "{}", v),
             Value::SingleQuotedString(v) => write!(f, "'{}'", escape_single_quote_string(v)),
-            Value::NationalStringLiteral(v) => write!(f, "N'{}'", v),
             Value::HexStringLiteral(v) => write!(f, "X'{}'", v),
             Value::Boolean(v) => write!(f, "{}", v),
             Value::Date(v, _) => write!(f, "DATE '{}'", escape_single_quote_string(v)),
