@@ -815,7 +815,6 @@ where
                             // consider restructuring the plan to pre-distinct the right
                             // data and then use a non-distinctness-requiring aggregation.
 
-                            let temp_storage = RowArena::new();
                             let eval = aggregate.expr.eval(&datums, &env, &temp_storage);
 
                             // Non-Abelian values cannot be accumulated, and just need to
