@@ -43,7 +43,11 @@ mod http;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The SHA identifying the Git commit at which the crate was built.
-pub const BUILD_SHA: &str = run_command_str!("git", "rev-parse", "--verify", "HEAD");
+pub const BUILD_SHA: &str = run_command_str!(
+    "sh",
+    "-c",
+    r#"[ -n "$MZ_DEV_BUILD_SHA" ] && echo "$MZ_DEV_BUILD_SHA" || git rev-parse --verify HEAD"#
+);
 
 /// The time in UTC at which the crate was built as an ISO 8601-compliant
 /// string.
