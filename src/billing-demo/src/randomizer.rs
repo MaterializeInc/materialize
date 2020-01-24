@@ -4,10 +4,10 @@
 // distributed without the express permission of Materialize, Inc.
 
 use chrono::prelude::*;
-use rand::seq::SliceRandom;
 use rand::distributions::Distribution;
+use rand::seq::SliceRandom;
 use rand::Rng;
-use rand_distr::{Normal};
+use rand_distr::Normal;
 use uuid_b64::UuidB64;
 
 use crate::proto;

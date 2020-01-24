@@ -112,7 +112,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
                 proto::BILLING_MESSAGE_NAME,
             )
             .await?;
-        
+
         exec_query!(client, config, "billing_batches");
         exec_query!(client, "billing_records");
         exec_query!(client, "billing_agg_by_minute");

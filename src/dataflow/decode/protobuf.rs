@@ -30,19 +30,10 @@ where
         Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
         "ProtobufDecode",
         move |_, _| {
+            let mut decoder =
+                Decoder::from_descriptor_file(&descriptor_file, &message_name).unwrap();
+
             move |input, output| {
-                let mut decoder =
-                    match Decoder::from_descriptor_file(&descriptor_file, &message_name) {
-                        Ok(decoder) => decoder,
-                        Err(e) => {
-                            error!(
-                                "Unable to construct protobuf decoder \
-                                 descriptor_file={} message_name={} error: {}",
-                                descriptor_file, message_name, e
-                            );
-                            return;
-                        }
-                    };
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
                     for (payload, _) in data.iter() {
