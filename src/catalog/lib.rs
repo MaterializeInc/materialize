@@ -411,72 +411,97 @@ impl Catalog {
         to_remove.push(metadata.id);
     }
 
+    pub fn create_database(&mut self, name: String) -> Result<(), failure::Error> {
+        self.transact(vec![
+            Op::CreateDatabase { name: name.clone() },
+            Op::CreateSchema {
+                database_name: name,
+                schema_name: "public".into(),
+            },
+        ])?;
+        Ok(())
+    }
+
+    pub fn create_schema(
+        &mut self,
+        database_name: String,
+        schema_name: String,
+    ) -> Result<(), failure::Error> {
+        self.transact(vec![Op::CreateSchema {
+            database_name,
+            schema_name,
+        }])?;
+        Ok(())
+    }
+
     pub fn create_item(
         &mut self,
         name: FullName,
         item: CatalogItem,
     ) -> Result<GlobalId, failure::Error> {
         let id = match self
-            .transact(vec![CatalogOp::CreateItem { name, item }])?
+            .transact(vec![Op::CreateItem { name, item }])?
             .as_slice()
         {
-            [CatalogOpStatus::CreatedItem(id)] => *id,
+            [OpStatus::CreatedItem(id)] => *id,
             _ => unreachable!(),
         };
         Ok(id)
     }
 
-    pub fn transact(
-        &mut self,
-        ops: Vec<CatalogOp>,
-    ) -> Result<Vec<CatalogOpStatus>, failure::Error> {
-        enum Status {
-            CreatedDatabase {
+    pub fn drop_items(&mut self, items: &[GlobalId]) -> Result<(), failure::Error> {
+        self.transact(items.iter().map(|id| Op::DropItem(*id)).collect())?;
+        Ok(())
+    }
+
+    fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<OpStatus>, failure::Error> {
+        enum Action {
+            CreateDatabase {
                 id: i64,
                 name: String,
             },
-            CreatedSchema {
+            CreateSchema {
                 id: i64,
                 database_name: String,
                 schema_name: String,
             },
-            CreatedItem {
+            CreateItem {
                 id: GlobalId,
                 name: FullName,
                 item: CatalogItem,
             },
             #[allow(dead_code)]
-            DroppedDatabase {
+            DropDatabase {
                 name: String,
             },
             #[allow(dead_code)]
-            DroppedSchema {
+            DropSchema {
                 database_name: String,
                 schema_name: String,
             },
-            DroppedItem(GlobalId),
+            DropItem(GlobalId),
         }
 
-        let mut statuses = Vec::with_capacity(ops.len());
+        let mut actions = Vec::with_capacity(ops.len());
         let mut tx = self.storage.transaction()?;
         for op in ops {
-            statuses.push(match op {
-                CatalogOp::CreateDatabase { name } => Status::CreatedDatabase {
+            actions.push(match op {
+                Op::CreateDatabase { name } => Action::CreateDatabase {
                     id: tx.insert_database(&name)?,
                     name,
                 },
-                CatalogOp::CreateSchema {
+                Op::CreateSchema {
                     database_name,
                     schema_name,
                 } => {
                     let database_id = tx.load_database_id(&database_name)?;
-                    Status::CreatedSchema {
+                    Action::CreateSchema {
                         id: tx.insert_schema(database_id, &schema_name)?,
                         database_name,
                         schema_name,
                     }
                 }
-                CatalogOp::CreateItem { name, item } => {
+                Op::CreateItem { name, item } => {
                     let database_id = match &name.database {
                         DatabaseSpecifier::Name(name) => tx.load_database_id(&name)?,
                         DatabaseSpecifier::Ambient => {
@@ -487,22 +512,22 @@ impl Catalog {
                     self.id += 1;
                     let id = GlobalId::user(self.id);
                     tx.insert_item(id, schema_id, &name.item, &item)?;
-                    Status::CreatedItem { name, item, id }
+                    Action::CreateItem { name, item, id }
                 }
-                CatalogOp::DropDatabase { .. } => todo!(),
-                CatalogOp::DropSchema { .. } => todo!(),
-                CatalogOp::DropItem(id) => {
+                Op::DropDatabase { .. } => todo!(),
+                Op::DropSchema { .. } => todo!(),
+                Op::DropItem(id) => {
                     tx.remove_item(id)?;
-                    Status::DroppedItem(id)
+                    Action::DropItem(id)
                 }
             })
         }
         tx.commit()?;
 
-        Ok(statuses
+        Ok(actions
             .into_iter()
-            .map(|status| match status {
-                Status::CreatedDatabase { id, name } => {
+            .map(|action| match action {
+                Action::CreateDatabase { id, name } => {
                     info!("create database {}", name);
                     self.by_name.insert(
                         name,
@@ -511,10 +536,10 @@ impl Catalog {
                             schemas: HashMap::new(),
                         },
                     );
-                    CatalogOpStatus::CreatedDatabase
+                    OpStatus::CreatedDatabase
                 }
 
-                Status::CreatedSchema {
+                Action::CreateSchema {
                     id,
                     database_name,
                     schema_name,
@@ -531,17 +556,17 @@ impl Catalog {
                                 items: HashMap::new(),
                             },
                         );
-                    CatalogOpStatus::CreatedSchema
+                    OpStatus::CreatedSchema
                 }
 
-                Status::CreatedItem { id, name, item } => {
+                Action::CreateItem { id, name, item } => {
                     self.insert_item(id, name, item);
-                    CatalogOpStatus::CreatedItem(id)
+                    OpStatus::CreatedItem(id)
                 }
 
-                Status::DroppedDatabase { .. } | Status::DroppedSchema { .. } => todo!(),
+                Action::DropDatabase { .. } | Action::DropSchema { .. } => todo!(),
 
-                Status::DroppedItem(id) => {
+                Action::DropItem(id) => {
                     let metadata = self.by_id.remove(&id).unwrap();
                     info!(
                         "drop {} {} ({})",
@@ -561,7 +586,7 @@ impl Catalog {
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
-                    CatalogOpStatus::DroppedItem
+                    OpStatus::DroppedItem
                 }
             })
             .collect())
@@ -587,7 +612,7 @@ impl IdHumanizer for Catalog {
     }
 }
 
-pub enum CatalogOp {
+enum Op {
     CreateDatabase {
         name: String,
     },
@@ -599,9 +624,11 @@ pub enum CatalogOp {
         name: FullName,
         item: CatalogItem,
     },
+    #[allow(dead_code)]
     DropDatabase {
         name: String,
     },
+    #[allow(dead_code)]
     DropSchema {
         database_name: String,
         schema_name: String,
@@ -612,7 +639,7 @@ pub enum CatalogOp {
     DropItem(GlobalId),
 }
 
-pub enum CatalogOpStatus {
+pub enum OpStatus {
     CreatedDatabase,
     CreatedSchema,
     CreatedItem(GlobalId),

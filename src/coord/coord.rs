@@ -31,7 +31,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem, CatalogOp};
+use catalog::{Catalog, CatalogItem};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -416,13 +416,7 @@ where
             Plan::CreateDatabase {
                 name,
                 if_not_exists,
-            } => match self.catalog.transact(vec![
-                CatalogOp::CreateDatabase { name: name.clone() },
-                CatalogOp::CreateSchema {
-                    database_name: name,
-                    schema_name: "public".into(),
-                },
-            ]) {
+            } => match self.catalog.create_database(name) {
                 Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
                 Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
                 Err(err) => Err(err),
@@ -432,10 +426,7 @@ where
                 database_name,
                 schema_name,
                 if_not_exists,
-            } => match self.catalog.transact(vec![CatalogOp::CreateSchema {
-                database_name,
-                schema_name,
-            }]) {
+            } => match self.catalog.create_schema(database_name, schema_name) {
                 Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
                 Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
                 Err(err) => Err(err),
@@ -1045,9 +1036,7 @@ where
             );
         }
 
-        self.catalog
-            .transact(ids.iter().map(|id| CatalogOp::DropItem(*id)).collect())
-            .unwrap();
+        self.catalog.drop_items(ids).unwrap();
 
         if !sources_to_drop.is_empty() {
             broadcast(
