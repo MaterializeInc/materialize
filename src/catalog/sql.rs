@@ -136,22 +136,64 @@ impl Connection {
             .collect()
     }
 
-    /// Inserts a new database with a default schema named "public". Returns
-    /// the ID of the new database and the ID of the public schema.
-    ///
-    // TODO(benesch): if we exposed a transactional API, the caller could
-    // manually call `insert_schema`, so we wouldn't need to hardcode the
-    // creation of the public schema here.
-    pub fn insert_database(&mut self, database_name: &str) -> Result<(i64, i64), failure::Error> {
-        self.inner
+    pub fn transaction(&mut self) -> Result<Transaction, failure::Error> {
+        Ok(Transaction {
+            inner: self.inner.transaction()?,
+        })
+    }
+
+    pub fn bootstrapped(&self) -> bool {
+        self.bootstrapped
+    }
+}
+
+pub struct Transaction<'a> {
+    inner: rusqlite::Transaction<'a>,
+}
+
+impl Transaction<'_> {
+    pub fn load_database_id(&self, database_name: &str) -> Result<i64, failure::Error> {
+        match self
+            .inner
+            .prepare_cached("SELECT id FROM databases WHERE name = ?")?
+            .query_row(params![database_name], |row| row.get(0))
+        {
+            Ok(id) => Ok(id),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                bail!("unknown database '{}'", database_name);
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn load_schema_id(
+        &self,
+        database_id: i64,
+        schema_name: &str,
+    ) -> Result<i64, failure::Error> {
+        match self
+            .inner
+            .prepare_cached("SELECT id FROM schemas WHERE database_id = ? AND name = ?")?
+            .query_row(params![database_id, schema_name], |row| row.get(0))
+        {
+            Ok(id) => Ok(id),
+            Err(rusqlite::Error::QueryReturnedNoRows) => bail!("unknown schema '{}'", schema_name),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn insert_database(&mut self, database_name: &str) -> Result<i64, failure::Error> {
+        match self
+            .inner
             .prepare_cached("INSERT INTO databases (name) VALUES (?)")?
-            .execute(params![database_name])?;
-        let database_id = self.inner.last_insert_rowid();
-        self.inner
-            .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, 'public')")?
-            .execute(params![database_id])?;
-        let schema_id = self.inner.last_insert_rowid();
-        Ok((database_id, schema_id))
+            .execute(params![database_name])
+        {
+            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Err(err) if is_constraint_violation(&err) => {
+                bail!("database '{}' already exists", database_name);
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn insert_schema(
@@ -159,11 +201,17 @@ impl Connection {
         database_id: i64,
         schema_name: &str,
     ) -> Result<i64, failure::Error> {
-        let mut stmt = self
+        match self
             .inner
-            .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, ?)")?;
-        stmt.execute(params![database_id, schema_name])?;
-        Ok(self.inner.last_insert_rowid())
+            .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, ?)")?
+            .execute(params![database_id, schema_name])
+        {
+            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Err(err) if is_constraint_violation(&err) => {
+                bail!("schema '{}' already exists", schema_name);
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn insert_item(
@@ -173,25 +221,39 @@ impl Connection {
         item_name: &str,
         item: &CatalogItem,
     ) -> Result<(), failure::Error> {
-        let mut stmt = self.inner.prepare_cached(
-            "INSERT INTO items (gid, schema_id, name, definition)
-                VALUES (?, ?, ?, ?)",
-        )?;
-        stmt.execute(params![SqlVal(&id), schema_id, item_name, SqlVal(item)])?;
+        match self
+            .inner
+            .prepare_cached(
+                "INSERT INTO items (gid, schema_id, name, definition) VALUES (?, ?, ?, ?)",
+            )?
+            .execute(params![SqlVal(&id), schema_id, item_name, SqlVal(item)])
+        {
+            Ok(_) => Ok(()),
+            Err(err) if is_constraint_violation(&err) => {
+                bail!("catalog item '{}' already exists", item_name);
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn remove_item(&self, id: GlobalId) -> Result<(), failure::Error> {
+        self.inner
+            .prepare_cached("DELETE FROM items WHERE gid = ?")?
+            .execute(params![SqlVal(id)])?;
         Ok(())
     }
 
-    pub fn remove_item(&self, id: GlobalId) {
-        let mut stmt = self
-            .inner
-            .prepare_cached("DELETE FROM items WHERE gid = ?")
-            .expect("catalog: sqlite failed");
-        stmt.execute(params![SqlVal(id)])
-            .expect("catalog: sqlite failed");
+    pub fn commit(self) -> Result<(), rusqlite::Error> {
+        self.inner.commit()
     }
+}
 
-    pub fn bootstrapped(&self) -> bool {
-        self.bootstrapped
+fn is_constraint_violation(err: &rusqlite::Error) -> bool {
+    match err {
+        rusqlite::Error::SqliteFailure(err, _) => {
+            err.code == rusqlite::ErrorCode::ConstraintViolation
+        }
+        _ => false,
     }
 }
 

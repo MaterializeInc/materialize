@@ -21,6 +21,9 @@ Schema
 public
 s
 
+! CREATE SCHEMA s
+schema 's' already exists
+
 # TODO(benesch): fix DROP SCHEMA.
 ! DROP SCHEMA s
 catalog item 's' does not exist
@@ -38,6 +41,9 @@ Database
 d
 materialize
 
+! CREATE DATABASE d
+database 'd' already exists
+
 > SHOW SCHEMAS FROM d
 Schema
 ----
@@ -54,3 +60,12 @@ s
 # TODO(benesch): implement DROP DATABASE.
 ! DROP DATABASE d
 unsupported SQL statement
+
+! CREATE VIEW noexist.ignored AS SELECT 1
+unknown schema 'noexist'
+
+! CREATE VIEW materialize.noexist.ignored AS SELECT 1
+unknown schema 'noexist'
+
+! CREATE VIEW noexist.ignored.ignored AS SELECT 1
+unknown database 'noexist'

@@ -197,11 +197,11 @@ impl Catalog {
         // system items, but these system items depend on the system
         // database/schema being installed.
         for (id, name, item) in items {
-            catalog.insert_id(id, name, item)?;
+            catalog.insert_item(id, name, item);
         }
 
         for (id, name, def) in catalog.storage.load_items()? {
-            catalog.insert_id_core(id, name, def);
+            catalog.insert_item(id, name, def);
             if let GlobalId::User(id) = id {
                 catalog.id = cmp::max(catalog.id, id);
             }
@@ -326,106 +326,7 @@ impl Catalog {
         }
     }
 
-    pub fn create_database(&mut self, name: String) -> Result<(), failure::Error> {
-        if self.by_name.contains_key(&name) {
-            bail!("database '{}' already exists", &name);
-        }
-        info!("create database {}", name);
-        let (database_id, schema_id) = self.storage.insert_database(&name)?;
-        let mut schemas = HashMap::new();
-        schemas.insert(
-            "public".into(),
-            Schema {
-                id: schema_id,
-                items: HashMap::new(),
-            },
-        );
-        self.by_name.insert(
-            name,
-            Database {
-                id: database_id,
-                schemas,
-            },
-        );
-        Ok(())
-    }
-
-    pub fn create_schema(
-        &mut self,
-        database_name: String,
-        schema_name: String,
-    ) -> Result<(), failure::Error> {
-        let database = match self.by_name.get_mut(&database_name) {
-            None => bail!("unknown database '{}'", database_name),
-            Some(database) => database,
-        };
-        if database.schemas.contains_key(&schema_name) {
-            bail!("schema '{}.{}' already exists", database_name, schema_name);
-        }
-        info!("create schema {}.{}", database_name, schema_name);
-        let id = self.storage.insert_schema(database.id, &schema_name)?;
-        database.schemas.insert(
-            schema_name,
-            Schema {
-                id,
-                items: HashMap::new(),
-            },
-        );
-        Ok(())
-    }
-
-    /// Inserts a new catalog item, returning an error if a catalog item with
-    /// the same name already exists.
-    ///
-    /// The internal dependency graph is updated accordingly. The function will
-    /// panic if any of `item`'s dependencies are not present in the store.
-    pub fn insert(
-        &mut self,
-        name: FullName,
-        item: CatalogItem,
-    ) -> Result<GlobalId, failure::Error> {
-        let id = self.allocate_id();
-        self.insert_id(id, name, item)?;
-        Ok(id)
-    }
-
-    fn insert_id(
-        &mut self,
-        id: GlobalId,
-        name: FullName,
-        item: CatalogItem,
-    ) -> Result<(), failure::Error> {
-        // Validate that we can insert the item.
-        if self.by_id.contains_key(&id) {
-            bail!("catalog item with id {} already exists", id)
-        }
-        let schema = match self
-            .get_schemas_mut(&name.database)
-            .and_then(|schemas| schemas.get(&name.schema))
-        {
-            Some(schema) => schema,
-            None => bail!("catalog does not contain schema '{}'", name.schema),
-        };
-        if schema.items.contains_key(&name.item) {
-            bail!("catalog item '{}' already exists", name);
-        }
-        let schema_id = schema.id;
-
-        // Maybe update on-disk state.
-        // At the moment, system sources are always ephemeral.
-        if let GlobalId::User(_) = id {
-            // TODO: tables created by symbiosis are considered user sources,
-            // but they are ephemeral and should not be inserted into the
-            // catalog.
-            self.storage.insert_item(id, schema_id, &name.item, &item)?;
-        }
-
-        // Update in-memory state.
-        self.insert_id_core(id, name, item);
-        Ok(())
-    }
-
-    fn insert_id_core(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
+    fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
         info!("create {} {} ({})", item.type_string(), name, id);
         let entry = CatalogEntry {
             inner: item,
@@ -510,31 +411,160 @@ impl Catalog {
         to_remove.push(metadata.id);
     }
 
-    /// Unconditionally removes the named view. It is required that `id`
-    /// come from the output of `plan_remove`; otherwise consistency rules may
-    /// be violated.
-    pub fn remove(&mut self, id: GlobalId) {
-        if let Some(metadata) = self.by_id.remove(&id) {
-            info!(
-                "drop {} {} ({})",
-                metadata.inner.type_string(),
-                metadata.name,
-                id
-            );
-            for u in metadata.uses() {
-                if let Some(dep_metadata) = self.by_id.get_mut(&u) {
-                    dep_metadata.used_by.retain(|u| *u != metadata.id)
-                }
-            }
-            self.get_schemas_mut(&metadata.name.database)
-                .expect("catalog out of sync")
-                .get_mut(&metadata.name.schema)
-                .expect("catalog out of sync")
-                .items
-                .remove(&metadata.name.item)
-                .expect("catalog out of sync");
+    pub fn create_item(
+        &mut self,
+        name: FullName,
+        item: CatalogItem,
+    ) -> Result<GlobalId, failure::Error> {
+        let id = match self
+            .transact(vec![CatalogOp::CreateItem { name, item }])?
+            .as_slice()
+        {
+            [CatalogOpStatus::CreatedItem(id)] => *id,
+            _ => unreachable!(),
+        };
+        Ok(id)
+    }
+
+    pub fn transact(
+        &mut self,
+        ops: Vec<CatalogOp>,
+    ) -> Result<Vec<CatalogOpStatus>, failure::Error> {
+        enum Status {
+            CreatedDatabase {
+                id: i64,
+                name: String,
+            },
+            CreatedSchema {
+                id: i64,
+                database_name: String,
+                schema_name: String,
+            },
+            CreatedItem {
+                id: GlobalId,
+                name: FullName,
+                item: CatalogItem,
+            },
+            #[allow(dead_code)]
+            DroppedDatabase {
+                name: String,
+            },
+            #[allow(dead_code)]
+            DroppedSchema {
+                database_name: String,
+                schema_name: String,
+            },
+            DroppedItem(GlobalId),
         }
-        self.storage.remove_item(id);
+
+        let mut statuses = Vec::with_capacity(ops.len());
+        let mut tx = self.storage.transaction()?;
+        for op in ops {
+            statuses.push(match op {
+                CatalogOp::CreateDatabase { name } => Status::CreatedDatabase {
+                    id: tx.insert_database(&name)?,
+                    name,
+                },
+                CatalogOp::CreateSchema {
+                    database_name,
+                    schema_name,
+                } => {
+                    let database_id = tx.load_database_id(&database_name)?;
+                    Status::CreatedSchema {
+                        id: tx.insert_schema(database_id, &schema_name)?,
+                        database_name,
+                        schema_name,
+                    }
+                }
+                CatalogOp::CreateItem { name, item } => {
+                    let database_id = match &name.database {
+                        DatabaseSpecifier::Name(name) => tx.load_database_id(&name)?,
+                        DatabaseSpecifier::Ambient => {
+                            bail!("writing to {} is not allowed", name.schema)
+                        }
+                    };
+                    let schema_id = tx.load_schema_id(database_id, &name.schema)?;
+                    self.id += 1;
+                    let id = GlobalId::user(self.id);
+                    tx.insert_item(id, schema_id, &name.item, &item)?;
+                    Status::CreatedItem { name, item, id }
+                }
+                CatalogOp::DropDatabase { .. } => todo!(),
+                CatalogOp::DropSchema { .. } => todo!(),
+                CatalogOp::DropItem(id) => {
+                    tx.remove_item(id)?;
+                    Status::DroppedItem(id)
+                }
+            })
+        }
+        tx.commit()?;
+
+        Ok(statuses
+            .into_iter()
+            .map(|status| match status {
+                Status::CreatedDatabase { id, name } => {
+                    info!("create database {}", name);
+                    self.by_name.insert(
+                        name,
+                        Database {
+                            id,
+                            schemas: HashMap::new(),
+                        },
+                    );
+                    CatalogOpStatus::CreatedDatabase
+                }
+
+                Status::CreatedSchema {
+                    id,
+                    database_name,
+                    schema_name,
+                } => {
+                    info!("create schema {}.{}", database_name, schema_name);
+                    self.by_name
+                        .get_mut(&database_name)
+                        .unwrap()
+                        .schemas
+                        .insert(
+                            schema_name,
+                            Schema {
+                                id,
+                                items: HashMap::new(),
+                            },
+                        );
+                    CatalogOpStatus::CreatedSchema
+                }
+
+                Status::CreatedItem { id, name, item } => {
+                    self.insert_item(id, name, item);
+                    CatalogOpStatus::CreatedItem(id)
+                }
+
+                Status::DroppedDatabase { .. } | Status::DroppedSchema { .. } => todo!(),
+
+                Status::DroppedItem(id) => {
+                    let metadata = self.by_id.remove(&id).unwrap();
+                    info!(
+                        "drop {} {} ({})",
+                        metadata.inner.type_string(),
+                        metadata.name,
+                        id
+                    );
+                    for u in metadata.uses() {
+                        if let Some(dep_metadata) = self.by_id.get_mut(&u) {
+                            dep_metadata.used_by.retain(|u| *u != metadata.id)
+                        }
+                    }
+                    self.get_schemas_mut(&metadata.name.database)
+                        .expect("catalog out of sync")
+                        .get_mut(&metadata.name.schema)
+                        .expect("catalog out of sync")
+                        .items
+                        .remove(&metadata.name.item)
+                        .expect("catalog out of sync");
+                    CatalogOpStatus::DroppedItem
+                }
+            })
+            .collect())
     }
 
     /// Iterates over the items in the catalog in order of increasing ID.
@@ -555,6 +585,40 @@ impl IdHumanizer for Catalog {
             Id::Local(_) => None,
         }
     }
+}
+
+pub enum CatalogOp {
+    CreateDatabase {
+        name: String,
+    },
+    CreateSchema {
+        database_name: String,
+        schema_name: String,
+    },
+    CreateItem {
+        name: FullName,
+        item: CatalogItem,
+    },
+    DropDatabase {
+        name: String,
+    },
+    DropSchema {
+        database_name: String,
+        schema_name: String,
+    },
+    /// Unconditionally removes the identified items. It is required that the
+    /// IDs come from the output of `plan_remove`; otherwise consistency rules
+    /// may be violated.
+    DropItem(GlobalId),
+}
+
+pub enum CatalogOpStatus {
+    CreatedDatabase,
+    CreatedSchema,
+    CreatedItem(GlobalId),
+    DroppedDatabase,
+    DroppedSchema,
+    DroppedItem,
 }
 
 /// A helper for resolving schema and item names within one database.
