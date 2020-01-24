@@ -76,7 +76,7 @@ DEFAULT_NEW_USERS_PER_TICK = 100
 DEFAULT_TICK_SLEEP_SECONDS = 1
 
 with open('./words.txt') as f:
-    WORDS = f.readlines()
+    WORDS = f.read().splitlines()
 
 def path_for_state(state):
     if state == State.GATEWAY:
