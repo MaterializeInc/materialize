@@ -69,7 +69,7 @@ where
             let input = self.collection(input).unwrap();
 
             // Distinct is a special case, as there are no aggregates to aggregate.
-            if aggregates.len() == 0 {
+            if aggregates.is_empty() {
                 let arrangement = input
                     .map({
                         let env = env.clone();
