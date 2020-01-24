@@ -248,24 +248,20 @@ where
                                             // If any false, else if all true, else must be no false and some nulls.
                                             if nnl > 0 {
                                                 Datum::False
+                                            } else if tot == agg {
+                                                Datum::True
                                             } else {
-                                                if tot == agg {
-                                                    Datum::True
-                                                } else {
-                                                    Datum::Null
-                                                }
+                                                Datum::Null
                                             }
                                         }
                                         (AggregateFunc::Any, _) => {
                                             // If any true, else if all false, else must be no true and some nulls.
                                             if agg > 0 {
                                                 Datum::True
+                                            } else if tot == nnl {
+                                                Datum::False
                                             } else {
-                                                if tot == nnl {
-                                                    Datum::False
-                                                } else {
-                                                    Datum::Null
-                                                }
+                                                Datum::Null
                                             }
                                         }
                                         // Below this point, anything with only nulls should be null.
