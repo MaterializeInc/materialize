@@ -36,6 +36,7 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 
 mod context;
+mod reduce;
 
 pub(crate) fn build_local_input<A: Allocate>(
     manager: &mut TraceManager,
@@ -408,7 +409,7 @@ where
                 }
 
                 RelationExpr::Reduce { .. } => {
-                    self.render_reduce(relation_expr, env, scope, worker_index);
+                    self.render_reduce_robust(relation_expr, env, scope, worker_index);
                 }
 
                 RelationExpr::TopK { .. } => {
@@ -732,6 +733,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     fn render_reduce(
         &mut self,
         relation_expr: &RelationExpr,
