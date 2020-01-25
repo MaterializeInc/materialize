@@ -13,9 +13,6 @@ use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 #[derive(Debug)]
 pub enum Error {
-    Message {
-        s: String,
-    },
     Input {
         err: InputError,
         details: Option<InputDetails>,
@@ -40,7 +37,6 @@ impl Error {
         };
         let mut stderr = StandardStream::stderr(color_choice);
         match self {
-            Error::Message { s } => writeln!(stderr, "{}", s),
             Error::Input {
                 err,
                 details: Some(details),
@@ -121,25 +117,9 @@ impl Error {
     }
 }
 
-impl From<String> for Error {
-    fn from(s: String) -> Error {
-        Error::Message { s }
-    }
-}
-
 impl From<InputError> for Error {
     fn from(err: InputError) -> Error {
         Error::Input { err, details: None }
-    }
-}
-
-pub trait ErrCtx<T> {
-    fn context(self, msg: &'static str) -> Result<T, Error>;
-}
-
-impl<T> ErrCtx<T> for std::result::Result<T, io::Error> {
-    fn context(self, msg: &'static str) -> Result<T, Error> {
-        self.map_err(|e| Error::Io { msg, cause: e })
     }
 }
 
@@ -166,7 +146,6 @@ fn write_error_heading(stream: &mut StandardStream, color_spec: &ColorSpec) -> i
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::Message { s } => write!(f, "{}", s),
             Error::Input { err, .. } => write!(f, "{}", err.msg),
             Error::General { cause, .. } => cause.fmt(f),
             Error::Usage { details, .. } => write!(f, "usage error: {}", details),
