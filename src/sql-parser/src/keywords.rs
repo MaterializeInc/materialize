@@ -279,7 +279,6 @@ define_keywords!(
     MONTH,
     MONTHS,
     MULTISET,
-    NATIONAL,
     NATURAL,
     NCHAR,
     NCLOB,

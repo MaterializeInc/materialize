@@ -1322,20 +1322,16 @@ fn parse_literal_decimal() {
 
 #[test]
 fn parse_literal_string() {
-    let sql = "SELECT 'one', N'national string', X'deadBEEF'";
+    let sql = "SELECT 'one', X'deadBEEF'";
     let select = verified_only_select(sql);
-    assert_eq!(3, select.projection.len());
+    assert_eq!(2, select.projection.len());
     assert_eq!(
         &Expr::Value(Value::SingleQuotedString("one".to_string())),
         expr_from_projection(&select.projection[0])
     );
     assert_eq!(
-        &Expr::Value(Value::NationalStringLiteral("national string".to_string())),
-        expr_from_projection(&select.projection[1])
-    );
-    assert_eq!(
         &Expr::Value(Value::HexStringLiteral("deadBEEF".to_string())),
-        expr_from_projection(&select.projection[2])
+        expr_from_projection(&select.projection[1])
     );
 
     one_statement_parses_to("SELECT x'deadBEEF'", "SELECT X'deadBEEF'");

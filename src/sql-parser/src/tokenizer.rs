@@ -41,8 +41,6 @@ pub enum Token {
     Char(char),
     /// Single quoted string: i.e: 'string'
     SingleQuotedString(String),
-    /// "National" string literal: i.e: N'string'
-    NationalStringLiteral(String),
     /// Hexadecimal string literal: i.e.: X'deadbeef'
     HexStringLiteral(String),
     /// An unsigned numeric literal representing positional
@@ -135,7 +133,6 @@ impl fmt::Display for Token {
             Token::Number(ref n) => f.write_str(n),
             Token::Char(ref c) => write!(f, "{}", c),
             Token::SingleQuotedString(ref s) => write!(f, "'{}'", s),
-            Token::NationalStringLiteral(ref s) => write!(f, "N'{}'", s),
             Token::HexStringLiteral(ref s) => write!(f, "X'{}'", s),
             Token::Parameter(n) => write!(f, "${}", n),
             Token::Comma => f.write_str(","),
@@ -336,21 +333,6 @@ impl Tokenizer {
                         chars.next();
                     }
                     Ok(Some(Token::Whitespace(Whitespace::Newline)))
-                }
-                'N' => {
-                    chars.next(); // consume, to check the next char
-                    match chars.peek() {
-                        Some('\'') => {
-                            // N'...' - a <national character string literal>
-                            let s = self.tokenize_single_quoted_string(chars);
-                            Ok(Some(Token::NationalStringLiteral(s)))
-                        }
-                        _ => {
-                            // regular identifier starting with an "N"
-                            let s = self.tokenize_word('N', chars);
-                            Ok(Some(Token::make_word(&s, None)))
-                        }
-                    }
                 }
                 // The spec only allows an uppercase 'X' to introduce a hex
                 // string, but PostgreSQL, at least, allows a lowercase 'x' too.

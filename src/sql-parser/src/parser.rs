@@ -299,10 +299,7 @@ impl Parser {
                     expr: Box::new(self.parse_subexpr(Self::PLUS_MINUS_PREC)?),
                 })
             }
-            Token::Number(_)
-            | Token::SingleQuotedString(_)
-            | Token::NationalStringLiteral(_)
-            | Token::HexStringLiteral(_) => {
+            Token::Number(_) | Token::SingleQuotedString(_) | Token::HexStringLiteral(_) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
             }
@@ -1868,9 +1865,6 @@ impl Parser {
                 },
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::SingleQuotedString(ref s) => Ok(Value::SingleQuotedString(s.to_string())),
-                Token::NationalStringLiteral(ref s) => {
-                    Ok(Value::NationalStringLiteral(s.to_string()))
-                }
                 Token::HexStringLiteral(ref s) => Ok(Value::HexStringLiteral(s.to_string())),
                 _ => parser_err!(
                     self,
