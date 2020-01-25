@@ -177,7 +177,7 @@ END $$;
                 ..
             } => {
                 self.client.execute(&*stmt.to_string(), &[]).await?;
-                let mut items = Vec::new();
+                let mut items = vec![];
                 for name in names {
                     let name = match scx.resolve_name(name.clone()) {
                         Ok(name) => name,
@@ -196,18 +196,14 @@ END $$;
                             }
                         }
                         Some(entry) => {
-                            catalog.plan_remove(
-                                &name,
-                                catalog::RemoveMode::from_cascade(true),
-                                &mut items,
-                            )?;
                             items.push(entry.id());
                         }
                     }
                 }
-                items.sort();
-                items.dedup();
-                Plan::DropItems(items, ObjectType::Table)
+                Plan::DropItems {
+                    items,
+                    ty: ObjectType::Table,
+                }
             }
             Statement::Delete { table_name, .. } => {
                 let mut updates = vec![];

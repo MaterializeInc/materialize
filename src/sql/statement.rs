@@ -21,7 +21,7 @@ use sql_parser::ast::{
 use url::Url;
 
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
-use catalog::{Catalog, CatalogItem, RemoveMode};
+use catalog::{Catalog, CatalogItem};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
     KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, Sink,
@@ -29,6 +29,7 @@ use dataflow_types::{
 };
 use expr as relationexpr;
 use interchange::{avro, protobuf};
+use ore::collections::CollectionExt;
 use ore::future::MaybeFuture;
 use relationexpr::{EvalEnv, GlobalId};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
@@ -51,6 +52,7 @@ pub fn describe_statement(
         | Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
+        | Statement::DropDatabase { .. }
         | Statement::DropObjects { .. }
         | Statement::SetVariable { .. }
         | Statement::StartTransaction { .. }
@@ -207,7 +209,13 @@ fn handle_sync_statement(
         Statement::CreateView { .. } => handle_create_view(scx, stmt, params),
         Statement::CreateSink { .. } => handle_create_sink(scx, stmt),
         Statement::CreateIndex { .. } => handle_create_index(scx, stmt),
-        Statement::DropObjects { .. } => handle_drop_dataflow(scx, stmt),
+        Statement::DropDatabase { name, if_exists } => handle_drop_database(scx, name, if_exists),
+        Statement::DropObjects {
+            object_type,
+            if_exists,
+            names,
+            cascade,
+        } => handle_drop_objects(scx, object_type, if_exists, names, cascade),
         Statement::Query(query) => handle_select(scx, *query, params),
         Statement::SetVariable {
             local,
@@ -719,18 +727,13 @@ fn handle_create_view(
     if !with_options.is_empty() {
         bail!("WITH options are not yet supported");
     }
+    let name = scx.allocate_name(normalize::object_name(name.to_owned())?);
     let replace = if *replace {
         let if_exists = true;
         let cascade = false;
-        handle_drop_dataflow_core(
-            scx,
-            ObjectType::View,
-            if_exists,
-            vec![name.clone()],
-            cascade,
-        )?
+        handle_drop_item(scx, ObjectType::View, if_exists, &name, cascade)?
     } else {
-        vec![]
+        None
     };
     let (mut relation_expr, mut desc, finishing) =
         handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
@@ -761,7 +764,6 @@ fn handle_create_view(
         }
     }
     *materialized = false; // Normalize for `raw_sql` below.
-    let name = scx.allocate_name(normalize::object_name(name.to_owned())?);
     let view = View {
         raw_sql: stmt.to_string(),
         relation_expr,
@@ -1037,69 +1039,151 @@ async fn handle_create_dataflow(
     }
 }
 
-fn handle_drop_dataflow(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let (object_type, if_exists, names, cascade) = match stmt {
-        Statement::DropObjects {
-            object_type,
-            if_exists,
-            names,
-            cascade,
-        } => (object_type, if_exists, names, cascade),
-        _ => unreachable!(),
-    };
-    let to_remove = handle_drop_dataflow_core(scx, object_type, if_exists, names, cascade)?;
-    Ok(match object_type {
-        ObjectType::Source => Plan::DropItems(to_remove, ObjectType::Source),
-        ObjectType::View => Plan::DropItems(to_remove, ObjectType::View),
-        ObjectType::Index => Plan::DropItems(to_remove, ObjectType::Index),
-        ObjectType::Sink => Plan::DropItems(to_remove, ObjectType::Sink),
-        _ => bail!("unsupported SQL statement: DROP {}", object_type),
-    })
+fn handle_drop_database(
+    scx: &StatementContext,
+    name: Ident,
+    if_exists: bool,
+) -> Result<Plan, failure::Error> {
+    let name = normalize::ident(name);
+    match scx.catalog.database_resolver(&name) {
+        Ok(_) => (),
+        Err(_) if if_exists => {
+            // TODO(benesch): generate a notice indicating that the database
+            // does not exist.
+        }
+        Err(err) => return Err(err),
+    }
+    Ok(Plan::DropDatabase { name })
 }
 
-fn handle_drop_dataflow_core(
+fn handle_drop_objects(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
     names: Vec<ObjectName>,
     cascade: bool,
-) -> Result<Vec<GlobalId>, failure::Error> {
+) -> Result<Plan, failure::Error> {
+    match object_type {
+        ObjectType::Schema => handle_drop_schema(scx, if_exists, names, cascade),
+        ObjectType::Source | ObjectType::View | ObjectType::Index | ObjectType::Sink => {
+            handle_drop_items(scx, object_type, if_exists, names, cascade)
+        }
+        _ => bail!("unsupported SQL statement: DROP {}", object_type),
+    }
+}
+
+fn handle_drop_schema(
+    scx: &StatementContext,
+    if_exists: bool,
+    names: Vec<ObjectName>,
+    cascade: bool,
+) -> Result<Plan, failure::Error> {
+    if names.len() != 1 {
+        bail!("DROP SCHEMA with multiple schemas is not yet supported");
+    }
+    let mut name = names.into_element();
+    let schema_name = normalize::ident(name.0.pop().unwrap());
+    let database_name = name
+        .0
+        .pop()
+        .map(normalize::ident)
+        .unwrap_or_else(|| scx.session.database().to_owned());
+    match scx.catalog.database_resolver(&database_name) {
+        Ok(resolver) => {
+            match resolver.resolve_schema(&schema_name) {
+                None if if_exists => {
+                    // TODO(benesch): generate a notice indicating that
+                    // the schema does not exist.
+                }
+                None => bail!("schema '{}.{}' does not exist", database_name, schema_name),
+                Some(schema) if !cascade && !schema.items.is_empty() => {
+                    bail!("schema '{}.{}' cannot be dropped without CASCADE while it contains objects", database_name, schema_name);
+                }
+                _ => (),
+            }
+        }
+        Err(_) if if_exists => {
+            // TODO(benesch): generate a notice indicating that the
+            // database does not exist.
+        }
+        Err(err) => return Err(err),
+    }
+    Ok(Plan::DropSchema {
+        database_name,
+        schema_name,
+    })
+}
+
+fn handle_drop_items(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    names: Vec<ObjectName>,
+    cascade: bool,
+) -> Result<Plan, failure::Error> {
     let names = names
         .into_iter()
         .map(|n| scx.resolve_name(n))
         .collect::<Vec<_>>();
-    for name in &names {
+    let mut ids = vec![];
+    for name in names {
         match name {
-            Ok(name) => match scx.catalog.get(&name) {
-                Ok(catalog_entry) => {
-                    if !object_type_matches(object_type, catalog_entry.item()) {
-                        bail!("{} is not of type {}", name, object_type);
+            Ok(name) => ids.extend(handle_drop_item(
+                scx,
+                object_type,
+                if_exists,
+                &name,
+                cascade,
+            )?),
+            Err(_) if if_exists => {
+                // TODO(benesch): generate a notice indicating this
+                // item does not exist.
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(Plan::DropItems {
+        items: ids,
+        ty: object_type,
+    })
+}
+
+fn handle_drop_item(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: &FullName,
+    cascade: bool,
+) -> Result<Option<GlobalId>, failure::Error> {
+    match scx.catalog.get(name) {
+        Ok(catalog_entry) => {
+            if !object_type_matches(object_type, catalog_entry.item()) {
+                bail!("{} is not of type {}", name, object_type);
+            }
+            if !cascade {
+                for id in catalog_entry.used_by() {
+                    let dep = scx.catalog.get_by_id(id);
+                    match dep.item() {
+                        CatalogItem::Source(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
+                            bail!(
+                                "cannot drop {}: still depended upon by catalog item '{}'",
+                                catalog_entry.name(),
+                                dep.name()
+                            );
+                        }
+                        CatalogItem::Index(_) => (),
                     }
-                }
-                Err(e) => {
-                    if !if_exists {
-                        return Err(e);
-                    }
-                }
-            },
-            Err(e) => {
-                if !if_exists {
-                    bail!("{}", e);
                 }
             }
+            Ok(Some(catalog_entry.id()))
         }
-    }
-    // This needs to have heterogenous drops, because cascades could drop multiple types.
-    let mode = RemoveMode::from_cascade(cascade);
-    let mut to_remove = vec![];
-    for name in &names {
-        if let Ok(name) = name {
-            scx.catalog.plan_remove(name, mode, &mut to_remove)?;
+        Err(_) if if_exists => {
+            // TODO(benesch): generate a notice indicating this
+            // item does not exist.
+            Ok(None)
         }
+        Err(err) => Err(err),
     }
-    to_remove.sort();
-    to_remove.dedup();
-    Ok(to_remove)
 }
 
 fn handle_select(

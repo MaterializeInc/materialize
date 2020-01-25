@@ -13,7 +13,6 @@ fuzz_target!(|data: &[u8]| {
             Ok(())
             | Err(testdrive::Error::Input { .. })
             | Err(testdrive::Error::Usage { .. })
-            | Err(testdrive::Error::Pg { .. })
             | Err(testdrive::Error::Io { .. })
             | Err(testdrive::Error::Message { .. }) => {}
             Err(error @ testdrive::Error::General { .. }) => panic!("{}", error),

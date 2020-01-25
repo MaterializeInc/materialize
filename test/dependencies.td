@@ -44,23 +44,23 @@ catalog item 's' already exists
 > CREATE MATERIALIZED VIEW test3b AS SELECT * FROM test2;
 
 ! DROP VIEW test1;
-cannot delete materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 ! DROP VIEW test2;
-cannot delete materialize.public.test2: still depended upon by catalog item 'materialize.public.test3a'
+cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3a'
 
 > DROP VIEW test3a;
 
 ! DROP VIEW test1;
-cannot delete materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 ! DROP VIEW test2;
-cannot delete materialize.public.test2: still depended upon by catalog item 'materialize.public.test3b'
+cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3b'
 
 > DROP VIEW test3b;
 
 ! DROP VIEW test1;
-cannot delete materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 > DROP VIEW test2;
 
@@ -237,7 +237,7 @@ catalog item 'i4' does not exist
 2
 
 ! CREATE OR REPLACE VIEW v3 AS SELECT 3
-cannot delete materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
+cannot drop materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
 
 > CREATE OR REPLACE VIEW v4 AS SELECT 3
 > SELECT * FROM v4

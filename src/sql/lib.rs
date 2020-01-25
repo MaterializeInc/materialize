@@ -68,10 +68,20 @@ pub enum Plan {
     CreateView {
         name: FullName,
         view: View<RelationExpr>,
-        /// The IDs of the object that this view is replacing, if any.
-        replace: Vec<GlobalId>,
+        /// The ID of the object that this view is replacing, if any.
+        replace: Option<GlobalId>,
     },
-    DropItems(Vec<GlobalId>, ObjectType),
+    DropDatabase {
+        name: String,
+    },
+    DropSchema {
+        database_name: String,
+        schema_name: String,
+    },
+    DropItems {
+        items: Vec<GlobalId>,
+        ty: ObjectType,
+    },
     EmptyQuery,
     SetVariable {
         /// The name of the variable

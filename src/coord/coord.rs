@@ -31,7 +31,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem, CatalogOp};
+use catalog::{Catalog, CatalogEntry, CatalogItem};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -416,13 +416,7 @@ where
             Plan::CreateDatabase {
                 name,
                 if_not_exists,
-            } => match self.catalog.transact(vec![
-                CatalogOp::CreateDatabase { name: name.clone() },
-                CatalogOp::CreateSchema {
-                    database_name: name,
-                    schema_name: "public".into(),
-                },
-            ]) {
+            } => match self.catalog.create_database(name) {
                 Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
                 Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
                 Err(err) => Err(err),
@@ -432,10 +426,7 @@ where
                 database_name,
                 schema_name,
                 if_not_exists,
-            } => match self.catalog.transact(vec![CatalogOp::CreateSchema {
-                database_name,
-                schema_name,
-            }]) {
+            } => match self.catalog.create_schema(database_name, schema_name) {
                 Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
                 Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
                 Err(err) => Err(err),
@@ -531,8 +522,11 @@ where
                 view,
                 replace,
             } => {
-                let cascaded = true;
-                self.drop_items(&replace, cascaded);
+                if let Some(id) = replace {
+                    let cascaded = true;
+                    let drops = self.catalog.drop_items(&[id])?;
+                    self.drop_items(&drops, cascaded);
+                }
                 let view = self.optimize_view(view);
                 let id = self.register_view(&name, &view)?;
                 self.create_materialized_view_dataflow(&name, id, view, None)?;
@@ -552,9 +546,27 @@ where
                 Err(err) => Err(err),
             },
 
-            Plan::DropItems(ids, item_type) => {
-                self.drop_items(&ids, item_type != ObjectType::Index);
-                Ok(match item_type {
+            Plan::DropDatabase { name } => {
+                let cascaded = true;
+                let drops = self.catalog.drop_database(name)?;
+                self.drop_items(&drops, cascaded);
+                Ok(ExecuteResponse::DroppedDatabase)
+            }
+
+            Plan::DropSchema {
+                database_name,
+                schema_name,
+            } => {
+                let cascaded = true;
+                let drops = self.catalog.drop_schema(database_name, schema_name)?;
+                self.drop_items(&drops, cascaded);
+                Ok(ExecuteResponse::DroppedSchema)
+            }
+
+            Plan::DropItems { items, ty } => {
+                let drops = self.catalog.drop_items(&items)?;
+                self.drop_items(&drops, ty != ObjectType::Index);
+                Ok(match ty {
                     ObjectType::Schema => unreachable!(),
                     ObjectType::Source => ExecuteResponse::DroppedSource,
                     ObjectType::View => ExecuteResponse::DroppedView,
@@ -1021,33 +1033,20 @@ where
         );
     }
 
-    fn drop_items(&mut self, ids: &[GlobalId], cascaded: bool) {
+    fn drop_items(&mut self, entries: &[CatalogEntry], cascaded: bool) {
         let mut sources_to_drop: Vec<GlobalId> = Vec::new();
         let mut views_to_drop: Vec<GlobalId> = Vec::new();
         let mut sinks_to_drop: Vec<GlobalId> = Vec::new();
         let mut indexes_to_drop: Vec<GlobalId> = Vec::new();
-        // Sort ids to be dropped ~before~ removing them from the
-        // Coordinator's Catalog below.
-        for id in ids {
-            match self.catalog.get_by_id(id).item() {
-                CatalogItem::Source(_s) => sources_to_drop.push(*id),
-                CatalogItem::View(_v) => views_to_drop.push(*id),
-                CatalogItem::Sink(_s) => sinks_to_drop.push(*id),
-                CatalogItem::Index(_i) => indexes_to_drop.push(*id),
+        for entry in entries {
+            match entry.item() {
+                CatalogItem::Source(_) => sources_to_drop.push(entry.id()),
+                CatalogItem::View(_) => views_to_drop.push(entry.id()),
+                CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
+                CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
             }
+            self.report_catalog_update(entry.id(), entry.name().to_string(), false);
         }
-
-        for id in ids {
-            self.report_catalog_update(
-                *id,
-                self.catalog.humanize_id(expr::Id::Global(*id)).unwrap(),
-                false,
-            );
-        }
-
-        self.catalog
-            .transact(ids.iter().map(|id| CatalogOp::DropItem(*id)).collect())
-            .unwrap();
 
         if !sources_to_drop.is_empty() {
             broadcast(
