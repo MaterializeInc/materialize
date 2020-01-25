@@ -45,15 +45,14 @@ pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, String> {
 impl Action for SqlAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
         match &self.stmt {
-            // TODO(benesch): enable once DROP {DATABASE | SCHEMA} is supported.
-            // Statement::CreateDatabase { name, .. } => self.try_drop(
-            //     &mut state.pgclient,
-            //     &format!("DROP DATABASE IF EXISTS {}", name.to_string()),
-            // ),
-            // Statement::CreateSchema { name, .. } => self.try_drop(
-            //     &mut state.pgclient,
-            //     &format!("DROP SCHEMA IF EXISTS {} CASCADE", name.to_string()),
-            // ),
+            Statement::CreateDatabase { name, .. } => self.try_drop(
+                &mut state.pgclient,
+                &format!("DROP DATABASE IF EXISTS {}", name.to_string()),
+            ),
+            Statement::CreateSchema { name, .. } => self.try_drop(
+                &mut state.pgclient,
+                &format!("DROP SCHEMA IF EXISTS {} CASCADE", name.to_string()),
+            ),
             Statement::CreateSource { name, .. } => self.try_drop(
                 &mut state.pgclient,
                 &format!("DROP SOURCE IF EXISTS {} CASCADE", name.to_string()),
@@ -212,7 +211,7 @@ impl Action for FailSqlAction {
     }
 }
 
-fn print_query(query: &str) {
+pub fn print_query(query: &str) {
     if query.len() > 72 {
         println!("> {}...", &query[..72]);
     } else {

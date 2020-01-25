@@ -3,26 +3,26 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use getopts::Options;
 use std::env;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
 
+use getopts::Options;
+
+use crate::error::ErrCtx;
+
 use self::error::{InputError, ResultExt};
 use self::parser::LineReader;
 
 mod action;
-mod ddl;
 mod error;
 mod parser;
 mod protobuf;
 
 pub use self::action::Config;
-use self::ddl::Ddl;
 pub use self::error::Error;
-use crate::error::ErrCtx;
 
 static TESTDRIVE_DATA_DIR: &str = "testdrive_data";
 
@@ -133,20 +133,17 @@ fn run_line_reader(config: &Config, line_reader: &mut LineReader) -> Result<(), 
     // reconnections for every file. For now it's nice to not open any
     // connections until after parsing.
     let mut state = action::create_state(config)?;
+    state.reset_materialized()?;
     let actions = action::build(cmds, &state, config.data_dir.as_deref())?;
     for a in actions.iter().rev() {
         a.action
             .undo(&mut state)
             .map_err(|e| InputError { msg: e, pos: a.pos })?;
     }
-    let mut ddl = Ddl::new(&mut state.pgclient())?;
-
     for a in &actions {
-        a.action.redo(&mut state).map_err(|e| {
-            let _ = ddl.clear_since_new(state.pgclient());
-            InputError { msg: e, pos: a.pos }
-        })?;
+        a.action
+            .redo(&mut state)
+            .map_err(|e| InputError { msg: e, pos: a.pos })?;
     }
-    ddl.clear_since_new(state.pgclient())?;
     Ok(())
 }

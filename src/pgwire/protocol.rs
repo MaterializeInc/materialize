@@ -632,6 +632,8 @@ where
             ExecuteResponse::CreatedSink { existed } => created!(existed, "42710", "sink"),
             ExecuteResponse::CreatedView => command_complete!("CREATE VIEW"),
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
+            ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
+            ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
             ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),

@@ -236,10 +236,39 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn remove_database(&self, name: &str) -> Result<(), failure::Error> {
+        let n = self
+            .inner
+            .prepare_cached("DELETE FROM databases WHERE name = ?")?
+            .execute(params![name])?;
+        assert!(n <= 1);
+        if n != 1 {
+            bail!("database '{}' does not exist", name);
+        }
+        Ok(())
+    }
+
+    pub fn remove_schema(&self, database_id: i64, schema_name: &str) -> Result<(), failure::Error> {
+        let n = self
+            .inner
+            .prepare_cached("DELETE FROM schemas WHERE database_id = ? AND name = ?")?
+            .execute(params![database_id, schema_name])?;
+        assert!(n <= 1);
+        if n != 1 {
+            bail!("schema '{}' does not exist", schema_name);
+        }
+        Ok(())
+    }
+
     pub fn remove_item(&self, id: GlobalId) -> Result<(), failure::Error> {
-        self.inner
+        let n = self
+            .inner
             .prepare_cached("DELETE FROM items WHERE gid = ?")?
             .execute(params![SqlVal(id)])?;
+        assert!(n <= 1);
+        if n != 1 {
+            bail!("item {} does not exist", id);
+        }
         Ok(())
     }
 

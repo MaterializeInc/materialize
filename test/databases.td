@@ -24,9 +24,7 @@ s
 ! CREATE SCHEMA s
 schema 's' already exists
 
-# TODO(benesch): fix DROP SCHEMA.
-! DROP SCHEMA s
-catalog item 's' does not exist
+> DROP SCHEMA s
 
 > SHOW DATABASES
 Database
@@ -57,9 +55,13 @@ Schema
 public
 s
 
-# TODO(benesch): implement DROP DATABASE.
-! DROP DATABASE d
-unsupported SQL statement
+> DROP DATABASE d
+
+> SHOW DATABASES
+Database
+----
+materialize
+
 
 ! CREATE VIEW noexist.ignored AS SELECT 1
 unknown schema 'noexist'

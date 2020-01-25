@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 
-use crate::error::{Error, InputError};
+use crate::error::{Error, InputError, ResultExt};
 use crate::parser::{Command, PosCommand};
-use compile_proto::compile_and_encode;
+
+use self::compile_proto::compile_and_encode;
 
 mod compile_proto;
 mod kafka;
@@ -40,8 +41,26 @@ pub struct State {
 }
 
 impl State {
-    pub fn pgclient(&mut self) -> &mut postgres::Client {
-        &mut self.pgclient
+    pub fn reset_materialized(&mut self) -> Result<(), Error> {
+        for message in self
+            .pgclient
+            .simple_query("SHOW DATABASES")
+            .err_ctx("resetting materialized state: SHOW DATABASES".into())?
+        {
+            if let postgres::SimpleQueryMessage::Row(row) = message {
+                let name = row.get(0).expect("database name is not nullable");
+                let query = format!("DROP DATABASE {}", name);
+                sql::print_query(&query);
+                self.pgclient.batch_execute(&query).err_ctx(format!(
+                    "restting materialized state: DROP DATABASE {}",
+                    name,
+                ))?;
+            }
+        }
+        self.pgclient
+            .batch_execute("CREATE DATABASE materialize")
+            .err_ctx("resetting materialized state: CREATE DATABASE materialize".into())?;
+        Ok(())
     }
 }
 
