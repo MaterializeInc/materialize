@@ -3,11 +3,9 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-$ compile-protoc source=${testdrive.data_dir}/simple.proto var=simple
-
 > CREATE SOURCE protomessages FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
-  USING SCHEMA '${simple}'
-  WITH (format='protobuf-descriptor', message_name='.Struct')
+  USING SCHEMA '${testdrive.protobuf-descriptors}'
+  WITH (format = 'protobuf-descriptor', message_name = '.Struct')
 
 > CREATE VIEW pm AS SELECT * FROM protomessages
 

@@ -4,14 +4,10 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::env;
-use std::ffi::OsStr;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Read};
-use std::path::Path;
 
 use getopts::Options;
-
-use crate::error::ErrCtx;
 
 use self::error::{InputError, ResultExt};
 use self::parser::LineReader;
@@ -23,8 +19,6 @@ mod protobuf;
 
 pub use self::action::Config;
 pub use self::error::Error;
-
-static TESTDRIVE_DATA_DIR: &str = "testdrive_data";
 
 pub fn run() -> Result<(), Error> {
     let args: Vec<_> = env::args().collect();
@@ -59,7 +53,6 @@ pub fn run() -> Result<(), Error> {
         kafka_addr: opts.opt_str("kafka-addr"),
         schema_registry_url: opts.opt_str("schema-registry-url"),
         materialized_url: opts.opt_str("materialized-url"),
-        data_dir: find_datadir(opts.free.as_ref())?,
     };
 
     if opts.free.is_empty() {
@@ -74,33 +67,6 @@ pub fn run() -> Result<(), Error> {
         }
         Ok(())
     }
-}
-
-/// Find a data directory
-///
-/// Errors only come from permission issues, if the `TESTDRIVE_DATA`
-fn find_datadir(command_files: &[impl AsRef<OsStr>]) -> Result<Option<String>, Error> {
-    for cmdfile in command_files.iter().map(Path::new) {
-        let dir = if !cmdfile.exists() {
-            return Err(format!("error: file {:?} does not exist", cmdfile.display()).into());
-        } else if cmdfile.is_dir() {
-            cmdfile
-        } else {
-            match cmdfile.parent() {
-                Some(parent) => parent,
-                None => continue,
-            }
-        };
-
-        for fname in fs::read_dir(dir).context("finding testdrive files")? {
-            let path = fname.context("checking testdrive data dir")?.path();
-            if path.file_name() == Some(OsStr::new(TESTDRIVE_DATA_DIR)) {
-                return Ok(Some(path.to_string_lossy().to_string()));
-            }
-        }
-    }
-
-    Ok(None)
 }
 
 pub fn run_file(config: &Config, filename: &str) -> Result<(), Error> {
@@ -134,7 +100,7 @@ fn run_line_reader(config: &Config, line_reader: &mut LineReader) -> Result<(), 
     // connections until after parsing.
     let mut state = action::create_state(config)?;
     state.reset_materialized()?;
-    let actions = action::build(cmds, &state, config.data_dir.as_deref())?;
+    let actions = action::build(cmds, &state)?;
     for a in actions.iter().rev() {
         a.action
             .undo(&mut state)

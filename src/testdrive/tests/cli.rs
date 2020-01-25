@@ -17,7 +17,7 @@ fn test_missing_file() {
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            r#"error: file "noexist" does not exist"#,
+            r#"error: opening noexist: No such file or directory"#,
         ));
 }
 

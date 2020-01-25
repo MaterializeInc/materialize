@@ -3,19 +3,18 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use lazy_static::lazy_static;
-use rand::Rng;
-use regex::{Captures, Regex};
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 
+use lazy_static::lazy_static;
+use protobuf::Message;
+use rand::Rng;
+use regex::{Captures, Regex};
+
 use crate::error::{Error, InputError, ResultExt};
 use crate::parser::{Command, PosCommand};
 
-use self::compile_proto::compile_and_encode;
-
-mod compile_proto;
 mod kafka;
 mod sql;
 
@@ -24,8 +23,6 @@ pub struct Config {
     pub kafka_addr: Option<String>,
     pub schema_registry_url: Option<String>,
     pub materialized_url: Option<String>,
-    /// The correct path to the `testdrive_data` directory relative to execution
-    pub data_dir: Option<String>,
 }
 
 pub struct State {
@@ -74,11 +71,7 @@ pub trait Action {
     fn redo(&self, state: &mut State) -> Result<(), String>;
 }
 
-pub fn build(
-    cmds: Vec<PosCommand>,
-    state: &State,
-    data_dir: Option<&str>,
-) -> Result<Vec<PosAction>, InputError> {
+pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, InputError> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
     vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
@@ -93,15 +86,18 @@ pub fn build(
             .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
     );
     vars.insert(
-        "testdrive.data_dir".into(),
-        // this should only happen if test drive is being run from stdin
-        data_dir.unwrap_or("<COULD_NOT_FIND_DATA_DIR>").into(),
-    );
-    vars.insert(
         "testdrive.schema-registry-url".into(),
         state.schema_registry_url.clone(),
     );
     vars.insert("testdrive.seed".into(), state.seed.to_string());
+    vars.insert(
+        "testdrive.protobuf-descriptors".into(),
+        base64::encode(
+            &crate::protobuf::gen::descriptors()
+                .write_to_bytes()
+                .unwrap(),
+        ),
+    );
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
@@ -117,13 +113,6 @@ pub fn build(
                 match builtin.name.as_ref() {
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
-                    "compile-protoc" => {
-                        let b64_encoded =
-                            compile_and_encode(builtin.args.string("source").map_err(wrap_err)?)
-                                .map_err(wrap_err)?;
-                        vars.insert(builtin.args.string("var").map_err(wrap_err)?, b64_encoded);
-                        continue;
-                    }
                     "set" => {
                         vars.extend(builtin.args);
                         continue;

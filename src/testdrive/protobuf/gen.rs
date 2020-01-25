@@ -5,5 +5,17 @@
 
 //! Module containing generated proto code
 
+use protobuf::descriptor::FileDescriptorSet;
+use protobuf::RepeatedField;
+
 pub mod simple;
 pub mod billing;
+
+pub fn descriptors() -> FileDescriptorSet {
+    let mut fds = FileDescriptorSet::new();
+    fds.set_file(RepeatedField::from_vec(vec![
+        simple::file_descriptor_proto().clone(),
+        billing::file_descriptor_proto().clone(),
+    ]));
+    fds
+}

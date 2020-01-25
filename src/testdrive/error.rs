@@ -25,10 +25,6 @@ pub enum Error {
         cause: Box<dyn StdError>,
         hints: Vec<String>,
     },
-    Io {
-        msg: &'static str,
-        cause: io::Error,
-    },
     Usage {
         details: String,
         requested: bool,
@@ -66,10 +62,6 @@ impl Error {
             }
             Error::Input { details: None, .. } => {
                 panic!("programming error: print_stderr called on InputError with no details")
-            }
-            Error::Io { msg, cause } => {
-                println!("ERROR: {} {}", msg, cause);
-                Ok(())
             }
             Error::General { ctx, cause, hints } => {
                 let color_spec = ColorSpec::new();
@@ -177,7 +169,6 @@ impl fmt::Display for Error {
             Error::Message { s } => write!(f, "{}", s),
             Error::Input { err, .. } => write!(f, "{}", err.msg),
             Error::General { cause, .. } => cause.fmt(f),
-            Error::Io { msg, cause } => write!(f, "{}: {}", msg, cause),
             Error::Usage { details, .. } => write!(f, "usage error: {}", details),
         }
     }
