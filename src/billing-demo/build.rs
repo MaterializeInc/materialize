@@ -43,7 +43,15 @@ fn compile_proto_descriptors(specs: &[&str]) -> Result<()> {
     let env_var = "MZ_GENERATE_PROTO";
     println!("cargo:rerun-if-env-changed={}", env_var);
     for spec in specs {
-        let out = &(format!("{}/{}", Path::new(".").join("resources/gen").canonicalize().unwrap().display(), spec)); 
+        let out = &(format!(
+            "{}/{}",
+            Path::new(".")
+                .join("resources/gen")
+                .canonicalize()
+                .unwrap()
+                .display(),
+            spec
+        ));
         if env::var_os(env_var).is_some() {
             let protoc = Protoc::from_env_path();
             let args = DescriptorSetOutArgs {
