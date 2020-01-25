@@ -40,18 +40,22 @@ fn run() -> Result<()> {
 }
 
 fn compile_proto_descriptors(specs: &[&str]) -> Result<()> {
-    let protoc = Protoc::from_env_path();
+    let env_var = "MZ_GENERATE_PROTO";
+    println!("cargo:rerun-if-env-changed={}", env_var);
     for spec in specs {
-        let out = &(env::var("OUT_DIR").unwrap() + spec);
-        let args = DescriptorSetOutArgs {
-            out,
-            includes: &["resources"],
-            input: &[spec],
-            include_imports: false,
-        };
-        protoc.write_descriptor_set(args)?;
+        let out = &(format!("{}/{}", Path::new(".").join("resources/gen").canonicalize().unwrap().display(), spec)); 
+        if env::var_os(env_var).is_some() {
+            let protoc = Protoc::from_env_path();
+            let args = DescriptorSetOutArgs {
+                out,
+                includes: &["resources"],
+                input: &[spec],
+                include_imports: false,
+            };
+            protoc.write_descriptor_set(args)?;
+        }
         let basename = Path::new(spec).file_stem().unwrap().to_str().unwrap();
-        println!("cargo:rustc-env=DESCRIPTOR_{}={}", basename, spec);
+        println!("cargo:rustc-env=DESCRIPTOR_{}={}", basename, out);
     }
 
     Ok(())
