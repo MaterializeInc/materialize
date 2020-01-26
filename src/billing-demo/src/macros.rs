@@ -7,7 +7,7 @@
 #[macro_export]
 macro_rules! query {
     ($fname:tt) => {
-        include_str!(concat!(env!("VIEWS_DIR"), "/", $fname, ".sql"))
+        include_str!(concat!(env!("VIEWS_DIR"), "/", $fname, ".sql.in"))
     };
 }
 
