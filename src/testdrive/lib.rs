@@ -3,72 +3,23 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::env;
+//! Integration test driver for Materialize.
+
 use std::fs::File;
 use std::io::{self, Read};
 
-use getopts::Options;
-
-use self::error::{InputError, ResultExt};
+use self::error::{Error, InputError, ResultExt};
 use self::parser::LineReader;
 
 mod action;
-mod error;
 mod parser;
 mod protobuf;
 
+pub mod error;
+
 pub use self::action::Config;
-pub use self::error::Error;
 
-pub fn run() -> Result<(), Error> {
-    let args: Vec<_> = env::args().collect();
-
-    let mut opts = Options::new();
-    opts.optopt("", "kafka-addr", "kafka bootstrap address", "HOST:PORT");
-    opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
-    opts.optopt(
-        "",
-        "materialized-url",
-        "materialized connection string",
-        "URL",
-    );
-    opts.optflag("h", "help", "show this usage information");
-    let usage_details = opts.usage("usage: testdrive [options] FILE");
-    let opts = opts
-        .parse(&args[1..])
-        .err_ctx("parsing options".into())
-        .map_err(|e| Error::Usage {
-            details: format!("{}\n{}\n", usage_details, e),
-            requested: false,
-        })?;
-
-    if opts.opt_present("h") {
-        return Err(Error::Usage {
-            details: usage_details,
-            requested: true,
-        });
-    }
-
-    let config = Config {
-        kafka_addr: opts.opt_str("kafka-addr"),
-        schema_registry_url: opts.opt_str("schema-registry-url"),
-        materialized_url: opts.opt_str("materialized-url"),
-    };
-
-    if opts.free.is_empty() {
-        run_stdin(&config)
-    } else {
-        for arg in opts.free {
-            if arg == "-" {
-                run_stdin(&config)?
-            } else {
-                run_file(&config, &arg)?
-            }
-        }
-        Ok(())
-    }
-}
-
+/// Runs a testdrive script stored in a file.
 pub fn run_file(config: &Config, filename: &str) -> Result<(), Error> {
     let mut file = File::open(&filename).err_ctx(format!("opening {}", filename))?;
     let mut contents = String::new();
@@ -77,6 +28,7 @@ pub fn run_file(config: &Config, filename: &str) -> Result<(), Error> {
     run_string(config, filename, &contents)
 }
 
+/// Runs a testdrive script from the standard input.
 pub fn run_stdin(config: &Config) -> Result<(), Error> {
     let mut contents = String::new();
     io::stdin()
@@ -85,6 +37,11 @@ pub fn run_stdin(config: &Config) -> Result<(), Error> {
     run_string(config, "<stdin>", &contents)
 }
 
+/// Runs a testdrive script stored in a string.
+///
+/// The script in `contents` is used verbatim. The provided `filename` is used
+/// only as output in error messages and such. No attempt is made to read
+/// `filename`.
 pub fn run_string(config: &Config, filename: &str, contents: &str) -> Result<(), Error> {
     println!("==> {}", filename);
     let mut line_reader = LineReader::new(contents);

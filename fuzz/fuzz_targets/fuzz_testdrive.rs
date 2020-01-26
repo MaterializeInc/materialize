@@ -7,11 +7,13 @@
 
 use libfuzzer_sys::fuzz_target;
 
+use testdrive::error::Error;
+
 fuzz_target!(|data: &[u8]| {
     if let Ok(string) = std::str::from_utf8(data) {
         match testdrive::run_string(&testdrive::Config::default(), "<fuzzer>", &string) {
-            Ok(()) | Err(testdrive::Error::Input { .. }) | Err(testdrive::Error::Usage { .. }) => {}
-            Err(error @ testdrive::Error::General { .. }) => panic!("{}", error),
+            Ok(()) | Err(Error::Input { .. }) | Err(Error::Usage { .. }) => {}
+            Err(error @ Error::General { .. }) => panic!("{}", error),
         }
     };
 });

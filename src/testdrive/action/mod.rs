@@ -18,6 +18,7 @@ use crate::parser::{Command, PosCommand};
 mod kafka;
 mod sql;
 
+/// User-settable configuration parameters.
 #[derive(Debug, Default)]
 pub struct Config {
     pub kafka_addr: Option<String>,
@@ -179,7 +180,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             .unwrap_or_else(|| "postgres://ignored@localhost:6875");
         postgres::Client::connect(url, postgres::NoTls).map_err(|e| Error::General {
             ctx: "opening SQL connection".into(),
-            cause: Box::new(e),
+            cause: Some(Box::new(e)),
             hints: vec![
                 format!("connection string: {}", url),
                 "are you running the materialized server?".into(),
@@ -196,7 +197,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
     let ccsr_client =
         ccsr::Client::new(schema_registry_url.parse().map_err(|e| Error::General {
             ctx: "opening schema registry connection".into(),
-            cause: Box::new(e),
+            cause: Some(Box::new(e)),
             hints: vec![
                 format!("url: {}", schema_registry_url),
                 "are you running the schema registry?".into(),
@@ -221,7 +222,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         let admin: AdminClient<DefaultClientContext> =
             config.create().map_err(|e| Error::General {
                 ctx: "opening Kafka connection".into(),
-                cause: Box::new(e),
+                cause: Some(Box::new(e)),
                 hints: vec![format!("connection string: {}", addr)],
             })?;
 
@@ -229,13 +230,13 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
         let consumer: StreamConsumer = config.create().map_err(|e| Error::General {
             ctx: "opening Kafka consumer connection".into(),
-            cause: Box::new(e),
+            cause: Some(Box::new(e)),
             hints: vec![format!("connection string: {}", addr)],
         })?;
 
         let producer: FutureProducer = config.create().map_err(|e| Error::General {
             ctx: "opening Kafka producer connection".into(),
-            cause: Box::new(e),
+            cause: Some(Box::new(e)),
             hints: vec![format!("connection string: {}", addr)],
         })?;
 
