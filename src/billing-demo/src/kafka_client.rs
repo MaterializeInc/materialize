@@ -32,7 +32,7 @@ impl KafkaClient {
         })
     }
 
-    pub async fn send(&mut self, topic: &str, message: &Vec<u8>) -> Result<()> {
+    pub async fn send(&mut self, topic: &str, message: &[u8]) -> Result<()> {
         let tn = topic.to_string();
         self.messages += 1;
         let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&tn)

@@ -66,8 +66,8 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
         ))
         .unwrap();
 
-    static POSSIBLE_METERS: &[&str] = &["execution_time_ms"];
-    let meter = POSSIBLE_METERS.choose(rng).unwrap().to_string();
+    static POSSIBLE_METERS: [&str; 1] = ["execution_time_ms"];
+    let meter = (*POSSIBLE_METERS.choose(rng).unwrap()).to_string();
 
     let n = Normal::new(50.0, 10.0).unwrap();
     let mut val;
