@@ -3,31 +3,48 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use atty::Stream;
+//! Error handling.
+//!
+//! Testdrive takes pains to provide better error messages than are typical of a
+//! Rust program. The main error type, [`Error`], is not intentionally not
+//! constructible from from underlying errors without providing additional
+//! context. The [`ResultExt`] trait can be used to ergonomically add this
+//! context to the error within the result. For example, here is an idiomatic
+//! example of handling a filesystem error:
+//!
+//! ```rust
+//! use std::fs::File;
+//! use std::io::Read;
+//! use testdrive::error::{Error, ResultExt};
+//!
+//! fn check_file(path: &str) -> Result<bool, Error> {
+//!     let mut file = File::open(&path).err_ctx(format!("opening {}", path))?;
+//!
+//!     let mut contents = String::new();
+//!     file.read_to_string(&mut contents).err_ctx(format!("reading {}", path))?;
+//!     Ok(contents.contains("AOK"))
+//! }
+//! ```
+
 use std::error::Error as StdError;
 use std::fmt;
 use std::fmt::Write as FmtWrite;
 use std::io;
 use std::io::Write;
+
+use atty::Stream;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 #[derive(Debug)]
 pub enum Error {
-    Message {
-        s: String,
-    },
     Input {
         err: InputError,
         details: Option<InputDetails>,
     },
     General {
         ctx: String,
-        cause: Box<dyn StdError>,
+        cause: Option<Box<dyn StdError>>,
         hints: Vec<String>,
-    },
-    Io {
-        msg: &'static str,
-        cause: io::Error,
     },
     Usage {
         details: String,
@@ -44,7 +61,6 @@ impl Error {
         };
         let mut stderr = StandardStream::stderr(color_choice);
         match self {
-            Error::Message { s } => writeln!(stderr, "{}", s),
             Error::Input {
                 err,
                 details: Some(details),
@@ -67,14 +83,13 @@ impl Error {
             Error::Input { details: None, .. } => {
                 panic!("programming error: print_stderr called on InputError with no details")
             }
-            Error::Io { msg, cause } => {
-                println!("ERROR: {} {}", msg, cause);
-                Ok(())
-            }
             Error::General { ctx, cause, hints } => {
                 let color_spec = ColorSpec::new();
                 write_error_heading(&mut stderr, &color_spec)?;
-                writeln!(&mut stderr, "{}: {}", ctx, cause)?;
+                write!(&mut stderr, "{}", ctx)?;
+                if let Some(cause) = cause {
+                    writeln!(&mut stderr, ": {}", cause)?;
+                }
                 for hint in hints {
                     stderr.set_color(&color_spec.clone().set_bold(true))?;
                     write!(&mut stderr, " hint: ")?;
@@ -129,25 +144,9 @@ impl Error {
     }
 }
 
-impl From<String> for Error {
-    fn from(s: String) -> Error {
-        Error::Message { s }
-    }
-}
-
 impl From<InputError> for Error {
     fn from(err: InputError) -> Error {
         Error::Input { err, details: None }
-    }
-}
-
-pub trait ErrCtx<T> {
-    fn context(self, msg: &'static str) -> Result<T, Error>;
-}
-
-impl<T> ErrCtx<T> for std::result::Result<T, io::Error> {
-    fn context(self, msg: &'static str) -> Result<T, Error> {
-        self.map_err(|e| Error::Io { msg, cause: e })
     }
 }
 
@@ -174,10 +173,14 @@ fn write_error_heading(stream: &mut StandardStream, color_spec: &ColorSpec) -> i
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::Message { s } => write!(f, "{}", s),
             Error::Input { err, .. } => write!(f, "{}", err.msg),
-            Error::General { cause, .. } => cause.fmt(f),
-            Error::Io { msg, cause } => write!(f, "{}: {}", msg, cause),
+            Error::General { ctx, cause, .. } => {
+                write!(f, "{}", ctx)?;
+                if let Some(cause) = cause {
+                    write!(f, ": {}", cause)?;
+                }
+                Ok(())
+            }
             Error::Usage { details, .. } => write!(f, "usage error: {}", details),
         }
     }
@@ -219,14 +222,8 @@ where
     {
         self.map_err(|err| Error::General {
             ctx,
-            cause: Box::new(err),
+            cause: Some(Box::new(err)),
             hints: Vec::new(),
         })
-    }
-}
-
-impl From<Error> for String {
-    fn from(e: Error) -> String {
-        e.to_string()
     }
 }

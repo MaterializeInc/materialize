@@ -3,11 +3,9 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-$ compile-protoc source=${testdrive.data_dir}/billing.proto var=billing
-
 > CREATE SOURCE billing_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
-  USING SCHEMA '${billing}'
-  WITH (format='protobuf-descriptor', message_name='.Batch')
+  USING SCHEMA '${testdrive.protobuf-descriptors}'
+  WITH (format = 'protobuf-descriptor', message_name = '.Batch')
 > CREATE VIEW billing AS SELECT * FROM billing_source
 
 $ kafka-ingest format=protobuf topic=messages message=.Batch timestamp=1
@@ -34,7 +32,10 @@ records         YES jsonb
 > SELECT records->0->'value', records->1->'value' FROM billing WHERE id = 2
 25.0 125.0
 
-> SELECT records->0->'measurements'->0->'measured_value', records->1->'measurements'->1->'measured_value' FROM billing WHERE id = 2
+> SELECT
+    records->0->'measurements'->0->'measured_value',
+    records->1->'measurements'->1->'measured_value'
+  FROM billing WHERE id = 2
 5.0 256.0
 
 > SELECT records->0->>'meter', records->1->>'meter' FROM billing WHERE id = 2
@@ -46,7 +47,15 @@ user user
 user
 user
 
-> CREATE VIEW billing_records AS SELECT billing.id, r.value->>'interval_start' interval_start, r.value->>'interval_end' interval_end, r.value->>'meter' meter, (r.value->'value')::float::int value, r.value->'measurements' measurements FROM billing, jsonb_array_elements(records) AS r
+> CREATE VIEW billing_records AS
+  SELECT
+    billing.id,
+    r.value->>'interval_start' AS interval_start,
+    r.value->>'interval_end' AS interval_end,
+    r.value->>'meter' AS meter,
+    (r.value->'value')::float::int AS value,
+    r.value->'measurements' AS measurements
+  FROM billing, jsonb_array_elements(records) AS r
 
 > SHOW COLUMNS FROM billing_records
 id              YES text
