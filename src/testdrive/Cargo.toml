@@ -35,7 +35,7 @@ regex = "1"
 reqwest = "0.10.1"
 serde = "1.0.104"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
-serde_json = { version = "1.0.44", features = ["preserve_order"] }
+serde_json = { version = "1.0.45", features = ["preserve_order"] }
 sql-parser = { path = "../sql-parser" }
 termcolor = "1.1.0"
 tokio = "0.2"
