@@ -113,13 +113,13 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             )
             .await?;
 
-        exec_query!(client, config, "billing_batches");
+        exec_query!(client, config, "billing_raw_data");
+        exec_query!(client, "billing_batches");
         exec_query!(client, "billing_records");
         exec_query!(client, "billing_agg_by_minute");
         exec_query!(client, "billing_agg_by_hour");
         exec_query!(client, "billing_agg_by_day");
         exec_query!(client, "billing_agg_by_month");
-        exec_query!(client, config, "billing_raw_data");
     } else {
         log::info!(
             "source '{}' already exists, not recreating",

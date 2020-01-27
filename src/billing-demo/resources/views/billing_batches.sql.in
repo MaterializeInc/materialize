@@ -1,7 +1,7 @@
 CREATE VIEW billing_batches AS
 SELECT
-    {source_name}.id,
-    {source_name}.interval_start,
-    {source_name}.interval_end
+    billing_raw_data.id,
+    billing_raw_data.interval_start,
+    billing_raw_data.interval_end
 FROM
-    {source_name};
+    billing_raw_data;
