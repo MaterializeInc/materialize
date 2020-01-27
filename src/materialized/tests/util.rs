@@ -31,7 +31,7 @@ impl Config {
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
     let server = Server(materialized::serve(materialized::Config {
         logging_granularity: Some(Duration::from_millis(10)),
-        timestamp_frequency: Some(Duration::from_millis(50)),
+        timestamp_frequency: None,
         max_increment_ts_size: 1000,
         ts_source: None,
         threads: 1,

@@ -39,7 +39,6 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use coord::ExecuteResponse;
-use coord::TimestampChannel;
 
 use dataflow;
 use ore::option::OptionExt;
