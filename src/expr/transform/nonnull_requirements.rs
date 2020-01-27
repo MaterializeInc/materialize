@@ -100,7 +100,8 @@ impl NonNullRequirements {
                     // outputs zero rows if input is null
                     UnaryTableFunc::JsonbEach
                     | UnaryTableFunc::JsonbObjectKeys
-                    | UnaryTableFunc::JsonbArrayElements => {
+                    | UnaryTableFunc::JsonbArrayElements
+                    | UnaryTableFunc::Regex(_) => {
                         expr.non_null_requirements(&mut columns);
                     }
                 }

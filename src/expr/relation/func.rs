@@ -523,6 +523,21 @@ fn jsonb_array_elements<'a>(a: Datum<'a>) -> Vec<Row> {
     }
 }
 
+fn regex_match(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
+    match a {
+        Datum::String(s) => {
+            let r = r.inner();
+            let captures = r.captures(s)?;
+            let datums_iter = captures
+                .iter()
+                .skip(1)
+                .map(|m| Datum::from(m.map(|m| m.as_str())));
+            Some(Row::pack(datums_iter))
+        }
+        _ => None,
+    }
+}
+
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -563,10 +578,53 @@ impl fmt::Display for AggregateFunc {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct CaptureGroupDesc {
+    pub index: u32,
+    pub name: Option<String>,
+    pub nullable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct AnalyzedRegex(repr::regex::Regex, Vec<CaptureGroupDesc>);
+
+impl AnalyzedRegex {
+    pub fn new(s: &str) -> Result<Self, regex::Error> {
+        let r = regex::Regex::new(s)?;
+        let descs: Vec<_> = r
+            .capture_names()
+            .enumerate()
+            // The first capture is the entire matched string.
+            // This will often not be useful, so skip it.
+            // If people want it they can just surround their
+            // entire regex in an explicit capture group.
+            .skip(1)
+            .map(|(i, name)| CaptureGroupDesc {
+                index: i as u32,
+                name: name.map(String::from),
+                // TODO -- we can do better.
+                // https://github.com/MaterializeInc/materialize/issues/1685
+                nullable: true,
+            })
+            .collect();
+        Ok(Self(repr::regex::Regex(r), descs))
+    }
+    pub fn capture_groups_len(&self) -> usize {
+        self.1.len()
+    }
+    pub fn capture_groups_iter(&self) -> impl Iterator<Item = &CaptureGroupDesc> {
+        self.1.iter()
+    }
+    pub fn inner(&self) -> &regex::Regex {
+        &(self.0).0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UnaryTableFunc {
     JsonbEach,
     JsonbObjectKeys,
     JsonbArrayElements,
+    Regex(AnalyzedRegex),
 }
 
 impl UnaryTableFunc {
@@ -580,6 +638,7 @@ impl UnaryTableFunc {
             UnaryTableFunc::JsonbEach => jsonb_each(datum),
             UnaryTableFunc::JsonbObjectKeys => jsonb_object_keys(datum),
             UnaryTableFunc::JsonbArrayElements => jsonb_array_elements(datum),
+            UnaryTableFunc::Regex(a) => regex_match(datum, a).into_iter().collect(),
         }
     }
 
@@ -591,6 +650,10 @@ impl UnaryTableFunc {
             ],
             UnaryTableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],
             UnaryTableFunc::JsonbArrayElements => vec![ColumnType::new(ScalarType::Jsonb)],
+            UnaryTableFunc::Regex(a) => a
+                .capture_groups_iter()
+                .map(|cg| ColumnType::new(ScalarType::String).nullable(cg.nullable))
+                .collect(),
         })
     }
 
@@ -599,6 +662,7 @@ impl UnaryTableFunc {
             UnaryTableFunc::JsonbEach => 2,
             UnaryTableFunc::JsonbObjectKeys => 1,
             UnaryTableFunc::JsonbArrayElements => 1,
+            UnaryTableFunc::Regex(a) => a.capture_groups_len(),
         }
     }
 }
@@ -609,6 +673,7 @@ impl fmt::Display for UnaryTableFunc {
             UnaryTableFunc::JsonbEach => f.write_str("jsonb_each"),
             UnaryTableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
             UnaryTableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
+            UnaryTableFunc::Regex(a) => f.write_fmt(format_args!("regex_parse(_, {:?})", a.0)),
         }
     }
 }
