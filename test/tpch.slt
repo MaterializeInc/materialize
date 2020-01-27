@@ -190,7 +190,7 @@ ORDER BY
     s_acctbal DESC, n_name, s_name, p_partkey
 ----
 Let {
-  l16 = Filter {
+  l0 = Filter {
     predicates: [^.*BRASS$ ~ #9, #10 = 15, #26 = "EUROPE"],
     Join {
       variables: [
@@ -223,7 +223,7 @@ Project {
   outputs: [19, 15, 22, 5, 7, 16, 18, 20],
   Join {
     variables: [[(0, 5), (1, 0)], [(0, 3), (1, 1)]],
-    Get { l16 },
+    Get { l0 },
     Reduce {
       group_key: [#5],
       aggregates: [min(#3)],
@@ -237,7 +237,7 @@ Project {
             [(3, 2), (4, 0)]
           ],
           Get { materialize.public.partsupp (u9) },
-          Distinct { group_key: [#5], Get { l16 } },
+          Distinct { group_key: [#5], Get { l0 } },
           ArrangeBy {
             keys: [[#0]],
             Get { materialize.public.supplier (u7) }
@@ -334,7 +334,7 @@ ORDER BY
     o_orderpriority
 ----
 Let {
-  l4 = Filter {
+  l0 = Filter {
     predicates: [datetots #4 < 1993-10-01 00:00:00, #4 >= 1993-07-01],
     Get { materialize.public.orders (u13) }
   }
@@ -344,7 +344,7 @@ Reduce {
   aggregates: [countall(null)],
   Join {
     variables: [[(0, 0), (1, 0)]],
-    Get { l4 },
+    Get { l0 },
     Distinct {
       group_key: [#16],
       Join {
@@ -353,7 +353,7 @@ Reduce {
           predicates: [#11 < #12],
           Get { materialize.public.lineitem (u15) }
         },
-        Get { l4 }
+        Get { l0 }
       }
     }
   }
@@ -436,7 +436,7 @@ WHERE
     AND l_discount BETWEEN 0.06 - 0.01 AND 0.07
 ----
 Let {
-  l4 = Reduce {
+  l0 = Reduce {
     group_key: [],
     aggregates: [sum(#5 * #6)],
     Filter {
@@ -452,11 +452,11 @@ Let {
   }
 } in
 Union {
-  Get { l4 },
+  Get { l0 },
   Map {
     scalars: [null],
     Union {
-      Project { outputs: [], Negate { Get { l4 } } },
+      Project { outputs: [], Negate { Get { l0 } } },
       Constant [[]]
     }
   }
@@ -953,7 +953,7 @@ ORDER BY
     c_count DESC
 ----
 Let {
-  l7 = Join {
+  l0 = Join {
     variables: [[(0, 1), (1, 0)]],
     Filter {
       predicates: [!(^.*special.*requests.*$ ~ #8)],
@@ -972,7 +972,7 @@ Reduce {
     group_key: [#0],
     aggregates: [count(#8)],
     Union {
-      Project { outputs: [9 .. 16, 0, 9, 2 .. 8], Get { l7 } },
+      Project { outputs: [9 .. 16, 0, 9, 2 .. 8], Get { l0 } },
       Map {
         scalars: [
           null,
@@ -989,7 +989,7 @@ Reduce {
           Negate {
             Distinct {
               group_key: [#9, #10, #11, #12, #13, #14, #15, #16],
-              Get { l7 }
+              Get { l0 }
             }
           },
           Get { materialize.public.customer (u11) }
@@ -1017,7 +1017,7 @@ WHERE
     AND l_shipdate < DATE '1996-01-01' + INTERVAL '1' month
 ----
 Let {
-  l7 = Reduce {
+  l0 = Reduce {
     group_key: [],
     aggregates: [
       sum(if ^PROMO.*$ ~ #20 then #5 * (100dec - #6) else 0dec),
@@ -1041,11 +1041,11 @@ Project {
   Map {
     scalars: [(((10000dec * #0) * 10000000dec) / #1) * 1000dec],
     Union {
-      Get { l7 },
+      Get { l0 },
       Map {
         scalars: [null, null],
         Union {
-          Project { outputs: [], Negate { Get { l7 } } },
+          Project { outputs: [], Negate { Get { l0 } } },
           Constant [[]]
         }
       }
@@ -1151,7 +1151,7 @@ ORDER BY
     p_size
 ----
 Let {
-  l7 = Filter {
+  l0 = Filter {
     predicates: [
       !(^MEDIUM POLISHED.*$ ~ #9),
       (
@@ -1178,14 +1178,14 @@ Let {
     }
   }
 } in
-Let { l8 = Distinct { group_key: [#1], Get { l7 } } } in
+Let { l1 = Distinct { group_key: [#1], Get { l0 } } } in
 Let {
-  l12 = Reduce {
+  l2 = Reduce {
     group_key: [#0],
     aggregates: [all(#0 != #1)],
     Join {
       variables: [],
-      Get { l8 },
+      Get { l1 },
       Filter {
         predicates: [^.*Customer.*Complaints.*$ ~ #6],
         Get { materialize.public.supplier (u7) }
@@ -1198,14 +1198,14 @@ Reduce {
   aggregates: [count(distinct #1)],
   Join {
     variables: [[(0, 1), (1, 0)]],
-    Get { l7 },
+    Get { l0 },
     Union {
-      Filter { predicates: [#1], Get { l12 } },
+      Filter { predicates: [#1], Get { l2 } },
       Map {
         scalars: [true],
         Union {
-          Project { outputs: [0], Negate { Get { l12 } } },
-          Get { l8 }
+          Project { outputs: [0], Negate { Get { l2 } } },
+          Get { l1 }
         }
       }
     }
@@ -1234,7 +1234,7 @@ WHERE
   )
 ----
 Let {
-  l7 = Filter {
+  l0 = Filter {
     predicates: [#19 = "Brand#23", #22 = "MED BOX"],
     Join {
       variables: [[(0, 1), (1, 0)]],
@@ -1244,14 +1244,14 @@ Let {
   }
 } in
 Let {
-  l14 = Reduce {
+  l1 = Reduce {
     group_key: [],
     aggregates: [sum(#5)],
     Filter {
       predicates: [(#4 * 10000000dec) < #28],
       Join {
         variables: [[(0, 1), (1, 0)]],
-        Get { l7 },
+        Get { l0 },
         Map {
           scalars: [
             2dec
@@ -1264,7 +1264,7 @@ Let {
             Join {
               variables: [[(0, 1), (1, 0)]],
               Get { materialize.public.lineitem (u15) },
-              Distinct { group_key: [#1], Get { l7 } }
+              Distinct { group_key: [#1], Get { l0 } }
             }
           }
         }
@@ -1277,11 +1277,11 @@ Project {
   Map {
     scalars: [(#0 * 10000000dec) / 70dec],
     Union {
-      Get { l14 },
+      Get { l1 },
       Map {
         scalars: [null],
         Union {
-          Project { outputs: [], Negate { Get { l14 } } },
+          Project { outputs: [], Negate { Get { l1 } } },
           Constant [[]]
         }
       }
@@ -1326,7 +1326,7 @@ ORDER BY
     o_orderdate
 ----
 Let {
-  l10 = Join {
+  l0 = Join {
     variables: [[(0, 0), (1, 0)], [(1, 1), (2, 0)]],
     Get { materialize.public.lineitem (u15) },
     ArrangeBy {
@@ -1344,7 +1344,7 @@ Reduce {
   aggregates: [sum(#4)],
   Join {
     variables: [[(0, 16), (1, 0)]],
-    Get { l10 },
+    Get { l0 },
     Reduce {
       group_key: [#0],
       aggregates: [any(true)],
@@ -1356,7 +1356,7 @@ Reduce {
           Join {
             variables: [[(0, 0), (1, 0)]],
             Get { materialize.public.lineitem (u15) },
-            Distinct { group_key: [#16], Get { l10 } }
+            Distinct { group_key: [#16], Get { l0 } }
           }
         }
       }
@@ -1404,7 +1404,7 @@ WHERE
     )
 ----
 Let {
-  l7 = Reduce {
+  l0 = Reduce {
     group_key: [],
     aggregates: [sum(#5 * (100dec - #6))],
     Filter {
@@ -1510,11 +1510,11 @@ Let {
   }
 } in
 Union {
-  Get { l7 },
+  Get { l0 },
   Map {
     scalars: [null],
     Union {
-      Project { outputs: [], Negate { Get { l7 } } },
+      Project { outputs: [], Negate { Get { l0 } } },
       Constant [[]]
     }
   }
@@ -1562,7 +1562,7 @@ ORDER BY
     s_name
 ----
 Let {
-  l7 = Filter {
+  l0 = Filter {
     predicates: [#8 = "CANADA"],
     Join {
       variables: [[(0, 3), (1, 0)]],
@@ -1575,21 +1575,21 @@ Let {
   }
 } in
 Let {
-  l12 = Join {
+  l1 = Join {
     variables: [],
-    Get { l7 },
+    Get { l0 },
     Get { materialize.public.partsupp (u9) }
   }
 } in
 Let {
-  l19 = Filter {
+  l2 = Filter {
     predicates: [^forest.*$ ~ #18],
     Map {
       scalars: [true],
       Join {
         variables: [[(0, 11), (1, 0), (2, 0)]],
-        Get { l12 },
-        Distinct { group_key: [#11], Get { l12 } },
+        Get { l1 },
+        Distinct { group_key: [#11], Get { l1 } },
         ArrangeBy {
           keys: [[#0]],
           Get { materialize.public.part (u5) }
@@ -1602,7 +1602,7 @@ Project {
   outputs: [1, 2],
   Join {
     variables: [[(0, 0), (1, 0)]],
-    Get { l7 },
+    Get { l0 },
     Reduce {
       group_key: [#0],
       aggregates: [any(true)],
@@ -1610,7 +1610,7 @@ Project {
         predicates: [(i32todec #13 * 1000dec) > #30],
         Join {
           variables: [[(0, 11), (1, 0)], [(0, 12), (1, 1)]],
-          Filter { predicates: [#0 = #12], Get { l19 } },
+          Filter { predicates: [#0 = #12], Get { l2 } },
           Map {
             scalars: [5dec * #2],
             Reduce {
@@ -1625,7 +1625,7 @@ Project {
                   ],
                   Get { materialize.public.lineitem (u15) }
                 },
-                Distinct { group_key: [#11, #12], Get { l19 } }
+                Distinct { group_key: [#11, #12], Get { l2 } }
               }
             }
           }
@@ -1679,7 +1679,7 @@ ORDER BY
     s_name
 ----
 Let {
-  l13 = Filter {
+  l0 = Filter {
     predicates: [#25 = "F", #33 = "SAUDI ARABIA"],
     Join {
       variables: [
@@ -1707,18 +1707,18 @@ Let {
   }
 } in
 Let {
-  l19 = Map {
+  l1 = Map {
     scalars: [true],
     Join {
       variables: [[(0, 0), (1, 0)], [(0, 16), (1, 1)]],
-      Get { l13 },
+      Get { l0 },
       Distinct {
         group_key: [#0, #1],
         Filter {
           predicates: [#4 != #1],
           Join {
             variables: [[(0, 0), (1, 0)]],
-            Distinct { group_key: [#0, #16], Get { l13 } },
+            Distinct { group_key: [#0, #16], Get { l0 } },
             Get { materialize.public.lineitem (u15) }
           }
         }
@@ -1726,13 +1726,13 @@ Let {
     }
   }
 } in
-Let { l20 = Distinct { group_key: [#0, #16], Get { l19 } } } in
+Let { l2 = Distinct { group_key: [#0, #16], Get { l1 } } } in
 Reduce {
   group_key: [#17],
   aggregates: [countall(null)],
   Join {
     variables: [[(0, 0), (1, 0)], [(0, 16), (1, 1)]],
-    Get { l19 },
+    Get { l1 },
     Union {
       Project {
         outputs: [0, 1],
@@ -1745,7 +1745,7 @@ Reduce {
                 predicates: [#4 != #1],
                 Join {
                   variables: [[(0, 0), (1, 0)]],
-                  Get { l20 },
+                  Get { l2 },
                   Filter {
                     predicates: [#12 > #11],
                     Get { materialize.public.lineitem (u15) }
@@ -1756,7 +1756,7 @@ Reduce {
           }
         }
       },
-      Get { l20 }
+      Get { l2 }
     }
   }
 }
@@ -1813,7 +1813,7 @@ ORDER BY
     cntrycode
 ----
 Let {
-  l12 = Filter {
+  l0 = Filter {
     predicates: [(#5 * 1000000dec) > #10],
     Join {
       variables: [],
@@ -1902,14 +1902,14 @@ Reduce {
               Join {
                 variables: [[(0, 1), (1, 0)]],
                 Get { materialize.public.orders (u13) },
-                Get { l12 }
+                Get { l0 }
               }
             }
           }
         }
       },
-      Project { outputs: [0], Get { l12 } }
+      Project { outputs: [0], Get { l0 } }
     },
-    Get { l12 }
+    Get { l0 }
   }
 }
