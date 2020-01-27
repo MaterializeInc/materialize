@@ -1,9 +1,29 @@
 # doc/user
 
 This is the root directory of the Materialize user docs, which are rendered by
-the Hugo site in </www> locally or at <https://materialize.io/docs>.
+the [Hugo](https://gohugo.io/) site in </www> locally or at <https://materialize.io/docs>.
 
 Instructions for previewing the documentation locally are contained in </www>.
+
+## Viewing the docs site locally
+
+1.
+    ```shell
+    cd <path to materialize>/www
+    ```
+
+1.
+    ```shell
+    hugo serve -D
+    ```
+
+1. Go to <http://localhost:1313/docs>
+
+If you're making changes to the site, you might want a more cache-busting version:
+
+```shell
+hugo server --disableFastRender --ignoreCache
+```
 
 ## Writing & managing docs
 
