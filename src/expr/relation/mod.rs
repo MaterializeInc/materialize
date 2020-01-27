@@ -1113,7 +1113,8 @@ pub struct IdGen {
 }
 
 impl IdGen {
-    fn allocate_id(&mut self) -> usize {
+    /// Allocates a new identifier and advances the generator.
+    pub fn allocate_id(&mut self) -> usize {
         let id = self.id;
         self.id += 1;
         id
