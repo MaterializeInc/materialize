@@ -5,8 +5,6 @@
 
 //! Protobuf source connector
 
-use std::fs;
-
 use failure::{bail, format_err, ResultExt};
 use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
@@ -24,36 +22,6 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, Scalar
 use crate::error::Result;
 
 pub mod test_util;
-
-pub fn read_descriptors(descriptor_source: &str) -> Result<Descriptors> {
-    match base64::decode(descriptor_source) {
-        Ok(decoded) => parse_descriptors_from_reader(&mut std::io::Cursor::new(decoded)),
-        Err(_) => read_descriptors_from_file(descriptor_source),
-    }
-}
-
-pub fn validate_proto_schema(message_name: &str, descriptor_source: &str) -> Result<RelationDesc> {
-    let descriptors = read_descriptors(descriptor_source)?;
-
-    validate_proto_schema_with_descriptors(message_name, &descriptors)
-}
-
-pub fn read_descriptors_from_file(descriptor_file: &str) -> Result<Descriptors> {
-    let abs = fs::canonicalize(descriptor_file)?;
-    let mut file = fs::File::open(&abs).map_err(|e| {
-        format_err!(
-            "Opening descriptor set file {} failed: {}",
-            abs.display(),
-            e
-        )
-    })?;
-    parse_descriptors_from_reader(&mut file)
-}
-
-fn parse_descriptors_from_reader(r: &mut impl std::io::Read) -> Result<Descriptors> {
-    let proto = protobuf::parse_from_reader(r).context("Parsing descriptor set failed")?;
-    Ok(Descriptors::from_proto(&proto))
-}
 
 fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<ScalarType> {
     Ok(match field.field_label() {
@@ -126,10 +94,13 @@ fn validate_proto_field_resolved(field: &FieldDescriptor, descriptors: &Descript
     Ok(())
 }
 
-pub fn validate_proto_schema_with_descriptors(
-    message_name: &str,
-    descriptors: &Descriptors,
-) -> Result<RelationDesc> {
+pub fn decode_descriptors(descriptors: &[u8]) -> Result<Descriptors> {
+    let proto = protobuf::parse_from_bytes(descriptors)
+        .context("parsing encoded protobuf descriptors failed")?;
+    Ok(Descriptors::from_proto(&proto))
+}
+
+pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
     let message = descriptors.message_by_name(message_name).ok_or_else(|| {
         format_err!(
             "Message {:?} not found in file descriptor set: {}",
@@ -169,21 +140,16 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    /// Build a decoder from a pre-validated message
+    /// Build a decoder from a pre-validated message.
     ///
-    /// The message `message_name` must exist in the descriptor set and be valid
+    /// The message `message_name` must exist in the descriptor set and be
+    /// valid.
     pub fn new(descriptors: Descriptors, message_name: &str) -> Decoder {
         // TODO: verify that name exists
         Decoder {
             descriptors,
             message_name: message_name.to_string(),
         }
-    }
-
-    pub fn from_descriptor_file(descriptor_file_name: &str, message_name: &str) -> Result<Decoder> {
-        let descriptors = read_descriptors(descriptor_file_name)?;
-        // TODO: should we validate message exists in descriptor?
-        Ok(Decoder::new(descriptors, message_name))
     }
 
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>> {
@@ -445,9 +411,8 @@ mod tests {
         ));
         descriptors.add_message(m1);
 
-        let mut relation =
-            super::validate_proto_schema_with_descriptors(".test.message1", &descriptors)
-                .expect("Failed to parse descriptor");
+        let mut relation = super::validate_descriptors(".test.message1", &descriptors)
+            .expect("Failed to parse descriptor");
 
         sanity_check_relation(
             &relation,
@@ -475,7 +440,7 @@ mod tests {
         ));
         descriptors.add_message(m2);
 
-        relation = super::validate_proto_schema_with_descriptors(".test.message2", &descriptors)
+        relation = super::validate_descriptors(".test.message2", &descriptors)
             .expect("Failed to parse descriptor");
 
         sanity_check_relation(

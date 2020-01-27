@@ -1416,12 +1416,13 @@ impl Parser {
         self.expect_keyword("FROM")?;
         let url = self.parse_literal_string()?;
         let schema = if self.parse_keywords(vec!["USING", "SCHEMA"]) {
-            let schema = if self.parse_keyword("REGISTRY") {
+            Some(if self.parse_keyword("FILE") {
+                SourceSchema::File(self.parse_literal_string()?)
+            } else if self.parse_keyword("REGISTRY") {
                 SourceSchema::Registry(self.parse_literal_string()?)
             } else {
-                SourceSchema::RawOrPath(self.parse_literal_string()?)
-            };
-            Some(schema)
+                SourceSchema::Inline(self.parse_literal_string()?)
+            })
         } else {
             None
         };

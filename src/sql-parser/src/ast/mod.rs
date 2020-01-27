@@ -813,8 +813,11 @@ impl fmt::Display for Statement {
                     Some(schema) => {
                         write!(f, " USING SCHEMA ")?;
                         match schema {
-                            SourceSchema::RawOrPath(schema) => {
+                            SourceSchema::Inline(schema) => {
                                 write!(f, "{}", Value::SingleQuotedString(schema.clone()))?;
+                            }
+                            SourceSchema::File(schema) => {
+                                write!(f, "FILE {}", Value::SingleQuotedString(schema.clone()))?;
                             }
                             SourceSchema::Registry(url) => {
                                 write!(f, "REGISTRY {}", Value::SingleQuotedString(url.clone()))?;
@@ -1124,12 +1127,13 @@ impl fmt::Display for Function {
     }
 }
 
-/// Specifies the schema associated with a given Kafka topic.
+/// Specifies the schema associated with a given source.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SourceSchema {
-    /// The schema is specified directly in the contained string
-    /// or its a path to a file
-    RawOrPath(String),
+    /// The schema is specified directly in the contained string.
+    Inline(String),
+    /// The schema is stored in the file at the specified path.
+    File(String),
     /// The schema is available in a Confluent-compatible schema registry that
     /// is accessible at the specified URL.
     Registry(String),

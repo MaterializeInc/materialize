@@ -192,6 +192,7 @@ define_keywords!(
     FALSE,
     FETCH,
     FIELDS,
+    FILE,
     FILTER,
     FIRST,
     FIRST_VALUE,

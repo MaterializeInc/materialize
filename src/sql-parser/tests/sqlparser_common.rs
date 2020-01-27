@@ -3342,7 +3342,7 @@ fn parse_create_materialized_view() {
 }
 
 #[test]
-fn parse_create_source_raw_schema() {
+fn parse_create_source_inline_schema() {
     let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA 'baz' WITH (name = 'val')";
     match verified_stmt(sql) {
         Statement::CreateSource {
@@ -3354,7 +3354,7 @@ fn parse_create_source_raw_schema() {
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
-            assert_eq!(SourceSchema::RawOrPath("baz".into()), schema.unwrap());
+            assert_eq!(SourceSchema::Inline("baz".into()), schema.unwrap());
             assert_eq!(
                 with_options,
                 vec![SqlOption {
@@ -3369,8 +3369,8 @@ fn parse_create_source_raw_schema() {
 }
 
 #[test]
-fn parse_create_source_path_schema_multiple_args() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA 'path' WITH (format = 'someformat', message_name = 'somemessage')";
+fn parse_create_source_file_schema_multiple_args() {
+    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA FILE 'path' WITH (format = 'someformat', message_name = 'somemessage')";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
@@ -3381,7 +3381,7 @@ fn parse_create_source_path_schema_multiple_args() {
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
-            assert_eq!(SourceSchema::RawOrPath("path".into()), schema.unwrap());
+            assert_eq!(SourceSchema::File("path".into()), schema.unwrap());
             assert_eq!(
                 with_options,
                 vec![
@@ -3427,7 +3427,7 @@ fn parse_create_source_registry() {
 
 #[test]
 fn parse_create_source_if_not_exists() {
-    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' USING SCHEMA ''";
+    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar'";
     match verified_stmt(sql) {
         Statement::CreateSource { if_not_exists, .. } => {
             assert!(if_not_exists);

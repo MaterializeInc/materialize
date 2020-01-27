@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::collections::HashMap;
+use std::fs;
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 
@@ -12,9 +13,12 @@ use protobuf::Message;
 use rand::Rng;
 use regex::{Captures, Regex};
 
+use repr::strconv;
+
 use crate::error::{Error, InputError, ResultExt};
 use crate::parser::{Command, PosCommand};
 
+mod file;
 mod kafka;
 mod sql;
 
@@ -28,6 +32,7 @@ pub struct Config {
 
 pub struct State {
     seed: u32,
+    temp_dir: tempfile::TempDir,
     pgclient: postgres::Client,
     schema_registry_url: String,
     ccsr_client: ccsr::Client,
@@ -72,7 +77,7 @@ pub trait Action {
     fn redo(&self, state: &mut State) -> Result<(), String>;
 }
 
-pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, InputError> {
+pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
     vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
@@ -92,13 +97,25 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
     );
     vars.insert("testdrive.seed".into(), state.seed.to_string());
     vars.insert(
-        "testdrive.protobuf-descriptors".into(),
-        base64::encode(
-            &crate::protobuf::gen::descriptors()
-                .write_to_bytes()
-                .unwrap(),
-        ),
+        "testdrive.temp-dir".into(),
+        state.temp_dir.path().display().to_string(),
     );
+    {
+        let protobuf_descriptors = crate::protobuf::gen::descriptors()
+            .write_to_bytes()
+            .unwrap();
+        vars.insert("testdrive.protobuf-descriptors".into(), {
+            let mut out = String::new();
+            strconv::format_bytes(&mut out, &protobuf_descriptors);
+            out
+        });
+        vars.insert("testdrive.protobuf-descriptors-file".into(), {
+            let path = state.temp_dir.path().join("protobuf-descriptors");
+            fs::write(&path, &protobuf_descriptors)
+                .err_ctx("writing protobuf descriptors file".into())?;
+            path.display().to_string()
+        });
+    }
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
@@ -112,6 +129,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
                     *line = subst(line)?;
                 }
                 match builtin.name.as_ref() {
+                    "file-write" => Box::new(file::build_write(builtin).map_err(wrap_err)?),
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
                     "set" => {
@@ -122,7 +140,8 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
                         return Err(InputError {
                             msg: format!("unknown built-in command {}", builtin.name),
                             pos: cmd.pos,
-                        });
+                        }
+                        .into());
                     }
                 }
             }
@@ -172,6 +191,7 @@ fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, 
 
 pub fn create_state(config: &Config) -> Result<State, Error> {
     let seed = rand::thread_rng().gen();
+    let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory".into())?;
 
     let pgclient = {
         let url = config
@@ -245,6 +265,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
     Ok(State {
         seed,
+        temp_dir,
         pgclient,
         schema_registry_url,
         ccsr_client,
