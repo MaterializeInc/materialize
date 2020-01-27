@@ -744,7 +744,7 @@ fn plan_table_function(
         | ("jsonb_array_elements", _)
         | ("jsonb_each_text", _)
         | ("jsonb_array_elements_text", _) => bail!("{}() requires exactly one argument", ident),
-        ("regex", [regex, haystack]) => {
+        ("regexp_extract", [regex, haystack]) => {
             let expr = plan_expr(ecx, haystack, None)?;
             let regex = match &regex {
                 Expr::Value(Value::SingleQuotedString(s)) => s,
@@ -762,7 +762,7 @@ fn plan_table_function(
                 .collect();
             let call = RelationExpr::FlatMapUnary {
                 input: Box::new(left),
-                func: UnaryTableFunc::Regex(ar),
+                func: UnaryTableFunc::RegexpExtract(ar),
                 expr,
             };
             let scope = Scope::from_source(
@@ -772,7 +772,7 @@ fn plan_table_function(
             );
             Ok((call, ecx.scope.clone().product(scope)))
         }
-        ("regex", _) => bail!("{}() requires exactly two arguments", ident),
+        ("regexp_extract", _) => bail!("{}() requires exactly two arguments", ident),
         _ => bail!("unsupported table function: {}", ident),
     }
 }
@@ -3387,7 +3387,7 @@ fn is_table_func(name: &str) -> bool {
         | "jsonb_array_elements"
         | "jsonb_each_text"
         | "jsonb_array_elements_text"
-        | "regex" => true,
+        | "regexp_extract" => true,
         _ => false,
     }
 }

@@ -12,7 +12,7 @@ statement ok
 INSERT INTO data VALUES ('asdfjkl'), ('foo'), ('asdf'), (NULL), ('jkl')
 
 query TTT
-SELECT data.*, reg.* FROM data, regex('(asdf)|(?P<foo>jkl)', data.input) reg ORDER BY data.input
+SELECT data.*, reg.* FROM data, regexp_extract('(asdf)|(?P<foo>jkl)', data.input) reg ORDER BY data.input
 ----
 asdf asdf NULL
 asdfjkl asdf NULL
