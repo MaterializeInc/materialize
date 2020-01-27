@@ -475,10 +475,6 @@ where
             SequencedCommand::DropSources(names) => {
                 for name in names {
                     self.local_inputs.remove(&name);
-                    // TODO(natacha): implement
-                    unimplemented!();
-                    // self.timestamp_histories.borrow_mut().remove(&name);
-                    // self.global_source_mapping.remove(&name);
                 }
             }
 
