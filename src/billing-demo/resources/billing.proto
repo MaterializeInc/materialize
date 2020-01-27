@@ -1,0 +1,35 @@
+// Copyright 2020 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
+syntax = "proto3";
+
+package billing;
+
+message ResourceInfo {
+  int32 cpu_num = 1;
+  int32 memory_gb = 2;
+  int32 disk_gb = 3;
+  int32 client_id = 4;
+  int32 vm_id = 5;
+}
+
+message Record {
+  string id = 1;
+  string interval_start = 2;
+  string interval_end = 3;
+
+  string meter = 4; // What's being measured
+  uint32 value = 5;
+
+  ResourceInfo info = 6;
+}
+
+message Batch {
+  string id = 1; // idempotency key
+  string interval_start = 3;
+  string interval_end = 4;
+
+  repeated Record records = 7;
+}

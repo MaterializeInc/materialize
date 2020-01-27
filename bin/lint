@@ -63,11 +63,12 @@ copyright_files=$(grep -vE \
     -e '\.(md|json|asc|png|jpe?g|svg|eot|ttf|woff2?)$' \
     -e '^www/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^misc/docker/ci-builder/ssh_known_hosts$' \
-    -e '\.protospec$' \
+    -e '\.(protospec|pb)$' \
+    -e '\.in$' \
     <<< "$files"
 )
 
-newline_files=$(grep -vE '\.(png|jpe?g|eot|ttf|woff2?|protospec)$' <<< "$files")
+newline_files=$(grep -vE '\.(png|jpe?g|eot|ttf|woff2?|protospec|pb|in)$' <<< "$files")
 
 shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.md'))
 
