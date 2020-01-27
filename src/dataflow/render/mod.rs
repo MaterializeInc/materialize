@@ -103,6 +103,14 @@ pub(crate) fn build_dataflow<A: Allocate>(
             let mut context = Context::<_, _, _, Timestamp>::new();
 
             let mut source_tokens = HashMap::new();
+            // use an export id to distinguish between different dataflows
+            let first_export_id = if let Some((id, _, _)) = dataflow.index_exports.first() {
+                *id
+            } else if let Some((id, _)) = dataflow.sink_exports.first() {
+                *id
+            } else {
+                unreachable!()
+            };
             // Load declared sources into the rendering context.
             for (source_number, (src_id, src)) in
                 dataflow.source_imports.clone().into_iter().enumerate()
@@ -115,7 +123,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         let read_from_kafka = hash % worker_peers == worker_index;
                         source::kafka(
                             region,
-                            format!("kafka-{}-{}", dataflow.debug_name, source_number),
+                            format!("kafka-{}-{}", first_export_id, source_number),
                             c,
                             read_from_kafka,
                         )

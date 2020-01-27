@@ -1397,15 +1397,29 @@ where
     /// Initializes managed state and logs the insertion (and removal of any existing view).
     fn insert_view(&mut self, view_id: GlobalId, view: &View<OptimizedRelationExpr>) {
         self.views.remove(&view_id);
-        let mut out = Vec::new();
-        view.relation_expr.as_ref().global_uses(&mut out);
-        out.sort();
-        out.dedup();
-        out = out
+        let mut uses_views = Vec::new();
+        view.relation_expr.as_ref().global_uses(&mut uses_views);
+        uses_views.sort();
+        uses_views.dedup();
+        let (queryable, uses_views): (Vec<_>, Vec<_>) = uses_views
             .into_iter()
-            .filter(|id| self.views.contains_key(&id))
-            .collect();
-        self.views.insert(view_id, ViewState::new(out));
+            .map(|id| {
+                if let Some(view_state) = self.views.get(&id) {
+                    (view_state.queryable, id, true)
+                } else {
+                    (false, id, false)
+                }
+            })
+            .filter(|(_, _, keep)| *keep)
+            .map(|(queryable, id, _)| (queryable, id))
+            .unzip();
+        self.views.insert(
+            view_id,
+            ViewState::new(
+                !queryable.is_empty() && queryable.iter().all(|q| *q),
+                uses_views,
+            ),
+        );
     }
 
     /// Add an index to a view in the coordinator.
@@ -1589,9 +1603,9 @@ pub struct ViewState {
 }
 
 impl ViewState {
-    fn new(uses_views: Vec<GlobalId>) -> Self {
+    fn new(queryable: bool, uses_views: Vec<GlobalId>) -> Self {
         ViewState {
-            queryable: false,
+            queryable,
             uses_views,
             default_idx: None,
             primary_idxes: HashMap::new(),
