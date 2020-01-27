@@ -744,6 +744,35 @@ fn plan_table_function(
         | ("jsonb_array_elements", _)
         | ("jsonb_each_text", _)
         | ("jsonb_array_elements_text", _) => bail!("{}() requires exactly one argument", ident),
+        ("regex", [regex, haystack]) => {
+            let expr = plan_expr(ecx, haystack, None)?;
+            let regex = match &regex {
+                Expr::Value(Value::SingleQuotedString(s)) => s,
+                _ => bail!("Regex must be a string literal."),
+            };
+
+            let ar = expr::AnalyzedRegex::new(regex)?;
+            let colnames: Vec<_> = ar
+                .capture_groups_iter()
+                .map(|cgd| {
+                    cgd.name
+                        .clone()
+                        .unwrap_or_else(|| format!("column{}", cgd.index))
+                })
+                .collect();
+            let call = RelationExpr::FlatMapUnary {
+                input: Box::new(left),
+                func: UnaryTableFunc::Regex(ar),
+                expr,
+            };
+            let scope = Scope::from_source(
+                alias,
+                colnames.iter().map(|name| Some(ColumnName::from(&**name))),
+                Some(ecx.qcx.outer_scope.clone()),
+            );
+            Ok((call, ecx.scope.clone().product(scope)))
+        }
+        ("regex", _) => bail!("{}() requires exactly two arguments", ident),
         _ => bail!("unsupported table function: {}", ident),
     }
 }
@@ -3357,7 +3386,8 @@ fn is_table_func(name: &str) -> bool {
         | "jsonb_object_keys"
         | "jsonb_array_elements"
         | "jsonb_each_text"
-        | "jsonb_array_elements_text" => true,
+        | "jsonb_array_elements_text"
+        | "regex" => true,
         _ => false,
     }
 }
