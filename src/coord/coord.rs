@@ -311,7 +311,6 @@ where
 
                while let Some(msg) = block_on(messages.next()) {
                     // Check for timestamp updates
-                    // TODO(natacha): cleaner if make channel a future channel?
                     if let Some(source_updates) = &self.source_updates {
                         while let Ok(update) = source_updates.receiver.try_recv() {
                             match update {

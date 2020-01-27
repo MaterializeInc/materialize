@@ -44,13 +44,7 @@ INSERT INTO schemas VALUES
     (2, NULL, 'pg_catalog'),
     (3, 1, 'public');
 
-CREATE TABLE IF NOT EXISTS timestamp (
-    sid blob NOT NULL,
-    vid blob NOT NULL,
-    timestamp unsigned bigint NOT NULL,
-    offset blob NOT NULL,
-    PRIMARY KEY (sid,vid,timestamp)
-);";
+";
 
 #[derive(Debug)]
 pub struct Connection {

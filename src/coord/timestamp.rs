@@ -114,6 +114,19 @@ impl Timestamper {
             None => rusqlite::Connection::open_in_memory().expect("Could not connect"),
         };
 
+        sqlite
+            .prepare(
+                "CREATE TABLE IF NOT EXISTS timestamp (
+            sid blob NOT NULL,
+            vid blob NOT NULL,
+            timestamp unsigned bigint NOT NULL,
+            offset blob NOT NULL,
+            PRIMARY KEY (sid,vid,timestamp));",
+            )
+            .expect("Failed to prepare CREATE statement")
+            .execute(params![])
+            .expect("Failed to CREATE timestamp table");
+
         // Recover existing data by running max on the timestamp count. This will ensure that
         // there will never be two duplicate entries and that there is a continuous stream
         // of timestamp updates across reboots
