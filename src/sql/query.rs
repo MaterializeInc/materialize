@@ -748,7 +748,7 @@ fn plan_table_function(
             let expr = plan_expr(ecx, haystack, None)?;
             let regex = match &regex {
                 Expr::Value(Value::SingleQuotedString(s)) => s,
-                _ => bail!("Regex must be a constant string."),
+                _ => bail!("Regex must be a string literal."),
             };
 
             let ar = expr::AnalyzedRegex::new(regex)?;
