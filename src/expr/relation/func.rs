@@ -673,7 +673,7 @@ impl fmt::Display for UnaryTableFunc {
             UnaryTableFunc::JsonbEach => f.write_str("jsonb_each"),
             UnaryTableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
             UnaryTableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
-            UnaryTableFunc::RegexpExtract(a) => f.write_fmt(format_args!("regex_parse({:?}, _)", a.0)),
+            UnaryTableFunc::RegexpExtract(a) => f.write_fmt(format_args!("regexp_extract({:?}, _)", a.0)),
         }
     }
 }
