@@ -21,7 +21,7 @@ services:
     init: true
     command: --threads 8 --bootstrap-sql=/usr/local/etc/materialized/bootstrap.sql
     environment:
-      - MZ_LOG=dataflow/critial,info
+      - MZ_LOG=dataflow=error,info
       - DIFFERENTIAL_EAGER_MERGE=1000
   zookeeper:
     image: confluentinc/cp-zookeeper:5.3.0
