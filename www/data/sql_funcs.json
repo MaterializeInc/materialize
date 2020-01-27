@@ -132,7 +132,7 @@
                 "url": "substring"
             },
             {
-                "signature": "regex(regex: str, haystack: str) -> Col<string>",
+                "signature": "regexp_extract(regex: str, haystack: str) -> Col<string>",
                 "description": "Values of the capture groups of `regex` as matched in `haystack`"
             }
         ]
