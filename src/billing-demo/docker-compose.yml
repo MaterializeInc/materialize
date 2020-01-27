@@ -1,0 +1,51 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+
+# Map from host-port:internal port
+#
+# This mostly just shows all the ports that are available to the host system, if you want
+# to change these you must restart the docker-compose cluster.
+x-port-mappings:
+  - &kafka 9092:9092
+  - &materialized 6875:6875
+
+version: '3.7'
+services:
+  materialized:
+    image: materialize/materialized:latest
+    ports:
+     - *materialized
+    init: true
+    command: --threads 8 --bootstrap-sql=/usr/local/etc/materialized/bootstrap.sql
+    environment:
+      - MZ_LOG=dataflow=error,info
+      - DIFFERENTIAL_EAGER_MERGE=1000
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  kafka:
+    image: confluentinc/cp-enterprise-kafka:5.3.0
+    ports:
+      - *kafka
+    depends_on: [zookeeper]
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:9092"
+      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      # To avoid race condition with control-center
+      CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
+      KAFKA_JMX_PORT: 9991
+  billing-demo:
+    image: materialize/billing-demo:latest
+    environment:
+      - RUST_LOG=billing-demo=debug,info
+    command: --kafka-topic billsbillsbills --message-count 1000 --materialized-host materialized --kafka-host kafka
+    depends_on: [kafka, materialized]

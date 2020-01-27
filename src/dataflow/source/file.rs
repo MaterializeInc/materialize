@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::{Fuse, Stream, StreamExt};
-use log::error;
+use log::{error, warn};
 use notify::{RecursiveMode, Watcher};
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
@@ -244,7 +244,7 @@ where
             let mut next_activation_duration = HEARTBEAT;
             let next_time = if cap_time > sys_time {
                 if cap_time != sys_time + 1 {
-                    error!(
+                    warn!(
                         "{}: fast-forwarding out-of-order Unix timestamp {}ms ({} -> {})",
                         n2,
                         cap_time - sys_time,

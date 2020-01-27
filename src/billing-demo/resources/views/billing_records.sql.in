@@ -1,7 +1,7 @@
 CREATE VIEW billing_records AS
 SELECT
     r.value->>'id' id,
-    billing_source.id batch_id,
+    billing_raw_data.id batch_id,
     r.value->>'interval_start' interval_start,
     r.value->>'interval_end' interval_end,
     r.value->>'meter' meter,
@@ -12,5 +12,5 @@ SELECT
     (r.value->'info'->'memory_gb')::int memory_gb,
     (r.value->'info'->'disk_gb')::int disk_gb
 FROM
-    billing_source,
+    billing_raw_data,
     jsonb_array_elements(records) AS r;

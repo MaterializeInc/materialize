@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
-use log::error;
+use log::{error, warn};
 use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{ClientConfig, ClientContext};
@@ -99,7 +99,7 @@ where
                             if ms >= *cap.time() {
                                 cap.downgrade(&ms)
                             } else {
-                                error!(
+                                warn!(
                                     "{}: fast-forwarding out-of-order Kafka timestamp {}ms ({} -> {})",
                                     name,
                                     cur - ms,
