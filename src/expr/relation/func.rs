@@ -523,7 +523,7 @@ fn jsonb_array_elements<'a>(a: Datum<'a>) -> Vec<Row> {
     }
 }
 
-fn regex_match(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
+fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
     match a {
         Datum::String(s) => {
             let r = r.inner();
@@ -624,7 +624,7 @@ pub enum UnaryTableFunc {
     JsonbEach,
     JsonbObjectKeys,
     JsonbArrayElements,
-    Regex(AnalyzedRegex),
+    RegexpExtract(AnalyzedRegex),
 }
 
 impl UnaryTableFunc {
@@ -638,7 +638,7 @@ impl UnaryTableFunc {
             UnaryTableFunc::JsonbEach => jsonb_each(datum),
             UnaryTableFunc::JsonbObjectKeys => jsonb_object_keys(datum),
             UnaryTableFunc::JsonbArrayElements => jsonb_array_elements(datum),
-            UnaryTableFunc::Regex(a) => regex_match(datum, a).into_iter().collect(),
+            UnaryTableFunc::RegexpExtract(a) => regexp_extract(datum, a).into_iter().collect(),
         }
     }
 
@@ -650,7 +650,7 @@ impl UnaryTableFunc {
             ],
             UnaryTableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],
             UnaryTableFunc::JsonbArrayElements => vec![ColumnType::new(ScalarType::Jsonb)],
-            UnaryTableFunc::Regex(a) => a
+            UnaryTableFunc::RegexpExtract(a) => a
                 .capture_groups_iter()
                 .map(|cg| ColumnType::new(ScalarType::String).nullable(cg.nullable))
                 .collect(),
@@ -662,7 +662,7 @@ impl UnaryTableFunc {
             UnaryTableFunc::JsonbEach => 2,
             UnaryTableFunc::JsonbObjectKeys => 1,
             UnaryTableFunc::JsonbArrayElements => 1,
-            UnaryTableFunc::Regex(a) => a.capture_groups_len(),
+            UnaryTableFunc::RegexpExtract(a) => a.capture_groups_len(),
         }
     }
 }
@@ -673,7 +673,7 @@ impl fmt::Display for UnaryTableFunc {
             UnaryTableFunc::JsonbEach => f.write_str("jsonb_each"),
             UnaryTableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
             UnaryTableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
-            UnaryTableFunc::Regex(a) => f.write_fmt(format_args!("regex_parse({:?}, _)", a.0)),
+            UnaryTableFunc::RegexpExtract(a) => f.write_fmt(format_args!("regex_parse({:?}, _)", a.0)),
         }
     }
 }

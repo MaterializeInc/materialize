@@ -762,7 +762,7 @@ fn plan_table_function(
                 .collect();
             let call = RelationExpr::FlatMapUnary {
                 input: Box::new(left),
-                func: UnaryTableFunc::Regex(ar),
+                func: UnaryTableFunc::RegexpExtract(ar),
                 expr,
             };
             let scope = Scope::from_source(

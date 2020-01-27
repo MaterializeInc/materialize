@@ -101,7 +101,7 @@ impl NonNullRequirements {
                     UnaryTableFunc::JsonbEach
                     | UnaryTableFunc::JsonbObjectKeys
                     | UnaryTableFunc::JsonbArrayElements
-                    | UnaryTableFunc::Regex(_) => {
+                    | UnaryTableFunc::RegexpExtract(_) => {
                         expr.non_null_requirements(&mut columns);
                     }
                 }
