@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 default-run = "materialized"
 # required for cargo-deb
-authors = ["Materialized, inc."]
+authors = ["Materialize, Inc."]
 license = "proprietary"
 
 [lib]
