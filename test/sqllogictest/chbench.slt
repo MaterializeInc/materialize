@@ -1214,42 +1214,16 @@ Let {
   l2 = Reduce {
     group_key: [#0],
     aggregates: [all(#0 != #1)],
-<<<<<<< HEAD
-<<<<<<< HEAD
     Join {
       variables: [],
-<<<<<<< HEAD
-      Get { l1 },
-      Filter {
-        predicates: [^.*bad.*$ ~ #6],
-=======
-    Filter {
-      predicates: [^.*bad.*$ ~ #7],
-      Join {
-        variables: [],
-        ArrangeBy { keys: [[]], Get { l3 } },
->>>>>>> merge master
-=======
-    Join {
-      variables: [],
-<<<<<<< HEAD
-      ArrangeBy { keys: [[]], Get { l3 } },
-      Filter {
-        predicates: [^.*bad.*$ ~ #6],
->>>>>>> only lift predicate when arrangement needed
-        Get { materialize.public.supplier (u21) }
-=======
-=======
       implementation: DifferentialLinear,
->>>>>>> teach SLT to parse indexes
-      Get { l3 },
+      Get { l1 },
       ArrangeBy {
         keys: [[]],
         Filter {
           predicates: [^.*bad.*$ ~ #6],
           Get { materialize.public.supplier (u34) }
         }
->>>>>>> permute join order for readability
       }
     }
   }
@@ -1259,20 +1233,7 @@ Reduce {
   aggregates: [count(distinct #17)],
   Join {
     variables: [[(0, 17), (1, 0)]],
-<<<<<<< HEAD
-<<<<<<< HEAD
-    ArrangeBy { keys: [[#17]], Get { l0 } },
-    Union {
-      Filter { predicates: [#1], Get { l2 } },
-      Map {
-        scalars: [true],
-        Union {
-          Project { outputs: [0], Negate { Get { l2 } } },
-          Get { l1 }
-=======
-=======
     implementation: DifferentialLinear,
->>>>>>> teach SLT to parse indexes
     Get { l0 },
     ArrangeBy {
       keys: [[#0]],
@@ -1282,9 +1243,8 @@ Reduce {
           scalars: [true],
           Union {
             Project { outputs: [0], Negate { Get { l2 } } },
-            Get { l3 }
+            Get { l1 }
           }
->>>>>>> permute join order for readability
         }
       }
     }
@@ -1524,48 +1484,10 @@ Let {
   }
 } in
 Let {
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-  l1 = Join {
-    variables: [[(1, 4), (2, 0)]],
-    Get { l0 },
-    Filter {
-      predicates: [datetots #6 > 2010-05-23 12:00:00],
-=======
-=======
->>>>>>> teach SLT to parse indexes
-  l3 = Filter {
+  l1 = Filter {
     predicates: [datetots #35 > 2010-05-23 12:00:00],
     Join {
       variables: [[(1, 0), (2, 4)]],
-<<<<<<< HEAD
-      ArrangeBy { keys: [[]], Get { l0 } },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.stock (u17) }
-      },
->>>>>>> merge master
-=======
-  l3 = Join {
-    variables: [[(1, 0), (2, 4)]],
-    Get { l0 },
-    ArrangeBy { keys: [[]], Get { materialize.public.stock (u17) } },
-    ArrangeBy {
-<<<<<<< HEAD
-      keys: [[#0]],
-      Get { materialize.public.stock (u17) }
-    },
-    Filter {
-      predicates: [datetots #6 > 2010-05-23 12:00:00],
->>>>>>> only lift predicate when arrangement needed
-      Get { materialize.public.orderline (u13) }
-=======
-      keys: [[#4]],
-      Filter {
-        predicates: [datetots #6 > 2010-05-23 12:00:00],
-        Get { materialize.public.orderline (u13) }
-=======
       implementation: DifferentialLinear,
       Get { l0 },
       ArrangeBy {
@@ -1575,9 +1497,7 @@ Let {
       ArrangeBy {
         keys: [[#4]],
         Get { materialize.public.orderline (u19) }
->>>>>>> teach SLT to parse indexes
       }
->>>>>>> permute join order for readability
     }
   }
 } in
@@ -1600,25 +1520,16 @@ Project {
             Filter {
               predicates: [^co.*$ ~ #44],
               Join {
-<<<<<<< HEAD
-                variables: [[(0, 21), (1, 0), (2, 0)]],
-                Filter {
-                  predicates: [#0 = ((#21 * #22) % 10000)],
-                  Get { l1 }
-                },
-                Distinct { group_key: [#21], Get { l1 } },
-=======
                 variables: [[(0, 11), (1, 0), (2, 0)]],
                 implementation: DifferentialLinear,
                 Filter {
                   predicates: [#0 = ((#11 * #12) % 10000)],
-                  Get { l3 }
+                  Get { l1 }
                 },
                 ArrangeBy {
                   keys: [[#0]],
-                  Distinct { group_key: [#11], Get { l3 } }
+                  Distinct { group_key: [#11], Get { l1 } }
                 },
->>>>>>> merge master
                 ArrangeBy {
                   keys: [[#0]],
                   Get { materialize.public.item (u24) }
@@ -1692,15 +1603,7 @@ Let {
     }
   }
 } in
-<<<<<<< HEAD
-<<<<<<< HEAD
 Let { l1 = Distinct { group_key: [#0, #1, #2, #6], Get { l0 } } } in
-=======
-Let { l2 = Distinct { group_key: [#7, #8, #9, #13], Get { l0 } } } in
->>>>>>> merge master
-=======
-Let { l2 = Distinct { group_key: [#0, #1, #2, #6], Get { l0 } } } in
->>>>>>> permute join order for readability
 Reduce {
   group_key: [#37],
   aggregates: [countall(null)],
@@ -1711,35 +1614,7 @@ Reduce {
       [(0, 2), (1, 2)],
       [(0, 6), (1, 3)]
     ],
-<<<<<<< HEAD
-<<<<<<< HEAD
-    ArrangeBy { keys: [[#7, #8, #9, #13]], Get { l0 } },
-    Union {
-      Project {
-        outputs: [0 .. 3],
-        Negate {
-          Map {
-            scalars: [true],
-            Distinct {
-              group_key: [#0, #1, #2, #3],
-              Filter {
-                predicates: [#10 > #3],
-                Join {
-                  variables: [
-                    [(0, 0), (1, 0)],
-                    [(0, 1), (1, 1)],
-                    [(0, 2), (1, 2)]
-                  ],
-<<<<<<< HEAD
-                  Get { l1 },
-=======
-                  ArrangeBy { keys: [[#0, #1, #2]], Get { l2 } },
->>>>>>> merge master
-                  Get { materialize.public.orderline (u13) }
-=======
-=======
     implementation: DifferentialLinear,
->>>>>>> teach SLT to parse indexes
     Get { l0 },
     ArrangeBy {
       keys: [[#0, #1, #2, #3]],
@@ -1760,26 +1635,19 @@ Reduce {
                       [(0, 2), (1, 2)]
                     ],
                     implementation: DifferentialLinear,
-                    Get { l2 },
+                    Get { l1 },
                     ArrangeBy {
                       keys: [[#2, #1, #0]],
                       Get { materialize.public.orderline (u19) }
                     }
                   }
->>>>>>> permute join order for readability
                 }
               }
             }
           }
-<<<<<<< HEAD
-        }
-      },
-      Get { l1 }
-=======
         },
-        Get { l2 }
+        Get { l1 }
       }
->>>>>>> permute join order for readability
     }
   }
 }
