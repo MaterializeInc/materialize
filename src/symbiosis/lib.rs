@@ -43,7 +43,9 @@ pub struct Postgres {
 
 impl Postgres {
     pub async fn open_and_erase(url: &str) -> Result<Self, failure::Error> {
-        let (client, conn) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
+        let (client, conn) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+            .await
+            .map_err(|err| format_err!("Postgres connection failed: {}", err))?;
 
         tokio::spawn(async move {
             if let Err(e) = conn.await {
