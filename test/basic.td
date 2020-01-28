@@ -49,6 +49,7 @@ Cannot construct query out of existing materialized views
 ! SELECT * FROM data_view
 Cannot construct query out of existing materialized views
 
+#TODO (materialize#1725) This test consistently in fails on buildkite but not locally
 #> CREATE SINK not_mat_sink FROM data_view INTO 'kafka://${testdrive.kafka-addr}/data-view-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
 
 > CREATE MATERIALIZED VIEW test1 AS
