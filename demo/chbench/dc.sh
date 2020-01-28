@@ -126,6 +126,9 @@ bring_up() {
     bring_up_source_data
     echo "materialize and ingstion should be running fine, bringing up introspection and metabase"
     bring_up_introspection
+
+    rm metabase/*
+    curl -L "https://github.com/MaterializeInc/metabase-materialize-driver/releases/download/0.0.1/materialize-driver-0.0.1-SNAPSHOT-standalone.jar" -o metabase/materialize-driver-0.0.1-SNAPSHOT-standalone.jar
     dc_up metabase
 }
 
