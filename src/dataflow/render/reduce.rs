@@ -26,7 +26,9 @@ where
     G::Timestamp: Lattice + timely::progress::timestamp::Refines<T>,
     T: timely::progress::Timestamp + Lattice,
 {
-    pub fn render_reduce_robust(
+    /// Renders a `RelationExpr::Reduce` using various non-obvious techniques to
+    /// minimize worst-case incremental update times and memory footprint.
+    pub fn render_reduce(
         &mut self,
         relation_expr: &RelationExpr,
         env: &EvalEnv,
@@ -366,7 +368,7 @@ where
             move |_key, source, target| {
                 // We ignore the count here under the belief that it cannot affect
                 // hierarchical aggregations; should that belief be incorrect, we
-                // should certainly revising this implementation.
+                // should certainly revise this implementation.
                 let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
                 target.push((Row::pack(Some(aggr.eval(iter, &env, &RowArena::new()))), 1));
             }
@@ -379,6 +381,17 @@ where
 /// At present, there is a dichotomy, but this is set up to complain if new aggregations
 /// are added that perhaps violate these requirement. For example, a "median" aggregation
 /// could be neither accumulable nor hierarchical.
+///
+/// Accumulable aggregations will be packed into differential dataflow's "difference" field,
+/// which can be accumulated in-place using the addition operation on the type. Aggregations
+/// that indicate they are accumulable will still need to provide an action that takes their
+/// data and introduces it as a difference, and the post-processing when the accumulated value
+/// is presented as data.
+///
+/// Hierarchical aggregations will be subjected to repeated aggregation on initially small but
+/// increasingly large subsets of each key. This has the intended property that no invocation
+/// is on a significantly large set of values (and so, no incremental update needs to reform
+/// significant input data).
 fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
     match func {
         AggregateFunc::SumInt32
