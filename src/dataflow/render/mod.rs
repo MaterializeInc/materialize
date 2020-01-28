@@ -103,7 +103,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
             let mut context = Context::<_, _, _, Timestamp>::new();
 
             let mut source_tokens = HashMap::new();
+            // this is stopgap measure so dropping an index and recreating one with the same name
+            // does not result in timestamp/reading from source errors.
             // use an export id to distinguish between different dataflows
+            // TODO (materialize#1720): replace `first_export_id` by some form of dataflow identifier
             let first_export_id = if let Some((id, _, _)) = dataflow.index_exports.first() {
                 *id
             } else if let Some((id, _)) = dataflow.sink_exports.first() {

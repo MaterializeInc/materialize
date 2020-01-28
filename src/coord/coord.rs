@@ -16,7 +16,7 @@
 // may become non-copy in the future.
 #![allow(clippy::clone_on_copy)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::iter;
 use std::path::Path;
@@ -834,35 +834,31 @@ where
             } => {
                 let view_information = ids
                     .into_iter()
-                    .map(|(name, id)| {
+                    .filter_map(|(name, id)| {
                         let class = match id {
                             GlobalId::System(_) => "SYSTEM",
                             GlobalId::User(_) => "USER",
                         };
                         if let Some(view_state) = self.views.get(&id) {
-                            (
-                                name,
-                                class,
-                                view_state.queryable,
-                                view_state.default_idx.is_some(),
-                                true,
-                            )
+                            if !show_materialized || view_state.default_idx.is_some() {
+                                Some((
+                                    name,
+                                    class,
+                                    view_state.queryable,
+                                    view_state.default_idx.is_some(),
+                                ))
+                            } else {
+                                None
+                            }
                         } else {
-                            (name, class, false, false, false)
-                        }
-                    })
-                    .filter(|(_, _, _, materialized, valid)| {
-                        if show_materialized {
-                            *materialized && *valid
-                        } else {
-                            *valid
+                            None
                         }
                     })
                     .collect::<Vec<_>>();
 
                 let mut rows = view_information
                     .into_iter()
-                    .map(|(name, class, queryable, materialized, _)| {
+                    .map(|(name, class, queryable, materialized)| {
                         if full {
                             if show_materialized {
                                 Row::pack(&[Datum::from(name.as_str()), Datum::from(class)])
@@ -1233,6 +1229,7 @@ where
     fn propagate_queryability(&mut self, id: &GlobalId) {
         let mut ids_to_propagate = Vec::new();
         for used_by_id in self.catalog.get_by_id(id).used_by().to_owned() {
+            //if view is not materialized
             if self.views.contains_key(&used_by_id) && self.views[&used_by_id].default_idx.is_none()
             {
                 let new_queryability = self.views[&used_by_id]
@@ -1240,6 +1237,7 @@ where
                     .iter()
                     .all(|id| self.views[id].queryable);
                 if let Some(view_state) = self.views.get_mut(&used_by_id) {
+                    // we only need to continue propagating if there is a change in queryability
                     if view_state.queryable != new_queryability {
                         ids_to_propagate.push(used_by_id);
                         view_state.queryable = new_queryability;
@@ -1462,15 +1460,13 @@ where
         uses_views.dedup();
         let (queryable, uses_views): (Vec<_>, Vec<_>) = uses_views
             .into_iter()
-            .map(|id| {
+            .filter_map(|id| {
                 if let Some(view_state) = self.views.get(&id) {
-                    (view_state.queryable, id, true)
+                    Some((view_state.queryable, id))
                 } else {
-                    (false, id, false)
+                    None
                 }
             })
-            .filter(|(_, _, keep)| *keep)
-            .map(|(queryable, id, _)| (queryable, id))
             .unzip();
         self.views.insert(
             view_id,
@@ -1656,9 +1652,9 @@ pub struct ViewState {
     default_idx: Option<(GlobalId, Vec<ScalarExpr>)>,
     // TODO(andiwang): only allow one primary index?
     /// Currently all indexes are primary indexes
-    primary_idxes: HashMap<Vec<ScalarExpr>, GlobalId>,
+    primary_idxes: BTreeMap<Vec<ScalarExpr>, GlobalId>,
     // TODO(andiwang): materialize#220 Implement seconary indexes
-    // secondary_idxes: HashMap<Vec<ScalarExpr>, GlobalId>,
+    // secondary_idxes: BTreeMap<Vec<ScalarExpr>, GlobalId>,
 }
 
 impl ViewState {
@@ -1667,8 +1663,8 @@ impl ViewState {
             queryable,
             uses_views,
             default_idx: None,
-            primary_idxes: HashMap::new(),
-            //secondary_idxes: HashMap::new(),
+            primary_idxes: BTreeMap::new(),
+            //secondary_idxes: BTreeMap::new(),
         }
     }
 
