@@ -641,29 +641,6 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<Row> {
             })
         })
         .collect()
-    //    for result in csv_reader.records() {
-    //        let record = result.unwrap();
-    //        if record.len() != n_cols {
-    //            EVENTS_COUNTER.csv.error.inc();
-    //            error!(
-    //                "CSV error: expected {} columns, got {}. Ignoring row.",
-    //                n_cols,
-    //                record.len()
-    //            );
-    //            continue;
-    //        }
-    //        EVENTS_COUNTER.csv.success.inc();
-    //        session.give((
-    //            Row::pack(
-    //                record
-    //                    .iter()
-    //                    .map(|s| Datum::String(s))
-    //                    .chain(iter::once(line_no.map(Datum::Int64).into())),
-    //            ),
-    //            *cap.time(),
-    //            1,
-    //        ));
-    //    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
