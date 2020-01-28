@@ -629,39 +629,41 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<Row> {
     let mut csv_reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .from_reader(bytes);
-    csv_reader.records().filter_map(|res| {
-        res.ok().and_then(|sr| {
-            if sr.len() == n_cols {
-                Some(Row::pack(sr.iter().map(|s| Datum::String(s))))
-            } else {
-                None
-            }
+    csv_reader
+        .records()
+        .filter_map(|res| {
+            res.ok().and_then(|sr| {
+                if sr.len() == n_cols {
+                    Some(Row::pack(sr.iter().map(|s| Datum::String(s))))
+                } else {
+                    None
+                }
+            })
         })
-    }).collect()
-//    for result in csv_reader.records() {
-//        let record = result.unwrap();
-//        if record.len() != n_cols {
-//            EVENTS_COUNTER.csv.error.inc();
-//            error!(
-//                "CSV error: expected {} columns, got {}. Ignoring row.",
-//                n_cols,
-//                record.len()
-//            );
-//            continue;
-//        }
-//        EVENTS_COUNTER.csv.success.inc();
-//        session.give((
-//            Row::pack(
-//                record
-//                    .iter()
-//                    .map(|s| Datum::String(s))
-//                    .chain(iter::once(line_no.map(Datum::Int64).into())),
-//            ),
-//            *cap.time(),
-//            1,
-//        ));
-//    }
-
+        .collect()
+    //    for result in csv_reader.records() {
+    //        let record = result.unwrap();
+    //        if record.len() != n_cols {
+    //            EVENTS_COUNTER.csv.error.inc();
+    //            error!(
+    //                "CSV error: expected {} columns, got {}. Ignoring row.",
+    //                n_cols,
+    //                record.len()
+    //            );
+    //            continue;
+    //        }
+    //        EVENTS_COUNTER.csv.success.inc();
+    //        session.give((
+    //            Row::pack(
+    //                record
+    //                    .iter()
+    //                    .map(|s| Datum::String(s))
+    //                    .chain(iter::once(line_no.map(Datum::Int64).into())),
+    //            ),
+    //            *cap.time(),
+    //            1,
+    //        ));
+    //    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -701,7 +703,9 @@ impl UnaryTableFunc {
                 .capture_groups_iter()
                 .map(|cg| ColumnType::new(ScalarType::String).nullable(cg.nullable))
                 .collect(),
-            UnaryTableFunc::CsvExtract(n_cols) => iter::repeat(ColumnType::new(ScalarType::String)).take(*n_cols).collect(),
+            UnaryTableFunc::CsvExtract(n_cols) => iter::repeat(ColumnType::new(ScalarType::String))
+                .take(*n_cols)
+                .collect(),
         })
     }
 
@@ -724,7 +728,7 @@ impl fmt::Display for UnaryTableFunc {
             UnaryTableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
             UnaryTableFunc::RegexpExtract(a) => {
                 f.write_fmt(format_args!("regexp_extract({:?}, _)", a.0))
-            },
+            }
             UnaryTableFunc::CsvExtract(n_cols) => {
                 f.write_fmt(format_args!("csv_extract({}, _)", n_cols))
             }

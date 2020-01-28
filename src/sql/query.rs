@@ -771,19 +771,18 @@ fn plan_table_function(
                 Some(ecx.qcx.outer_scope.clone()),
             );
             Ok((call, ecx.scope.clone().product(scope)))
-        },
+        }
         ("csv_extract", [n_cols, expr]) => {
             let bad_ncols_bail = "csv_extract number of columns must be a positive integer literal";
             let n_cols: usize = match n_cols {
                 Expr::Value(Value::Number(s)) => s.parse()?,
-                _ => bail!(bad_ncols_bail)
+                _ => bail!(bad_ncols_bail),
             };
             if n_cols == 0 {
                 bail!(bad_ncols_bail);
             }
             let expr = plan_expr(ecx, expr, None)?;
-            let colnames: Vec<_> = (1..=n_cols)
-                .map(|i| format!("column{}", i)).collect();
+            let colnames: Vec<_> = (1..=n_cols).map(|i| format!("column{}", i)).collect();
             let call = RelationExpr::FlatMapUnary {
                 input: Box::new(left),
                 func: UnaryTableFunc::CsvExtract(n_cols),
@@ -795,8 +794,10 @@ fn plan_table_function(
                 Some(ecx.qcx.outer_scope.clone()),
             );
             Ok((call, ecx.scope.clone().product(scope)))
-        },
-        ("regexp_extract", _) | ("csv_extract", _) => bail!("{}() requires exactly two arguments", ident),
+        }
+        ("regexp_extract", _) | ("csv_extract", _) => {
+            bail!("{}() requires exactly two arguments", ident)
+        }
         _ => bail!("unsupported table function: {}", ident),
     }
 }
