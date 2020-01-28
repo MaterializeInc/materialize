@@ -1,0 +1,2 @@
+create_sink ::=
+   'CREATE' 'SINK' sink_name 'FROM' source_name 'INTO' sink_target 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
