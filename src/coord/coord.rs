@@ -1109,7 +1109,18 @@ where
         for entry in entries {
             match entry.item() {
                 CatalogItem::Source(_) => sources_to_drop.push(entry.id()),
-                CatalogItem::View(_) => views_to_drop.push(entry.id()),
+                CatalogItem::View(_) => {
+                    views_to_drop.push(entry.id());
+                    if let Some(source_updates) = &self.source_updates {
+                        source_updates
+                            .sender
+                            .send(TimestampMessage::DropView(
+                                entry.name().clone(),
+                                entry.id(),
+                            ))
+                            .expect("Failed to send source update");
+                    }
+                },
                 CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
                 CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
             }
@@ -1124,17 +1135,6 @@ where
         }
 
         if !views_to_drop.is_empty() {
-            for v in &views_to_drop {
-                if let Some(source_updates) = &self.source_updates {
-                    source_updates
-                        .sender
-                        .send(TimestampMessage::DropView(
-                            self.catalog.get_by_id(v).name().clone(),
-                            v.clone(),
-                        ))
-                        .expect("Failed to send source update");
-                }
-            }
             self.drop_views(views_to_drop);
         }
 
