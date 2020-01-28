@@ -52,9 +52,9 @@ _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` docume
 
 Because Materialize works very differently from a traditional RDBMS, it's important to understand the implications that certain features of `SELECT` will impact your Materialize instances.
 
-### Creating views
+### Creating materialized views
 
-Creating views in Materialize generates a persistent dataflow, which has a different performance profile from performing a `SELECT` in an RDBMS.
+Creating materialized views generates a persistent dataflow, which has a different performance profile from performing a `SELECT` in an RDBMS.
 
 When creating views, using the following features of `SELECT` have certain side effects:
 

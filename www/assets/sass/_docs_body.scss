@@ -36,7 +36,8 @@ main {
   }
 
   // Spacing for examples
-  p + hr, .highlight + hr {
+  p + hr,
+  .highlight + hr {
     margin-top: 3rem;
   }
 
@@ -61,5 +62,12 @@ main {
     &:hover {
       opacity: 0.75;
     }
+  }
+
+  .warning {
+    background-color: rgba(255, 124, 26, 0.1);
+    border: 1px dashed rgb(255, 124, 26);
+    margin-bottom: 1rem;
+    padding: 1rem;
   }
 }

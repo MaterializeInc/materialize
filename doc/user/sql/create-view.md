@@ -1,26 +1,27 @@
 ---
 title: "CREATE VIEW"
-description: "`CREATE VIEW` creates a materialized view, which Materialize will incrementally maintain as updates occur to the underlying data."
+description: "`CREATE VIEW` creates an alias for a `SELECT` statement."
 menu:
   main:
     parent: 'sql'
 ---
 
-`CREATE VIEW` creates a materialized view, which lets you retrieve incrementally
-updated results of a `SELECT` query very quickly. Despite the simplicity of
-creating a view, it's Materialize's most powerful feature.
+`CREATE VIEW` creates a _non-materialized_ view, which only provides an alias
+for the `SELECT` statement it includes.
+
+Note that this is very different from Materialize's main type of view,
+materialized views, which you can create with [`CREATE MATERIALIZED
+VIEW`](../create-materialized-view).
 
 ## Conceptual framework
 
-`CREATE VIEW` computes and maintains the results of a `SELECT` query in memory,
-which is similar to a materialized view in the language of RDBMSes. (For more
-information about materialized views, see [What is
-Materialize?](../../overview/what-is-materialize))
+`CREATE VIEW` simply stores the verbatim `SELECT` query, and provides a
+shorthand for performing the query.
 
-This means that as data streams in from Kafka, Materialize incrementally updates
-the results of the view's `SELECT` statement. Because these results are
-available in memory, you will have incredibly fast access to the query's result
-set.
+Note that you can only `SELECT` from non-materialized views if all of the views in their `FROM` clauses are themselves materialized or have transitive access to materialized views. For more information on this restriction, see [Selecting from non-materialized views](#selecting-from-non-materialized-views).
+
+If you plan on repeatedly reading from a view, we recommend using [materialized
+views](../create-materialized-view) instead.
 
 ## Syntax
 
@@ -28,36 +29,50 @@ set.
 
 Field | Use
 ------|-----
+**OR REPLACE** | If a view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
 _view&lowbar;name_ | A name for the view.
 _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want to materialize and maintain.
-**`OR REPLACE`** | If a view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
 
 ## Details
 
-### Overview
+### Selecting from non-materialized views
 
-When creating a view, Materialize's internal Differential dataflow engine
-creates a persistent dataflow for the corresponding `SELECT` statement. All of
-the data that is available from the view's source's arrangements (which is
-similar to an index in the language of RDBMSes) is then used to create the first
-result set of the view.
+You can only directly `SELECT` from a non-materialized view if all of the
+sources it depends on (i.e. views and sources in its `FROM` clause) have access
+to materialized data (i.e. indexes). That is to say that all of a
+non-materialized view's data must exist somewhere in memory for it to process
+`SELECT` statements. For those inclined toward mathematics, it's possible to
+think of this as "transitive materialization."
 
-As data continues to stream in from Kafka, Differential passes the data to the
-appropriate dataflows, which are then responsible for making any necessary
-updates to maintain the views you've defined.
+However, this limitation does not apply to creating materialized views.
+Materialized view definitions can `SELECT` from non-materialized view,
+irrespective of the non-materialized view's dependencies. This is done by
+essentially inlining the definition of the non-materialized view into the
+materialized view's definition.
 
-When reading from a view (e.g. `SELECT * FROM some_view`), Materialize simply
-returns the current result set for the persisted dataflow.
+The diagram below demonstrates this restriction using a number of views (`a`-`h`) with a complex set of interdependencies.
+
+{{<
+    figure src="/images/transitive-materialization.png"
+    alt="transitive materialization diagram"
+    width="500"
+>}}
+
+A few things to note from this example:
+
+- **c** can be materialized despite the dependency on a non-materialized view.
+- If **g** were materialized, all views could process `SELECT`.
 
 ### Memory
 
-Views are maintained in memory. Because of this, one must be sure that all
-intermediate stages of the query, as well as its result set can fit in the
-memory of a single machine, while also understanding the rate at which the
-query's result set will grow.
+Non-materialized views do not store the results of the query. Instead, they
+simply store the verbatim of the included `SELECT`. This means they take up very
+little memory, but also provide very little benefit in terms of reducing the
+latency and computation needed to answer queries.
 
-For more detail about how different clauses impact memory usage, check out our
-[`SELECT`](../select) documentation.
+### Converting to materialized view
+
+You can convert a non-materialized view into a materialized view by [adding an index](../create-index/#converting-views-to-materialized-views).
 
 ## Examples
 
@@ -66,20 +81,23 @@ CREATE VIEW purchase_sum_by_region
 AS
     SELECT sum(purchase.amount) AS region_sum,
            region.id AS region_id
-    FROM mysql_simple_region AS region
-    INNER JOIN mysql_simple_user AS user
+    FROM region
+    INNER JOIN user
         ON region.id = user.region_id
-    INNER JOIN mysql_simple_purchase AS purchase
+    INNER JOIN purchase
         ON purchase.user_id = user.id
     GROUP BY region.id;
 ```
 
-In this example, as new users or purchases come in, the results of the view are
-incrementally updated. For example, if a new purchase comes in for a specific
-user, the underlying dataflow will determine which region that user belongs to,
-and then increment the `region_sum` field with those results.
+This view is useful only in as much as it is easier to type
+`purchase_sum_by_region` than the entire `SELECT` statement.
+
+However, it's important to note that you could only `SELECT` from this view:
+
+- In the definition of [`CREATE MATERIALIZED VIEW`](../create-materialized-view) statements.
+- If `region`, `user`, and `purchase` had access to materialized data (i.e.
+  indexes) directly or transitively.
 
 ## Related pages
 
-- [`SELECT`](../select)
-- [`CREATE SOURCES`](../create-sources)
+- [`CREATE MATERIALIZED VIEW`](../create-materialized-view)

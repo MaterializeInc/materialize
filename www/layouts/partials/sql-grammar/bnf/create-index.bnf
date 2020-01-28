@@ -1,0 +1,2 @@
+create_index ::=
+    'CREATE' 'INDEX' index_name 'ON' view_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
