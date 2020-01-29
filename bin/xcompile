@@ -51,9 +51,6 @@ build() {
     export TARGET_CXX=$CXX
     export TARGET_CFLAGS=$CFLAGS
     export TARGET_CXXFLAGS=$CXXFLAGS
-    export OPENSSL_STATIC=1
-    export OPENSSL_LIB_DIR=$sysroot/usr/lib/x86_64-linux-gnu
-    export OPENSSL_INCLUDE_DIR=$sysroot/usr/include
 
     cargo build --target=x86_64-unknown-linux-gnu "$@"
 }

@@ -33,7 +33,7 @@ rand = "0.7.3"
 rdkafka = { version = "0.23.1", features = ["cmake-build"] }
 regex = "1"
 repr = { path = "../repr" }
-reqwest = "0.10.1"
+reqwest = { version = "0.10.1", features = ["native-tls-vendored"] }
 serde = "1.0.104"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
 serde_json = { version = "1.0.45", features = ["preserve_order"] }
