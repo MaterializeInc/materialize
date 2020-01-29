@@ -438,7 +438,12 @@ where
                 let view = View {
                     raw_sql: "<created by CREATE TABLE>".to_string(),
                     relation_expr: OptimizedRelationExpr::declare_optimized(
-                        RelationExpr::constant(vec![vec![]], desc.typ().clone()),
+                        // TODO: Adding a second `vec![]` here avoids some defect where
+                        // uniqueness of the constant expression results in incorrect
+                        // computation when using tables; this happens when we use the
+                        // type information (unique keys) to recommend which columns to
+                        // use for a default arrangement.
+                        RelationExpr::constant(vec![vec![], vec![]], desc.typ().clone()),
                     ),
                     eval_env: EvalEnv::default(),
                     desc,
@@ -448,7 +453,7 @@ where
                         self.insert_view(view_id, &view);
                         let mut index_name = name.clone();
                         index_name.item += "_primary_idx";
-                        let index = view.auto_generate_primary_idx(view_id);
+                        let index = auto_generate_primary_idx(&view, view_id);
                         let index_id = self.register_index(&index_name, &index)?;
                         broadcast(
                             &mut self.broadcast_tx,
@@ -532,7 +537,7 @@ where
                     let mut index_name = name.clone();
                     let mut dataflow = DataflowDesc::new(name.to_string());
                     self.build_view_collection(&id, &view, &mut dataflow);
-                    let index = view.auto_generate_primary_idx(id);
+                    let index = auto_generate_primary_idx(&view, id);
                     index_name.item += "_primary_idx";
                     let index_id = self.register_index(&index_name, &index)?;
                     self.build_arrangement(&index_id, index, dataflow);
@@ -704,7 +709,7 @@ where
                             eval_env: eval_env.clone(),
                         };
                         self.build_view_collection(&view_id, &view, &mut dataflow);
-                        let index = view.auto_generate_primary_idx(view_id);
+                        let index = auto_generate_primary_idx(&view, view_id);
                         self.build_arrangement(&index_id, index, dataflow);
                     }
 
@@ -1690,4 +1695,15 @@ impl ViewState {
                 .map(|(keys, id)| (*id, keys.to_owned()));
         }
     }
+}
+
+use dataflow_types::Index;
+pub fn auto_generate_primary_idx(view: &View<OptimizedRelationExpr>, view_id: GlobalId) -> Index {
+    let keys = view.relation_expr.as_ref().typ().keys;
+    let keys = if let Some(keys) = keys.first() {
+        keys.clone()
+    } else {
+        (0..view.desc.typ().column_types.len()).collect()
+    };
+    Index::new_from_cols(view_id, keys, &view.desc)
 }

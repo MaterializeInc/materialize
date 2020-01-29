@@ -191,9 +191,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         region,
                         worker_index,
                     );
-                    context.collections.insert(
-                        RelationExpr::global_get(object.id, typ.clone()),
-                        context.collection(&object.relation_expr.as_ref()).unwrap(),
+                    context.clone_from_to(
+                        &object.relation_expr.as_ref(),
+                        &RelationExpr::global_get(object.id, typ.clone()),
                     );
                 } else {
                     context.render_arranged(

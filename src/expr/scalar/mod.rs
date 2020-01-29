@@ -237,12 +237,11 @@ impl ScalarExpr {
     /// assert_eq!(test, expr_t);
     /// ```
     pub fn reduce(&mut self, env: &EvalEnv) {
-        let null = || ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null));
+        let null = |typ| ScalarExpr::literal(Datum::Null, typ);
         let empty = RelationType::new(vec![]);
         let temp_storage = &RowArena::new();
-        let eval = move |e: &ScalarExpr| {
-            ScalarExpr::literal(e.eval(&[], env, temp_storage), e.typ(&empty))
-        };
+        let eval =
+            |e: &ScalarExpr| ScalarExpr::literal(e.eval(&[], env, temp_storage), e.typ(&empty));
         self.visit_mut(&mut |e| match e {
             ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => (),
             ScalarExpr::CallNullary(_) => {
@@ -259,26 +258,26 @@ impl ScalarExpr {
                 } else if *func == BinaryFunc::MatchRegex && expr2.is_literal() {
                     // we can at least precompile the regex
                     *e = match expr2.eval(&[], env, temp_storage) {
-                        Datum::Null => null(),
+                        Datum::Null => null(expr2.typ(&empty)),
                         Datum::String(string) => {
                             match func::build_like_regex_from_string(&string) {
                                 Ok(regex) => {
                                     expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex)))
                                 }
-                                Err(_) => null(),
+                                Err(_) => null(expr2.typ(&empty)),
                             }
                         }
                         _ => unreachable!(),
                     };
                 } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
                     *e = match expr1.eval(&[], env, &temp_storage) {
-                        Datum::Null => null(),
+                        Datum::Null => null(expr1.typ(&empty)),
                         Datum::String(s) => match s.parse::<DateTruncTo>() {
                             Ok(to) => ScalarExpr::CallUnary {
                                 func: UnaryFunc::DateTrunc(to),
                                 expr: Box::new(expr2.take()),
                             },
-                            Err(_) => null(),
+                            Err(_) => null(expr1.typ(&empty)),
                         },
                         _ => unreachable!(),
                     }
