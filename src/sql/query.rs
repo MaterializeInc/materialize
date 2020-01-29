@@ -746,6 +746,9 @@ fn plan_table_function(
         | ("jsonb_array_elements_text", _) => bail!("{}() requires exactly one argument", ident),
         ("regexp_extract", [regex, haystack]) => {
             let expr = plan_expr(ecx, haystack, None)?;
+            if ecx.column_type(&expr).scalar_type != ScalarType::String {
+                bail!("Datum to search must be a string");
+            }
             let regex = match &regex {
                 Expr::Value(Value::SingleQuotedString(s)) => s,
                 _ => bail!("Regex must be a string literal."),
@@ -782,6 +785,10 @@ fn plan_table_function(
                 bail!(bad_ncols_bail);
             }
             let expr = plan_expr(ecx, expr, None)?;
+            let st = ecx.column_type(&expr).scalar_type;
+            if st != ScalarType::Bytes && st != ScalarType::String {
+                bail!("Datum to decode as CSV must be a string")
+            }
             let colnames: Vec<_> = (1..=n_cols).map(|i| format!("column{}", i)).collect();
             let call = RelationExpr::FlatMapUnary {
                 input: Box::new(left),
