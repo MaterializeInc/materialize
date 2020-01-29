@@ -438,7 +438,12 @@ where
                 let view = View {
                     raw_sql: "<created by CREATE TABLE>".to_string(),
                     relation_expr: OptimizedRelationExpr::declare_optimized(
-                        RelationExpr::constant(vec![vec![]], desc.typ().clone()),
+                        // TODO: Adding a second `vec![]` here avoids some defect where
+                        // uniqueness of the constant expression results in incorrect
+                        // computation when using tables; this happens when we use the
+                        // type information (unique keys) to recommend which columns to
+                        // use for a default arrangement.
+                        RelationExpr::constant(vec![vec![], vec![]], desc.typ().clone()),
                     ),
                     eval_env: EvalEnv::default(),
                     desc,
