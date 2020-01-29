@@ -136,16 +136,12 @@ impl Action for VerifyAction {
         // Additionally, we do this bummer of a comparison because
         // avro_rs::types::Value does not implement Eq or Ord.
         // TODO@jldlaughlin: update this once we have Kafka ordering guarantees
-        let missing_values = get_values_in_first_list_not_in_second(
-            &converted_expected_messages,
-            actual_messages.clone(),
-        );
-        let additional_values = get_values_in_first_list_not_in_second(
-            &actual_messages,
-            converted_expected_messages.clone(),
-        );
+        let missing_values =
+            get_values_in_first_list_not_in_second(&converted_expected_messages, &actual_messages);
+        let additional_values =
+            get_values_in_first_list_not_in_second(&actual_messages, &converted_expected_messages);
 
-        if missing_values.len() != 0 || additional_values.len() != 0 {
+        if !missing_values.is_empty() || !additional_values.is_empty() {
             return Err(format!(
                 "Mismatched Kafka sink rows. Missing: {:#?}, Unexpected: {:#?}",
                 missing_values, additional_values
@@ -157,19 +153,19 @@ impl Action for VerifyAction {
 }
 
 fn get_values_in_first_list_not_in_second(
-    first_list: &Vec<AvroValue>,
-    second_list: Vec<AvroValue>,
+    first_list: &[AvroValue],
+    second_list: &[AvroValue],
 ) -> Vec<AvroValue> {
-    let mut first_list_clone = first_list.clone();
+    let mut first_list_clone: Vec<AvroValue> = first_list.to_vec();
     let mut missing_values = Vec::new();
     for s in second_list {
-        let pos = first_list_clone.iter().position(|x| *x == s);
+        let pos = first_list_clone.iter().position(|x| *x == *s);
         match pos {
             Some(index) => {
                 first_list_clone.remove(index);
                 continue;
             }
-            None => missing_values.push(s),
+            None => missing_values.push(s.clone()),
         }
     }
     missing_values
