@@ -302,11 +302,11 @@ pub struct CsvEncoding {
     pub n_cols: usize,
 }
 
-/// Encoding in Protobuf format
+/// Encoding in Protobuf format.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProtobufEncoding {
-    pub descriptor_file: String,
+    pub descriptors: Vec<u8>,
     pub message_name: String,
 }
 

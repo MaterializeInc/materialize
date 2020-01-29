@@ -14,13 +14,18 @@ services:
       --schema-registry-url=http://schema-registry:8081
       --materialized-url=postgres://ignored@materialized:6875
       test/*.td"
+    environment:
+    - TMPDIR=/tmpshare
     volumes:
     - ../../:/workdir
+    - tmpshare:/tmpshare
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
     depends_on: [kafka, zookeeper, schema-registry, materialized]
   materialized:
     image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
     command: --logging-granularity=10ms
+    volumes:
+    - tmpshare:/tmpshare
   zookeeper:
     image: zookeeper:3.4.13
   kafka:
@@ -34,3 +39,5 @@ services:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
+volumes:
+  tmpshare:

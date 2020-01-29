@@ -36,6 +36,16 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
+! CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
+  USING SCHEMA FILE 'data-schema.json'
+No such file or directory
+
+$ file-write path=data-schema.json
+\${schema}
+
+> CREATE SOURCE data2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
+  USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
+
 > SHOW CREATE SOURCE data
 Source   Create Source
 ------------------

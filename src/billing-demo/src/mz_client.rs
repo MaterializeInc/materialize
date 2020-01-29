@@ -57,11 +57,11 @@ impl MzClient {
         source_name: &str,
         message_name: &str,
     ) -> Result<()> {
-        let encoded = base64::encode(descriptor);
+        let encoded = hex::encode(descriptor);
 
         let query = format!(
             "CREATE SOURCE {source} FROM 'kafka://{kafka_url}/{topic}' \
-             USING SCHEMA '{descriptor}' \
+             USING SCHEMA '\\x{descriptor}' \
              WITH (format='protobuf-descriptor', message_name='{message}')",
             descriptor = encoded,
             kafka_url = kafka_url,

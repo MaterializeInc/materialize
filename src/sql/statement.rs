@@ -28,10 +28,12 @@ use dataflow_types::{
     SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
+use futures::future::TryFutureExt;
 use interchange::{avro, protobuf};
 use ore::collections::CollectionExt;
 use ore::future::MaybeFuture;
 use relationexpr::{EvalEnv, GlobalId};
+use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr::like::build_like_regex_from_string;
@@ -1268,7 +1270,7 @@ fn build_kafka_source(
     match (format, message_name) {
         (KafkaSchemaFormat::Avro, None) => build_kafka_avro_source(schema, kafka_addr, topic),
         (KafkaSchemaFormat::Protobuf, Some(m)) => {
-            build_kafka_protobuf_source(schema, kafka_addr, topic, m).into()
+            build_kafka_protobuf_source(schema, kafka_addr, topic, m)
         }
         (KafkaSchemaFormat::Avro, Some(s)) => Err(format_err!(
             "Invalid parameter message name {} provided for Avro source",
@@ -1318,13 +1320,20 @@ fn build_kafka_avro_source(
 ) -> MaybeFuture<Result<Source, failure::Error>> {
     let schema = match schema {
         // TODO(jldlaughlin): we need a way to pass in primary key information
-        // when building a source from a string
-        SourceSchema::RawOrPath(schema) => Ok(Schema {
+        // when building a source from a string or file.
+        SourceSchema::Inline(schema) => Ok(Schema {
             key_schema: None,
             value_schema: schema.to_owned(),
             schema_registry_url: None,
         })
         .into(),
+        SourceSchema::File(path) => MaybeFuture::Future(Box::pin(async move {
+            Ok(Schema {
+                key_schema: None,
+                value_schema: tokio::fs::read_to_string(path).await?,
+                schema_registry_url: None,
+            })
+        })),
         SourceSchema::Registry(url) => {
             let url: Result<Url, _> = url.parse();
             match url {
@@ -1372,27 +1381,38 @@ fn build_kafka_protobuf_source(
     kafka_addr: SocketAddr,
     topic: String,
     message_name: String,
-) -> Result<Source, failure::Error> {
-    let schema = match schema {
-        SourceSchema::RawOrPath(s) => s.to_owned(),
-        _ => bail!(
-            "Invalid schema type. Schema must be a path to a file or a base64 encoded descriptor"
-        ),
+) -> MaybeFuture<Result<Source, failure::Error>> {
+    let descriptors: MaybeFuture<Result<_, failure::Error>> = match schema {
+        SourceSchema::Inline(bytes) => strconv::parse_bytes(bytes).map_err(Into::into).into(),
+        SourceSchema::File(path) => {
+            MaybeFuture::Future(Box::pin(tokio::fs::read(path).map_err(Into::into)))
+        }
+        SourceSchema::Registry(_) => Err(format_err!(
+            "protobuf sources do not support schema registries"
+        ))
+        .into(),
     };
 
-    let desc = protobuf::validate_proto_schema(&message_name, &schema)?;
-    Ok(Source {
-        connector: SourceConnector {
-            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                addr: kafka_addr,
-                topic,
-            }),
-            encoding: DataEncoding::Protobuf(ProtobufEncoding {
-                descriptor_file: schema,
-                message_name,
-            }),
-        },
-        desc,
+    descriptors.map(move |descriptors| {
+        descriptors.and_then(move |descriptors| {
+            let desc = protobuf::validate_descriptors(
+                &message_name,
+                &protobuf::decode_descriptors(&descriptors)?,
+            )?;
+            Ok(Source {
+                connector: SourceConnector {
+                    connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                        addr: kafka_addr,
+                        topic,
+                    }),
+                    encoding: DataEncoding::Protobuf(ProtobufEncoding {
+                        descriptors,
+                        message_name,
+                    }),
+                },
+                desc,
+            })
+        })
     })
 }
 

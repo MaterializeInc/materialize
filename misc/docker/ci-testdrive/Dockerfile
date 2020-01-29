@@ -10,3 +10,7 @@ RUN apt-get update && apt-get -qy install wait-for-it
 COPY testdrive /usr/local/bin
 
 WORKDIR /workdir
+
+RUN mkdir -p /tmpshare && chmod 777 /tmpshare
+
+VOLUME ["/tmpshare"]
