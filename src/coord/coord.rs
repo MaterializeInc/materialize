@@ -1034,7 +1034,12 @@ where
                         // to the collection to arrange it ourselves.
                         if let Some(view) = self.views.get(on_id) {
                             if let Some(index) = view.primary_idxes.get(key_set) {
-                                dataflow.add_index_import(*index, index_desc, typ.clone(), *view_id);
+                                dataflow.add_index_import(
+                                    *index,
+                                    index_desc,
+                                    typ.clone(),
+                                    *view_id,
+                                );
                             }
                         }
                     }
