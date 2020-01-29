@@ -591,6 +591,9 @@ where
             }
 
             // Unwrap demand
+            // TODO: If we pushed predicates into the operator, we could have a
+            // more accurate view of demand that does not include the support of
+            // all predicates.
             let demand = if let Some(demand) = demand {
                 demand.clone()
             } else {
@@ -628,17 +631,16 @@ where
                     .iter()
                     .map(|k| {
                         if let ScalarExpr::Column(c) = k {
-                            let prev_c = variables
+                            variables
                                 .iter()
                                 .find(|v| v.contains(&(*input, *c)))
                                 .expect("Column in key not bound!")
                                 .iter()
-                                .flat_map(|rel_col1| {
-                                    columns.iter().position(|rel_col2| rel_col1 == rel_col2)
+                                .map(|rel_col1| {
+                                    columns.iter().position(|rel_col2| rel_col1 == rel_col2).expect("Could not find bound column in prev_column")
                                 })
                                 .next()
-                                .expect("Column in key not bound by prior column");
-                            prev_c
+                                .expect("Column in key not bound by prior column")
                         } else {
                             panic!("Non-column keys are not currently supported");
                         }
@@ -651,6 +653,7 @@ where
                     .iter()
                     .enumerate()
                     .flat_map(|(i, (r, c))| {
+                        // TODO: Check if this discards key repetitions.
                         let output_demand = demand[*r].contains(c);
                         let future_demand = variables.iter().any(|variable| {
                             variable.contains(&(*r, *c))
@@ -701,6 +704,8 @@ where
                         prev_keyed.join_core(&local, move |_keys, old, new| {
                             let prev_datums = old.unpack();
                             let next_datums = new.unpack();
+                            // TODO: We could in principle apply some predicates here, and avoid
+                            // constructing output rows that will be filtered out soon.
                             Some(Row::pack(
                                 prev_datums
                                     .iter()
@@ -712,6 +717,8 @@ where
                         prev_keyed.join_core(&trace, move |_keys, old, new| {
                             let prev_datums = old.unpack();
                             let next_datums = new.unpack();
+                            // TODO: We could in principle apply some predicates here, and avoid
+                            // constructing output rows that will be filtered out soon.
                             Some(Row::pack(
                                 prev_datums
                                     .iter()

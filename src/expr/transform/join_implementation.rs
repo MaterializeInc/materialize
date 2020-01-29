@@ -81,6 +81,7 @@ impl JoinImplementation {
     pub fn action(&self, relation: &mut RelationExpr, indexes: &HashMap<Id, Vec<Vec<ScalarExpr>>>) {
         if let RelationExpr::Join { inputs, .. } = relation {
             // Common information of broad utility.
+            // TODO: Figure out how to package this up for everyone who uses it.
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             let arities = types
                 .iter()
@@ -141,6 +142,7 @@ impl JoinImplementation {
                 }
                 available_arrangements[index].sort();
                 available_arrangements[index].dedup();
+                available_arrangements[index].retain(|key| key.iter().all(|k| if let ScalarExpr::Column(_) = k { true } else { false }));
             }
 
             // Determine if we can perform delta queries with the existing arrangements.
@@ -430,7 +432,7 @@ pub struct Characteristics {
     key_length: usize,
     // Indicates that there will be no additional in-memory footprint.
     arranged: bool,
-    // We want to prefer smaller inputs, for stability of ordering.
+    // We want to prefer input earlier in the input list, for stability of ordering.
     input: std::cmp::Reverse<usize>,
 }
 

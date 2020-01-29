@@ -109,13 +109,11 @@ where
                                     env,
                                 );
 
-                                // We must determine an order to join the other relations, starting from
-                                // `relation`, and ideally maximizing the number of arrangements used.
+                                // We use the order specified by the implementation.
                                 let order = &orders[relation];
 
                                 // Repeatedly update `update_stream` to reflect joins with more and more
                                 // other relations, in the specified order.
-                                // for index in 0..order.len() {
                                 for (other, next_key) in order.iter() {
                                     // Keys for the incoming updates are determined by locating
                                     // the elements of `next_keys` among the existing `columns`.
@@ -123,21 +121,20 @@ where
                                         .iter()
                                         .map(|k| {
                                             if let ScalarExpr::Column(c) = k {
-                                                let prev_c = variables
+                                                variables
                                                     .iter()
                                                     .find(|v| v.contains(&(*other, *c)))
                                                     .expect("Column in key not bound!")
                                                     .iter()
-                                                    .flat_map(|rel_col1| {
+                                                    .map(|rel_col1| {
                                                         update_column_sources.iter().position(
                                                             |rel_col2| rel_col1 == rel_col2,
-                                                        )
+                                                        ).expect("Failed to find position of bound column")
                                                     })
                                                     .next()
                                                     .expect(
                                                         "Column in key not bound by prior column",
-                                                    );
-                                                prev_c
+                                                    )
                                             } else {
                                                 panic!(
                                                     "Non-column keys are not currently supported"
@@ -145,6 +142,8 @@ where
                                             }
                                         })
                                         .collect::<Vec<_>>();
+
+                                    // TODO: Investigate demanded columns as in DifferentialLinear join.
 
                                     // We require different logic based on the flavor of arrangement.
                                     // We may need to cache each of these if we want to re-use the same wrapped
@@ -217,6 +216,7 @@ where
                                 }
 
                                 // We must now de-permute the results to return to the common order.
+                                // TODO: Non-demanded columns would need default values here.
                                 update_stream = update_stream.map(move |row| {
                                     let datums = row.unpack();
                                     let mut to_sort = update_column_sources
