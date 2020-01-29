@@ -1494,6 +1494,7 @@ dependencies = [
  "jemallocator",
  "lazy_static",
  "log",
+ "num_cpus",
  "ore",
  "parse_duration",
  "pgwire",

@@ -166,9 +166,15 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     let local_addr = listener.local_addr()?;
     config.addresses[config.process].set_port(local_addr.port());
 
+    println!("materialized {}", version(),);
     println!(
-        "materialized {} listening on {}...",
-        version(),
+        "    process {} of {}",
+        config.process,
+        config.addresses.len()
+    );
+    println!("    {} threads", config.threads);
+    println!(
+        "    listening on {}",
         SocketAddr::new(listen_addr.ip(), local_addr.port()),
     );
 

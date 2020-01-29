@@ -111,7 +111,7 @@ fn run() -> Result<(), failure::Error> {
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
-    let threads = popts.opt_get_default("threads", 1)?;
+    let threads = popts.opt_get_default("threads", num_cpus::get_physical())?;
     let process = popts.opt_get_default("process", 0)?;
     let processes = popts.opt_get_default("processes", 1)?;
     let address_file = popts.opt_str("address-file");
