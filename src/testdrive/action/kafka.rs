@@ -112,7 +112,9 @@ impl Action for VerifyAction {
                             }
                             let value =
                                 avro_rs::from_avro_datum(&schema, &mut bytes, None).unwrap();
-                            assert_eq!(message, value);
+                            if message != value {
+                                return Err(format!("Data from Kafka sink does not match expected data. Expected: {:#?}, Actual: {:#?}", message, value));
+                            }
                         }
                         None => {
                             return Err(String::from("No bytes found in Kafka message payload."))
