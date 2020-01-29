@@ -1,4 +1,4 @@
-CREATE VIEW billing_batches AS
+CREATE MATERIALIZED VIEW billing_batches AS
 SELECT
     billing_raw_data.id,
     billing_raw_data.interval_start,

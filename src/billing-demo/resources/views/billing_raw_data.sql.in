@@ -1,4 +1,4 @@
-CREATE VIEW billing_raw_data AS
+CREATE MATERIALIZED VIEW billing_raw_data AS
 SELECT
     *
 FROM
