@@ -22,6 +22,7 @@ path = "bin/build_corpus.rs"
 
 [dependencies]
 libfuzzer-sys = { git = "https://github.com/rust-fuzz/libfuzzer-sys.git" }
+openssl = { version = "0.10", features = ["vendored"] }
 rand = { version = "0.7.3", features = ["small_rng"] }
 sqllogictest = { path = "../src/sqllogictest" }
 testdrive = { path = "../src/testdrive" }
