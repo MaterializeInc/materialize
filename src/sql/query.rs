@@ -1513,7 +1513,12 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     let arg = &sql_func.args[0];
     let (expr, func) = match (name.as_str(), arg) {
         // COUNT(*) is a special case that doesn't compose well
-        ("count", Expr::Wildcard) => (ScalarExpr::literal_null(), AggregateFunc::CountAll),
+        ("count", Expr::Wildcard) => (
+            // Ok to use `ScalarType::Unknown` here because this expression
+            // can't ever escape the surrounding reduce.
+            ScalarExpr::literal_null(ScalarType::Unknown),
+            AggregateFunc::CountAll,
+        ),
         _ => {
             // No type hint passed to `plan_expr`, because all aggregates accept
             // multiple input types. PostgreSQL is also unable to infer
@@ -1898,7 +1903,7 @@ fn plan_function<'a>(
                 let else_expr = plan_expr(ecx, &sql_func.args[0], None)?;
                 let expr = ScalarExpr::If {
                     cond: Box::new(cond_expr),
-                    then: Box::new(ScalarExpr::literal_null()),
+                    then: Box::new(ScalarExpr::literal_null(ecx.scalar_type(&else_expr))),
                     els: Box::new(else_expr),
                 };
                 Ok(expr)
@@ -3392,6 +3397,10 @@ impl<'a> ExprContext<'a> {
             &self.relation_type,
             &self.qcx.param_types.borrow(),
         )
+    }
+
+    fn scalar_type(&self, expr: &ScalarExpr) -> ScalarType {
+        self.column_type(expr).scalar_type
     }
 
     fn derived_query_context(&self) -> QueryContext {
