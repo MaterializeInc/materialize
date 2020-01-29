@@ -880,6 +880,7 @@ version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "chrono",
+ "csv",
  "differential-dataflow",
  "encoding",
  "enum-iterator",
