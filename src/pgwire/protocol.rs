@@ -147,7 +147,9 @@ where
 
     async fn advance_startup(&mut self, session: Session) -> Result<State, comm::Error> {
         match self.recv().await? {
-            Some(FrontendMessage::Startup { version }) => self.startup(session, version).await,
+            Some(FrontendMessage::Startup { version, params }) => {
+                self.startup(session, version, params).await
+            }
             Some(FrontendMessage::CancelRequest {
                 conn_id,
                 secret_key,
@@ -232,7 +234,12 @@ where
         }
     }
 
-    async fn startup(&mut self, session: Session, version: i32) -> Result<State, comm::Error> {
+    async fn startup(
+        &mut self,
+        mut session: Session,
+        version: i32,
+        params: Vec<(String, String)>,
+    ) -> Result<State, comm::Error> {
         if version != VERSION_3 {
             return self
                 .fatal(
@@ -240,6 +247,10 @@ where
                     "server does not support the client's requested protocol version",
                 )
                 .await;
+        }
+
+        for (name, value) in params {
+            let _ = session.set(&name, &value);
         }
 
         let mut messages = vec![BackendMessage::AuthenticationOk];

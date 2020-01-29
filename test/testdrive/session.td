@@ -4,13 +4,14 @@
 # distributed without the express permission of Materialize, Inc.
 
 > SHOW ALL
-application_name    ""          "Sets the application name to be reported in statistics and logs (PostgreSQL)."
-client_encoding     UTF8        "Sets the client's character set encoding (PostgreSQL)."
-database            materialize   "Sets the current database (CockroachDB)."
-extra_float_digits  3           "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
-DateStyle           "ISO, MDY"  "Sets the display format for date and time values (PostgreSQL)."
-server_version      9.5.0       "Shows the server version (PostgreSQL)."
-sql_safe_updates    false       "Prohibits SQL statements that may be overly destructive (CockroachDB)."
+application_name    ""                                "Sets the application name to be reported in statistics and logs (PostgreSQL)."
+client_encoding     UTF8                              "Sets the client's character set encoding (PostgreSQL)."
+database            materialize                       "Sets the current database (CockroachDB)."
+extra_float_digits  3                                 "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
+DateStyle           "ISO, MDY"                        "Sets the display format for date and time values (PostgreSQL)."
+search_path         "mz_catalog, pg_catalog, public"  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
+server_version      9.5.0                             "Shows the server version (PostgreSQL)."
+sql_safe_updates    false                             "Prohibits SQL statements that may be overly destructive (CockroachDB)."
 
 > SHOW client_encoding
 UTF8

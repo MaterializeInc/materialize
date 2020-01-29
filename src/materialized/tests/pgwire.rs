@@ -6,6 +6,8 @@
 //! Integration tests for pgwire functionality.
 
 use std::error::Error;
+use std::thread;
+use std::time::Duration;
 
 use postgres::error::SqlState;
 
@@ -96,6 +98,69 @@ fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
     let rows = trans.query_portal(&portal, max_rows)?;
 
     assert_eq!(rows.len(), 3, "row len should be all values");
+
+    Ok(())
+}
+
+#[test]
+fn test_conn_params() -> Result<(), Box<dyn Error>> {
+    ore::log::init();
+
+    let (server, mut client) = util::start_server(util::Config::default())?;
+
+    // The default database should be `materialize`.
+    assert_eq!(
+        client.query_one("SHOW database", &[])?.get::<_, String>(0),
+        "materialize",
+    );
+
+    // Connecting to a nonexistent database should work, and creating that
+    // database should work.
+    {
+        let mut client = server
+            .pg_config()
+            .dbname("newdb")
+            .connect(postgres::NoTls)?;
+        assert_eq!(
+            client.query_one("SHOW database", &[])?.get::<_, String>(0),
+            "newdb",
+        );
+        client.batch_execute("CREATE DATABASE newdb")?;
+        client.batch_execute("CREATE MATERIALIZED VIEW v AS SELECT 1")?;
+    }
+
+    // Connecting to an existing database should work.
+    {
+        let mut client = server
+            .pg_config()
+            .dbname("newdb")
+            .connect(postgres::NoTls)?;
+
+        // Sleep a little bit so the view catches up.
+        // TODO(benesch): seriously? It's a view over a static query.
+        thread::sleep(Duration::from_millis(100));
+
+        assert_eq!(
+            // `v` here should refer to the `v` in `newdb.public` that we
+            // created above.
+            client.query_one("SELECT * FROM v", &[])?.get::<_, i32>(0),
+            1,
+        );
+    }
+
+    // Setting the application name at connection time should be respected.
+    {
+        let mut client = server
+            .pg_config()
+            .application_name("hello")
+            .connect(postgres::NoTls)?;
+        assert_eq!(
+            client
+                .query_one("SHOW application_name", &[])?
+                .get::<_, String>(0),
+            "hello",
+        );
+    }
 
     Ok(())
 }

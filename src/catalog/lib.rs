@@ -64,6 +64,12 @@ pub struct Schema {
     pub items: HashMap<String, GlobalId>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum SchemaType {
+    Ambient,
+    Normal,
+}
+
 #[derive(Clone, Debug)]
 pub struct CatalogEntry {
     inner: CatalogItem,
@@ -524,6 +530,9 @@ impl Catalog {
                     database_name,
                     schema_name,
                 } => {
+                    if schema_name.starts_with("mz_") || schema_name.starts_with("pg") {
+                        bail!("unacceptable schema name '{}'", schema_name);
+                    }
                     let database_id = tx.load_database_id(&database_name)?;
                     Action::CreateSchema {
                         id: tx.insert_schema(database_id, &schema_name)?,
@@ -741,10 +750,15 @@ impl<'a, 'b> DatabaseResolver<'a, 'b> {
 
     /// Attempts to find the schema specified by `schema_name` in the database
     /// that this resolver is attached to, or in the set of ambient schemas.
-    pub fn resolve_schema(&self, schema_name: &str) -> Option<&'a Schema> {
+    pub fn resolve_schema(&self, schema_name: &str) -> Option<(&'a Schema, SchemaType)> {
         self.database
             .schemas
             .get(schema_name)
-            .or_else(|| self.ambient_schemas.get(schema_name))
+            .map(|s| (s, SchemaType::Normal))
+            .or_else(|| {
+                self.ambient_schemas
+                    .get(schema_name)
+                    .map(|s| (s, SchemaType::Ambient))
+            })
     }
 }
