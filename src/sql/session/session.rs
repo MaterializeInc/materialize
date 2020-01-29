@@ -22,11 +22,54 @@ use repr::{Datum, Row, ScalarType};
 use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};
-use crate::session::var::{
-    APPLICATION_NAME, CLIENT_ENCODING, DATABASE, DATE_STYLE, EXTRA_FLOAT_DIGITS, SERVER_VERSION,
-    SQL_SAFE_UPDATES,
-};
 use crate::Params;
+
+const APPLICATION_NAME: ServerVar<&'static str> = ServerVar {
+    name: unicase::Ascii::new("application_name"),
+    value: "",
+    description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
+};
+
+const CLIENT_ENCODING: ServerVar<&'static str> = ServerVar {
+    name: unicase::Ascii::new("client_encoding"),
+    value: "UTF8",
+    description: "Sets the client's character set encoding (PostgreSQL).",
+};
+
+const DATABASE: ServerVar<&'static str> = ServerVar {
+    name: unicase::Ascii::new("database"),
+    value: "materialize",
+    description: "Sets the current database (CockroachDB).",
+};
+
+const DATE_STYLE: ServerVar<&'static str> = ServerVar {
+    // DateStyle has nonstandard capitalization for historical reasons.
+    name: unicase::Ascii::new("DateStyle"),
+    value: "ISO, MDY",
+    description: "Sets the display format for date and time values (PostgreSQL).",
+};
+
+const EXTRA_FLOAT_DIGITS: ServerVar<&i32> = ServerVar {
+    name: unicase::Ascii::new("extra_float_digits"),
+    value: &3,
+    description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
+};
+
+const SERVER_VERSION: ServerVar<&'static str> = ServerVar {
+    name: unicase::Ascii::new("server_version"),
+    // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
+    // be. Too new and some clients will emit a "server too new" warning. Too
+    // old and some clients will fall back to legacy code paths. v9.5.0
+    // empirically seems to be a good compromise.
+    value: "9.5.0",
+    description: "Shows the server version (PostgreSQL).",
+};
+
+const SQL_SAFE_UPDATES: ServerVar<&bool> = ServerVar {
+    name: unicase::Ascii::new("sql_safe_updates"),
+    value: &false,
+    description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
+};
 
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
