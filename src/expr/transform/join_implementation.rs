@@ -415,6 +415,13 @@ fn optimize_orders(
         .collect::<Vec<_>>()
 }
 
+/// Characteristics of a join order candidate collection.
+///
+/// A candidate is described by a collection and a key, and may have various liabilities.
+/// Primarily, the candidate may risk substantial inflation of records, which is something
+/// that concerns us greatly. Additionally the candidate may be unarranged, and we would
+/// prefer candidates that do not require additional memory. Finally, we prefer lower id
+/// collections in the interest of consistent tie-breaking.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone)]
 pub struct Characteristics {
     // An excellent indication that record count will not increase.

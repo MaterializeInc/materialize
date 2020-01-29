@@ -21,7 +21,7 @@ use timely::worker::Worker as TimelyWorker;
 use dataflow_types::Timestamp;
 use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
-use repr::{Datum, Row, RowArena, RowPacker};
+use repr::{Datum, Row, RowArena};
 
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
