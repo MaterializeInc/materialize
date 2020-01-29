@@ -340,17 +340,6 @@ pub struct View<Expr> {
     pub desc: RelationDesc,
 }
 
-impl<Expr> View<Expr> {
-    pub fn auto_generate_primary_idx(&self, view_id: GlobalId) -> Index {
-        let keys = if let Some(keys) = self.desc.typ().keys.first() {
-            keys.clone()
-        } else {
-            (0..self.desc.typ().column_types.len()).collect()
-        };
-        Index::new_from_cols(view_id, keys, &self.desc)
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceConnector {
     pub connector: ExternalSourceConnector,
