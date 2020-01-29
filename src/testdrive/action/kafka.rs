@@ -88,7 +88,8 @@ impl Action for VerifyAction {
         }
 
         let mut message_stream = state.kafka_consumer.start();
-        for message in converted_expected_messages {
+        let mut actual_messages = Vec::new();
+        for _i in 0..converted_expected_messages.len() {
             let output = block_on(message_stream.next());
             match output {
                 Some(result) => match result {
@@ -110,11 +111,10 @@ impl Action for VerifyAction {
                                     bytes[0]
                                 ));
                             }
-                            let value =
-                                avro_rs::from_avro_datum(&schema, &mut bytes, None).unwrap();
-                            if message != value {
-                                return Err(format!("Data from Kafka sink does not match expected data. Expected: {:#?}, Actual: {:#?}", message, value));
-                            }
+                            actual_messages.push(
+                                avro_rs::from_avro_datum(&schema, &mut bytes, None)
+                                    .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?,
+                            );
                         }
                         None => {
                             return Err(String::from("No bytes found in Kafka message payload."))
@@ -130,6 +130,32 @@ impl Action for VerifyAction {
                 }
             }
         }
+
+        // NB: We can't compare messages as they come in because
+        // Kafka sinks do not currently support ordering.
+        // Additionally, we do this bummer of a comparison because
+        // avro_rs::types::Value does not implement Eq or Ord.
+        // TODO@jldlaughlin: update this once we have Kafka ordering guarantees
+        let mut missing = Vec::new();
+        for e in &converted_expected_messages {
+            if !actual_messages.contains(e) {
+                missing.push(e);
+            }
+        }
+        let mut unexpected = Vec::new();
+        for a in &actual_messages {
+            if !converted_expected_messages.contains(a) {
+                unexpected.push(a);
+            }
+        }
+
+        if missing.len() != 0 || unexpected.len() != 0 {
+            return Err(format!(
+                "Mismatched Kafka sink rows. Missing: {:#?}, Unexpected: {:#?}",
+                missing, unexpected
+            ));
+        }
+
         Ok(())
     }
 }
