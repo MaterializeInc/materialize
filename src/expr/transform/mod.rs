@@ -67,7 +67,16 @@ impl Transform for Fixpoint {
                 return;
             }
         }
-        panic!("Fixpoint looped 100 times! {:#?} {:#?}", self, relation);
+        let original = relation.clone();
+        for transform in self.transforms.iter() {
+            transform.transform(relation, indexes, env);
+        }
+        panic!(
+            "Fixpoint looped 100 times! {:#?} {}\n{}",
+            self,
+            original.pretty(),
+            relation.pretty()
+        );
     }
 }
 

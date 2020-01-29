@@ -73,8 +73,8 @@ impl JoinImplementation {
             self.action_recursive(body, arranged);
             arranged.remove(&Id::Local(*id));
         } else {
-            self.action(relation, arranged);
             relation.visit1_mut(|e| self.action_recursive(e, arranged));
+            self.action(relation, arranged);
         }
     }
 
@@ -192,7 +192,7 @@ mod delta_queries {
         } = &mut new_join
         {
             // Determine a viable order for each relation, or return `None` if none found.
-            let orders = super::optimize_orders(inputs.len(), variables, available, unique_keys);
+            let orders = super::optimize_orders(variables, available, unique_keys);
             if !orders.iter().all(|o| o.iter().all(|(c, _, _)| c.arranged)) {
                 return None;
             }
@@ -224,12 +224,14 @@ mod delta_queries {
                 if let Some(demand) = demand {
                     let mut rel_col = Vec::new();
                     for (input, arity) in arities.iter().enumerate() {
-                        rel_col.push((input, *arity));
+                        for _ in 0..*arity {
+                            rel_col.push(input);
+                        }
                     }
                     for expr in lifted.iter() {
                         for column in expr.support() {
-                            let (rel, col) = rel_col[column];
-                            demand[rel].push(col);
+                            let rel = rel_col[column];
+                            demand[rel].push(column - prior_arities[rel]);
                         }
                     }
                     for list in demand.iter_mut() {
@@ -277,12 +279,17 @@ mod differential {
             implementation,
         } = &mut new_join
         {
+            for variable in variables.iter_mut() {
+                variable.sort();
+            }
+            variables.sort();
+
             // We prefer a starting point based on the characteristics of the other input arrangements.
             // We could change this preference at any point, but the list of orders should still inform.
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
-            let orders = super::optimize_orders(inputs.len(), variables, available, unique_keys);
+            let orders = super::optimize_orders(variables, available, unique_keys);
             let max_min_characteristics = orders
                 .iter()
                 .flat_map(|order| order.iter().map(|(c, _, _)| c.clone()).min())
@@ -312,12 +319,14 @@ mod differential {
                 if let Some(demand) = demand {
                     let mut rel_col = Vec::new();
                     for (input, arity) in arities.iter().enumerate() {
-                        rel_col.push((input, *arity));
+                        for _ in 0..*arity {
+                            rel_col.push(input);
+                        }
                     }
                     for expr in lifted.iter() {
                         for column in expr.support() {
-                            let (rel, col) = rel_col[column];
-                            demand[rel].push(col);
+                            let rel = rel_col[column];
+                            demand[rel].push(column - prior_arities[rel]);
                         }
                     }
                     for list in demand.iter_mut() {
@@ -330,34 +339,6 @@ mod differential {
             // Install the implementation.
             *implementation = JoinImplementation::Differential(start, order.clone());
 
-            // Optional: permute join inputs to match join plan order.
-            let mut permutation = Vec::with_capacity(inputs.len());
-            permutation.push(start);
-            for (input, _) in order.iter() {
-                permutation.push(*input);
-            }
-
-            super::permute_join(inputs, variables, demand, implementation, &permutation);
-            if permutation.iter().enumerate().any(|(x, y)| x != *y) {
-                // We must re-arrange the columns so that they are where they are
-                // expected to be, which is in the pre-permuted order.
-                let mut offset = 0;
-                let mut offsets = vec![0; permutation.len()];
-                for input in permutation.iter() {
-                    offsets[*input] = offset;
-                    offset += arities[*input];
-                }
-
-                let mut to_project = Vec::new();
-                for rel in 0..inputs.len() {
-                    for col in 0..arities[rel] {
-                        let position = offsets[rel] + col;
-                        to_project.push(position);
-                    }
-                }
-                new_join = new_join.project(to_project);
-            }
-
             if !lifted.is_empty() {
                 new_join = new_join.filter(lifted);
             }
@@ -366,194 +347,6 @@ mod differential {
             Some(new_join)
         } else {
             panic!("differential::plan call on non-join expression.")
-        }
-    }
-}
-
-fn permute_join(
-    inputs: &mut Vec<RelationExpr>,
-    variables: &mut Vec<Vec<(usize, usize)>>,
-    demand: &mut Option<Vec<Vec<usize>>>,
-    implementation: &mut crate::relation::JoinImplementation,
-    permutation: &[usize],
-) {
-    *inputs = permutation
-        .iter()
-        .map(|i| inputs[*i].clone())
-        .collect::<Vec<_>>();
-
-    let mut remap = vec![0; inputs.len()];
-    for (index, input) in permutation.iter().enumerate() {
-        remap[*input] = index;
-    }
-    for variable in variables.iter_mut() {
-        for (rel, _col) in variable.iter_mut() {
-            *rel = remap[*rel];
-        }
-        variable.sort();
-    }
-    variables.sort();
-
-    // update demand
-    if let Some(demand) = demand {
-        *demand = permutation
-            .iter()
-            .map(|i| demand[*i].clone())
-            .collect::<Vec<_>>();
-    }
-
-    match implementation {
-        crate::relation::JoinImplementation::Differential(start, order) => {
-            *start = 0;
-            for (index, (input, _)) in order.iter_mut().enumerate() {
-                *input = index + 1;
-            }
-        }
-        crate::relation::JoinImplementation::DeltaQuery(orders) => {
-            // permute the order of instructions.
-            *orders = permutation
-                .iter()
-                .map(|i| orders[*i].clone())
-                .collect::<Vec<_>>();
-            for order in orders.iter_mut() {
-                for (index, _) in order.iter_mut() {
-                    *index = remap[*index];
-                }
-            }
-        }
-        crate::relation::JoinImplementation::Unimplemented => {}
-    }
-}
-
-fn optimize_orders(
-    inputs: usize,
-    variables: &[Vec<(usize, usize)>],
-    available: &[Vec<Vec<ScalarExpr>>],
-    unique_keys: &[Vec<Vec<usize>>],
-) -> Vec<Vec<(CandidateCharacteristics, Vec<ScalarExpr>, usize)>> {
-    (0..inputs)
-        .map(|start| {
-            // Rule-out `start` but claim that it does a pretty good job.
-            // Worth understanding based on join implementation, but for
-            // the moment neither implementation uses a start arrangement.
-            let mut order = vec![(
-                CandidateCharacteristics::new(true, true, true),
-                Vec::new(),
-                start,
-            )];
-            while order.len() < inputs {
-                let ordered = order.iter().map(|(_c, _k, r)| *r).collect::<Vec<_>>();
-                let candidate =
-                    optimize_candidates(inputs, &ordered, variables, available, unique_keys);
-                order.push(candidate.expect("Failed to find candidate in optimize_orders"));
-            }
-            order
-        })
-        .collect::<Vec<_>>()
-}
-
-/// Identifiers the next most appealing candidate and keys to use.
-///
-/// This method restricts its search to collections with arrangements
-/// that can be used (i.e. have as keys expressions over columns bound
-/// in `order`), and orders candidates by 1. whether their key is unique,
-/// and 2. whether the key exactly matches the constrained columns of
-/// the collection, and 3. whether an arrangement exists. This ordering
-/// is intended to minimize the volume of intermediate records; one can
-/// use a different order to prefer minimizing memory use.
-///
-/// These rules are subject to change if it turns out that they are silly.
-/// For example, these rules prioritize non-arranged unique keys over any
-/// arranged non-unique keys; that sounds conservatively smart, but there
-/// are reasonable justifications to swap that around.
-fn optimize_candidates(
-    relations: usize,
-    order: &[usize],
-    variables: &[Vec<(usize, usize)>],
-    arrange_keys: &[Vec<Vec<ScalarExpr>>],
-    unique_keys: &[Vec<Vec<usize>>],
-) -> Option<(CandidateCharacteristics, Vec<ScalarExpr>, usize)> {
-    let candidates = (0..relations)
-        .filter(|i| !order.contains(i))
-        .flat_map(|i| {
-            let constrained = constrained_columns(i, &order, variables);
-            arrange_keys[i]
-                .iter()
-                // For a key to be viable, we must be able to form the value needed to look up the key.
-                .filter(|key| {
-                    key.iter()
-                        .all(|k| k.support().iter().all(|col| constrained.contains(col)))
-                })
-                .map(|key| {
-                    let key_unique = unique_keys[i].iter().any(|uniq| {
-                        uniq.iter()
-                            .all(|col| key.contains(&ScalarExpr::Column(*col)))
-                    });
-                    let key_equal = key.len() == constrained.len();
-                    (
-                        CandidateCharacteristics::new(key_unique, key_equal, true),
-                        key.clone(),
-                        i,
-                    )
-                })
-                // We can always consider a new arrangement, based on `constrained`.
-                .chain(Some({
-                    let unique = unique_keys[i]
-                        .iter()
-                        .any(|uniq| uniq.iter().all(|col| constrained.contains(col)));
-                    (
-                        CandidateCharacteristics::new(unique, true, false),
-                        constrained.iter().map(|c| ScalarExpr::Column(*c)).collect(),
-                        i,
-                    )
-                }))
-                .max()
-        })
-        .collect::<Vec<_>>();
-
-    // We determine the best candidate characteristics, and then choose the first relation with
-    // these characteristics. The convoluted logic is meant to ensure stability under permutation
-    // of inputs, at least in the case that we promote appealing candidates.
-    let max_characteristics = candidates.iter().map(|(c, _, _)| c.clone()).max().unwrap();
-    candidates
-        .into_iter()
-        .find(|(c, _, _)| c == &max_characteristics)
-}
-
-/// Lists the columns of collection `index` constrained to be equal to columns present in `order`.
-fn constrained_columns(
-    index: usize,
-    order: &[usize],
-    variables: &[Vec<(usize, usize)>],
-) -> Vec<usize> {
-    let mut results = Vec::new();
-    for variable in variables.iter() {
-        if variable.iter().any(|(rel, _col)| order.contains(rel)) {
-            for (rel, col) in variable.iter() {
-                if rel == &index {
-                    results.push(*col);
-                }
-            }
-        }
-    }
-    results.sort();
-    results.dedup();
-    results
-}
-
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone)]
-pub struct CandidateCharacteristics {
-    unique_key: bool,
-    exact_key: bool,
-    arranged: bool,
-}
-
-impl CandidateCharacteristics {
-    fn new(unique_key: bool, exact_key: bool, arranged: bool) -> Self {
-        Self {
-            unique_key,
-            exact_key,
-            arranged,
         }
     }
 }
@@ -607,6 +400,218 @@ fn implement_arrangements<'a>(
         }
         if !needed.is_empty() {
             inputs[index] = RelationExpr::arrange_by(inputs[index].take_dangerous(), needed);
+        }
+    }
+}
+
+fn optimize_orders(
+    variables: &[Vec<(usize, usize)>],
+    available: &[Vec<Vec<ScalarExpr>>],
+    unique_keys: &[Vec<Vec<usize>>],
+) -> Vec<Vec<(Characteristics, Vec<ScalarExpr>, usize)>> {
+    let mut orderer = Orderer::new(variables, available, unique_keys);
+    (0..available.len())
+        .map(move |i| orderer.optimize_order_for(i))
+        .collect::<Vec<_>>()
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone)]
+pub struct Characteristics {
+    // An excellent indication that record count will not increase.
+    unique_key: bool,
+    // A weaker signal that record count will not increase.
+    key_length: usize,
+    // Indicates that there will be no additional in-memory footprint.
+    arranged: bool,
+    // We want to prefer smaller inputs, for stability of ordering.
+    input: std::cmp::Reverse<usize>,
+}
+
+impl Characteristics {
+    fn new(unique_key: bool, key_length: usize, arranged: bool, input: usize) -> Self {
+        Self {
+            unique_key,
+            key_length,
+            arranged,
+            input: std::cmp::Reverse(input),
+        }
+    }
+}
+
+struct Orderer<'a> {
+    inputs: usize,
+    variables: &'a [Vec<(usize, usize)>],
+    arrangements: &'a [Vec<Vec<ScalarExpr>>],
+    unique_keys: &'a [Vec<Vec<usize>>],
+    reverse_variables: Vec<Vec<usize>>,
+    unique_arrangement: Vec<Vec<bool>>,
+
+    order: Vec<(Characteristics, Vec<ScalarExpr>, usize)>,
+    placed: Vec<bool>,
+    bound: Vec<Vec<usize>>,
+    variables_active: Vec<bool>,
+    arrangement_active: Vec<Vec<usize>>,
+    priority_queue:
+        std::collections::BinaryHeap<(Characteristics, Vec<ScalarExpr>, usize)>,
+}
+
+impl<'a> Orderer<'a> {
+    fn new(
+        variables: &'a [Vec<(usize, usize)>],
+        arrangements: &'a [Vec<Vec<ScalarExpr>>],
+        unique_keys: &'a [Vec<Vec<usize>>],
+    ) -> Self {
+        let inputs = arrangements.len();
+        let mut reverse_variables = vec![Vec::new(); inputs];
+        for (index, variable) in variables.iter().enumerate() {
+            for (rel, _col) in variable.iter() {
+                reverse_variables[*rel].push(index);
+            }
+        }
+        let mut unique_arrangement = vec![Vec::new(); inputs];
+        for (input, keys) in arrangements.iter().enumerate() {
+            for key in keys.iter() {
+                unique_arrangement[input].push(
+                    unique_keys[input]
+                        .iter()
+                        .any(|cols| cols.iter().all(|c| key.contains(&ScalarExpr::Column(*c)))),
+                );
+            }
+        }
+
+        let order = Vec::with_capacity(inputs);
+        let placed = vec![false; inputs];
+        let bound = vec![Vec::new(); inputs];
+        let variables_active = vec![false; variables.len()];
+        let arrangement_active = vec![Vec::new(); inputs];
+        let priority_queue = std::collections::BinaryHeap::new();
+        Self {
+            inputs,
+            variables,
+            arrangements,
+            unique_keys,
+            reverse_variables,
+            unique_arrangement,
+            order,
+            placed,
+            bound,
+            variables_active,
+            arrangement_active,
+            priority_queue,
+        }
+    }
+
+    fn optimize_order_for(
+        &mut self,
+        start: usize,
+    ) -> Vec<(Characteristics, Vec<ScalarExpr>, usize)> {
+        self.order.clear();
+        self.priority_queue.clear();
+        for input in 0..self.inputs {
+            self.placed[input] = false;
+            self.bound[input].clear();
+            self.arrangement_active[input].clear();
+        }
+        for index in 0..self.variables.len() {
+            self.variables_active[index] = false;
+        }
+
+        // Introduce cross joins as a possibility.
+        for input in 0..self.inputs {
+            let is_unique = self.unique_keys[input].iter().any(|cols| cols.is_empty());
+            if let Some(pos) = self.arrangements[input]
+                .iter()
+                .position(|key| key.is_empty())
+            {
+                self.arrangement_active[input].push(pos);
+                self.priority_queue.push((
+                    Characteristics::new(is_unique, 0, true, input),
+                    vec![],
+                    input,
+                ));
+            } else {
+                self.priority_queue.push((
+                    Characteristics::new(is_unique, 0, false, input),
+                    vec![],
+                    input,
+                ));
+            }
+        }
+
+        self.order.push((
+            Characteristics::new(true, usize::max_value(), true, start),
+            vec![],
+            start,
+        ));
+        self.order_input(start);
+        while self.order.len() < self.inputs {
+            let (characteristics, key, input) = self.priority_queue.pop().unwrap();
+            if !self.placed[input] {
+                self.order.push((characteristics, key, input));
+                self.order_input(input);
+            }
+        }
+
+        std::mem::replace(&mut self.order, Vec::new())
+    }
+
+    /// Introduces a specific input and keys to the order, along with its characteristics.
+    ///
+    /// This method places a next element in the order, and updates the associated state
+    /// about other candidates, including which columns are now bound and which potential
+    /// keys are available to consider (both arranged, and unarranged).
+    fn order_input(&mut self, input: usize) {
+        self.placed[input] = true;
+        for variable in self.reverse_variables[input].iter() {
+            if !self.variables_active[*variable] {
+                self.variables_active[*variable] = true;
+                for (rel, col) in self.variables[*variable].iter() {
+                    // Update bound columns.
+                    self.bound[*rel].push(*col);
+                    self.bound[*rel].sort();
+                    // Reconsider all available arrangements.
+                    for (pos, keys) in self.arrangements[*rel].iter().enumerate() {
+                        if !self.arrangement_active[*rel].contains(&pos) {
+                            // Determine if the arrangement is viable, which happens when the
+                            // support of its keys are all bound.
+                            if keys
+                                .iter()
+                                .all(|k| k.support().iter().all(|c| self.bound[*rel].contains(c)))
+                            {
+                                self.arrangement_active[*rel].push(pos);
+                                // TODO: This could be pre-computed, as it is independent of the order.
+                                let is_unique = self.unique_arrangement[*rel][pos];
+                                self.priority_queue.push((
+                                    Characteristics::new(
+                                        is_unique,
+                                        keys.len(),
+                                        true,
+                                        *rel,
+                                    ),
+                                    keys.clone(),
+                                    *rel,
+                                ));
+                            }
+                        }
+                    }
+                    let is_unique = self.unique_keys[*rel]
+                        .iter()
+                        .any(|cols| cols.iter().all(|c| self.bound[*rel].contains(c)));
+                    self.priority_queue.push((
+                        Characteristics::new(
+                            is_unique,
+                            self.bound[*rel].len(),
+                            false,
+                            *rel,
+                        ),
+                        self.bound[*rel]
+                            .iter()
+                            .map(|c| ScalarExpr::Column(*c))
+                            .collect::<Vec<_>>(),
+                        *rel,
+                    ));
+                }
+            }
         }
     }
 }

@@ -838,6 +838,30 @@ impl RelationExpr {
                         .append(")")
                 };
 
+                // We may want to present inputs in a different order.
+                let permutation = match implementation {
+                    JoinImplementation::Differential(start, order) => {
+                        let mut permute = Vec::with_capacity(inputs.len());
+                        permute.push(*start);
+                        permute.extend(order.iter().map(|(input, _)| *input));
+                        permute
+                    }
+                    JoinImplementation::DeltaQuery(_) => (0..inputs.len()).collect::<Vec<_>>(),
+                    JoinImplementation::Unimplemented => (0..inputs.len()).collect::<Vec<_>>(),
+                };
+                let mut remap = vec![0; inputs.len()];
+                for (pos, perm) in permutation.iter().enumerate() {
+                    remap[*perm] = pos;
+                }
+                let mut variables = variables.clone();
+                for variable in variables.iter_mut() {
+                    for (rel, _col) in variable.iter_mut() {
+                        *rel = remap[*rel];
+                    }
+                    variable.sort();
+                }
+                variables.sort();
+
                 let variables = alloc
                     .intersperse(
                         variables.iter().map(|ps| {
@@ -860,7 +884,9 @@ impl RelationExpr {
                 let implementation = alloc.text(format!("implementation: {}", implementation));
 
                 let inputs = alloc.intersperse(
-                    inputs.iter().map(|inp| inp.to_doc(alloc, id_humanizer)),
+                    permutation
+                        .iter()
+                        .map(|idx| inputs[*idx].to_doc(alloc, id_humanizer)),
                     alloc.text(",").append(alloc.line()),
                 );
 

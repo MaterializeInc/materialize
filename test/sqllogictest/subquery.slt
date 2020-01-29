@@ -215,7 +215,7 @@ query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
 Project {
-  outputs: [0, 0, 1],
+  outputs: [0, 0, 2],
   Map {
     scalars: [true],
     Join {
@@ -246,11 +246,11 @@ Let {
   }
 } in
 Project {
-  outputs: [0, 0, 1],
+  outputs: [0, 0, 2],
   Map {
     scalars: [true],
     Join {
-      variables: [[(0, 1), (1, 0)]],
+      variables: [[(0, 2), (1, 0)]],
       implementation: DifferentialLinear,
       Get { l0 },
       ArrangeBy {
@@ -262,7 +262,7 @@ Project {
             implementation: DeltaQuery,
             ArrangeBy {
               keys: [[#0]],
-              Distinct { group_key: [#1], Get { l0 } }
+              Distinct { group_key: [#2], Get { l0 } }
             },
             ArrangeBy {
               keys: [[#0]],

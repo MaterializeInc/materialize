@@ -124,10 +124,10 @@ Project {
     Join {
       variables: [],
       implementation: DifferentialLinear,
-      Get { materialize.public.date_trunc_fields (u1) },
+      Get { materialize.public.date_trunc_timestamps (u5) },
       ArrangeBy {
         keys: [[]],
-        Get { materialize.public.date_trunc_timestamps (u5) }
+        Get { materialize.public.date_trunc_fields (u1) }
       }
     }
   }

@@ -279,37 +279,21 @@ AND s_quantity = m_s_quantity
 ORDER BY n_name, su_name, i_id
 ----
 Project {
-  outputs: [17, 24, 31, 0, 20, 25, 27, 29],
+  outputs: [5, 6, 31, 0, 2, 7, 9, 11],
   Filter {
-    predicates: [^.*b$ ~ #22, ^EUROP.*$ ~ #35],
+    predicates: [^.*b$ ~ #4, ^EUROP.*$ ~ #35],
     Join {
       variables: [
-        [(0, 0), (1, 0), (5, 0)],
-        [(0, 2), (5, 1)],
-        [(0, 17), (2, 0)],
-        [(2, 3), (3, 0)],
-        [(3, 2), (4, 0)]
+        [(0, 0), (1, 0), (2, 0)],
+        [(0, 2), (1, 1)],
+        [(0, 17), (3, 0)],
+        [(3, 3), (4, 0)],
+        [(4, 2), (5, 0)]
       ],
       implementation: DifferentialLinear,
       Filter {
         predicates: [!isnull #2],
         Get { materialize.public.stock (u26) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.item (u24) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.region (u37) }
       },
       ArrangeBy {
         keys: [[#0, #1]],
@@ -347,6 +331,22 @@ Project {
             }
           }
         }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.item (u24) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.supplier (u34) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.nation (u31) }
+      },
+      ArrangeBy {
+        keys: [[#0]],
+        Get { materialize.public.region (u37) }
       }
     }
   }
@@ -449,9 +449,9 @@ Reduce {
     ArrangeBy {
       keys: [[#0, #1, #2, #3]],
       Distinct {
-        group_key: [#0, #1, #2, #14],
+        group_key: [#0, #1, #2, #4],
         Filter {
-          predicates: [#6 >= #14],
+          predicates: [#14 >= #4],
           Join {
             variables: [
               [(0, 0), (1, 0)],
@@ -459,11 +459,11 @@ Reduce {
               [(0, 2), (1, 2)]
             ],
             implementation: DeltaQuery,
+            ArrangeBy { keys: [[#0, #1, #2]], Get { l0 } },
             ArrangeBy {
               keys: [[#2, #1, #0]],
               Get { materialize.public.orderline (u19) }
-            },
-            ArrangeBy { keys: [[#0, #1, #2]], Get { l0 } }
+            }
           }
         }
       }
@@ -496,10 +496,10 @@ GROUP BY n_name
 ORDER BY revenue DESC
 ----
 Reduce {
-  group_key: [#59],
-  aggregates: [sum(#8)],
+  group_key: [#66],
+  aggregates: [sum(#38)],
   Filter {
-    predicates: [#63 = "EUROPE", datetots #14 >= 2007-01-02 00:00:00],
+    predicates: [#70 = "EUROPE", datetots #26 >= 2007-01-02 00:00:00],
     Join {
       variables: [
         [(0, 0), (1, 0)],
@@ -507,9 +507,9 @@ Reduce {
         [(0, 2), (1, 2), (2, 2), (3, 1)],
         [(0, 4), (3, 0)],
         [(1, 3), (2, 0)],
-        [(2, 21), (4, 0), (6, 3)],
-        [(3, 17), (6, 0)],
-        [(4, 2), (5, 0)]
+        [(2, 21), (4, 3), (5, 0)],
+        [(3, 17), (4, 0)],
+        [(5, 2), (6, 0)]
       ],
       implementation: DifferentialLinear,
       Get { materialize.public.orderline (u19) },
@@ -526,16 +526,16 @@ Reduce {
         Get { materialize.public.stock (u26) }
       },
       ArrangeBy {
+        keys: [[#0, #3]],
+        Get { materialize.public.supplier (u34) }
+      },
+      ArrangeBy {
         keys: [[#0]],
         Get { materialize.public.nation (u31) }
       },
       ArrangeBy {
         keys: [[#0]],
         Get { materialize.public.region (u37) }
-      },
-      ArrangeBy {
-        keys: [[#0, #3]],
-        Get { materialize.public.supplier (u34) }
       }
     }
   }
@@ -1217,14 +1217,11 @@ Let {
     Join {
       variables: [],
       implementation: DifferentialLinear,
-      Get { l1 },
-      ArrangeBy {
-        keys: [[]],
-        Filter {
-          predicates: [^.*bad.*$ ~ #6],
-          Get { materialize.public.supplier (u34) }
-        }
-      }
+      Filter {
+        predicates: [^.*bad.*$ ~ #6],
+        Get { materialize.public.supplier (u34) }
+      },
+      ArrangeBy { keys: [[]], Get { l1 } }
     }
   }
 } in
@@ -1232,22 +1229,19 @@ Reduce {
   group_key: [#20, substr(#22, 1, 3), #21],
   aggregates: [count(distinct #17)],
   Join {
-    variables: [[(0, 17), (1, 0)]],
+    variables: [[(0, 0), (1, 17)]],
     implementation: DifferentialLinear,
-    Get { l0 },
-    ArrangeBy {
-      keys: [[#0]],
-      Union {
-        Filter { predicates: [#1], Get { l2 } },
-        Map {
-          scalars: [true],
-          Union {
-            Project { outputs: [0], Negate { Get { l2 } } },
-            Get { l1 }
-          }
+    Union {
+      Filter { predicates: [#1], Get { l2 } },
+      Map {
+        scalars: [true],
+        Union {
+          Project { outputs: [0], Negate { Get { l2 } } },
+          Get { l1 }
         }
       }
-    }
+    },
+    ArrangeBy { keys: [[#17]], Get { l0 } }
   }
 }
 
@@ -1487,17 +1481,14 @@ Let {
   l1 = Filter {
     predicates: [datetots #35 > 2010-05-23 12:00:00],
     Join {
-      variables: [[(1, 0), (2, 4)]],
+      variables: [[(0, 0), (1, 4)]],
       implementation: DifferentialLinear,
-      Get { l0 },
-      ArrangeBy {
-        keys: [[]],
-        Get { materialize.public.stock (u26) }
-      },
+      Get { materialize.public.stock (u26) },
       ArrangeBy {
         keys: [[#4]],
         Get { materialize.public.orderline (u19) }
-      }
+      },
+      ArrangeBy { keys: [[]], Get { l0 } }
     }
   }
 } in
@@ -1572,7 +1563,7 @@ ORDER BY numwait DESC, su_name
 ----
 Let {
   l0 = Filter {
-    predicates: [#44 = "GERMANY", #6 > #14],
+    predicates: [#44 = "GERMANY", #13 > #21],
     Join {
       variables: [
         [(0, 0), (1, 0)],
@@ -1603,52 +1594,49 @@ Let {
     }
   }
 } in
-Let { l1 = Distinct { group_key: [#0, #1, #2, #6], Get { l0 } } } in
+Let { l1 = Distinct { group_key: [#7, #8, #9, #13], Get { l0 } } } in
 Reduce {
-  group_key: [#37],
+  group_key: [#1],
   aggregates: [countall(null)],
   Join {
     variables: [
-      [(0, 0), (1, 0)],
-      [(0, 1), (1, 1)],
-      [(0, 2), (1, 2)],
-      [(0, 6), (1, 3)]
+      [(0, 0), (1, 7)],
+      [(0, 1), (1, 8)],
+      [(0, 2), (1, 9)],
+      [(0, 3), (1, 13)]
     ],
     implementation: DifferentialLinear,
-    Get { l0 },
-    ArrangeBy {
-      keys: [[#0, #1, #2, #3]],
-      Union {
-        Project {
-          outputs: [0 .. 3],
-          Negate {
-            Map {
-              scalars: [true],
-              Distinct {
-                group_key: [#0, #1, #2, #3],
-                Filter {
-                  predicates: [#10 > #3],
-                  Join {
-                    variables: [
-                      [(0, 0), (1, 0)],
-                      [(0, 1), (1, 1)],
-                      [(0, 2), (1, 2)]
-                    ],
-                    implementation: DifferentialLinear,
-                    Get { l1 },
-                    ArrangeBy {
-                      keys: [[#2, #1, #0]],
-                      Get { materialize.public.orderline (u19) }
-                    }
+    Union {
+      Project {
+        outputs: [0 .. 3],
+        Negate {
+          Map {
+            scalars: [true],
+            Distinct {
+              group_key: [#0, #1, #2, #3],
+              Filter {
+                predicates: [#10 > #3],
+                Join {
+                  variables: [
+                    [(0, 0), (1, 0)],
+                    [(0, 1), (1, 1)],
+                    [(0, 2), (1, 2)]
+                  ],
+                  implementation: DifferentialLinear,
+                  Get { l1 },
+                  ArrangeBy {
+                    keys: [[#2, #1, #0]],
+                    Get { materialize.public.orderline (u19) }
                   }
                 }
               }
             }
           }
-        },
-        Get { l1 }
-      }
-    }
+        }
+      },
+      Get { l1 }
+    },
+    ArrangeBy { keys: [[#7, #8, #9, #13]], Get { l0 } }
   }
 }
 
@@ -1754,8 +1742,8 @@ Let {
   }
 } in
 Reduce {
-  group_key: [substr(#12, 1, 1)],
-  aggregates: [countall(null), sum(#19)],
+  group_key: [substr(#9, 1, 1)],
+  aggregates: [countall(null), sum(#16)],
   Join {
     variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)], [(0, 2), (1, 2)]],
     implementation: DifferentialLinear,
@@ -1766,19 +1754,19 @@ Reduce {
           Map {
             scalars: [true],
             Distinct {
-              group_key: [#3, #1, #2],
+              group_key: [#0, #1, #2],
               Join {
                 variables: [
+                  [(0, 0), (1, 3)],
                   [(0, 1), (1, 1)],
-                  [(0, 2), (1, 2)],
-                  [(0, 3), (1, 0)]
+                  [(0, 2), (1, 2)]
                 ],
                 implementation: DeltaQuery,
+                ArrangeBy { keys: [[#0, #1, #2]], Get { l0 } },
                 ArrangeBy {
                   keys: [[#2, #1, #3]],
                   Get { materialize.public.order (u16) }
-                },
-                ArrangeBy { keys: [[#0, #1, #2]], Get { l0 } }
+                }
               }
             }
           }
