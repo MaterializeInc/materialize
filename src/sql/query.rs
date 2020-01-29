@@ -374,7 +374,7 @@ fn plan_view_select(
         };
         let expr = plan_expr(ecx, &selection, Some(ScalarType::Bool))?;
         let typ = ecx.column_type(&expr);
-        if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Null {
+        if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Unknown {
             bail!(
                 "WHERE clause must have boolean type, not {:?}",
                 typ.scalar_type
@@ -1575,7 +1575,7 @@ fn plan_function<'a>(
                 }
                 let expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::String))?;
                 let typ = ecx.column_type(&expr);
-                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null {
+                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Unknown {
                     bail!("ascii does not accept arguments of type {:?}", typ);
                 }
                 let expr = ScalarExpr::CallUnary {
@@ -1623,7 +1623,7 @@ fn plan_function<'a>(
                 for arg in &sql_func.args {
                     let mut expr = plan_expr(ecx, arg, Some(ScalarType::String))?;
                     let typ = ecx.column_type(&expr).scalar_type;
-                    if typ != ScalarType::Null && typ != ScalarType::Bool {
+                    if typ != ScalarType::Unknown && typ != ScalarType::Bool {
                         expr = plan_cast_internal(ecx, "concat", expr, ScalarType::String)?;
                     }
                     exprs.push(expr);
@@ -1706,7 +1706,7 @@ fn plan_function<'a>(
                 let expr = plan_expr(ecx, &sql_func.args[0], None)?;
                 let typ = ecx.column_type(&expr);
                 let output_type = match &typ.scalar_type {
-                    ScalarType::Null => ScalarType::Null,
+                    ScalarType::Unknown => ScalarType::Unknown,
                     ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
                     ScalarType::Decimal(p, s) => ScalarType::Decimal(*p, *s),
                     ScalarType::Int32 => ScalarType::Decimal(10, 0),
@@ -1722,7 +1722,7 @@ fn plan_function<'a>(
                 }
                 let jsonb = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::Jsonb))?;
                 let typ = ecx.column_type(&jsonb);
-                if typ.scalar_type != ScalarType::Jsonb && typ.scalar_type != ScalarType::Null {
+                if typ.scalar_type != ScalarType::Jsonb && typ.scalar_type != ScalarType::Unknown {
                     bail!(
                         "{}() requires jsonb as it's first argument, but got {}",
                         ident,
@@ -1801,7 +1801,7 @@ fn plan_function<'a>(
                 let expr1 = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::String))?;
                 let typ1 = ecx.column_type(&expr1);
                 match typ1.scalar_type {
-                    ScalarType::String | ScalarType::Null => {
+                    ScalarType::String | ScalarType::Unknown => {
                         exprs.push(expr1);
 
                         if sql_func.args.len() == 2 {
@@ -1809,7 +1809,7 @@ fn plan_function<'a>(
                                 plan_expr(ecx, &sql_func.args[1], Some(ScalarType::String))?;
                             let typ2 = ecx.column_type(&expr2);
                             if typ2.scalar_type != ScalarType::String
-                                && typ2.scalar_type != ScalarType::Null
+                                && typ2.scalar_type != ScalarType::Unknown
                             {
                                 bail!("length second argument has non-string type {:?}", typ1);
                             }
@@ -1945,7 +1945,8 @@ fn plan_function<'a>(
                 let mut exprs = Vec::new();
                 let expr1 = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::String))?;
                 let typ1 = ecx.column_type(&expr1);
-                if typ1.scalar_type != ScalarType::String && typ1.scalar_type != ScalarType::Null {
+                if typ1.scalar_type != ScalarType::String && typ1.scalar_type != ScalarType::Unknown
+                {
                     bail!("substring first argument has non-string type {:?}", typ1);
                 }
                 exprs.push(expr1);
@@ -2015,14 +2016,14 @@ fn plan_function<'a>(
                 let ts_expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::TimestampTz))?;
                 let ts_type = ecx.column_type(&ts_expr);
                 match ts_type.scalar_type {
-                    ScalarType::Timestamp | ScalarType::TimestampTz | ScalarType::Null => (),
+                    ScalarType::Timestamp | ScalarType::TimestampTz | ScalarType::Unknown => (),
                     other => bail!("to_char requires a timestamp or timestamptz as its first argument, but got: {}", other)
                 }
 
                 let fmt_expr = plan_expr(ecx, &sql_func.args[1], Some(ScalarType::String))?;
                 let fmt_typ = ecx.column_type(&fmt_expr);
                 if fmt_typ.scalar_type != ScalarType::String
-                    && fmt_typ.scalar_type != ScalarType::Null
+                    && fmt_typ.scalar_type != ScalarType::Unknown
                 {
                     bail!(
                         "to_char requires a string as its second arugment, but got: {}",
@@ -2091,7 +2092,7 @@ fn plan_to_jsonb(
     let typ = ecx.column_type(&arg).scalar_type;
     Ok(match typ {
         ScalarType::Jsonb => arg,
-        ScalarType::String | ScalarType::Float64 | ScalarType::Bool | ScalarType::Null => {
+        ScalarType::String | ScalarType::Float64 | ScalarType::Bool | ScalarType::Unknown => {
             arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
         }
         ScalarType::Int32 => arg
@@ -2223,14 +2224,14 @@ fn plan_boolean_op<'a>(
     let ltype = ecx.column_type(&lexpr);
     let rtype = ecx.column_type(&rexpr);
 
-    if ltype.scalar_type != ScalarType::Bool && ltype.scalar_type != ScalarType::Null {
+    if ltype.scalar_type != ScalarType::Bool && ltype.scalar_type != ScalarType::Unknown {
         bail!(
             "Cannot apply operator {:?} to non-boolean type {:?}",
             op,
             ltype.scalar_type
         )
     }
-    if rtype.scalar_type != ScalarType::Bool && rtype.scalar_type != ScalarType::Null {
+    if rtype.scalar_type != ScalarType::Bool && rtype.scalar_type != ScalarType::Unknown {
         bail!(
             "Cannot apply operator {:?} to non-boolean type {:?}",
             op,
@@ -2522,8 +2523,8 @@ fn plan_comparison_op<'a>(
     let ltype = ecx.column_type(&lexpr);
 
     if ltype.scalar_type != rtype.scalar_type
-        && ltype.scalar_type != ScalarType::Null
-        && rtype.scalar_type != ScalarType::Null
+        && ltype.scalar_type != ScalarType::Unknown
+        && rtype.scalar_type != ScalarType::Unknown
     {
         bail!(
             "{:?} and {:?} are not comparable",
@@ -2554,8 +2555,8 @@ fn plan_like<'a>(
     let rexpr = plan_expr(ecx, right, Some(ScalarType::String))?;
     let rtype = ecx.column_type(&rexpr);
 
-    if (ltype.scalar_type != ScalarType::String && ltype.scalar_type != ScalarType::Null)
-        || (rtype.scalar_type != ScalarType::String && rtype.scalar_type != ScalarType::Null)
+    if (ltype.scalar_type != ScalarType::String && ltype.scalar_type != ScalarType::Unknown)
+        || (rtype.scalar_type != ScalarType::String && rtype.scalar_type != ScalarType::Unknown)
     {
         bail!(
             "LIKE operator requires two string operators, found: {:?} and {:?}",
@@ -2868,7 +2869,7 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             let i = iv.compute_interval()?;
             (Datum::Interval(i.into()), ScalarType::Interval)
         }
-        Value::Null => (Datum::Null, ScalarType::Null),
+        Value::Null => (Datum::Null, ScalarType::Unknown),
         Value::Array(_) => bail!("ARRAY literals are not supported: {}", l.to_string()),
     })
 }
@@ -3002,7 +3003,7 @@ fn unnest(expr: &Expr) -> &Expr {
 fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<ScalarType> {
     iter.into_iter()
         .max_by_key(|scalar_type| match scalar_type {
-            ScalarType::Null => 0,
+            ScalarType::Unknown => 0,
             ScalarType::Int32 => 1,
             ScalarType::Int64 => 2,
             ScalarType::Decimal(_, _) => 3,
@@ -3118,7 +3119,7 @@ where
         (String, Interval) => expr.call_unary(CastStringToInterval),
         (String, Bytes) => expr.call_unary(CastStringToBytes),
         (String, Jsonb) => expr.call_unary(CastStringToJsonb),
-        (Null, _) => {
+        (Unknown, _) => {
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }
         (from, to) if from == to => expr,
@@ -3144,7 +3145,7 @@ where
 {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Float32 | ScalarType::Float64 | ScalarType::Decimal(_, _) => expr,
-        ScalarType::Null | ScalarType::Int32 | ScalarType::Int64 => {
+        ScalarType::Unknown | ScalarType::Int32 | ScalarType::Int64 => {
             plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
         }
         other => bail!("{} has non-numeric type {:?}", name, other),
@@ -3161,7 +3162,7 @@ where
 {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Float64 => expr,
-        ScalarType::Null
+        ScalarType::Unknown
         | ScalarType::Int32
         | ScalarType::Int64
         | ScalarType::Decimal(_, _)
@@ -3180,7 +3181,7 @@ where
 {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Int64 => expr,
-        ScalarType::Null | ScalarType::Int32 => {
+        ScalarType::Unknown | ScalarType::Int32 => {
             plan_cast_internal(ecx, name, expr, ScalarType::Int64)?
         }
         other => bail!("{} has non-integer type {:?}", name, other,),
@@ -3196,7 +3197,7 @@ where
     S: fmt::Display + Copy,
 {
     Ok(match ecx.column_type(&expr).scalar_type {
-        ScalarType::Null | ScalarType::Float64 => expr,
+        ScalarType::Unknown | ScalarType::Float64 => expr,
         ScalarType::Float32 | ScalarType::Decimal(_, _) => {
             plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
         }
@@ -3445,7 +3446,7 @@ fn find_agg_func(name: &str, scalar_type: ScalarType) -> Result<AggregateFunc, f
         ("max", ScalarType::Date) => AggregateFunc::MaxDate,
         ("max", ScalarType::Timestamp) => AggregateFunc::MaxTimestamp,
         ("max", ScalarType::TimestampTz) => AggregateFunc::MaxTimestampTz,
-        ("max", ScalarType::Null) => AggregateFunc::MaxNull,
+        ("max", ScalarType::Unknown) => AggregateFunc::MaxNull,
         ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
         ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
         ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
@@ -3456,13 +3457,13 @@ fn find_agg_func(name: &str, scalar_type: ScalarType) -> Result<AggregateFunc, f
         ("min", ScalarType::Date) => AggregateFunc::MinDate,
         ("min", ScalarType::Timestamp) => AggregateFunc::MinTimestamp,
         ("min", ScalarType::TimestampTz) => AggregateFunc::MinTimestampTz,
-        ("min", ScalarType::Null) => AggregateFunc::MinNull,
+        ("min", ScalarType::Unknown) => AggregateFunc::MinNull,
         ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
         ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
         ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
         ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
         ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
-        ("sum", ScalarType::Null) => AggregateFunc::SumNull,
+        ("sum", ScalarType::Unknown) => AggregateFunc::SumNull,
         ("count", _) => AggregateFunc::Count,
         other => bail!("Unimplemented function/type combo: {:?}", other),
     })

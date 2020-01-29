@@ -360,7 +360,9 @@ impl RelationExpr {
                                     id_gen,
                                     get_join.clone(),
                                     (0..ra)
-                                        .map(|_| (Datum::Null, ColumnType::new(ScalarType::Null)))
+                                        .map(|_| {
+                                            (Datum::Null, ColumnType::new(ScalarType::Unknown))
+                                        })
                                         .collect(),
                                 );
                                 result = result.union(left_outer);
@@ -380,7 +382,7 @@ impl RelationExpr {
                                             ),
                                         (0..la)
                                             .map(|_| {
-                                                (Datum::Null, ColumnType::new(ScalarType::Null))
+                                                (Datum::Null, ColumnType::new(ScalarType::Unknown))
                                             })
                                             .collect(),
                                     )
@@ -686,7 +688,7 @@ impl ScalarExpr {
                             // compute for every row in get_relation
                             .applied_to(id_gen, get_relation.clone())?;
                         // append Null to anything that didn't return any rows
-                        let default = vec![(Datum::Null, ColumnType::new(ScalarType::Null))];
+                        let default = vec![(Datum::Null, ColumnType::new(ScalarType::Unknown))];
                         Ok(get_relation.lookup(id_gen, select, default))
                     },
                 )?;
@@ -858,7 +860,7 @@ impl ScalarExpr {
             Datum::Null,
             ColumnType {
                 nullable: true,
-                scalar_type: ScalarType::Null,
+                scalar_type: ScalarType::Unknown,
             },
         )
     }

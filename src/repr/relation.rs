@@ -28,7 +28,7 @@ impl ColumnType {
     /// methods of the same name.
     pub fn new(scalar_type: ScalarType) -> Self {
         ColumnType {
-            nullable: if let ScalarType::Null = scalar_type {
+            nullable: if let ScalarType::Unknown = scalar_type {
                 true
             } else {
                 false
@@ -39,7 +39,7 @@ impl ColumnType {
 
     pub fn union(&self, other: &Self) -> Result<Self, failure::Error> {
         let scalar_type = match (&self.scalar_type, &other.scalar_type) {
-            (ScalarType::Null, s) | (s, ScalarType::Null) => s.clone(),
+            (ScalarType::Unknown, s) | (s, ScalarType::Unknown) => s.clone(),
             (s1, s2) if s1 == s2 => s1.clone(),
             (s1, s2) => bail!("Can't union types: {:?} and {:?}", s1, s2),
         };
@@ -47,8 +47,8 @@ impl ColumnType {
             scalar_type,
             nullable: self.nullable
                 || other.nullable
-                || self.scalar_type == ScalarType::Null
-                || other.scalar_type == ScalarType::Null,
+                || self.scalar_type == ScalarType::Unknown
+                || other.scalar_type == ScalarType::Unknown,
         })
     }
 

@@ -239,7 +239,7 @@ pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
         Type::Text => ScalarType::String,
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
-        Type::Unknown => ScalarType::Null,
+        Type::Unknown => ScalarType::Unknown,
     };
     (Datum::Null, ty)
 }

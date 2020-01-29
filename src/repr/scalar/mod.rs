@@ -281,7 +281,7 @@ impl<'a> Datum<'a> {
             } else {
                 // sql type checking
                 match (datum, scalar_type) {
-                    (Datum::Null, ScalarType::Null) => true,
+                    (Datum::Null, ScalarType::Unknown) => true,
                     (Datum::Null, _) => false,
                     (Datum::False, ScalarType::Bool) => true,
                     (Datum::False, _) => false,
@@ -528,10 +528,13 @@ impl fmt::Display for Datum<'_> {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Copy, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum ScalarType {
-    /// The type of a datum that can only be null.
+    /// The type of an unknown datum. Whenever possible, this variant should be
+    /// avoided, as clients are typically unable to handle it.
     ///
-    /// This is uncommon. Most [`Datum::Null`]s appear with a non-null type.
-    Null,
+    /// The usual situation in which this variant arises is in a SQL query like
+    /// `SELECT NULL`, where there is no additional hint about what type `NULL`
+    /// should take on.
+    Unknown,
     Bool,
     Int32,
     Int64,
@@ -567,7 +570,7 @@ impl<'a> ScalarType {
 
     pub fn dummy_datum(self) -> Datum<'a> {
         match self {
-            ScalarType::Null => Datum::Null,
+            ScalarType::Unknown => Datum::Null,
             ScalarType::Bool => Datum::False,
             ScalarType::Int32 => Datum::Int32(0),
             ScalarType::Int64 => Datum::Int64(0),
@@ -596,7 +599,7 @@ impl PartialEq for ScalarType {
         match (self, other) {
             (Decimal(_, s1), Decimal(_, s2)) => s1 == s2,
 
-            (Null, Null)
+            (Unknown, Unknown)
             | (Bool, Bool)
             | (Int32, Int32)
             | (Int64, Int64)
@@ -610,7 +613,7 @@ impl PartialEq for ScalarType {
             | (String, String)
             | (Jsonb, Jsonb) => true,
 
-            (Null, _)
+            (Unknown, _)
             | (Bool, _)
             | (Int32, _)
             | (Int64, _)
@@ -632,7 +635,7 @@ impl Hash for ScalarType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         use ScalarType::*;
         match self {
-            Null => state.write_u8(0),
+            Unknown => state.write_u8(0),
             Bool => state.write_u8(1),
             Int32 => state.write_u8(2),
             Int64 => state.write_u8(3),
@@ -664,7 +667,7 @@ impl fmt::Display for ScalarType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ScalarType::*;
         match self {
-            Null => f.write_str("null"),
+            Unknown => f.write_str("null"),
             Bool => f.write_str("bool"),
             Int32 => f.write_str("i32"),
             Int64 => f.write_str("i64"),
