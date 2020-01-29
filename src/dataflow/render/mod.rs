@@ -637,7 +637,10 @@ where
                                 .expect("Column in key not bound!")
                                 .iter()
                                 .map(|rel_col1| {
-                                    columns.iter().position(|rel_col2| rel_col1 == rel_col2).expect("Could not find bound column in prev_column")
+                                    columns
+                                        .iter()
+                                        .position(|rel_col2| rel_col1 == rel_col2)
+                                        .expect("Could not find bound column in prev_column")
                                 })
                                 .next()
                                 .expect("Column in key not bound by prior column")

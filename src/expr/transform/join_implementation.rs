@@ -142,7 +142,15 @@ impl JoinImplementation {
                 }
                 available_arrangements[index].sort();
                 available_arrangements[index].dedup();
-                available_arrangements[index].retain(|key| key.iter().all(|k| if let ScalarExpr::Column(_) = k { true } else { false }));
+                available_arrangements[index].retain(|key| {
+                    key.iter().all(|k| {
+                        if let ScalarExpr::Column(_) = k {
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                });
             }
 
             // Determine if we can perform delta queries with the existing arrangements.
