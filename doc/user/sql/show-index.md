@@ -19,16 +19,16 @@ Field | Use
 ------|-----
 _view&lowbar;name_ | The name of the view whose indexes you want to show.
 
-## Output format
+## Details
+
+### Output format
 
 `SHOW INDEX`'s output is a table, with this structure:
 
 ```nofmt
-+------+----------+-------------+------------+------+--------------+
-| View | Key_name | Column_name | Expression | Null | Seq_in_index |
-+------+----------+-------------+------------+------+--------------+
-| ... | ...       | ...         | ...        | ...  | ...          |
-+------+----------+-------------+------------+------+--------------+
+ View | Key_name | Column_name | Expression | Null | Seq_in_index
+------+----------+-------------+------------+------+--------------
+ ... | ...       | ...         | ...        | ...  | ...
 ```
 
 Field | Meaning
@@ -40,28 +40,28 @@ Field | Meaning
 **Null** | Is the column nullable?
 **Seq_in_index** | The column's position in the index.
 
+### Determine which views have indexes
+
+[`SHOW FULL VIEWS`](../show-views/#show-details-about-views) includes details about which views have indexes, i.e. are materialized.
+
 ## Examples
 
 ```sql
-SHOW VIEWS;
+SHOW FULL VIEWS;
 ```
 ```nofmt
-+-----------------------------------+
-| VIEWS                             |
-|-----------------------------------|
-| ...                               |
-| q01                               |
-+-----------------------------------+
+          VIEWS          | TYPE | QUERYABLE | MATERIALIZED
+-------------------------+------+-----------+--------------
+ my_nonmaterialized_view | USER | t         | f
+ my_materialized_view    | USER | t         | t
 ```
 ```sql
-SHOW INDEXES FROM q01;
+SHOW INDEXES FROM my_materialized_view;
 ```
 ```
-+------+----------+-------------+------------+------+--------------+
-| View | Key_name | Column_name | Expression | Null | Seq_in_index |
-+------+----------+-------------+------------+------+--------------+
-| ... | ...       | ...         | ...        | ...  | ..           |
-+------+----------+-------------+------------+------+--------------+
+ View | Key_name | Column_name | Expression | Null | Seq_in_index
+------+----------+-------------+------------+------+--------------
+ ... | ...       | ...         | ...        | ...  | ...
 ```
 
 ## Related pages

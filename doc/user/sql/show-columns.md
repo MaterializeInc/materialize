@@ -20,7 +20,7 @@ _item&lowbar;ref_ | The name of the item whose columns you want to view. These c
 
 ## Details
 
-## Output format
+### Output format
 
 `SHOW COLUMN`'s output is a table, with this structure:
 
