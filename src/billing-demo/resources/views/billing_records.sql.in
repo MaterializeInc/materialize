@@ -1,4 +1,4 @@
-CREATE VIEW billing_records AS
+CREATE MATERIALIZED VIEW billing_records AS
 SELECT
     r.value->>'id' id,
     billing_raw_data.id batch_id,

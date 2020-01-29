@@ -5,7 +5,7 @@
 
 -- Stores all addresses that only have one slot (0) in mz_dataflow_operator_addresses
 -- The resulting addresses are either channels or dataflows
-CREATE VIEW mz_addresses_with_unit_length as
+CREATE MATERIALIZED VIEW mz_addresses_with_unit_length as
 SELECT
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker
@@ -18,7 +18,7 @@ HAVING count(*) = 1;
 
 -- Maintains a list of the current dataflow operator ids, and their corresponding
 -- operator names and local ids (per worker)
-CREATE VIEW mz_dataflow_names AS
+CREATE MATERIALIZED VIEW mz_dataflow_names AS
 SELECT
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker,
@@ -40,7 +40,7 @@ WHERE
 --
 -- Keeping this as a separate view instead of rolling it into
 -- mz_records_per_dataflow_operator to simplify logic
-CREATE VIEW mz_dataflow_operator_dataflows AS
+CREATE MATERIALIZED VIEW mz_dataflow_operator_dataflows AS
 SELECT
     mz_dataflow_operators.id,
     mz_dataflow_operators.name,
@@ -60,7 +60,7 @@ WHERE
 
 -- Maintains the number of records used by each operator in a dataflow (per worker)
 -- Operators not using any records are not shown
-CREATE VIEW mz_records_per_dataflow_operator AS
+CREATE MATERIALIZED VIEW mz_records_per_dataflow_operator AS
 SELECT
     mz_dataflow_operator_dataflows.id,
     mz_dataflow_operator_dataflows.name,
@@ -75,7 +75,7 @@ WHERE
     mz_dataflow_operator_dataflows.worker = mz_arrangement_sizes.worker;
 
 -- Maintains the number of records used by each dataflow (per worker)
-CREATE VIEW mz_records_per_dataflow AS
+CREATE MATERIALIZED VIEW mz_records_per_dataflow AS
 SELECT
     mz_records_per_dataflow_operator.dataflow_id as id,
     mz_dataflow_names.name,
@@ -93,7 +93,7 @@ GROUP BY
     mz_records_per_dataflow_operator.worker;
 
 -- Maintains the number of records used by each dataflow (across all workers)
-CREATE VIEW mz_records_per_dataflow_global AS
+CREATE MATERIALIZED VIEW mz_records_per_dataflow_global AS
 SELECT
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name,
@@ -107,7 +107,7 @@ GROUP BY
 --- Performance-rlated tables, used by prometheus
 
 --
-CREATE VIEW mz_perf_dependency_frontiers AS
+CREATE MATERIALIZED VIEW mz_perf_dependency_frontiers AS
 SELECT DISTINCT
      coalesce(mcn.name, index_deps.dataflow) as dataflow,
      coalesce(mcn_source.name, frontier_source.global_id) as source,
@@ -120,7 +120,7 @@ LEFT JOIN mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
 LEFT JOIN mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id;
 
 -- operator operator is due to issue #1217
-CREATE VIEW mz_perf_arrangement_records AS
+CREATE MATERIALIZED VIEW mz_perf_arrangement_records AS
  SELECT mas.worker, name, records, operator operator
  FROM mz_arrangement_sizes mas
  JOIN mz_dataflow_operators mdo ON mdo.id = mas.operator;
@@ -131,7 +131,7 @@ CREATE VIEW mz_perf_arrangement_records AS
 --   1. Create some values that all represent everything in them and below (_core)
 --   2. Find the max value and alias that with +Inf (_bucket)
 --   3. calculate a couple aggregates (_aggregates)
-CREATE VIEW mz_perf_peek_durations_core AS
+CREATE MATERIALIZED VIEW mz_perf_peek_durations_core AS
 SELECT
     d_upper.worker,
     CAST(d_upper.duration_ns AS TEXT) AS le,
@@ -144,14 +144,14 @@ WHERE
     d_upper.duration_ns >= d_summed.duration_ns
 GROUP BY d_upper.worker, d_upper.duration_ns;
 
-CREATE VIEW mz_perf_peek_durations_bucket AS (
+CREATE MATERIALIZED VIEW mz_perf_peek_durations_bucket AS (
     SELECT * FROM mz_perf_peek_durations_core
 ) UNION (
     SELECT worker, '+Inf', max(count) AS count FROM mz_perf_peek_durations_core
     GROUP BY worker
 );
 
-CREATE VIEW mz_perf_peek_durations_aggregates AS
+CREATE MATERIALIZED VIEW mz_perf_peek_durations_aggregates AS
 SELECT worker, sum(duration_ns * count) AS sum, sum(count) AS count
 FROM mz_peek_durations lpd
 GROUP BY worker;
