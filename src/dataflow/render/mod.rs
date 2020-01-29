@@ -638,9 +638,7 @@ where
                                 .flat_map(|rel_col1| {
                                     // Find the first (rel,col) pair in `columns`.
                                     // One *should* exist, but it is not the case that all must.us
-                                    columns
-                                        .iter()
-                                        .position(|rel_col2| rel_col1 == rel_col2)
+                                    columns.iter().position(|rel_col2| rel_col1 == rel_col2)
                                 })
                                 .next()
                                 .expect("Column in key not bound by prior column")
