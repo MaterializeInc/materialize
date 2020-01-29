@@ -126,10 +126,12 @@ where
                                                     .find(|v| v.contains(&(*other, *c)))
                                                     .expect("Column in key not bound!")
                                                     .iter()
-                                                    .map(|rel_col1| {
+                                                    .flat_map(|rel_col1| {
+                                                        // Find the first (rel,col) pair in `update_column_sources`.
+                                                        // One *should* exist, but it is not the case that all must.us
                                                         update_column_sources.iter().position(
                                                             |rel_col2| rel_col1 == rel_col2,
-                                                        ).expect("Failed to find position of bound column")
+                                                        )
                                                     })
                                                     .next()
                                                     .expect(
