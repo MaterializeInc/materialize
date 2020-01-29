@@ -1032,8 +1032,10 @@ where
                         // If the arrangement exists, import it. It may not exist, in which
                         // case we should import the source to be sure that we have access
                         // to the collection to arrange it ourselves.
-                        if let Some(index) = self.views[on_id].primary_idxes.get(key_set) {
-                            dataflow.add_index_import(*index, index_desc, typ.clone(), *view_id);
+                        if let Some(view) = self.views.get(on_id) {
+                            if let Some(index) = view.primary_idxes.get(key_set) {
+                                dataflow.add_index_import(*index, index_desc, typ.clone(), *view_id);
+                            }
                         }
                     }
                 }
