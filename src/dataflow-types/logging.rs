@@ -109,7 +109,9 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
                 "mz_materialization_dependencies"
             }
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "mz_view_frontiers",
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => {
+                "mz_materialization_frontiers"
+            }
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active",
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations",
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys",

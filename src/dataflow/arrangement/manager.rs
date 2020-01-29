@@ -6,11 +6,10 @@
 //! Management of arrangements across dataflows.
 
 use differential_dataflow::operators::arrange::TraceAgent;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-use dataflow_types::{Diff, IndexDesc, Timestamp};
+use dataflow_types::{Diff, Timestamp};
 use expr::GlobalId;
-use expr::ScalarExpr;
 use repr::Row;
 
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
@@ -30,7 +29,7 @@ pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 /// or keyed by some expression.
 pub struct TraceManager {
     /// A map from global identifiers to maintained traces.
-    pub traces: HashMap<GlobalId, CollectionTraces>,
+    pub traces: HashMap<GlobalId, WithDrop<KeysValsHandle>>,
 }
 
 impl Default for TraceManager {
@@ -51,8 +50,10 @@ impl TraceManager {
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
         let mut antichain = timely::progress::frontier::Antichain::new();
-        for collection_traces in self.traces.values_mut() {
-            collection_traces.merge_physical(&mut antichain);
+        for handle in self.traces.values_mut() {
+            use differential_dataflow::trace::TraceReader;
+            handle.read_upper(&mut antichain);
+            handle.distinguish_since(antichain.elements());
         }
     }
 
@@ -63,121 +64,40 @@ impl TraceManager {
     /// not in advance of `frontier`. Users should take care to only rely on
     /// accumulations at times in advance of `frontier`.
     pub fn allow_compaction(&mut self, id: GlobalId, frontier: &[Timestamp]) {
+        use differential_dataflow::trace::TraceReader;
         if let Some(val) = self.traces.get_mut(&id) {
-            val.merge_logical(frontier);
+            val.advance_by(frontier);
         }
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys(&self, desc: &IndexDesc) -> Option<&WithDrop<KeysValsHandle>> {
-        self.traces.get(&desc.on_id)?.by_keys.get(&desc.keys)
+    pub fn get(&self, id: &GlobalId) -> Option<&WithDrop<KeysValsHandle>> {
+        self.traces.get(&id)
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys_mut(&mut self, desc: &IndexDesc) -> Option<&mut WithDrop<KeysValsHandle>> {
-        self.traces
-            .get_mut(&desc.on_id)?
-            .by_keys
-            .get_mut(&desc.keys)
-    }
-
-    /// get the default arrangement, which is by primary key
-    pub fn get_default(&self, id: GlobalId) -> Option<&WithDrop<KeysValsHandle>> {
-        if let Some(collection) = self.traces.get(&id) {
-            collection.by_keys.get(&collection.default_arr_key)
-        } else {
-            None
-        }
-    }
-
-    /// Convenience method for binding an arrangement when all keys are columns
-    /// and not expressions
-    pub fn set_by_columns(
-        &mut self,
-        id: GlobalId,
-        columns: &[usize],
-        trace: WithDrop<KeysValsHandle>,
-    ) {
-        let mut keys = Vec::new();
-        for c in columns {
-            keys.push(ScalarExpr::Column(*c));
-        }
-        self.set_by_keys(&IndexDesc { on_id: id, keys }, trace);
+    pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut WithDrop<KeysValsHandle>> {
+        self.traces.get_mut(&id)
     }
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set_by_keys(&mut self, desc: &IndexDesc, trace: WithDrop<KeysValsHandle>) {
+    pub fn set(&mut self, id: GlobalId, trace: WithDrop<KeysValsHandle>) {
         //Currently it is assumed that the first arrangement for a collection is the one
         //keyed by the primary keys
-        self.traces
-            .entry(desc.on_id)
-            .or_insert_with(|| CollectionTraces::new(desc.keys.clone()))
-            .by_keys
-            .insert(desc.keys.clone(), trace);
-    }
-
-    /// Removes all of a collection's traces
-    pub fn del_collection_traces(&mut self, id: GlobalId) -> Option<CollectionTraces> {
-        self.traces.remove(&id)
+        self.traces.insert(id, trace);
     }
 
     /// Removes a trace
-    pub fn del_trace(&mut self, desc: &IndexDesc) -> bool {
-        self.traces
-            .get_mut(&desc.on_id)
-            .unwrap()
-            .by_keys
-            .remove(&desc.keys)
-            .is_some()
+    pub fn del_trace(&mut self, id: &GlobalId) -> bool {
+        self.traces.remove(&id).is_some()
     }
 
     /// Removes all remnants of all named traces.
     pub fn del_all_traces(&mut self) {
         self.traces.clear();
-    }
-}
-
-/// Maintained traces for a collection.
-pub struct CollectionTraces {
-    /// The key for the default arrangement, which a primary index containing all columns in the collection.
-    default_arr_key: Vec<ScalarExpr>,
-    /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    by_keys: BTreeMap<Vec<ScalarExpr>, WithDrop<KeysValsHandle>>,
-}
-
-impl CollectionTraces {
-    /// Advances the frontiers for physical merging to their current limits.
-    pub fn merge_physical(
-        &mut self,
-        antichain: &mut timely::progress::frontier::Antichain<Timestamp>,
-    ) {
-        use differential_dataflow::trace::TraceReader;
-        for handle in self.by_keys.values_mut() {
-            handle.read_upper(antichain);
-            handle.distinguish_since(antichain.elements());
-        }
-    }
-
-    /// Advances the frontiers for logical merging to the supplied frontier limit.
-    ///
-    /// Logical compaction does not immediately occur, rather it happens only when
-    /// the next physical merge happens, and users should take care to ensure that
-    /// the times observed in traces may need to be advanced to this frontier.
-    pub fn merge_logical(&mut self, frontier: &[Timestamp]) {
-        use differential_dataflow::trace::TraceReader;
-        for handle in self.by_keys.values_mut() {
-            handle.advance_by(frontier);
-        }
-    }
-
-    fn new(default_arr_key: Vec<ScalarExpr>) -> Self {
-        Self {
-            default_arr_key,
-            by_keys: BTreeMap::new(),
-        }
     }
 }
 

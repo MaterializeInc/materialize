@@ -2334,6 +2334,7 @@ fn parse_show_objects() {
                 extended: false,
                 full: false,
                 from: None,
+                materialized: false,
                 filter: None
             }
         );
@@ -2344,6 +2345,7 @@ fn parse_show_objects() {
                 object_type,
                 extended: false,
                 full: false,
+                materialized: false,
                 from: Some(ObjectName(vec!["foo".into(), "bar".into()])),
                 filter: None,
             }
@@ -2360,6 +2362,7 @@ fn parse_show_objects_with_like_regex() {
             extended: false,
             full: false,
             from: None,
+            materialized: false,
             filter,
         } => {
             assert_eq!(filter.unwrap(), ShowStatementFilter::Like("%foo%".into()));
@@ -2378,6 +2381,7 @@ fn parse_show_objects_with_full() {
             object_type: ObjectType::View,
             extended: false,
             full: true,
+            materialized: false,
             from: None,
             filter: None,
         }
@@ -2389,10 +2393,55 @@ fn parse_show_objects_with_full() {
             object_type: ObjectType::Table,
             extended: false,
             full: true,
+            materialized: false,
             from: None,
             filter: None,
         }
     );
+}
+
+#[test]
+fn parse_show_materialized_views() {
+    let sql = "SHOW MATERIALIZED VIEWS FROM foo";
+    assert_eq!(
+        verified_stmt(&sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::View,
+            extended: false,
+            full: false,
+            materialized: true,
+            from: Some(ObjectName(vec!["foo".into()])),
+            filter: None,
+        }
+    );
+    let sql = "SHOW FULL MATERIALIZED VIEWS";
+    assert_eq!(
+        verified_stmt(&sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::View,
+            extended: false,
+            full: true,
+            materialized: true,
+            from: None,
+            filter: None,
+        }
+    );
+    let sql = "SHOW MATERIALIZED VIEWS FROM bar.foo LIKE '%hello%'";
+    match verified_stmt(&sql) {
+        Statement::ShowObjects {
+            object_type,
+            extended: false,
+            full: false,
+            from,
+            materialized: true,
+            filter,
+        } => {
+            assert_eq!(from, Some(ObjectName(vec!["bar".into(), "foo".into()])));
+            assert_eq!(filter.unwrap(), ShowStatementFilter::Like("%hello%".into()));
+            assert_eq!(ObjectType::View, object_type);
+        }
+        _ => panic!("invalid SHOW MATERIALIZED VIEWS statement"),
+    }
 }
 
 #[test]

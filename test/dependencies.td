@@ -92,7 +92,7 @@ catalog item 'test2' does not exist
 # Test that CASCADE causes all dependent views to be dropped along with the
 # named source.
 
-> CREATE VIEW test4 as SELECT * FROM s;
+> CREATE MATERIALIZED VIEW test4 as SELECT * FROM s;
 
 > DROP SOURCE s CASCADE;
 
@@ -215,6 +215,9 @@ catalog item 'v5' does not exist
 ! DROP INDEX i4;
 catalog item 'i4' does not exist
 
+# Test that dropping indexies even with cascade does not cause the underlying view to be dropped
+> DROP INDEX i1 CASCADE;
+
 #cleanup
 > DROP VIEW v2;
 
@@ -224,28 +227,28 @@ catalog item 'i4' does not exist
 
 # Test CREATE OR REPLACE view.
 
-> CREATE OR REPLACE VIEW v3 AS SELECT 1
+> CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 1
 > SELECT * FROM v3
 1
 
-> CREATE OR REPLACE VIEW v3 AS SELECT 2
+> CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 2
 > SELECT * FROM v3
 2
 
-> CREATE OR REPLACE VIEW v4 AS SELECT * FROM v3
+> CREATE OR REPLACE MATERIALIZED VIEW v4 AS SELECT * FROM v3
 > SELECT * FROM v4
 2
 
-! CREATE OR REPLACE VIEW v3 AS SELECT 3
+! CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 3
 cannot drop materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
 
-> CREATE OR REPLACE VIEW v4 AS SELECT 3
+> CREATE OR REPLACE MATERIALIZED VIEW v4 AS SELECT 3
 > SELECT * FROM v4
 3
 
 > SELECT * FROM v3
 2
 
-> CREATE OR REPLACE VIEW v3 AS SELECT 4
+> CREATE OR REPLACE MATERIALIZED VIEW v3 AS SELECT 4
 > SELECT * FROM v3
 4

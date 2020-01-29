@@ -6,7 +6,7 @@
 > CREATE SOURCE billing_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
   USING SCHEMA '${testdrive.protobuf-descriptors}'
   WITH (format = 'protobuf-descriptor', message_name = '.Batch')
-> CREATE VIEW billing AS SELECT * FROM billing_source
+> CREATE MATERIALIZED VIEW billing AS SELECT * FROM billing_source
 
 $ kafka-ingest format=protobuf topic=messages message=.Batch timestamp=1
 {"id": "1", "interval_start": "2020-01-01_00:00:00", "interval_end": "2020-01-01_00:00:09", "records": []}
@@ -47,7 +47,7 @@ user user
 user
 user
 
-> CREATE VIEW billing_records AS
+> CREATE MATERIALIZED VIEW billing_records AS
   SELECT
     billing.id,
     r.value->>'interval_start' AS interval_start,

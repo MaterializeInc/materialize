@@ -34,8 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, Index, IndexDesc, PeekResponse, RowSetFinishing,
-    Timestamp, Update,
+    compare_columns, DataflowDesc, Diff, Index, PeekResponse, RowSetFinishing, Timestamp, Update,
 };
 use expr::{EvalEnv, GlobalId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -88,12 +87,10 @@ pub enum SequencedCommand {
     CreateDataflows(Vec<DataflowDesc>),
     /// Drop the sources bound to these names.
     DropSources(Vec<GlobalId>),
-    /// Drop the views bound to these names.
-    DropViews(Vec<GlobalId>, Vec<Vec<GlobalId>>),
     /// Drop the sinks bound to these names.
     DropSinks(Vec<GlobalId>),
-    /// Drop the indexes bound to these names.
-    DropIndexes(Vec<IndexDesc>),
+    /// Drop the indexes bound to these namees.
+    DropIndexes(Vec<GlobalId>),
     /// Peek at a materialized view.
     Peek {
         id: GlobalId,
@@ -314,23 +311,20 @@ where
                 );
 
             // Install traces as maintained indexes
-            for (log, (key, trace)) in t_traces {
-                self.traces
-                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
+            for (log, (_, trace)) in t_traces {
+                self.traces.set(log.index_id(), WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.id(), Antichain::from_elem(0));
+                    .insert(log.index_id(), Antichain::from_elem(0));
             }
-            for (log, (key, trace)) in d_traces {
-                self.traces
-                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
+            for (log, (_, trace)) in d_traces {
+                self.traces.set(log.index_id(), WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.id(), Antichain::from_elem(0));
+                    .insert(log.index_id(), Antichain::from_elem(0));
             }
-            for (log, (key, trace)) in m_traces {
-                self.traces
-                    .set_by_columns(log.id(), &key[..], WithDrop::from(trace));
+            for (log, (_, trace)) in m_traces {
+                self.traces.set(log.index_id(), WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.id(), Antichain::from_elem(0));
+                    .insert(log.index_id(), Antichain::from_elem(0));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -394,7 +388,7 @@ where
             let mut progress = Vec::new();
             let ids = self.traces.traces.keys().cloned().collect::<Vec<_>>();
             for id in ids {
-                if let Some(trace) = self.traces.get_default(id) {
+                if let Some(trace) = self.traces.get(&id) {
                     // Read the upper frontier and compare to what we've reported.
                     trace.clone().read_upper(&mut upper);
                     let lower = self
@@ -430,10 +424,8 @@ where
         match cmd {
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-                    for (id, index_desc, _) in dataflow.index_exports.iter() {
-                        self.reported_frontiers
-                            .entry(index_desc.on_id)
-                            .or_insert_with(|| Antichain::from_elem(0));
+                    for (id, _, _) in dataflow.index_exports.iter() {
+                        self.reported_frontiers.insert(*id, Antichain::from_elem(0));
                         if let Some(logger) = self.materialized_logger.as_mut() {
                             logger.log(MaterializedEvent::Dataflow(*id, true));
                         }
@@ -456,30 +448,21 @@ where
                 }
             }
 
-            SequencedCommand::DropViews(view_ids, index_ids) => {
-                for (view_id, index_id_set) in view_ids.iter().zip(index_ids.iter()) {
-                    if self.traces.del_collection_traces(*view_id).is_some() {
-                        if let Some(logger) = self.materialized_logger.as_mut() {
-                            for index_id in index_id_set {
-                                logger.log(MaterializedEvent::Dataflow(*index_id, false));
-                            }
-                        }
-                        self.reported_frontiers
-                            .remove(view_id)
-                            .expect("Dropped view with no frontier");
-                    }
-                }
-            }
-
             SequencedCommand::DropSinks(ids) => {
                 for id in ids {
                     self.sink_tokens.remove(&id);
                 }
             }
 
-            SequencedCommand::DropIndexes(index_descs) => {
-                for index_desc in index_descs {
-                    self.traces.del_trace(&index_desc);
+            SequencedCommand::DropIndexes(ids) => {
+                for id in ids {
+                    self.traces.del_trace(&id);
+                    if let Some(logger) = self.materialized_logger.as_mut() {
+                        logger.log(MaterializedEvent::Dataflow(id, false));
+                    }
+                    self.reported_frontiers
+                        .remove(&id)
+                        .expect("Dropped index with no frontier");
                 }
             }
 
@@ -494,7 +477,7 @@ where
                 eval_env,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace = self.traces.get_default(id).unwrap().clone();
+                let mut trace = self.traces.get(&id).unwrap().clone();
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
                 // Prepare a description of the peek work to do.
@@ -562,7 +545,7 @@ where
                     index,
                 );
                 self.reported_frontiers
-                    .insert(view_id, Antichain::from_elem(0));
+                    .insert(index_id, Antichain::from_elem(0));
                 if let Some(input) = self.local_inputs.get_mut(&view_id) {
                     input.capability.downgrade(&advance_to);
                 }

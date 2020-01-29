@@ -68,8 +68,8 @@ pub(crate) fn build_local_input<A: Allocate>(
             );
             match context.arrangement(&get_expr, &index.desc.keys) {
                 Some(ArrangementFlavor::Local(local)) => {
-                    manager.set_by_keys(
-                        &index.desc,
+                    manager.set(
+                        index_id,
                         WithDrop::new(local.trace, Rc::new(None::<source::SourceToken>)),
                     );
                 }
@@ -103,6 +103,17 @@ pub(crate) fn build_dataflow<A: Allocate>(
             let mut context = Context::<_, _, _, Timestamp>::new();
 
             let mut source_tokens = HashMap::new();
+            // this is stopgap measure so dropping an index and recreating one with the same name
+            // does not result in timestamp/reading from source errors.
+            // use an export id to distinguish between different dataflows
+            // TODO (materialize#1720): replace `first_export_id` by some form of dataflow identifier
+            let first_export_id = if let Some((id, _, _)) = dataflow.index_exports.first() {
+                *id
+            } else if let Some((id, _)) = dataflow.sink_exports.first() {
+                *id
+            } else {
+                unreachable!()
+            };
             // Load declared sources into the rendering context.
             for (source_number, (src_id, src)) in
                 dataflow.source_imports.clone().into_iter().enumerate()
@@ -115,7 +126,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         let read_from_kafka = hash % worker_peers == worker_index;
                         source::kafka(
                             region,
-                            format!("kafka-{}-{}", dataflow.debug_name, source_number),
+                            format!("kafka-{}-{}", first_export_id, source_number),
                             c,
                             read_from_kafka,
                         )
@@ -156,7 +167,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
             let mut index_tokens = HashMap::new();
 
             for (id, (index_desc, typ)) in dataflow.index_imports.iter() {
-                if let Some(trace) = manager.get_by_keys_mut(index_desc) {
+                if let Some(trace) = manager.get_mut(id) {
                     let token = trace.to_drop().clone();
                     let (arranged, button) = trace.import_frontier_core(
                         scope,
@@ -217,8 +228,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
                 match context.arrangement(&get_expr, &index_desc.keys) {
                     Some(ArrangementFlavor::Local(local)) => {
-                        manager
-                            .set_by_keys(&index_desc, WithDrop::new(local.trace.clone(), tokens));
+                        manager.set(*export_id, WithDrop::new(local.trace.clone(), tokens));
                     }
                     Some(ArrangementFlavor::Trace(_)) => {
                         // do nothing. there already exists an system

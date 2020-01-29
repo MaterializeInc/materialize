@@ -62,7 +62,7 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp
 > CREATE SOURCE data_v1 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE VIEW data_v1_view as SELECT * from data_v1
+> CREATE MATERIALIZED VIEW data_v1_view as SELECT * from data_v1
 
 > SELECT * FROM data_v1_view
 a
@@ -78,7 +78,7 @@ $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp
 > CREATE SOURCE data_v2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE VIEW data_v2_view as SELECT * from data_v2
+> CREATE MATERIALIZED VIEW data_v2_view as SELECT * from data_v2
 
 > SELECT * FROM data_v1_view
 a
@@ -109,7 +109,7 @@ materialize.public.testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
 
 # Verify that the sources created by CREATE SOURCES are usable from SQL without
 # quoting their names.
-> CREATE VIEW create_sources as SELECT * FROM testdrive_db_my_topic_${testdrive.seed}
+> CREATE MATERIALIZED VIEW create_sources as SELECT * FROM testdrive_db_my_topic_${testdrive.seed}
   UNION
   SELECT * FROM testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
 
@@ -186,7 +186,7 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key
 > CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE VIEW data_v3_view as SELECT * from data_v3
+> CREATE MATERIALIZED VIEW data_v3_view as SELECT * from data_v3
 
 > SELECT * FROM data_v3_view
 a
