@@ -451,8 +451,7 @@ struct Orderer<'a> {
     bound: Vec<Vec<usize>>,
     variables_active: Vec<bool>,
     arrangement_active: Vec<Vec<usize>>,
-    priority_queue:
-        std::collections::BinaryHeap<(Characteristics, Vec<ScalarExpr>, usize)>,
+    priority_queue: std::collections::BinaryHeap<(Characteristics, Vec<ScalarExpr>, usize)>,
 }
 
 impl<'a> Orderer<'a> {
@@ -582,12 +581,7 @@ impl<'a> Orderer<'a> {
                                 // TODO: This could be pre-computed, as it is independent of the order.
                                 let is_unique = self.unique_arrangement[*rel][pos];
                                 self.priority_queue.push((
-                                    Characteristics::new(
-                                        is_unique,
-                                        keys.len(),
-                                        true,
-                                        *rel,
-                                    ),
+                                    Characteristics::new(is_unique, keys.len(), true, *rel),
                                     keys.clone(),
                                     *rel,
                                 ));
@@ -598,12 +592,7 @@ impl<'a> Orderer<'a> {
                         .iter()
                         .any(|cols| cols.iter().all(|c| self.bound[*rel].contains(c)));
                     self.priority_queue.push((
-                        Characteristics::new(
-                            is_unique,
-                            self.bound[*rel].len(),
-                            false,
-                            *rel,
-                        ),
+                        Characteristics::new(is_unique, self.bound[*rel].len(), false, *rel),
                         self.bound[*rel]
                             .iter()
                             .map(|c| ScalarExpr::Column(*c))
