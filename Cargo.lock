@@ -1572,7 +1572,6 @@ dependencies = [
  "jemallocator",
  "lazy_static 1.4.0",
  "log",
- "openssl",
  "ore",
  "parse_duration",
  "pgwire",

@@ -30,7 +30,6 @@ hyper = "0.13.1"
 jemallocator = { version = "0.3.0", features = ["profiling"] }
 lazy_static = "1.4.0"
 log = "0.4.8"
-openssl = {version = "0.10", features = ["vendored"] }
 ore = { path = "../ore" }
 parse_duration = "2.0.1"
 pgwire = { path = "../pgwire" }
