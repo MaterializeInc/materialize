@@ -13,7 +13,7 @@ services:
       --kafka-addr=kafka:9092
       --schema-registry-url=http://schema-registry:8081
       --materialized-url=postgres://ignored@materialized:6875
-      test/*.td"
+      test/testdrive/*.td"
     environment:
     - TMPDIR=/tmpshare
     volumes:

@@ -142,7 +142,7 @@ sqllogictest file.
 Once PostgreSQL is running, you can run a sqllogictest file like so:
 
 ```shell
-$ cargo run --bin sqllogictest --release -- test/TESTFILE.slt
+$ cargo run --bin sqllogictest --release -- test/sqllogictest/TESTFILE.slt
 ```
 
 For larger test files, it is imperative that you compile in release mode, i.e.,
@@ -155,10 +155,12 @@ To add logging for tests, append `-vv`, e.g.:
 $ cargo run --bin sqllogictest --release -- test/TESTFILE.slt -vv
 ```
 
-The offical SQLite test files are in [test/sqllogictest](/test/sqllogictest),
-and some additional test files from CockroachDB are in
-[test/cockroach](/test/cockroach). Some additional Materialize-specific
-sqllogictest files live in [test/](/test) with a filename suffix of `.slt`—feel
+The offical SQLite test files are in
+[test/sqllogictest/sqlite](/test/sqllogictest/sqlite), and some additional test
+files from CockroachDB are in
+[test/sqllogictest/cockroach](/test/sqllogictest/cockroach). Some additional
+Materialize-specific sqllogictest files live in
+[test/sqllogictest](/test/sqllogictest) with a filename suffix of `.slt`—feel
 free to add more!
 
 ### testdrive
@@ -228,7 +230,7 @@ more!
 ## Long-running tests
 
 These are still a work in progress. The beginning of the orchestration has
-begun, though; see the Docker Compose demo in [ex/chbench](/ex/chbench) if
+begun, though; see the Docker Compose demo in [demo/chbench](/demo/chbench) if
 you're curious.
 
 ## What kind of tests should I write?
