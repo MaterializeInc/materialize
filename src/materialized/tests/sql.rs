@@ -3,6 +3,12 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+//! Integration tests for SQL functionality.
+//!
+//! Nearly all tests for SQL behavior should be sqllogictest or testdrive
+//! scripts. The tests here are simply too complicated to be easily expressed
+//! in testdrive, e.g., because they depend on the current time.
+
 use std::error::Error;
 use std::fs;
 use std::io::Write;
@@ -10,10 +16,39 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use futures::stream::TryStreamExt;
 use tokio::runtime::Runtime;
 
 pub mod util;
+
+#[test]
+fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
+    ore::log::init();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+
+    // Confirm that `now()` and `current_timestamp()` both return a
+    // DateTime<Utc>, but don't assert specific times.
+    let row = &client.query_one("SELECT now(), current_timestamp()", &[])?;
+    let _ = row.get::<_, DateTime<Utc>>(0);
+    let _ = row.get::<_, DateTime<Utc>>(1);
+
+    // Confirm calls to now() return the same DateTime<Utc> both inside and
+    // outside of subqueries.
+    let row = &client.query_one("SELECT now(), (SELECT now())", &[])?;
+    assert_eq!(
+        row.get::<_, DateTime<Utc>>(0),
+        row.get::<_, DateTime<Utc>>(1)
+    );
+
+    // Ensure that EXPLAIN selects a timestamp for `now()` and
+    // `current_timestamp()`, though we don't care what the timestamp is.
+    let rows = &client.query("EXPLAIN PLAN FOR SELECT now(), current_timestamp()", &[])?;
+    assert_eq!(1, rows.len());
+
+    Ok(())
+}
 
 #[test]
 fn test_regex_sources() -> Result<(), Box<dyn Error>> {

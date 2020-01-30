@@ -8,8 +8,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-pub type TestResult = Result<(), Box<dyn Error>>;
-
 #[derive(Default, Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
