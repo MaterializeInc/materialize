@@ -378,17 +378,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "colored"
-version = "1.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "433e7ac7d511768127ed85b0c4947f47a254131e37864b2dc13f52aa32cd37e5"
-dependencies = [
- "atty",
- "lazy_static 1.4.0",
- "winapi 0.3.8",
-]
-
-[[package]]
 name = "comm"
 version = "0.1.0"
 dependencies = [
@@ -2996,17 +2985,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "simple_logger"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a4756ecc75607ba957820ac0a2413a6c27e6c61191cda0c62c6dcea4da88870"
-dependencies = [
- "chrono",
- "colored",
- "log",
-]
-
-[[package]]
 name = "siphasher"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3088,7 +3066,6 @@ dependencies = [
  "failure",
  "log",
  "matches",
- "simple_logger",
 ]
 
 [[package]]
