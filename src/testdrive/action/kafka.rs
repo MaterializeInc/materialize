@@ -88,7 +88,8 @@ impl Action for VerifyAction {
         }
 
         let mut message_stream = state.kafka_consumer.start();
-        for message in converted_expected_messages {
+        let mut actual_messages = Vec::new();
+        for _i in 0..converted_expected_messages.len() {
             let output = block_on(message_stream.next());
             match output {
                 Some(result) => match result {
@@ -110,9 +111,10 @@ impl Action for VerifyAction {
                                     bytes[0]
                                 ));
                             }
-                            let value =
-                                avro_rs::from_avro_datum(&schema, &mut bytes, None).unwrap();
-                            assert_eq!(message, value);
+                            actual_messages.push(
+                                avro_rs::from_avro_datum(&schema, &mut bytes, None)
+                                    .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?,
+                            );
                         }
                         None => {
                             return Err(String::from("No bytes found in Kafka message payload."))
@@ -128,8 +130,45 @@ impl Action for VerifyAction {
                 }
             }
         }
+
+        // NB: We can't compare messages as they come in because
+        // Kafka sinks do not currently support ordering.
+        // Additionally, we do this bummer of a comparison because
+        // avro_rs::types::Value does not implement Eq or Ord.
+        // TODO@jldlaughlin: update this once we have Kafka ordering guarantees
+        let missing_values =
+            get_values_in_first_list_not_in_second(&converted_expected_messages, &actual_messages);
+        let additional_values =
+            get_values_in_first_list_not_in_second(&actual_messages, &converted_expected_messages);
+
+        if !missing_values.is_empty() || !additional_values.is_empty() {
+            return Err(format!(
+                "Mismatched Kafka sink rows. Missing: {:#?}, Unexpected: {:#?}",
+                missing_values, additional_values
+            ));
+        }
+
         Ok(())
     }
+}
+
+fn get_values_in_first_list_not_in_second(
+    first_list: &[AvroValue],
+    second_list: &[AvroValue],
+) -> Vec<AvroValue> {
+    let mut first_list_clone: Vec<AvroValue> = first_list.to_vec();
+    let mut missing_values = Vec::new();
+    for s in second_list {
+        let pos = first_list_clone.iter().position(|x| *x == *s);
+        match pos {
+            Some(index) => {
+                first_list_clone.remove(index);
+                continue;
+            }
+            None => missing_values.push(s.clone()),
+        }
+    }
+    missing_values
 }
 
 pub struct IngestAction {

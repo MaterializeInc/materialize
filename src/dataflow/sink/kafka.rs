@@ -16,6 +16,8 @@ use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
 use rdkafka::producer::FutureRecord;
 
+// TODO@jldlaughlin: What guarantess does this sink support? #1728
+
 // TODO@jldlaughlin: Progress tracking for kafka sinks #1442
 //
 // Right now, every time Materialize crashes and recovers these sinks
