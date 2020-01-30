@@ -990,10 +990,15 @@ where
     }
 
     fn optimize_view(&mut self, view: View<RelationExpr>) -> View<OptimizedRelationExpr> {
+        let relation_expr = self.optimize(view.relation_expr, &view.eval_env);
+        let desc = RelationDesc::new(
+            relation_expr.as_ref().typ(),
+            view.desc.iter_names().map(|c| c.cloned()),
+        );
         View {
             raw_sql: view.raw_sql,
-            relation_expr: self.optimize(view.relation_expr, &view.eval_env),
-            desc: view.desc,
+            relation_expr,
+            desc,
             eval_env: view.eval_env,
         }
     }
