@@ -103,7 +103,11 @@ ci_collapsed_heading "Preparing Docker context"
 if [[ "$BUILDKITE_BRANCH" = master || "$BUILDKITE_BRANCH" = brennan_tmp_testing ]]; then # FIXME - remove the brennan_tmp_testing crap before landing
     ci_collapsed_heading "Building .deb package"
     docker_run 'cargo-deb --deb-version 0.1.0-$(git rev-list HEAD | wc -l)-$(git rev-parse HEAD) -p materialized -o target/debian/materialized.deb'
-    curl -F package=@target/debian/materialized.deb https://$FURY_APT_PUSH_SECRET@push.fury.io/materialize
+    aws s3 cp \
+        --acl=public-read \
+        target/debian/materialized.deb \
+        s3://downloads.mtrlz.dev/materialized-$BUILDKITE_COMMIT-x86_64.deb
+    # curl -F package=@target/debian/materialized.deb https://$FURY_APT_PUSH_SECRET@push.fury.io/materialize
 fi
     
 
