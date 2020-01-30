@@ -86,6 +86,19 @@ As mentioned above, the Rust unit/integration tests follow the standard
 convention, and live in a `mod tests { ... }` block alongside the code
 they test, or in a `tests/` subdirectory of the crate they test, respectively.
 
+### Clippy, formatting, and linting
+
+CI also performs the lawful evil task of ensuring "good code style" with the following tools:
+
+Tool | Use | Run locally with
+-----|-----|-------------------
+[Clippy] | Rust semantic nits | `./bin/check`
+[rustfmt] | Rust code formatter | `cargo fmt`
+Linter | General formatting nits | `./bin/lint`
+
+[Clippy]: https://github.com/rust-lang/rust-clippy
+[rustfmt]: https://github.com/rust-lang/rustfmt
+
 ## System tests
 
 There are presently two system test frameworks. These are tests against with
