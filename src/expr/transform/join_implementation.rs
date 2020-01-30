@@ -270,9 +270,6 @@ mod differential {
     use crate::{relation::JoinImplementation, RelationExpr, ScalarExpr};
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
-    /// Creates a delta query plan, and any predicates that need to be lifted.
-    ///
-    /// The method returns `None` if it fails to find a sufficiently pleasing plan.
     pub fn plan(
         join: &RelationExpr,
         arities: &[usize],
