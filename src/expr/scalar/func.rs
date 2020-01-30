@@ -1596,8 +1596,8 @@ impl BinaryFunc {
             // decimal precision. Should either remove or fix.
             AddDecimal | SubDecimal | ModDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Null, _) | (_, ScalarType::Null) => {
-                        return ColumnType::new(ScalarType::Null);
+                    (ScalarType::Unknown, _) | (_, ScalarType::Unknown) => {
+                        return ColumnType::new(ScalarType::Unknown);
                     }
                     (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
@@ -1608,8 +1608,8 @@ impl BinaryFunc {
             }
             MulDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Null, _) | (_, ScalarType::Null) => {
-                        return ColumnType::new(ScalarType::Null);
+                    (ScalarType::Unknown, _) | (_, ScalarType::Unknown) => {
+                        return ColumnType::new(ScalarType::Unknown);
                     }
                     (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
@@ -1619,8 +1619,8 @@ impl BinaryFunc {
             }
             DivDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Null, _) | (_, ScalarType::Null) => {
-                        return ColumnType::new(ScalarType::Null);
+                    (ScalarType::Unknown, _) | (_, ScalarType::Unknown) => {
+                        return ColumnType::new(ScalarType::Unknown);
                     }
                     (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
@@ -1630,7 +1630,7 @@ impl BinaryFunc {
             }
 
             CastFloat32ToDecimal | CastFloat64ToDecimal => match input2_type.scalar_type {
-                ScalarType::Null => ColumnType::new(ScalarType::Null),
+                ScalarType::Unknown => ColumnType::new(ScalarType::Unknown),
                 ScalarType::Decimal(_, s) => {
                     ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
                 }
@@ -2498,11 +2498,11 @@ impl VariadicFunc {
             Coalesce => {
                 let any_nullable = input_types.iter().any(|typ| typ.nullable);
                 for typ in input_types {
-                    if typ.scalar_type != ScalarType::Null {
+                    if typ.scalar_type != ScalarType::Unknown {
                         return typ.nullable(any_nullable);
                     }
                 }
-                ColumnType::new(ScalarType::Null)
+                ColumnType::new(ScalarType::Unknown)
             }
             Concatenate => ColumnType::new(ScalarType::String).nullable(true),
             MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),

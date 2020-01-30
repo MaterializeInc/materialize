@@ -95,7 +95,7 @@ impl Type {
 impl From<ScalarType> for Type {
     fn from(typ: ScalarType) -> Type {
         match typ {
-            ScalarType::Null => Type::Unknown,
+            ScalarType::Unknown => Type::Unknown,
             ScalarType::Bool => Type::Bool,
             ScalarType::Int32 => Type::Int4,
             ScalarType::Int64 => Type::Int8,

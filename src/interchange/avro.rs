@@ -133,7 +133,7 @@ fn validate_schema_1(schema: &Schema) -> Result<RelationDesc> {
 
 fn validate_schema_2(schema: &Schema) -> Result<ScalarType> {
     Ok(match schema {
-        Schema::Null => ScalarType::Null,
+        Schema::Null => ScalarType::Unknown,
         Schema::Boolean => ScalarType::Bool,
         Schema::Int => ScalarType::Int32,
         Schema::Long => ScalarType::Int64,
@@ -488,7 +488,7 @@ pub fn encode_schema(desc: &RelationDesc) -> Result<serde_json::Value> {
 
         // todo@jldlaughlin: Support all ScalarTypes #1517
         let field_type = match typ.scalar_type {
-            ScalarType::Null => "null",
+            ScalarType::Unknown => "null",
             ScalarType::Bool => "boolean",
             ScalarType::Int32 => "int",
             ScalarType::Int64 => "long",

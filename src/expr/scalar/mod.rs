@@ -185,7 +185,10 @@ impl ScalarExpr {
     pub fn take(&mut self) -> Self {
         mem::replace(
             self,
-            ScalarExpr::Literal(Row::pack(&[Datum::Null]), ColumnType::new(ScalarType::Null)),
+            ScalarExpr::Literal(
+                Row::pack(&[Datum::Null]),
+                ColumnType::new(ScalarType::Unknown),
+            ),
         )
     }
 
@@ -361,7 +364,7 @@ impl ScalarExpr {
                 let then_type = then.typ(relation_type);
                 let else_type = els.typ(relation_type);
                 let nullable = then_type.nullable || else_type.nullable;
-                if then_type.scalar_type != ScalarType::Null {
+                if then_type.scalar_type != ScalarType::Unknown {
                     then_type.nullable(nullable)
                 } else {
                     else_type.nullable(nullable)

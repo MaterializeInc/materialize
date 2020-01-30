@@ -330,9 +330,11 @@ impl RelationExpr {
             } => {
                 let oa = get_outer.arity();
                 let left = left.applied_to(id_gen, get_outer.clone())?;
+                let lt = left.typ();
                 let la = left.arity() - oa;
                 left.let_in(id_gen, |id_gen, get_left| {
                     let right = right.applied_to(id_gen, get_outer.clone())?;
+                    let rt = right.typ();
                     let ra = right.arity() - oa;
                     right.let_in(id_gen, |id_gen, get_right| {
                         let mut product = SR::join(
@@ -359,8 +361,9 @@ impl RelationExpr {
                                 let left_outer = get_left.clone().anti_lookup(
                                     id_gen,
                                     get_join.clone(),
-                                    (0..ra)
-                                        .map(|_| (Datum::Null, ColumnType::new(ScalarType::Null)))
+                                    rt.column_types
+                                        .into_iter()
+                                        .map(|typ| (Datum::Null, typ.nullable(true)))
                                         .collect(),
                                 );
                                 result = result.union(left_outer);
@@ -378,10 +381,9 @@ impl RelationExpr {
                                                     .chain((oa)..(oa + la))
                                                     .collect(),
                                             ),
-                                        (0..la)
-                                            .map(|_| {
-                                                (Datum::Null, ColumnType::new(ScalarType::Null))
-                                            })
+                                        lt.column_types
+                                            .into_iter()
+                                            .map(|typ| (Datum::Null, typ.nullable(true)))
                                             .collect(),
                                     )
                                     // swap left and right back again
@@ -685,8 +687,9 @@ impl ScalarExpr {
                         let select = expr
                             // compute for every row in get_relation
                             .applied_to(id_gen, get_relation.clone())?;
+                        let col_type = select.typ().column_types.into_last();
                         // append Null to anything that didn't return any rows
-                        let default = vec![(Datum::Null, ColumnType::new(ScalarType::Null))];
+                        let default = vec![(Datum::Null, col_type.nullable(true))];
                         Ok(get_relation.lookup(id_gen, select, default))
                     },
                 )?;
@@ -853,12 +856,12 @@ impl ScalarExpr {
         )
     }
 
-    pub fn literal_null() -> ScalarExpr {
+    pub fn literal_null(scalar_type: ScalarType) -> ScalarExpr {
         ScalarExpr::literal(
             Datum::Null,
             ColumnType {
                 nullable: true,
-                scalar_type: ScalarType::Null,
+                scalar_type,
             },
         )
     }
