@@ -27,7 +27,6 @@ failure = "0.1.6"
 futures = "0.3"
 getopts = "0.2"
 hyper = "0.13.1"
-jemallocator = { version = "0.3.0", features = ["profiling"] }
 lazy_static = "1.4.0"
 log = "0.4.8"
 ore = { path = "../ore" }
