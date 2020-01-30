@@ -65,6 +65,11 @@ create a user and connect to a database. Note: Each time you
 restart the Metabase container, you will need to create a
 user and reconnect to Materialize.
 
+In the dropdown containing a list of possible database
+connections, choose `Materialize`. If you don't see `Materialize`,
+check that you have a `Materialize` .jar in your Metabase's
+`/plugins` directory. If not, follow steps [here](https://github.com/MaterializeInc/metabase-materialize-driver).
+
 There are three groups of fields:
 - Your metabase user:
   + Simply fill in the user information fields.
