@@ -128,4 +128,4 @@ for image in "${images[@]}"; do
         --pull \
         "misc/docker/ci-$image"
     docker push "$tag"
-one
+done
