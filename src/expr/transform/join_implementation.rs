@@ -475,12 +475,14 @@ impl<'a> Orderer<'a> {
         unique_keys: &'a [Vec<Vec<usize>>],
     ) -> Self {
         let inputs = arrangements.len();
+        // A map from inputs to the variables in which they are contained.
         let mut reverse_variables = vec![Vec::new(); inputs];
         for (index, variable) in variables.iter().enumerate() {
             for (rel, _col) in variable.iter() {
                 reverse_variables[*rel].push(index);
             }
         }
+        // Per-arrangement information about uniqueness of the arrangement key.
         let mut unique_arrangement = vec![Vec::new(); inputs];
         for (input, keys) in arrangements.iter().enumerate() {
             for key in keys.iter() {
