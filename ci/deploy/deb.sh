@@ -14,4 +14,4 @@ aws s3 cp \
     "s3://downloads.mtrls.dev/materialized-$MATERIALIZED_IMAGE_ID-x86_64.deb" \
     ./materialized.deb
 
-curl -F package=@materialized.deb https://$FURY_APT_PUSH_SECRET@push.fury.io/materialize
+curl -F package=@materialized.deb https://"$FURY_APT_PUSH_SECRET"@push.fury.io/materialize
