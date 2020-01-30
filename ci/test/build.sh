@@ -100,7 +100,7 @@ ci_collapsed_heading "Preparing Docker context"
 
 if [[ "$BUILDKITE_BRANCH" = master ]]; then
     ci_collapsed_heading "Building .deb package"
-    # shellcheck disable=SC2059
+    # shellcheck disable=SC2016
     docker_run 'cargo-deb --deb-version 0.1.0-$(git rev-list HEAD | wc -l)-$(git rev-parse HEAD) -p materialized -o target/debian/materialized.deb'
     aws s3 cp \
         --acl=public-read \
