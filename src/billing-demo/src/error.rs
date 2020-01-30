@@ -22,7 +22,7 @@ pub enum Error {
     FuturesCancelled(#[from] futures_channel::oneshot::Canceled),
 
     #[error("Unable to encode message")]
-    ProstEncodeError(#[from] prost::EncodeError),
+    ProtobufError(#[from] protobuf::error::ProtobufError),
 
     #[error("Waiting for futures to complete")]
     JoinError(#[from] tokio::task::JoinError),

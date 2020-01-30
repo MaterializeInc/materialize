@@ -6,8 +6,6 @@
 #![allow(dead_code)]
 #![allow(missing_docs)]
 
-include!(concat!(env!("OUT_DIR"), "/billing.rs"));
-
 pub static BILLING_DESCRIPTOR: &[u8] = include_bytes!(env!("DESCRIPTOR_billing"));
 
 /// This matches the name generated based on the proto file

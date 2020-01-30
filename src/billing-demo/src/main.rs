@@ -9,7 +9,7 @@
 
 use std::error::Error as _;
 
-use prost::Message;
+use protobuf::Message;
 use structopt::StructOpt;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
@@ -17,6 +17,7 @@ use crate::error::Result;
 
 mod config;
 mod error;
+mod gen;
 mod kafka_client;
 mod macros;
 mod mz_client;
@@ -75,7 +76,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             int.tick().await;
         }
         let m = randomizer::random_batch(rng, &mut recordstate);
-        m.encode(&mut buf)?;
+        m.write_to_vec(&mut buf)?;
         log::trace!("sending: {:?}", m);
         k_client.send(&config.topic, &buf).await?;
         total_size += buf.len();
