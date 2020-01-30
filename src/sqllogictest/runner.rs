@@ -445,12 +445,8 @@ impl State {
         lazy_static! {
             static ref UNSUPPORTED_INDEX_STATEMENT_REGEX: Regex =
                 Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap();
-            static ref UNSUPPORTED_INDEX_STATEMENT_REGEX2: Regex =
-                Regex::new("^CREATE INDEX .*( ASC| DESC)").unwrap();
         }
-        if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql)
-            || UNSUPPORTED_INDEX_STATEMENT_REGEX2.is_match(sql)
-        {
+        if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql) {
             // sure, we totally made you an index
             return Ok(Outcome::Success);
         }

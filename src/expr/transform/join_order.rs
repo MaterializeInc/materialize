@@ -39,7 +39,7 @@ use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 ///     vec![vec![(0, 0), (2, 0)]],
 /// );
 ///
-/// JoinOrder.transform(&mut expr);
+/// JoinOrder.transform(&mut expr, &std::collections::HashMap::new());
 ///
 /// if let RelationExpr::Project { input, outputs } = expr {
 ///     assert_eq!(outputs, vec![0, 1, 2]);
@@ -52,24 +52,33 @@ impl super::Transform for JoinOrder {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        arrangements: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
     ) {
-        self.transform(relation)
+        self.transform(relation, arrangements)
     }
 }
 
 impl JoinOrder {
-    pub fn transform(&self, relation: &mut RelationExpr) {
+    pub fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        arrangements: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+    ) {
         relation.visit_mut(&mut |e| {
-            self.action(e);
+            self.action(e, arrangements);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr) {
+    pub fn action(
+        &self,
+        relation: &mut RelationExpr,
+        arrangements: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+    ) {
         if let RelationExpr::Join {
             inputs,
             variables,
             demand,
+            implementation: _,
         } = relation
         {
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -134,6 +143,43 @@ impl JoinOrder {
                 new_variables.sort();
             }
 
+            // We now choose an implementation.
+            // We'll use delta queries if all necessary arrangements exist.
+            // Otherwise, we'll use a sequence of binary differential joins.
+            use crate::relation::JoinImplementation;
+            let mut new_orders = Vec::with_capacity(inputs.len());
+            let mut input_arrangements = vec![Vec::new(); inputs.len()];
+            for index in 0..inputs.len() {
+                match &inputs[index] {
+                    RelationExpr::Get { id, typ: _ } => {
+                        if let crate::id::Id::Global(id) = id {
+                            if let Some(keys) = arrangements.get(id) {
+                                input_arrangements[index].extend(keys.clone());
+                            }
+                        }
+                    }
+                    RelationExpr::ArrangeBy { input: _, keys } => {
+                        input_arrangements[index].extend(keys.clone());
+                    }
+                    _ => {}
+                }
+            }
+            let mut pure_arranged = true;
+            for start in 0..inputs.len() {
+                new_orders.push(order_delta_join(
+                    inputs.len(),
+                    start,
+                    variables,
+                    &input_arrangements,
+                    &mut pure_arranged,
+                ));
+            }
+            let new_implementation = if pure_arranged {
+                JoinImplementation::DeltaQuery(new_orders)
+            } else {
+                JoinImplementation::Differential
+            };
+
             let join = if let Some(demand) = demand {
                 let mut new_demand = Vec::new();
                 for rel in relation_expr_order.into_iter() {
@@ -143,6 +189,7 @@ impl JoinOrder {
                     inputs: new_inputs,
                     variables: new_variables,
                     demand: Some(new_demand),
+                    implementation: new_implementation,
                 }
             } else {
                 RelationExpr::join(new_inputs, new_variables)
@@ -225,4 +272,66 @@ fn order_on_keys(
         order.push(candidate?);
     }
     Some(order)
+}
+
+/// Orders `0 .. relations` starting with `start` so that arrangement use is maximized.
+///
+/// The ordering starts from `start` and attempts to add relations if we have access to an
+/// arrangement with keys that could be used for the join with the relations thus far. This
+/// reasoning does not know about uniqueness (yet) and may make bad decisions that inflate
+/// the number of updates flowing through the system (but not the arranged footprint).
+fn order_delta_join(
+    relations: usize,
+    start: usize,
+    constraints: &[Vec<(usize, usize)>],
+    arrange_keys: &[Vec<Vec<ScalarExpr>>],
+    pure_arranged: &mut bool,
+) -> Vec<usize> {
+    let mut order = vec![start];
+    while order.len() < relations {
+        // Attempt to find a next relation, not yet in `order` and whose unique keys are all bound
+        // by columns of relations that are present in `order`.
+        let mut candidate = (0..relations).filter(|i| !order.contains(i)).find(|i| {
+            arrange_keys[*i].iter().any(|keys| {
+                keys.iter().all(|key| {
+                    if let ScalarExpr::Column(key) = key {
+                        constraints.iter().any(|variables| {
+                            let contains_key = variables.contains(&(*i, *key));
+                            let contains_bound =
+                                variables.iter().any(|(idx, _)| order.contains(idx));
+                            contains_key && contains_bound
+                        })
+                    } else {
+                        false
+                    }
+                })
+            })
+        });
+
+        // Perhaps we found no relation with a key; we should find a relation with some constraint.
+        if candidate.is_none() {
+            *pure_arranged = false;
+            let mut candidates = (0..relations)
+                .filter(|i| !order.contains(i))
+                .map(|i| {
+                    (
+                        constraints
+                            .iter()
+                            .filter(|vars| {
+                                vars.iter().any(|(idx, _)| &i == idx)
+                                    && vars.iter().any(|(idx, _)| order.contains(idx))
+                            })
+                            .count(),
+                        i,
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            candidates.sort();
+            candidate = candidates.pop().map(|(_count, index)| index);
+        }
+
+        order.push(candidate.expect("No candidate found!"));
+    }
+    order
 }

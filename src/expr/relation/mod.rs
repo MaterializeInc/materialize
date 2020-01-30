@@ -98,6 +98,8 @@ pub enum RelationExpr {
         /// dummy values at the end of its computation, avoiding the maintenance of values
         /// not present in this list (when it is non-None).
         demand: Option<Vec<Vec<usize>>>,
+        /// Join implementation information.
+        implementation: JoinImplementation,
     },
     /// Group a dataflow by some columns and aggregate over each group
     Reduce {
@@ -496,6 +498,7 @@ impl RelationExpr {
             inputs,
             variables,
             demand: None,
+            implementation: JoinImplementation::Unimplemented,
         }
     }
 
@@ -820,7 +823,10 @@ impl RelationExpr {
                 .append(input.to_doc(alloc, id_humanizer))
                 .embrace("Filter {", "}"),
             RelationExpr::Join {
-                inputs, variables, ..
+                inputs,
+                variables,
+                implementation,
+                ..
             } => {
                 let pair_to_doc = |pair: &(usize, usize)| {
                     alloc
@@ -831,6 +837,30 @@ impl RelationExpr {
                         .append(pair.1.to_string())
                         .append(")")
                 };
+
+                // We may want to present inputs in a different order.
+                let permutation = match implementation {
+                    JoinImplementation::Differential(start, order) => {
+                        let mut permute = Vec::with_capacity(inputs.len());
+                        permute.push(*start);
+                        permute.extend(order.iter().map(|(input, _)| *input));
+                        permute
+                    }
+                    JoinImplementation::DeltaQuery(_) => (0..inputs.len()).collect::<Vec<_>>(),
+                    JoinImplementation::Unimplemented => (0..inputs.len()).collect::<Vec<_>>(),
+                };
+                let mut remap = vec![0; inputs.len()];
+                for (pos, perm) in permutation.iter().enumerate() {
+                    remap[*perm] = pos;
+                }
+                let mut variables = variables.clone();
+                for variable in variables.iter_mut() {
+                    for (rel, _col) in variable.iter_mut() {
+                        *rel = remap[*rel];
+                    }
+                    variable.sort();
+                }
+                variables.sort();
 
                 let variables = alloc
                     .intersperse(
@@ -846,12 +876,24 @@ impl RelationExpr {
                     )
                     .tightly_embrace("variables: [", "]");
 
+                let implementation = match implementation {
+                    JoinImplementation::Differential(_, _) => "DifferentialLinear",
+                    JoinImplementation::DeltaQuery(_) => "DeltaQuery",
+                    JoinImplementation::Unimplemented => "Unimplemented",
+                };
+                let implementation = alloc.text(format!("implementation: {}", implementation));
+
                 let inputs = alloc.intersperse(
-                    inputs.iter().map(|inp| inp.to_doc(alloc, id_humanizer)),
+                    permutation
+                        .iter()
+                        .map(|idx| inputs[*idx].to_doc(alloc, id_humanizer)),
                     alloc.text(",").append(alloc.line()),
                 );
 
                 variables
+                    .append(",")
+                    .append(alloc.line())
+                    .append(implementation)
                     .append(",")
                     .append(alloc.line())
                     .append(inputs)
@@ -1351,8 +1393,8 @@ Constant [[665]]"#
         );
 
         assert_eq!(
-            join.doc().pretty(82).to_string(),
-            "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], Constant [], Constant [] }",
+            join.doc().pretty(9999).to_string(),
+            "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], implementation: Unimplemented, Constant [], Constant [] }",
         );
 
         assert_eq!(
@@ -1362,6 +1404,7 @@ Constant [[665]]"#
     [(0, 0), (1, 0)],
     [(0, 1), (1, 1)]
   ],
+  implementation: Unimplemented,
   Constant [],
   Constant []
 }",
@@ -1409,4 +1452,17 @@ Constant [[665]]"#
 }",
         );
     }
+}
+
+/// Describe a join implementation in dataflow.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum JoinImplementation {
+    /// Perform a sequence of binary differential dataflow joins, in the order and
+    /// with the keys specified by the argument.
+    Differential(usize, Vec<(usize, Vec<ScalarExpr>)>),
+    /// Perform independent delta query dataflows for each input, with each joined
+    /// in the order and with the keys specified in its respective vector.
+    DeltaQuery(Vec<Vec<(usize, Vec<ScalarExpr>)>>),
+    /// No implementation yet selected.
+    Unimplemented,
 }

@@ -114,6 +114,7 @@ impl Demand {
                 inputs,
                 variables,
                 demand,
+                implementation: _,
             } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let input_arities = input_types
@@ -153,12 +154,17 @@ impl Demand {
 
                 // Permute each required column to its new location
                 // and record it as demanded of both the input and the join
-                for column in columns {
-                    let projected_column = permutation[column];
+                for column in columns.iter() {
+                    let projected_column = permutation[*column];
                     let rel = input_relation[projected_column];
                     let col = projected_column - prior_arities[rel];
                     demand_vec[rel].push(col);
                     new_columns[rel].insert(col);
+                }
+
+                for demand in demand_vec.iter_mut() {
+                    demand.sort();
+                    demand.dedup();
                 }
 
                 // Record column demands as an optional projection.
@@ -177,7 +183,9 @@ impl Demand {
                     self.action(input, columns, gets);
                 }
 
-                *relation = relation.take_dangerous().project(permutation);
+                if columns.iter().any(|i| permutation[*i] != *i) {
+                    *relation = relation.take_dangerous().project(permutation);
+                }
             }
             RelationExpr::Reduce {
                 input,

@@ -1510,7 +1510,11 @@ impl Parser {
         self.expect_keyword("ON")?;
         let on_name = self.parse_object_name()?;
         self.expect_token(&Token::LParen)?;
-        let key_parts = self.parse_comma_separated(Parser::parse_expr)?;
+        let key_parts = self
+            .parse_comma_separated(Parser::parse_order_by_expr)?
+            .into_iter()
+            .map(|x| x.expr)
+            .collect::<Vec<_>>();
         self.expect_token(&Token::RParen)?;
         Ok(Statement::CreateIndex {
             name,

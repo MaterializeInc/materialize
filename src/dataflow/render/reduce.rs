@@ -14,17 +14,16 @@ use differential_dataflow::operators::{Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 
+use dataflow_types::Timestamp;
 use expr::{AggregateExpr, AggregateFunc, EvalEnv, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
-    G: Scope,
-    G::Timestamp: Lattice + timely::progress::timestamp::Refines<T>,
-    T: timely::progress::Timestamp + Lattice,
+    G: Scope<Timestamp = Timestamp>,
 {
     /// Renders a `RelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.

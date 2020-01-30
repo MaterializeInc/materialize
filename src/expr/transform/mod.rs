@@ -19,7 +19,8 @@ pub mod filter_lets;
 pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
-pub mod join_order;
+pub mod join_implementation;
+// pub mod join_order;
 pub mod nonnull_requirements;
 pub mod nonnullable;
 pub mod predicate_pushdown;
@@ -32,7 +33,7 @@ pub mod redundant_join;
 pub mod simplify;
 pub mod split_predicates;
 pub mod update_let;
-pub mod use_indexes;
+// pub mod use_indexes;
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
@@ -66,7 +67,16 @@ impl Transform for Fixpoint {
                 return;
             }
         }
-        panic!("Fixpoint looped 100 times! {:#?} {:#?}", self, relation);
+        let original = relation.clone();
+        for transform in self.transforms.iter() {
+            transform.transform(relation, indexes, env);
+        }
+        panic!(
+            "Fixpoint looped 100 times! {:#?} {}\n{}",
+            self,
+            original.pretty(),
+            relation.pretty()
+        );
     }
 }
 
@@ -149,10 +159,8 @@ impl Default for Optimizer {
                 ],
             }),
             // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
-            // exists but is currently objectively suboptimal because JoinOrder will put
-            // the ArrangeBy input as first input and the constant as second
-            // uncomment this section and associated tests when FilterEqualLiteral
-            // becomes an improvement
+            // exists but is currently unevaluated with the new join implementations.
+
             /*Box::new(crate::transform::use_indexes::FilterEqualLiteral),
             Box::new(crate::transform::projection_lifting::ProjectionLifting),
             Box::new(crate::transform::column_knowledge::ColumnKnowledge),
@@ -160,14 +168,19 @@ impl Default for Optimizer {
             Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
             Box::new(crate::transform::fusion::join::Join),
             Box::new(crate::transform::redundant_join::RedundantJoin),*/
-            Box::new(crate::transform::demand::Demand),
             // JoinOrder adds Projects, hence need project fusion again.
-            Box::new(crate::transform::join_order::JoinOrder),
-            Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
-            Box::new(crate::transform::use_indexes::FilterLifting),
-            Box::new(crate::transform::projection_lifting::ProjectionLifting),
-            Box::new(crate::transform::fusion::project::Project),
+
+            // Implementation transformations
             Box::new(crate::transform::constant_join::RemoveConstantJoin),
+            Box::new(crate::transform::Fixpoint {
+                transforms: vec![
+                    Box::new(crate::transform::projection_lifting::ProjectionLifting),
+                    Box::new(crate::transform::join_implementation::JoinImplementation),
+                    Box::new(crate::transform::fusion::filter::Filter),
+                    Box::new(crate::transform::demand::Demand),
+                ],
+            }),
+            Box::new(crate::transform::fusion::project::Project),
             Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
         ];
         Self { transforms }
