@@ -21,7 +21,7 @@ use sql_parser::ast::{
 use url::Url;
 
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
-use catalog::{Catalog, CatalogItem};
+use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
     KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, Sink,
@@ -445,13 +445,16 @@ fn handle_show_objects(
                 .database_resolver(&database_name)?
                 .resolve_schema(&schema_name)
                 .ok_or_else(|| format_err!("schema '{}' does not exist", schema_name))?
+                .0
                 .items
         } else {
             let resolver = scx.catalog.database_resolver(scx.session.database())?;
-            &["public"]
+            scx.session
+                .search_path()
                 .iter()
-                .find_map(|schema_name| resolver.resolve_schema(schema_name))
-                .map_or_else(|| &empty_schema, |schema| &schema.items)
+                .filter_map(|schema_name| resolver.resolve_schema(schema_name))
+                .find(|(_schema, typ)| *typ == SchemaType::Normal)
+                .map_or_else(|| &empty_schema, |(schema, _typ)| &schema.items)
         };
 
         let filtered_items = items
@@ -1123,7 +1126,13 @@ fn handle_drop_schema(
                     // the schema does not exist.
                 }
                 None => bail!("schema '{}.{}' does not exist", database_name, schema_name),
-                Some(schema) if !cascade && !schema.items.is_empty() => {
+                Some((_schema, SchemaType::Ambient)) => {
+                    bail!(
+                        "cannot drop schema {} because it is required by the database system",
+                        schema_name
+                    );
+                }
+                Some((schema, SchemaType::Normal)) if !cascade && !schema.items.is_empty() => {
                     bail!("schema '{}.{}' cannot be dropped without CASCADE while it contains objects", database_name, schema_name);
                 }
                 _ => (),

@@ -22,19 +22,70 @@ use repr::{Datum, Row, ScalarType};
 use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};
-use crate::session::var::{
-    APPLICATION_NAME, CLIENT_ENCODING, DATABASE, DATE_STYLE, EXTRA_FLOAT_DIGITS, SERVER_VERSION,
-    SQL_SAFE_UPDATES,
-};
 use crate::Params;
+
+const APPLICATION_NAME: ServerVar<&str> = ServerVar {
+    name: unicase::Ascii::new("application_name"),
+    value: "",
+    description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
+};
+
+const CLIENT_ENCODING: ServerVar<&str> = ServerVar {
+    name: unicase::Ascii::new("client_encoding"),
+    value: "UTF8",
+    description: "Sets the client's character set encoding (PostgreSQL).",
+};
+
+const DATABASE: ServerVar<&str> = ServerVar {
+    name: unicase::Ascii::new("database"),
+    value: "materialize",
+    description: "Sets the current database (CockroachDB).",
+};
+
+const DATE_STYLE: ServerVar<&str> = ServerVar {
+    // DateStyle has nonstandard capitalization for historical reasons.
+    name: unicase::Ascii::new("DateStyle"),
+    value: "ISO, MDY",
+    description: "Sets the display format for date and time values (PostgreSQL).",
+};
+
+const EXTRA_FLOAT_DIGITS: ServerVar<&i32> = ServerVar {
+    name: unicase::Ascii::new("extra_float_digits"),
+    value: &3,
+    description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
+};
+
+const SEARCH_PATH: ServerVar<&[&str]> = ServerVar {
+    name: unicase::Ascii::new("search_path"),
+    value: &["mz_catalog", "pg_catalog", "public"],
+    description:
+        "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
+};
+
+const SERVER_VERSION: ServerVar<&str> = ServerVar {
+    name: unicase::Ascii::new("server_version"),
+    // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
+    // be. Too new and some clients will emit a "server too new" warning. Too
+    // old and some clients will fall back to legacy code paths. v9.5.0
+    // empirically seems to be a good compromise.
+    value: "9.5.0",
+    description: "Shows the server version (PostgreSQL).",
+};
+
+const SQL_SAFE_UPDATES: ServerVar<&bool> = ServerVar {
+    name: unicase::Ascii::new("sql_safe_updates"),
+    value: &false,
+    description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
+};
 
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
     application_name: SessionVar<str>,
     client_encoding: ServerVar<&'static str>,
-    database: ServerVar<&'static str>,
+    database: SessionVar<str>,
     date_style: ServerVar<&'static str>,
     extra_float_digits: SessionVar<i32>,
+    search_path: ServerVar<&'static [&'static str]>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
     /// The current state of the the session's transaction
@@ -56,6 +107,7 @@ impl fmt::Debug for Session {
             .field("database", &self.database())
             .field("date_style", &self.date_style())
             .field("extra_float_digits", &self.extra_float_digits())
+            .field("search_path", &self.search_path())
             .field("server_version", &self.server_version())
             .field("sql_safe_updates", &self.sql_safe_updates())
             .field("transaction", &self.transaction())
@@ -65,15 +117,16 @@ impl fmt::Debug for Session {
     }
 }
 
-impl std::default::Default for Session {
+impl Default for Session {
     /// Constructs a new `Session` with default values.
     fn default() -> Session {
         Session {
             application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
-            database: DATABASE,
+            database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
+            search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             transaction: TransactionStatus::Idle,
@@ -93,6 +146,7 @@ impl Session {
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
+            &self.search_path,
             &self.server_version,
             &self.sql_safe_updates,
         ]
@@ -131,6 +185,8 @@ impl Session {
             Ok(&self.date_style)
         } else if name == EXTRA_FLOAT_DIGITS.name {
             Ok(&self.extra_float_digits)
+        } else if name == SEARCH_PATH.name {
+            Ok(&self.search_path)
         } else if name == SERVER_VERSION.name {
             Ok(&self.server_version)
         } else if name == SQL_SAFE_UPDATES.name {
@@ -153,11 +209,13 @@ impl Session {
         } else if name == CLIENT_ENCODING.name {
             bail!("parameter {} is read only", CLIENT_ENCODING.name);
         } else if name == DATABASE.name {
-            bail!("parameter {} is read only", DATABASE.name);
+            self.database.set(value)
         } else if name == DATE_STYLE.name {
             bail!("parameter {} is read only", DATE_STYLE.name);
         } else if name == EXTRA_FLOAT_DIGITS.name {
             self.extra_float_digits.set(value)
+        } else if name == SEARCH_PATH.name {
+            bail!("parameter {} is read only", SEARCH_PATH.name);
         } else if name == SERVER_VERSION.name {
             bail!("parameter {} is read only", SERVER_VERSION.name);
         } else if name == SQL_SAFE_UPDATES.name {
@@ -183,13 +241,18 @@ impl Session {
     }
 
     /// Returns the value of the `database` configuration parameter.
-    pub fn database(&self) -> &'static str {
-        self.database.value
+    pub fn database(&self) -> &str {
+        self.database.value()
     }
 
     /// Returns the value of the `extra_float_digits` configuration parameter.
     pub fn extra_float_digits(&self) -> i32 {
         *self.extra_float_digits.value()
+    }
+
+    /// Returns the value of the `search_path` configuration parameter.
+    pub fn search_path(&self) -> &'static [&'static str] {
+        self.search_path.value
     }
 
     /// Returns the value of the `server_version` configuration parameter.

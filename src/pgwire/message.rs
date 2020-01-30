@@ -85,7 +85,10 @@ impl NoticeSeverity {
 #[derive(Debug)]
 pub enum FrontendMessage {
     /// Begin a connection.
-    Startup { version: i32 },
+    Startup {
+        version: i32,
+        params: Vec<(String, String)>,
+    },
 
     /// Request SSL encryption for the connection.
     SslRequest,

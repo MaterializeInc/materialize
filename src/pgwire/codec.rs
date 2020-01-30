@@ -363,7 +363,13 @@ fn decode_startup(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     } else if version == VERSION_GSSENC {
         Ok(FrontendMessage::GssEncRequest)
     } else {
-        Ok(FrontendMessage::Startup { version })
+        let mut params = vec![];
+        while buf.peek_byte()? != 0 {
+            let name = buf.read_cstr()?.to_owned();
+            let value = buf.read_cstr()?.to_owned();
+            params.push((name, value));
+        }
+        Ok(FrontendMessage::Startup { version, params })
     }
 }
 
@@ -509,14 +515,19 @@ impl<'a> Cursor<'a> {
         Cursor { buf }
     }
 
+    /// Returns the next byte without advancing the cursor.
+    fn peek_byte(&self) -> Result<u8, io::Error> {
+        self.buf
+            .get(0)
+            .copied()
+            .ok_or_else(|| input_err("No byte to read"))
+    }
+
     /// Returns the next byte, advancing the cursor by one byte.
     fn read_byte(&mut self) -> Result<u8, io::Error> {
-        let byte = self
-            .buf
-            .get(0)
-            .ok_or_else(|| input_err("No byte to read"))?;
+        let byte = self.peek_byte()?;
         self.advance(1);
-        Ok(*byte)
+        Ok(byte)
     }
 
     /// Returns the next null-terminated string. The null character is not

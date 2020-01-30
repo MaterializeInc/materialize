@@ -8,8 +8,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-pub type TestResult = Result<(), Box<dyn Error>>;
-
 #[derive(Default, Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
@@ -47,13 +45,18 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
 pub struct Server(materialized::Server);
 
 impl Server {
-    pub fn connect(&self) -> Result<postgres::Client, Box<dyn Error>> {
+    pub fn pg_config(&self) -> postgres::Config {
         let local_addr = self.0.local_addr();
-        Ok(postgres::Config::new()
+        let mut config = postgres::Config::new();
+        config
             .host(&local_addr.ip().to_string())
             .port(local_addr.port())
-            .user("root")
-            .connect(postgres::NoTls)?)
+            .user("root");
+        config
+    }
+
+    pub fn connect(&self) -> Result<postgres::Client, Box<dyn Error>> {
+        Ok(self.pg_config().connect(postgres::NoTls)?)
     }
 
     pub async fn connect_async(&self) -> Result<tokio_postgres::Client, Box<dyn Error>> {
