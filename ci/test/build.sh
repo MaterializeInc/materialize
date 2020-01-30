@@ -26,6 +26,8 @@ docker_run() {
 
 ci_init
 
+echo $BUILDKITE_BRANCH
+
 ci_collapsed_heading "Building standalone binaries"
 docker_run "cargo build --locked --release"
 
