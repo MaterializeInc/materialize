@@ -26,7 +26,6 @@ runv docker run --rm --entrypoint bash materialize/materialized -c "
     mkdir -p scratch/materialized/{bin,etc/materialized}
     cd scratch/materialized
     cp /usr/local/bin/materialized bin
-    cp /usr/local/etc/materialized/bootstrap.sql etc/materialized
     cd ..
     tar cz materialized
 " > materialized.tar.gz

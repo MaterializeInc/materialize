@@ -11,17 +11,11 @@ use std::time::{Duration, Instant};
 #[derive(Default, Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
-    bootstrap_sql: String,
 }
 
 impl Config {
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
         self.data_directory = Some(data_directory.into());
-        self
-    }
-
-    pub fn bootstrap_sql(mut self, bootstrap_sql: impl Into<String>) -> Self {
-        self.bootstrap_sql = bootstrap_sql.into();
         self
     }
 }
@@ -34,7 +28,6 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         threads: 1,
         process: 0,
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
-        bootstrap_sql: config.bootstrap_sql,
         data_directory: config.data_directory,
         symbiosis_url: None,
         gather_metrics: false,

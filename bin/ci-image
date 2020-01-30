@@ -36,7 +36,6 @@ do_build() {
     fi
     run cp \
         target/x86_64-unknown-linux-gnu/"$dir/$image" \
-        misc/dist/etc/materialized/bootstrap.sql \
         misc/docker/ci-"$image"
     local tag=materialize/"$image"
     run docker build --pull --tag "$tag:latest" --tag "$tag:local" misc/docker/ci-"$image"

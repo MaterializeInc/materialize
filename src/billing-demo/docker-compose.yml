@@ -19,7 +19,7 @@ services:
     ports:
      - *materialized
     init: true
-    command: --threads 8 --bootstrap-sql=/usr/local/etc/materialized/bootstrap.sql
+    command: --threads 8
     environment:
       - MZ_LOG=dataflow=error,info
       - DIFFERENTIAL_EAGER_MERGE=1000

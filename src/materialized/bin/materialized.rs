@@ -14,7 +14,7 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use std::env;
-use std::fs::{read_to_string, File};
+use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::panic;
@@ -87,12 +87,6 @@ fn run() -> Result<(), failure::Error> {
         "FILE",
     );
     opts.optopt(
-        "b",
-        "bootstrap-sql",
-        "file with SQL queries to execute when bootstrapping",
-        "FILE",
-    );
-    opts.optopt(
         "D",
         "data-directory",
         "where materialized will store metadata (default mzdata)",
@@ -152,11 +146,6 @@ fn run() -> Result<(), failure::Error> {
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
-    let bootstrap_sql = match popts.opt_str("bootstrap-sql") {
-        None => "".to_string(),
-        Some(bootstrap_file) => read_to_string(&bootstrap_file)?,
-    };
-
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
     let start_time = std::time::Instant::now();
 
@@ -167,7 +156,6 @@ fn run() -> Result<(), failure::Error> {
         threads,
         process,
         addresses,
-        bootstrap_sql,
         data_directory: Some(data_directory),
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,

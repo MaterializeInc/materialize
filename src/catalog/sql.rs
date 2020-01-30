@@ -49,7 +49,6 @@ INSERT INTO schemas VALUES
 #[derive(Debug)]
 pub struct Connection {
     inner: rusqlite::Connection,
-    bootstrapped: bool,
 }
 
 impl Connection {
@@ -60,7 +59,7 @@ impl Connection {
         };
         let tx = sqlite.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
-        let bootstrapped = if app_id == 0 {
+        if app_id == 0 {
             tx.execute(
                 &format!("PRAGMA application_id = {}", APPLICATION_ID),
                 params![],
@@ -75,10 +74,7 @@ impl Connection {
         };
         tx.commit()?;
 
-        Ok(Connection {
-            inner: sqlite,
-            bootstrapped,
-        })
+        Ok(Connection { inner: sqlite })
     }
 
     pub fn load_databases(&self) -> Result<Vec<(i64, String)>, failure::Error> {
@@ -140,10 +136,6 @@ impl Connection {
         Ok(Transaction {
             inner: self.inner.transaction()?,
         })
-    }
-
-    pub fn bootstrapped(&self) -> bool {
-        self.bootstrapped
     }
 }
 

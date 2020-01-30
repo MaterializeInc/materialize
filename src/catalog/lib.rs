@@ -156,12 +156,12 @@ impl CatalogEntry {
 }
 
 impl Catalog {
-    /// Opens or creates a `Catalog` that stores data at `path`. Initial
-    /// catalog items in `items` will be inserted into the catalog before any
-    /// persisted catalog items are loaded.
-    pub fn open<I>(path: Option<&Path>, items: I) -> Result<Catalog, failure::Error>
+    /// Opens or creates a `Catalog` that stores data at `path`. The
+    /// `initialize` callback will be invoked after database and schemas are
+    /// loaded but before any persisted user items are loaded.
+    pub fn open<F>(path: Option<&Path>, f: F) -> Result<Catalog, failure::Error>
     where
-        I: Iterator<Item = (GlobalId, FullName, CatalogItem)>,
+        F: FnOnce(&mut Self),
     {
         let storage = sql::Connection::open(path)?;
 
@@ -203,13 +203,11 @@ impl Catalog {
             );
         }
 
-        // Insert system items. This has to be done after databases and schemas
-        // are loaded, but before any items, as items might depend on these
-        // system items, but these system items depend on the system
-        // database/schema being installed.
-        for (id, name, item) in items {
-            catalog.insert_item(id, name, item);
-        }
+        // Invoke callback so that it can install system items. This has to be
+        // done after databases and schemas are loaded, but before any items, as
+        // items might depend on these system items, but these system items
+        // depend on the system database/schema being installed.
+        f(&mut catalog);
 
         for (id, name, def) in catalog.storage.load_items()? {
             catalog.insert_item(id, name, def);
@@ -337,7 +335,7 @@ impl Catalog {
         }
     }
 
-    fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
+    pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
         info!("create {} {} ({})", item.type_string(), name, id);
         let entry = CatalogEntry {
             inner: item,
@@ -662,11 +660,6 @@ impl Catalog {
     /// Iterates over the items in the catalog in order of increasing ID.
     pub fn iter(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.by_id.iter().map(|(_id, entry)| entry)
-    }
-
-    /// Whether this catalog instance bootstrapped its on-disk state.
-    pub fn bootstrapped(&self) -> bool {
-        self.storage.bootstrapped()
     }
 }
 

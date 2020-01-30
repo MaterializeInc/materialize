@@ -166,7 +166,7 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 
         // Sleep a little bit so the view catches up.
         // TODO(benesch): seriously? It's a view over a static query.
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(500));
 
         assert_eq!(
             // `v` here should refer to the `v` in `newdb.public` that we
@@ -198,12 +198,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     ore::log::init();
 
     let data_directory = tempfile::tempdir()?;
-    let config = util::Config::default()
-        .data_directory(data_directory.path().to_owned())
-        .bootstrap_sql(
-            "CREATE VIEW bootstrap1 AS SELECT 1;
-             CREATE VIEW bootstrap2 AS SELECT * FROM bootstrap1;",
-        );
+    let config = util::Config::default().data_directory(data_directory.path().to_owned());
 
     {
         let (_server, mut client) = util::start_server(config.clone())?;
@@ -226,7 +221,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .into_iter()
                 .map(|row| row.get(0))
                 .collect::<Vec<String>>(),
-            &["bootstrap1", "bootstrap2", "constant", "logging_derived"]
+            &["constant", "logging_derived"]
         );
         assert_eq!(
             client
