@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     pkg-config \
     rsync \
+    ruby \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.1.0/autouseradd-1.1.0-amd64.tar.gz \
@@ -59,6 +60,9 @@ RUN mkdir rust \
     && rm -f rust-src.asc rust-src.tar.gz \
     && case $RUST_COMPONENTS in *miri*) PATH=$PATH:/root/.cargo/bin cargo miri setup && mv /root/.cargo/bin/xargo /usr/local/bin/xargo;; esac \
     && rm -rf /rust
+
+RUN cargo install --quiet --root /usr cargo-deb
+RUN gem install gemfury
 
 # TODO(benesch): why is this required now with nightly?
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc

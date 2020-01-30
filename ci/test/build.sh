@@ -21,7 +21,7 @@ docker_run() {
         --env SSH_AUTH_SOCK=/tmp/ssh-agent.sock \
         --env CARGO_HOME=/cargo \
         --user "$(id -u):$(id -g)" \
-        materialize/ci-builder:1.40.0-20200129-141608 bash -c "$1"
+        materialize/ci-builder:1.40.0-20200130-101425 bash -c "$1"
 }
 
 ci_init
@@ -97,6 +97,16 @@ ci_collapsed_heading "Preparing Docker context"
     mv target/release/peeker misc/docker/ci-peeker
     mv target/release/billing-demo misc/docker/ci-billing-demo
 }
+
+if [[ "$BUILDKITE_BRANCH" = master ]]; then
+    ci_collapsed_heading "Building .deb package"
+    # shellcheck disable=SC2016
+    docker_run 'cargo-deb --deb-version 0.1.0-$(git rev-list HEAD | wc -l)-$(git rev-parse HEAD) -p materialized -o target/debian/materialized.deb'
+    aws s3 cp \
+        --acl=public-read \
+        target/debian/materialized.deb \
+        s3://downloads.mtrlz.dev/materialized-"$BUILDKITE_COMMIT"-x86_64.deb
+fi
 
 images=(
     materialized
