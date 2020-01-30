@@ -160,6 +160,47 @@ Be sure to install an SSH key with the appropriate GitHub access in
 The agent runs as the default MacStadium `administrator` user, since there isn't
 an easy way to isolate builds on macOS.
 
+## Agent security
+
+Unlike builds on a CI platform where hardware is provided, like Travis CI or
+Github Actions, our build runners are not hardened against malicious code. This
+is problematic for accepting third-party pull requests, which could modify the
+build scripts to do all manner of devious things to our infrastructure.
+
+Note that *any* solution that involves running third-party code on our
+infrastructure without human validation is unacceptable. We simply do not have
+the security expertise in house to have confidence in any sandboxing setup.
+
+The approach taken is to ensure that only "safe" builds are run, where a safe
+build is any build that is triggered by a trusted user (i.e., a Materialize
+employee or trusted collaborator). A build is safe if:
+
+  * It is triggered from the Buildkite API or UI, as only trusted users have
+    access to the Buildkite API or UI.
+  * It is triggered by a webhook and:
+    * The build branch is an origin branch, as only trusted users can push to
+      origin.
+    * The build branch is from a fork of the repository, but the fork is owned
+      by a GitHub user who is part of the `build-authorized` team.
+
+Unsafe builds are then builds that are automatically triggered by a webhook on a
+fork of the repository where the fork's owner is not part of the
+`build-authorized` team.
+
+Trusted users should be added to the `build-authorized` team on GitHub and
+to the Buildkite organization. Untrusted users must be given access to neither.
+
+These safety checks are performed by a shell script in the `env` file in the
+secrets bucket. This `env` file is downloaded and run before every step in every
+pipeline on every agent managed by the auto-scaling CloudFormation template.
+Keep in mind that standalone agents, like the macOS agent, do not download this
+`env` file and therefore should never be used to run untrusted code.
+
+Once a trusted user determines that an untrusted PR contains no malicious code,
+the trusted user can press the "Rebuild" button from the Buildkite UI to trigger
+a build. This process will need to be repeated whenever new code is pushed to
+the PR.
+
 ## Deployment
 
 Binary tarballs are deployed to an S3 bucket accessible at
