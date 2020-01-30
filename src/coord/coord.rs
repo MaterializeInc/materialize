@@ -332,15 +332,7 @@ where
                                         },
                                     );
                                 },
-                                TimestampMessage::DropInstance(id) => {
-                                    broadcast(
-                                        &mut self.broadcast_tx,
-                                        SequencedCommand::DropTimestampInformation{
-                                            id
-                                        },
-                                    );
-                                }
-                                _ => {}
+                               _ => {}
                             }
                         }
                     }
@@ -422,13 +414,9 @@ where
                             worker_id: _,
                             message: WorkerFeedback::DroppedSource(source_id)}) => {
                             // Notify timestamping thread that source has been dropped
-                            self.source_updates.as_ref().unwrap().sender.send(TimestampMessage::DropInstance(source_id)).expect("Failed to send Drop Instance notice to Worker");
-                            broadcast(
-                                &mut self.broadcast_tx,
-                                SequencedCommand::DropTimestampInformation {
-                                    id: source_id,
-                                },
-                            );
+                            if let Some(channel) = &mut self.source_updates{
+                                channel.sender.send(TimestampMessage::DropInstance(source_id)).expect("Failed to send Drop Instance notice to Worker");
+                            }
                         }
                     }
                 }
@@ -1185,13 +1173,6 @@ where
                 CatalogItem::Source(_) => sources_to_drop.push(entry.id()),
                 CatalogItem::View(_) => {
                     views_to_drop.push(entry.id());
-                    /*
-                    if let Some(source_updates) = &self.source_updates {
-                        source_updates
-                            .sender
-                            .send(TimestampMessage::DropView(entry.id()))
-                            .expect("Failed to send source update");
-                    } */
                 }
                 CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
                 CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),

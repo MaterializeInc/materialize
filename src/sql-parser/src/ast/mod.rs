@@ -830,11 +830,8 @@ impl fmt::Display for Statement {
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }
-                match consistency {
-                    SourceTimestamp::BringYourOwn(url) => {
-                        write!(f, " CONSISTENCY {}", url)?;
-                    }
-                    _ => {}
+                if let SourceTimestamp::BringYourOwn(url) = consistency {
+                    write!(f, " CONSISTENCY '{}'", url)?;
                 }
                 Ok(())
             }
@@ -858,11 +855,8 @@ impl fmt::Display for Statement {
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }
-                match consistency {
-                    SourceTimestamp::BringYourOwn(url) => {
-                        write!(f, " CONSISTENCY {} ", url)?;
-                    }
-                    _ => {}
+                if let SourceTimestamp::BringYourOwn(url) = consistency {
+                    write!(f, " CONSISTENCY {} ", url)?;
                 }
                 Ok(())
             }

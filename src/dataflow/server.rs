@@ -414,6 +414,8 @@ where
     fn report_source_drops(&mut self) {
         let mut updates = self.ts_source_drops.borrow_mut();
         for id in updates.iter() {
+            self.ts_histories.borrow_mut().remove(id);
+            self.ts_source_mapping.remove(id);
             let connector = self.feedback_tx.as_mut().unwrap();
             block_on(connector.send(WorkerFeedbackWithMeta {
                 worker_id: self.inner.index(),

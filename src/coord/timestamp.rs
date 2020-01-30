@@ -57,7 +57,7 @@ fn byo_query_source(consumer: &mut ByoTimestampConsumer, max_increment_size: i64
     let mut msg_count = 0;
     while let Some(payload) = get_next_message(consumer) {
         messages.push(payload);
-        msg_count = msg_count + 1;
+        msg_count += 1;
         if msg_count == max_increment_size {
             // Make sure to bound the number of timestamp updates we have at once,
             // to avoid overflowing the system
@@ -77,7 +77,7 @@ fn byo_extract_ts_update(
         match st {
             Ok(timestamp) => {
                 // Extract timestamp from payload
-                let split: Vec<&str> = timestamp.split('-').collect();
+                let split: Vec<&str> = timestamp.split(',').collect();
                 if split.len() != 3 {
                     error!("incorrect payload format. Expected: SourceName/TS/Offset");
                     continue;
@@ -122,7 +122,7 @@ fn byo_notify_coordinator(
 
 /// Polls a message from a Kafka Source
 fn get_next_message(consumer: &mut ByoTimestampConsumer) -> Option<Vec<u8>> {
-    if let Some(result) = consumer.consumer.poll(Duration::from_millis(0)) {
+    if let Some(result) = consumer.consumer.poll(Duration::from_millis(60)) {
         match result {
             Ok(message) => match message.payload() {
                 Some(p) => Some(p.to_vec()),
@@ -265,7 +265,8 @@ impl Timestamper {
                             Consistency::RealTime => {
                                 info!("Timestamping Source {} with Real Time Consistency", id);
                                 let last_offset = self.rt_recover_source(id);
-                                let connector = self.create_rt_connector(addr, topic, last_offset);
+                                let connector =
+                                    self.create_rt_connector(id, addr, topic, last_offset);
                                 self.rt_sources.insert(id, connector);
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
@@ -286,22 +287,14 @@ impl Timestamper {
                         .expect("Failed to execute delete statement");
                     self.rt_sources.remove(&id);
                     self.byo_sources.remove(&id);
-
-                    // Confirm to the coordinator that timestamping has stopped for this source
-                    self.coord_channel
-                        .sender
-                        .send(TimestampMessage::DropInstance(id))
-                        .unwrap();
                 }
-                TimestampMessage::Shutdown => {
-                    return true;
-                }
+                TimestampMessage::Shutdown => return true,
                 _ => {
                     // this should never happen
                 }
             }
         }
-        return false;
+        false
     }
 
     /// Implements the byo timestamping logic
@@ -319,6 +312,7 @@ impl Timestamper {
     /// Creates a RT Kafka connector
     fn create_rt_connector(
         &self,
+        id: SourceInstanceId,
         addr: SocketAddr,
         topic: String,
         last_offset: i64,
@@ -326,14 +320,11 @@ impl Timestamper {
         let mut config = ClientConfig::new();
         config
             .set("auto.offset.reset", "smallest")
-            .set("group.id", &format!("materialize-{}", &topic))
+            .set("group.id", &format!("materialize-rt-{}-{}", &topic, id))
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest")
-            .set(
-                "session.timeout.ms",
-                &(self.timestamp_frequency.as_millis() * 10).to_string(),
-            )
+            .set("session.timeout.ms", "300000")
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
@@ -360,15 +351,12 @@ impl Timestamper {
             .set("auto.offset.reset", "smallest")
             .set(
                 "group.id",
-                &format!("materialize-{}-{}", &timestamp_topic, id),
+                &format!("materialize-byo-{}-{}", &timestamp_topic, id),
             )
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest")
-            .set(
-                "session.timeout.ms",
-                &(self.timestamp_frequency.as_millis() * 10).to_string(),
-            )
+            .set("session.timeout.ms", "300000")
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
@@ -441,7 +429,7 @@ impl Timestamper {
                     result.push((*id, next_ts))
                 }
                 Err(e) => {
-                    error!("Failed to obtain Kafka Watermark Information: {}", e);
+                    error!("Failed to obtain Kafka Watermark Information: {} {}", id, e);
                 }
             }
         }
@@ -457,7 +445,7 @@ impl Timestamper {
                 .prepare_cached(
                     "INSERT INTO timestamp (sid, vid, timestamp, offset) VALUES (?, ?, ?, ?)",
                 )
-                .expect("Failed to insert statement into persistent store");
+                .expect("Failed to prepare insert statement into persistent store");
             stmt.execute(params![
                 SqlVal(&id.sid),
                 SqlVal(&id.vid),

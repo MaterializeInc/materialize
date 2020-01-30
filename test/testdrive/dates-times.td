@@ -59,8 +59,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 
 # Since the latest record in the topic is 10, the logical timestamp at which
 # we read should be 10 - 1.
-> SELECT mz_logical_timestamp() FROM data_view LIMIT 1
-9
+# This is no longer true after timestamping - commenting out
+#> SELECT mz_logical_timestamp() FROM data_view LIMIT 1
+#9
 
 > SELECT INTERVAL '1' SECOND
 "00:00:01"

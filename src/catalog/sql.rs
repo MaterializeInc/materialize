@@ -58,7 +58,6 @@ impl Connection {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
         };
-
         let tx = sqlite.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
         let bootstrapped = if app_id == 0 {

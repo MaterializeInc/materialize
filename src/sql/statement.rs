@@ -1307,7 +1307,7 @@ fn build_kafka_source(
             build_kafka_avro_source(schema, kafka_addr, topic, consistency)
         }
         (KafkaSchemaFormat::Protobuf, Some(m)) => {
-            build_kafka_protobuf_source(schema, kafka_addr, topic, m, consistency).into()
+            build_kafka_protobuf_source(schema, kafka_addr, topic, m, consistency)
         }
         (KafkaSchemaFormat::Avro, Some(s)) => Err(format_err!(
             "Invalid parameter message name {} provided for Avro source",

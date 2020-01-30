@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use expr::SourceInstanceId;
 use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::{Fuse, Stream, StreamExt};
@@ -25,7 +26,6 @@ use dataflow_types::Timestamp;
 
 use crate::source::util::source;
 use crate::source::{SourceStatus, SourceToken};
-use expr::SourceInstanceId;
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {

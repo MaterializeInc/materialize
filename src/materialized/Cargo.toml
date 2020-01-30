@@ -34,7 +34,6 @@ ore = { path = "../ore" }
 parse_duration = "2.0.1"
 pgwire = { path = "../pgwire" }
 prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
-url = "2.1.1"
 tempfile = "3.1"
 tokio = "0.2"
 

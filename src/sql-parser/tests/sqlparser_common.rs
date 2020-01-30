@@ -3400,6 +3400,7 @@ fn parse_create_source_inline_schema() {
             schema,
             with_options,
             if_not_exists,
+            consistency: _,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3427,6 +3428,7 @@ fn parse_create_source_file_schema_multiple_args() {
             schema,
             with_options,
             if_not_exists,
+            consistency: _,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3478,7 +3480,7 @@ fn parse_create_source_registry() {
 
 #[test]
 fn parse_create_source_consistency() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA REGISTRY 'http://localhost:8081' CONSISTENCY test";
+    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA REGISTRY 'http://localhost:8081' CONSISTENCY 'test'";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
@@ -3531,6 +3533,7 @@ fn parse_create_sources() {
             url,
             schema_registry,
             with_options,
+            consistency: _,
         } => {
             assert!(like.is_none());
             assert_eq!("kafka://whatever", url);

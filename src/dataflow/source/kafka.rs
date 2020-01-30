@@ -33,6 +33,7 @@ lazy_static! {
     .unwrap();
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn kafka<G>(
     scope: &G,
     name: String,
@@ -50,7 +51,7 @@ where
 
     let ts = if read_kafka {
         timestamp_histories.borrow_mut().insert(id.clone(), vec![]);
-        Some(timestamp_tx.clone())
+        Some(timestamp_tx)
     } else {
         None
     };
