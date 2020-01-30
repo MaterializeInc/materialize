@@ -23,17 +23,14 @@ fn main() {
 fn run() -> Result<()> {
     let specs = &["billing.proto"];
     // build the rust code
-    prost_build::compile_protos(specs, &["./resources"])?;
+    prost_build::compile_protos(specs, &["./resources"])
+        .map_err(|e| format!("unable to run prost build: {}", e))?;
 
     compile_proto_descriptors(specs)?;
 
     println!(
         "cargo:rustc-env=VIEWS_DIR={}",
-        Path::new(".")
-            .join("resources/views")
-            .canonicalize()
-            .unwrap()
-            .display()
+        canonicalize("resources/views")
     );
 
     Ok(())
@@ -42,17 +39,10 @@ fn run() -> Result<()> {
 fn compile_proto_descriptors(specs: &[&str]) -> Result<()> {
     let env_var = "MZ_GENERATE_PROTO";
     println!("cargo:rerun-if-env-changed={}", env_var);
+    let gen_dir = canonicalize("resources/gen");
     for spec in specs {
-        let basename = Path::new(spec).file_stem().unwrap().to_str().unwrap();
-        let out = &(format!(
-            "{}/{}.pb",
-            Path::new(".")
-                .join("resources/gen")
-                .canonicalize()
-                .unwrap()
-                .display(),
-            basename
-        ));
+        let basename = extract_stem(spec);
+        let out = &format!("{}/{}.pb", gen_dir, basename);
         if env::var_os(env_var).is_some() {
             let protoc = Protoc::from_env_path();
             let args = DescriptorSetOutArgs {
@@ -61,10 +51,29 @@ fn compile_proto_descriptors(specs: &[&str]) -> Result<()> {
                 input: &[spec],
                 include_imports: false,
             };
-            protoc.write_descriptor_set(args)?;
+            protoc
+                .write_descriptor_set(args)
+                .map_err(|e| format!("unable to write descriptors: {}", e))?;
         }
         println!("cargo:rustc-env=DESCRIPTOR_{}={}", basename, out);
     }
 
     Ok(())
+}
+
+fn canonicalize(name: &str) -> String {
+    Path::new(".")
+        .join(name)
+        .canonicalize()
+        .unwrap_or_else(|_| panic!("unable to canonicalize {:?}", name))
+        .display()
+        .to_string()
+}
+
+fn extract_stem(fname: &str) -> &str {
+    Path::new(fname)
+        .file_stem()
+        .unwrap_or_else(|| panic!("unable to extract stem from {:?}", fname))
+        .to_str()
+        .unwrap()
 }
