@@ -15,7 +15,8 @@ hex = "0.4.0"
 log = "0.4.8"
 parse_duration = "2.0.1"
 postgres-types = "0.1.0"
-prost = "0.6.0"
+protobuf = "2.8.1"
+protoc = "2.8.1"
 rand = "0.7.3"
 rand_distr = "0.2.2"
 rdkafka = { version = "0.23.1", features = ["cmake-build"] }
@@ -27,5 +28,5 @@ url = "2.1.1"
 uuid-b64 = "0.1.1"
 
 [build-dependencies]
-prost-build = "0.6.0"
-protoc = "2.10.1"
+protoc = "2.8.1"
+protoc-rust = "2.8.1"

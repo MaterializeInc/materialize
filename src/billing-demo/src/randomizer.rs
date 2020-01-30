@@ -4,13 +4,14 @@
 // distributed without the express permission of Materialize, Inc.
 
 use chrono::prelude::*;
+use protobuf::RepeatedField;
 use rand::distributions::Distribution;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use rand_distr::Normal;
 use uuid_b64::UuidB64;
 
-use crate::proto;
+use crate::gen::billing::{Batch, Record, ResourceInfo};
 
 pub trait Randomizer {
     fn random(rng: &mut impl Rng) -> Self;
@@ -32,7 +33,7 @@ impl RecordState {
 ///
 /// In particular this will have somewhat sensible values for all fields, and
 /// will be the next time slice after `state.last_time`, incrementing `last_time` to now
-pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> proto::Batch {
+pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> Batch {
     let id = UuidB64::new();
 
     let dur_val = rng.gen_range(15, 1_000);
@@ -41,21 +42,22 @@ pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> proto::Batch
     let interval_end = interval_start.checked_add_signed(dur).unwrap();
     state.last_time = interval_end;
 
-    let mut records = vec![];
+    let mut records = RepeatedField::<Record>::new();
 
     for _ in 0..rng.gen_range(1, 50) {
         records.push(random_record(rng, interval_start.clone(), dur_val));
     }
 
-    proto::Batch {
-        id: id.to_string(),
-        interval_start: interval_start.to_rfc3339(),
-        interval_end: interval_end.to_rfc3339(),
-        records,
-    }
+    let mut batch = Batch::new();
+    batch.set_id(id.to_string());
+    batch.set_interval_start(interval_start.to_rfc3339());
+    batch.set_interval_end(interval_end.to_rfc3339());
+    batch.set_records(records);
+
+    batch
 }
 
-fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> proto::Record {
+fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> Record {
     let start_offset = rng.gen_range(0, max_secs - 1);
     let interval_start = start_at
         .checked_add_signed(chrono::Duration::seconds(start_offset))
@@ -78,27 +80,30 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
         }
     }
 
-    proto::Record {
-        id: UuidB64::new().to_string(),
-        interval_start: interval_start.to_rfc3339(),
-        interval_end: interval_end.to_rfc3339(),
-        meter,
-        value: val as u32,
-        info: Some(proto::ResourceInfo::random(rng)),
-    }
+    let mut record = Record::new();
+    record.set_id(UuidB64::new().to_string());
+    record.set_interval_start(interval_start.to_rfc3339());
+    record.set_interval_end(interval_end.to_rfc3339());
+    record.set_meter(meter);
+    record.set_value(val as u32);
+    record.set_info(ResourceInfo::random(rng));
+
+    record
 }
 
-impl Randomizer for proto::ResourceInfo {
-    fn random(rng: &mut impl Rng) -> proto::ResourceInfo {
+impl Randomizer for ResourceInfo {
+    fn random(rng: &mut impl Rng) -> ResourceInfo {
         static POSSIBLE_CPUS: &[i32] = &[1, 2];
         static POSSIBLE_MEM: &[i32] = &[8, 16];
         static POSSIBLE_DISK: &[i32] = &[128];
-        proto::ResourceInfo {
-            cpu_num: *POSSIBLE_CPUS.choose(rng).unwrap(),
-            memory_gb: *POSSIBLE_MEM.choose(rng).unwrap(),
-            disk_gb: *POSSIBLE_DISK.choose(rng).unwrap(),
-            client_id: rng.gen_range(1, 100),
-            vm_id: rng.gen_range(1000, 2000),
-        }
+
+        let mut resource_info = ResourceInfo::new();
+        resource_info.set_cpu_num(*POSSIBLE_CPUS.choose(rng).unwrap());
+        resource_info.set_memory_gb(*POSSIBLE_MEM.choose(rng).unwrap());
+        resource_info.set_disk_gb(*POSSIBLE_DISK.choose(rng).unwrap());
+        resource_info.set_client_id(rng.gen_range(1, 100));
+        resource_info.set_vm_id(rng.gen_range(1000, 2000));
+
+        resource_info
     }
 }
