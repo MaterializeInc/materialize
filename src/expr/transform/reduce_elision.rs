@@ -3,8 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// Whatever clippy...
-#![allow(clippy::clone_on_copy)]
 use std::collections::HashMap;
 
 use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};

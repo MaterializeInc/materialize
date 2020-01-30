@@ -3,9 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// Clippy is wrong.
-#![allow(clippy::or_fun_call)]
-
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
@@ -111,7 +108,7 @@ pub fn construct<A: Allocate>(
                                 // version when the host dataflow is dropped.
                                 channels_data
                                     .entry((event.scope_addr[0], worker))
-                                    .or_insert(Vec::new())
+                                    .or_insert_with(|| Vec::new())
                                     .push(event.clone());
 
                                 // Present channel description.
