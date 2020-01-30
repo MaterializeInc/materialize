@@ -105,7 +105,7 @@ if [[ "$BUILDKITE_BRANCH" = master ]]; then
     aws s3 cp \
         --acl=public-read \
         target/debian/materialized.deb \
-        s3://downloads.mtrlz.dev/materialized-"$BUILDKITE_COMMIT"-x86_64.deb
+        s3://downloads.mtrlz.dev/materialized-"$BUILDKITE_BUILD_NUMBER"-x86_64.deb
 fi
 
 images=(
