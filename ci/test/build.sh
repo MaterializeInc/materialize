@@ -21,7 +21,7 @@ docker_run() {
         --env SSH_AUTH_SOCK=/tmp/ssh-agent.sock \
         --env CARGO_HOME=/cargo \
         --user "$(id -u):$(id -g)" \
-        materialize/ci-builder:1.40.0-20191219-232317 bash -c "$1"
+        materialize/ci-builder:1.40.0-20200129-141608 bash -c "$1"
 }
 
 ci_init
