@@ -26,6 +26,10 @@ docker_run() {
 
 ci_init
 
+echo "Running malicious code!! Stealing your AWS credits!!!"
+echo "do moar bads"
+echo "m0ar"
+
 ci_collapsed_heading "Building standalone binaries"
 docker_run "cargo build --locked --release"
 
