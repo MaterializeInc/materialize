@@ -21,7 +21,7 @@ docker_run() {
         --env SSH_AUTH_SOCK=/tmp/ssh-agent.sock \
         --env CARGO_HOME=/cargo \
         --user "$(id -u):$(id -g)" \
-        materialize/ci-builder:1.40.0-20200129-141608 bash -c "$1"
+        materialize/ci-builder:1.40.0-20200130-101425 bash -c "$1"
 }
 
 ci_init
@@ -98,6 +98,13 @@ ci_collapsed_heading "Preparing Docker context"
     mv target/release/billing-demo misc/docker/ci-billing-demo
 }
 
+if [[ "$BUILDKITE_BRANCH" = master || "$BUILDKITE_BRANCH" = brennan_tmp_testing ]]; then # FIXME - remove the brennan_tmp_testing crap before landing
+    ci_collapsed_heading "Building .deb package"
+    docker_run 'cargo-deb --deb-version 0.1.0-$(git rev-list HEAD | wc -l)-$(git rev-parse HEAD) -p materialized -o target/debian/materialized.deb'
+    curl -F package=@target/debian/materialized.deb https://$FURY_APT_PUSH_SECRET@push.fury.io/materialize
+fi
+    
+
 images=(
     materialized
     testdrive
@@ -119,4 +126,4 @@ for image in "${images[@]}"; do
         --pull \
         "misc/docker/ci-$image"
     docker push "$tag"
-done
+one

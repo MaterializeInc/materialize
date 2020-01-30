@@ -23,6 +23,10 @@ steps:
     timeout_in_minutes: 10
     concurrency: 1
     concurrency_group: deploy/docker
+  - command: ci/deploy/deb.sh
+    timeout_in_minutes: 1
+    concurrency: 1
+    concurrency_group: deploy/deb
   - command: ci/deploy/macos.sh
     agents:
       queue: mac
