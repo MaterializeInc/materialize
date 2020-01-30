@@ -93,12 +93,11 @@ where
                     })
             } else if aggregates.len() == 1 {
                 // If we have a single aggregate, we need not stage aggregations separately.
-                build_aggregate_stage(input, group_key, &aggregates[0], env)
+                build_aggregate_stage(input, group_key, &aggregates[0], env, true)
             } else {
                 // We'll accumulate partial aggregates here, where each contains updates
                 // of the form `(key, (index, value))`. This is eventually concatenated,
                 // and fed into a final reduce to put the elements in order.
-                // TODO: When there is a single aggregate, we can skip the complexity.
                 let mut partials = Vec::with_capacity(aggregates.len());
                 // Bound the complex dataflow in a region, for better interpretability.
                 scope.region(|region| {
@@ -108,7 +107,7 @@ where
                     for (index, aggr) in aggregates.iter().enumerate() {
                         // Collect the now-aggregated partial result, annotated with its position.
                         partials.push(
-                            build_aggregate_stage(input.enter(region), group_key, aggr, env)
+                            build_aggregate_stage(input.enter(region), group_key, aggr, env, false)
                                 .as_collection(move |key, val| (key.clone(), (index, val.clone())))
                                 .leave(),
                         );
@@ -155,6 +154,7 @@ fn build_aggregate_stage<G>(
     group_key: &[ScalarExpr],
     aggr: &AggregateExpr,
     env: &EvalEnv,
+    prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -195,7 +195,7 @@ where
     let (accumulable, hierarchical) = accumulable_hierarchical(&func);
 
     if accumulable {
-        build_accumulable(partial, func)
+        build_accumulable(partial, func, prepend_key)
     } else {
         // If hierarchical, we can repeatedly digest the groups, to minimize the incremental
         // update costs on relatively small updates.
@@ -207,14 +207,19 @@ where
         // The same code should work on data that can not be hierarchically reduced.
         partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
             let env = env.clone();
-            move |_key, source, target| {
+            move |key, source, target| {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
                 // because we don't know that the aggregation method is not sensitive
                 // to the number of records.
                 let iter = source.iter().flat_map(|(v, w)| {
                     std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
                 });
-                target.push((Row::pack(Some(func.eval(iter, &env, &RowArena::new()))), 1));
+                let mut packer = RowPacker::new();
+                if prepend_key {
+                    packer.extend(key.iter());
+                }
+                packer.push(func.eval(iter, &env, &RowArena::new()));
+                target.push((packer.finish(), 1));
             }
         })
     }
@@ -229,6 +234,7 @@ where
 fn build_accumulable<G>(
     collection: Collection<G, (Row, Row)>,
     aggr: AggregateFunc,
+    prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -290,7 +296,7 @@ where
         })
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
             "ReduceAccumulable",
-            move |_key, input, output| {
+            move |key, input, output| {
                 let accum = &input[0].1;
                 let tot = accum.element1;
 
@@ -340,7 +346,12 @@ where
                     x => panic!("Unexpected accumulable aggregation: {:?}", x),
                 };
                 // Pack the value with the key as the result.
-                output.push((Row::pack(Some(value)), 1));
+                let mut packer = RowPacker::new();
+                if prepend_key {
+                    packer.extend(key.iter());
+                }
+                packer.push(value);
+                output.push((packer.finish(), 1));
             },
         )
 }
