@@ -18,7 +18,10 @@ VIEW`](../create-materialized-view).
 `CREATE VIEW` simply stores the verbatim `SELECT` query, and provides a
 shorthand for performing the query.
 
-Note that you can only `SELECT` from non-materialized views if all of the views in their `FROM` clauses are themselves materialized or have transitive access to materialized views. For more information on this restriction, see [Selecting from non-materialized views](#selecting-from-non-materialized-views).
+Note that you can only `SELECT` from non-materialized views if all of the views
+in their `FROM` clauses are themselves materialized or have transitive access to
+materialized views. For more information on this restriction, see [Selecting
+from non-materialized views](#selecting-from-non-materialized-views).
 
 If you plan on repeatedly reading from a view, we recommend using [materialized
 views](../create-materialized-view) instead.
@@ -35,7 +38,7 @@ _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want
 
 ## Details
 
-### Selecting from non-materialized views
+### Querying non-materialized views
 
 You can only directly `SELECT` from a non-materialized view if all of the
 sources it depends on (i.e. views and sources in its `FROM` clause) have access
@@ -44,13 +47,17 @@ non-materialized view's data must exist somewhere in memory for it to process
 `SELECT` statements. For those inclined toward mathematics, it's possible to
 think of this as "transitive materialization."
 
+If non-materialized views can process `SELECT` statements, we call them
+"queryable."
+
 However, this limitation does not apply to creating materialized views.
 Materialized view definitions can `SELECT` from non-materialized view,
 irrespective of the non-materialized view's dependencies. This is done by
 essentially inlining the definition of the non-materialized view into the
 materialized view's definition.
 
-The diagram below demonstrates this restriction using a number of views (`a`-`h`) with a complex set of interdependencies.
+The diagram below demonstrates this restriction using a number of views
+(`a`-`h`) with a complex set of interdependencies.
 
 {{<
     figure src="/images/transitive-materialization.png"
@@ -72,7 +79,8 @@ latency and computation needed to answer queries.
 
 ### Converting to materialized view
 
-You can convert a non-materialized view into a materialized view by [adding an index](../create-index/#converting-views-to-materialized-views).
+You can convert a non-materialized view into a materialized view by [adding an
+index](../create-index/#converting-views-to-materialized-views).
 
 ## Examples
 

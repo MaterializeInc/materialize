@@ -1,2 +1,2 @@
 show_views ::=
-  'SHOW' 'VIEWS'
+  'SHOW' ('MATERIALIZED' | 'FULL')? 'VIEWS'
