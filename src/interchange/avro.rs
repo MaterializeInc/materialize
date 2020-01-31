@@ -21,6 +21,7 @@ use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
+use core::iter;
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -432,7 +433,10 @@ impl Decoder {
             }
         };
 
-        fn extract_row(v: Value) -> Result<Option<Row>> {
+        fn extract_row<'a, I>(v: Value, extra: I) -> Result<Option<Row>>
+        where
+            I: IntoIterator<Item = Datum<'a>>,
+        {
             let v = match v {
                 Value::Union(v) => *v,
                 _ => bail!("unsupported avro value: {:?}", v),
@@ -442,6 +446,9 @@ impl Decoder {
                     let mut row = RowPacker::new();
                     for (_, col) in fields.iter() {
                         row.push(value_to_datum(col)?);
+                    }
+                    for d in extra {
+                        row.push(d);
                     }
                     Ok(Some(row.finish()))
                 }
@@ -455,17 +462,23 @@ impl Decoder {
         if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
             // The record is laid out such that we can extract the `before` and
             // `after` fields without decoding the entire record.
-            before = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
-            after = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
+            before = extract_row(
+                avro_rs::from_avro_datum(&schema, &mut bytes, None)?,
+                iter::once(Datum::Int64(-1)),
+            )?;
+            after = extract_row(
+                avro_rs::from_avro_datum(&schema, &mut bytes, None)?,
+                iter::once(Datum::Int64(1)),
+            )?;
         } else {
             let val = avro_rs::from_avro_datum(writer_schema, &mut bytes, reader_schema)?;
             match val {
                 Value::Record(fields) => {
                     for (name, val) in fields {
                         if name == "before" {
-                            before = extract_row(val)?;
+                            before = extract_row(val, iter::once(Datum::Int64(-1)))?;
                         } else if name == "after" {
-                            after = extract_row(val)?;
+                            after = extract_row(val, iter::once(Datum::Int64(1)))?;
                         } else {
                             // Intentionally ignore other fields.
                         }

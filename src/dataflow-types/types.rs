@@ -284,6 +284,8 @@ pub enum DataEncoding {
         regex: Regex,
     },
     Protobuf(ProtobufEncoding),
+    Raw,
+    Text,
 }
 
 /// Encoding in Avro format.
@@ -301,6 +303,7 @@ pub struct AvroEncoding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
     pub n_cols: usize,
+    pub delimiter: u8,
 }
 
 /// Encoding in Protobuf format.
@@ -341,10 +344,17 @@ pub struct View<Expr> {
     pub desc: RelationDesc,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Envelope {
+    None,
+    Debezium,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceConnector {
     pub connector: ExternalSourceConnector,
     pub encoding: DataEncoding,
+    pub envelope: Envelope,
     pub consistency: Consistency,
 }
 
