@@ -148,7 +148,12 @@ impl FoldConstants {
                     };
                 }
             }
-            RelationExpr::FlatMapUnary { input, func, expr } => {
+            RelationExpr::FlatMapUnary {
+                input,
+                func,
+                expr,
+                demand: _,
+            } => {
                 expr.reduce(env);
 
                 if let RelationExpr::Constant { rows, .. } = &**input {

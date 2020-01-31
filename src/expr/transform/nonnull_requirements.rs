@@ -92,7 +92,12 @@ impl NonNullRequirements {
                 }
                 self.action(input, new_columns, gets);
             }
-            RelationExpr::FlatMapUnary { input, func, expr } => {
+            RelationExpr::FlatMapUnary {
+                input,
+                func,
+                expr,
+                demand: _,
+            } => {
                 match func {
                     // outputs zero rows if input is null
                     UnaryTableFunc::JsonbEach

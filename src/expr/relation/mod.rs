@@ -73,6 +73,12 @@ pub enum RelationExpr {
         func: UnaryTableFunc,
         /// The argument to the table func
         expr: ScalarExpr,
+        /// Output columns demanded by the surrounding expression.
+        ///
+        /// The input columns are often discarded and can be very
+        /// expensive to reproduce, so restricting what we produce
+        /// as output can be a substantial win.
+        demand: Option<Vec<usize>>,
     },
     /// Keep rows from a dataflow where all the predicates are true
     Filter {
@@ -250,7 +256,12 @@ impl RelationExpr {
 
                 typ
             }
-            RelationExpr::FlatMapUnary { input, func, expr } => {
+            RelationExpr::FlatMapUnary {
+                input,
+                func,
+                expr,
+                demand: _,
+            } => {
                 let mut typ = input.typ();
                 typ.column_types
                     .extend(func.output_type(&expr.typ(&typ)).column_types);
@@ -432,6 +443,7 @@ impl RelationExpr {
             input: Box::new(self),
             func,
             expr,
+            demand: None,
         }
     }
 
@@ -805,7 +817,12 @@ impl RelationExpr {
                 .append(alloc.line())
                 .append(input.to_doc(alloc, id_humanizer))
                 .embrace("Map {", "}"),
-            RelationExpr::FlatMapUnary { input, func, expr } => alloc
+            RelationExpr::FlatMapUnary {
+                input,
+                func,
+                expr,
+                demand: _,
+            } => alloc
                 .text(func.to_string())
                 .append(expr.to_doc(alloc).tightly_embrace("(", ")"))
                 .append(",")

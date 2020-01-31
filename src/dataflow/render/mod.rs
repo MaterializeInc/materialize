@@ -367,18 +367,63 @@ where
                     self.collections.insert(relation_expr.clone(), collection);
                 }
 
-                RelationExpr::FlatMapUnary { input, func, expr } => {
+                RelationExpr::FlatMapUnary {
+                    input,
+                    func,
+                    expr,
+                    demand,
+                } => {
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
                     let func = func.clone();
                     let expr = expr.clone();
+
+                    // Determine for each output column if it should be replaced by a
+                    // small default value. This information comes from the "demand"
+                    // analysis, and is meant to allow us to avoid reproducing the
+                    // input in each output, if at all possible.
+                    let types = relation_expr.typ();
+                    let arity = types.column_types.len();
+                    let replace = (0..arity)
+                        .map(|col| {
+                            if demand.as_ref().map(|d| d.contains(&col)).unwrap_or(true) {
+                                None
+                            } else {
+                                Some({
+                                    let typ = &types.column_types[col];
+                                    if typ.nullable {
+                                        Datum::Null
+                                    } else {
+                                        typ.scalar_type.dummy_datum()
+                                    }
+                                })
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
                     let collection = self.collection(input).unwrap().flat_map(move |input_row| {
                         let datums = input_row.unpack();
+                        let replace = replace.clone();
                         let temp_storage = RowArena::new();
                         let output_rows =
                             func.eval(expr.eval(&datums, &env, &temp_storage), &env, &temp_storage);
                         output_rows.into_iter().map(move |output_row| {
-                            Row::pack(input_row.iter().chain(output_row.into_iter()))
+                            Row::pack(
+                                // This is still quadratic, in that we decode `input_row` again
+                                // for each output row. We can avoid that by using `datums` but
+                                // the lifetimes are a bit awkward (as best as I can tell).
+                                input_row
+                                    .iter()
+                                    .chain(output_row.iter())
+                                    .zip(replace.iter())
+                                    .map(|(datum, demand)| {
+                                        if let Some(bogus) = demand {
+                                            bogus.clone()
+                                        } else {
+                                            datum
+                                        }
+                                    }),
+                            )
                         })
                     });
 
