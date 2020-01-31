@@ -377,14 +377,9 @@ where
                         let temp_storage = RowArena::new();
                         let output_rows =
                             func.eval(expr.eval(&datums, &env, &temp_storage), &env, &temp_storage);
-                        output_rows
-                            .into_iter()
-                            .map(|output_row| {
-                                Row::pack(
-                                    input_row.clone().into_iter().chain(output_row.into_iter()),
-                                )
-                            })
-                            .collect::<Vec<_>>()
+                        output_rows.into_iter().map(move |output_row| {
+                            Row::pack(input_row.iter().chain(output_row.into_iter()))
+                        })
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
