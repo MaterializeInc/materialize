@@ -3,9 +3,9 @@
 
 [<img src="https://materializeinc.wpengine.com/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.io)
 
-Materialize is a streaming data warehouse.
+Materialize is the streaming data warehouse.
 
-Materialize lets you ask questions of your streaming data, and get the latest answers back in real time – offering the power and flexibility of a SQL data warehouse for the world of real-time data. Materialize is powered by [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow).
+Materialize lets you ask questions of your streaming data, and get the current answers in real time – offering the power and flexibility of a SQL data warehouse for the world of real-time data. Materialize is powered by [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow).
 
 Materialize computes correct answers. We support a large fraction of  PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
 
@@ -28,7 +28,7 @@ Once you've got the data in, define views and perform reads via the PostgreSQL p
 Materialize supports a comprehensive variery of SQL features, all using the PostgreSQL dialect and protocol:
 
 -   Joins, Joins, Joins! Materialize supports multi-column join conditions, multi-way joins over, self-joins, cross-joins, inner joins, outer joins, etc.
--   Delta-join execution to avoid intermediate state blowup - joins tested up to 64 topics.
+-   Delta-join execution avoids intermediate state blowup - tested on joins of up to 64 relations.
 -   Support for subqueries. Materialize's SQL optimizer performs subquery decorrelation out-of-the-box, avoiding the need to manually rewrite subqueries into joins.
 -   Materialize supports streams that contain CDC data (currently supporting the [Debezium](https://debezium.io/blog/2017/09/25/streaming-to-another-database/) format). Materialize can incrementally maintain views in the presence of arbitrary inserts, updates, and deletes. No asterisks.
 -   All the aggregations. `GROUP BY` , `MIN`, `MAX`, `COUNT`, `SUM`, `STDDEV`, `HAVING`, etc.
@@ -44,6 +44,7 @@ Materialize supports a comprehensive variery of SQL features, all using the Post
 Here's an example join query that works fine in Materialize, `TPC-H` query 15:
 
 ```sql
+-- Views define commonly reused subqueries.
 CREATE VIEW revenue (supplier_no, total_revenue) AS
     SELECT
         l_suppkey,
@@ -57,6 +58,7 @@ CREATE VIEW revenue (supplier_no, total_revenue) AS
     GROUP BY
         l_suppkey;
 
+-- Materialized views are maintained automatically.
 CREATE MATERIALIZED VIEW tpch_q15 AS
   SELECT
     s_suppkey,
@@ -77,10 +79,9 @@ WHERE
     )
 ORDER BY
     s_suppkey
-
 ```
 
-Stream inserts, updates, and deletes on the underlying tables (`lineitem` and `supplier`), and Materialize keeps the final materialized view incrementally updated (with the intermediate non-materialized view taking up no additional state!).
+Stream inserts, updates, and deletes on the underlying tables (`lineitem` and `supplier`), and Materialize keeps the materialized view incrementally updated. You can type `SELECT * FROM tpch_q15` and expect to see the current results immediately!
 
 ## Get data out
 
@@ -106,11 +107,11 @@ Materialize is available as [a paid cloud service](https://materializeinc.wpengi
 
 ## How does it work?
 
-Materialize is built on top of [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow) and [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow), and built on a half-decade of cutting-edge stream processing research.
+Materialize is built on top of [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow) and [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow), and builds on a decade of cutting-edge stream processing research.
 
 ## For developers
 
-Materialize is built entirely in Rust.
+Materialize is written entirely in Rust.
 
 Materialize's developers can find docs at [doc/developer](doc/developer),
 and Rust API documentation is hosted at <https://mtrlz.dev/api/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
@@ -119,4 +120,4 @@ Contributions are welcome. Prospective code contributors might find the [good fi
 
 ## Credits
 
-Materialize is lovingly built by [a team of developers](https://github.com/MaterializeInc/materialize/graphs/contributors) and one bot. [Join us](https://jobs.lever.co/materialize).
+Materialize is lovingly crafted by [a team of developers](https://github.com/MaterializeInc/materialize/graphs/contributors) and one bot. [Join us](https://jobs.lever.co/materialize).
