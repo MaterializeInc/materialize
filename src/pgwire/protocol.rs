@@ -20,7 +20,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 use tokio_util::codec::Framed;
 
-use coord::ExecuteResponse;
+use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
 use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::Session;
@@ -253,6 +253,45 @@ where
             let _ = session.set(&name, &value);
         }
 
+        let (tx, rx) = futures::channel::oneshot::channel();
+        self.cmdq_tx
+            .send(coord::Command::Startup { session, tx })
+            .await?;
+        let (notices, session) = match rx.await? {
+            coord::Response {
+                result: Ok(messages),
+                session,
+            } => {
+                let notices: Vec<_> = messages
+                    .into_iter()
+                    .map(|m| match m {
+                        StartupMessage::UnknownSessionDatabase => BackendMessage::NoticeResponse {
+                            severity: NoticeSeverity::Notice,
+                            code: "00000",
+                            message: format!(
+                                "session database '{}' does not exist",
+                                session.database()
+                            ),
+                            detail: None,
+                            hint: Some(
+                                "Create the database with CREATE DATABASE \
+                                 or pick an extant database with SET DATABASE = <name>. \
+                                 List available databases with SHOW DATABASES."
+                                    .into(),
+                            ),
+                        },
+                    })
+                    .collect();
+                (notices, session)
+            }
+            coord::Response {
+                result: Err(err),
+                session,
+            } => {
+                return self.error(session, "99999", err.to_string()).await;
+            }
+        };
+
         let mut messages = vec![BackendMessage::AuthenticationOk];
         messages.extend(
             session
@@ -264,6 +303,7 @@ where
             conn_id: self.conn_id,
             secret_key: self.conn_secrets.get(self.conn_id).unwrap(),
         });
+        messages.extend(notices);
         messages.push(BackendMessage::ReadyForQuery(session.transaction().into()));
         self.send_all(messages).await?;
 
@@ -627,6 +667,7 @@ where
                         code: $code,
                         message: concat!($type, " already exists, skipping").into(),
                         detail: None,
+                        hint: None,
                     })
                     .await?;
                 }
@@ -823,9 +864,13 @@ where
         &mut self,
         messages: impl IntoIterator<Item = BackendMessage>,
     ) -> Result<(), comm::Error> {
+        let conn_id = self.conn_id;
         Ok(self
             .conn
-            .send_all(&mut stream::iter(messages.into_iter().map(Ok)))
+            .send_all(&mut stream::iter(messages.into_iter().map(|m| {
+                trace!("cid={} send={:?}", conn_id, m);
+                Ok(m)
+            })))
             .await?)
     }
 

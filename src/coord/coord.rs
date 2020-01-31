@@ -45,7 +45,7 @@ use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
 
 use crate::timestamp::{TimestampChannel, TimestampMessage};
-use crate::{Command, ExecuteResponse, Response};
+use crate::{Command, ExecuteResponse, Response, StartupMessage};
 use futures::Stream;
 
 type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
@@ -338,6 +338,16 @@ where
                     }
 
                     match msg.expect("coordinator message receiver failed") {
+                        Message::Command(Command::Startup {
+                            session,
+                            tx,
+                        }) => {
+                            let mut messages = vec![];
+                            if self.catalog.database_resolver(session.database()).is_err() {
+                                messages.push(StartupMessage::UnknownSessionDatabase);
+                            }
+                            let _ = tx.send(Response { result: Ok(messages), session });
+                        }
                         Message::Command(Command::Execute {
                             portal_name,
                             session,

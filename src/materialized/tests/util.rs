@@ -57,16 +57,23 @@ impl Server {
         config
     }
 
+    pub fn pg_config_async(&self) -> tokio_postgres::Config {
+        let local_addr = self.0.local_addr();
+        let mut config = tokio_postgres::Config::new();
+        config
+            .host(&local_addr.ip().to_string())
+            .port(local_addr.port())
+            .user("root");
+        config
+    }
+
     pub fn connect(&self) -> Result<postgres::Client, Box<dyn Error>> {
         Ok(self.pg_config().connect(postgres::NoTls)?)
     }
 
     pub async fn connect_async(&self) -> Result<tokio_postgres::Client, Box<dyn Error>> {
-        let local_addr = self.0.local_addr();
-        let (client, conn) = tokio_postgres::Config::new()
-            .host(&local_addr.ip().to_string())
-            .port(local_addr.port())
-            .user("root")
+        let (client, conn) = self
+            .pg_config_async()
             .connect(tokio_postgres::NoTls)
             .await?;
         tokio::spawn(async move {

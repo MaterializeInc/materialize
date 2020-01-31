@@ -258,6 +258,7 @@ pub enum BackendMessage {
         code: &'static str,
         message: String,
         detail: Option<String>,
+        hint: Option<String>,
     },
     ErrorResponse {
         severity: ErrorSeverity,
