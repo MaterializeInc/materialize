@@ -96,7 +96,11 @@ impl Demand {
                 input,
                 func: _,
                 expr,
+                demand,
             } => {
+                let mut sorted = columns.iter().cloned().collect::<Vec<_>>();
+                sorted.sort();
+                *demand = Some(sorted);
                 // A FlatMap which returns zero rows acts like a filter
                 // so we always need to execute it
                 columns.extend(expr.support());
