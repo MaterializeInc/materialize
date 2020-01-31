@@ -51,6 +51,18 @@ fn run() -> Result<(), failure::Error> {
         "DURATION/\"off\"",
     );
     opts.optopt(
+        "",
+        "timestamp-frequency",
+        "timestamp advancement frequency (default off)",
+        "DURATION/\"off\"",
+    );
+    opts.optopt(
+        "",
+        "batch-size",
+        "maximum number of messages with same timestamp (default 5000) ",
+        "SIZE",
+    );
+    opts.optopt(
         "w",
         "threads",
         "number of per-process worker threads (default 1)",
@@ -111,6 +123,18 @@ fn run() -> Result<(), failure::Error> {
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
+
+    let timestamp_frequency = match popts
+        .opt_str("timestamp-frequency")
+        .as_ref()
+        .map(|x| x.as_str())
+    {
+        None => None,
+        Some("off") => None,
+        Some(d) => Some(parse_duration::parse(&d)?),
+    };
+
+    let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
     let threads = popts.opt_get_default("threads", 1)?;
     let process = popts.opt_get_default("process", 0)?;
     let processes = popts.opt_get_default("processes", 1)?;
@@ -138,6 +162,8 @@ fn run() -> Result<(), failure::Error> {
 
     let _server = materialized::serve(materialized::Config {
         logging_granularity,
+        timestamp_frequency,
+        max_increment_ts_size,
         threads,
         process,
         addresses,

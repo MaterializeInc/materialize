@@ -3400,6 +3400,7 @@ fn parse_create_source_inline_schema() {
             schema,
             with_options,
             if_not_exists,
+            consistency: _,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3427,6 +3428,7 @@ fn parse_create_source_file_schema_multiple_args() {
             schema,
             with_options,
             if_not_exists,
+            consistency: _,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
@@ -3460,12 +3462,43 @@ fn parse_create_source_registry() {
             schema,
             with_options,
             if_not_exists,
+            consistency,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
             assert_eq!(
                 SourceSchema::Registry("http://localhost:8081".into()),
                 schema.unwrap()
+            );
+            assert_eq!(with_options, vec![]);
+            assert!(!if_not_exists);
+            assert_eq!(consistency, SourceTimestamp::RealTime);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_consistency() {
+    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA REGISTRY 'http://localhost:8081' CONSISTENCY 'test'";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            url,
+            schema,
+            with_options,
+            if_not_exists,
+            consistency,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", url);
+            assert_eq!(
+                SourceSchema::Registry("http://localhost:8081".into()),
+                schema.unwrap()
+            );
+            assert_eq!(
+                consistency,
+                SourceTimestamp::BringYourOwn(String::from("test"))
             );
             assert_eq!(with_options, vec![]);
             assert!(!if_not_exists);
@@ -3500,6 +3533,7 @@ fn parse_create_sources() {
             url,
             schema_registry,
             with_options,
+            consistency: _,
         } => {
             assert!(like.is_none());
             assert_eq!("kafka://whatever", url);
@@ -3519,6 +3553,7 @@ fn parse_create_sources_with_like_regex() {
             url,
             schema_registry,
             with_options,
+            consistency: SourceTimestamp::RealTime,
         } => {
             match like {
                 Some(value) => assert_eq!("%foo%", value),

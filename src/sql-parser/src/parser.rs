@@ -1427,12 +1427,20 @@ impl Parser {
             None
         };
         let with_options = self.parse_with_options()?;
+        let consistency = if self.parse_keyword("CONSISTENCY") {
+            let url = self.parse_literal_string()?;
+            SourceTimestamp::BringYourOwn(url)
+        } else {
+            SourceTimestamp::RealTime
+        };
+
         Ok(Statement::CreateSource {
             name,
             url,
             schema,
             with_options,
             if_not_exists,
+            consistency,
         })
     }
 
@@ -1444,11 +1452,18 @@ impl Parser {
         self.expect_keywords(&["USING", "SCHEMA", "REGISTRY"])?;
         let schema_registry = self.parse_literal_string()?;
         let with_options = self.parse_with_options()?;
+        let consistency = if self.parse_keyword("CONSISTENCY") {
+            let url = self.parse_literal_string()?;
+            SourceTimestamp::BringYourOwn(url)
+        } else {
+            SourceTimestamp::RealTime
+        };
         Ok(Statement::CreateSources {
             like,
             url,
             schema_registry,
             with_options,
+            consistency,
         })
     }
 

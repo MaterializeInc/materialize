@@ -357,8 +357,9 @@ macro_rules! make_visitor {
                 schema: Option<&'ast $($mut)* SourceSchema>,
                 with_options: &'ast $($mut)* Vec<SqlOption>,
                 if_not_exists: bool,
+                consistency: &'ast $($mut)* SourceTimestamp,
             ) {
-                visit_create_source(self, name, url, schema, with_options, if_not_exists)
+                visit_create_source(self, name, url, schema, with_options, if_not_exists, consistency)
             }
 
             fn visit_create_sources(
@@ -367,12 +368,17 @@ macro_rules! make_visitor {
                 url: &'ast $($mut)* String,
                 schema_registry: &'ast $($mut)* String,
                 with_options: &'ast $($mut)* Vec<SqlOption>,
+                consistency: &'ast $($mut)* SourceTimestamp,
             ) {
-                visit_create_sources(self, like, url, schema_registry, with_options)
+                visit_create_sources(self, like, url, schema_registry, with_options, consistency)
             }
 
             fn visit_source_schema(&mut self, source_schema: &'ast $($mut)* SourceSchema) {
                 visit_source_schema(self, source_schema)
+            }
+
+            fn visit_consistency(&mut self, source_timestamp: &'ast $($mut)* SourceTimestamp) {
+                visit_consistency(self, source_timestamp)
             }
 
             fn visit_create_sink(
@@ -638,13 +644,15 @@ macro_rules! make_visitor {
                     schema,
                     with_options,
                     if_not_exists,
-                } => visitor.visit_create_source(name, url, schema.as_auto_ref(), with_options, *if_not_exists),
+                    consistency,
+                } => visitor.visit_create_source(name, url, schema.as_auto_ref(), with_options, *if_not_exists, consistency),
                 Statement::CreateSources {
                     like,
                     url,
                     schema_registry,
                     with_options,
-                } => visitor.visit_create_sources(like.as_auto_ref(), url, schema_registry, with_options),
+                    consistency,
+                } => visitor.visit_create_sources(like.as_auto_ref(), url, schema_registry, with_options, consistency),
                 Statement::CreateSink {
                     name,
                     from,
@@ -1298,6 +1306,7 @@ macro_rules! make_visitor {
             schema: Option<&'ast $($mut)* SourceSchema>,
             with_options: &'ast $($mut)* Vec<SqlOption>,
             _if_not_exists: bool,
+            consistency: &'ast $($mut)* SourceTimestamp
         ) {
             visitor.visit_object_name(name);
             visitor.visit_literal_string(url);
@@ -1307,6 +1316,7 @@ macro_rules! make_visitor {
             for option in with_options {
                 visitor.visit_option(option);
             }
+            visitor.visit_consistency(consistency);
         }
 
         pub fn visit_create_sources<'ast, V: $name<'ast> + ?Sized>(
@@ -1315,6 +1325,7 @@ macro_rules! make_visitor {
             url: &'ast $($mut)* String,
             schema_registry: &'ast $($mut)* String,
             with_options: &'ast $($mut)* Vec<SqlOption>,
+            consistency: &'ast $($mut)* SourceTimestamp
         ) {
             if let Some(like) = like {
                 visitor.visit_literal_string(like);
@@ -1324,7 +1335,8 @@ macro_rules! make_visitor {
             for option in with_options {
                 visitor.visit_option(option);
             }
-        }
+            visitor.visit_consistency(consistency);
+         }
 
         fn visit_source_schema<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
@@ -1334,6 +1346,17 @@ macro_rules! make_visitor {
                 SourceSchema::Inline(schema) => visitor.visit_literal_string(schema),
                 SourceSchema::File(schema) => visitor.visit_literal_string(schema),
                 SourceSchema::Registry(url) => visitor.visit_literal_string(url),
+            }
+        }
+
+
+        fn visit_consistency<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            source_timestamp: &'ast $($mut)* SourceTimestamp,
+        ) {
+            match source_timestamp {
+                SourceTimestamp::BringYourOwn(url) => visitor.visit_literal_string(url),
+                SourceTimestamp::RealTime => {},
             }
         }
 

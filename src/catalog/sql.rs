@@ -43,6 +43,7 @@ INSERT INTO schemas VALUES
     (1, NULL, 'mz_catalog'),
     (2, NULL, 'pg_catalog'),
     (3, 1, 'public');
+
 ";
 
 #[derive(Debug)]
@@ -57,7 +58,6 @@ impl Connection {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
         };
-
         let tx = sqlite.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
         let bootstrapped = if app_id == 0 {
@@ -286,7 +286,7 @@ fn is_constraint_violation(err: &rusqlite::Error) -> bool {
     }
 }
 
-struct SqlVal<T>(pub T);
+pub struct SqlVal<T>(pub T);
 
 impl<T> ToSql for SqlVal<T>
 where

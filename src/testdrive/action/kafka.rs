@@ -46,15 +46,13 @@ pub struct VerifyAction {
 }
 
 pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
-    let format = cmd.args.string("format")?;
+    let _format = cmd.args.string("format")?;
     let topic_prefix = cmd.args.string("topic")?;
     let schema = cmd.args.string("schema")?;
     let expected_messages = cmd.input;
 
     cmd.args.done()?;
-    if format != "avro" {
-        return Err("formats besides avro are not supported".into());
-    }
+
     Ok(VerifyAction {
         topic_prefix,
         schema,
@@ -192,6 +190,7 @@ enum RawSchema {
         /// The name of the message to be sent
         message: String,
     },
+    Raw,
 }
 
 /// The parsed format
@@ -207,6 +206,7 @@ enum ParsedSchema {
         parser: &'static dyn Fn(&str) -> Result<crate::protobuf::DynMessage, failure::Error>,
         validator: &'static dyn Fn(&[u8]) -> Result<Box<dyn std::fmt::Debug>, failure::Error>,
     },
+    Raw,
 }
 
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
@@ -222,13 +222,14 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             let message = cmd.args.string("message")?;
             RawSchema::Proto { message }
         }
+        "raw" => RawSchema::Raw {},
         _ => return Err(format!("Unknown message format: {}", format)),
     };
 
     let timestamp = cmd.args.opt_parse("timestamp")?;
     let publish = cmd.args.opt_bool("publish")?;
     cmd.args.done()?;
-    if !["protobuf", "avro"].contains(&&*format) {
+    if !["protobuf", "avro", "raw"].contains(&&*format) {
         return Err("formats besides avro are not supported".into());
     }
     Ok(IngestAction {
@@ -352,6 +353,7 @@ impl IngestAction {
                 },
                 _ => return Err(format!("unknown testdrive protobuf message: {}", message)),
             },
+            RawSchema::Raw {} => ParsedSchema::Raw {},
         };
 
         let futs = FuturesUnordered::new();
@@ -386,6 +388,9 @@ impl IngestAction {
                     // succeed, otherwise there is no chance for the server.
                     let _parsed = validator(&buf)
                         .map_err(|e| format!("error validating proto row={}\nerror={}", row, e))?;
+                }
+                ParsedSchema::Raw {} => {
+                    buf = row.as_bytes().to_vec();
                 }
             }
 
