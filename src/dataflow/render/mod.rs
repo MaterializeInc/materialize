@@ -407,24 +407,29 @@ where
                         let temp_storage = RowArena::new();
                         let output_rows =
                             func.eval(expr.eval(&datums, &env, &temp_storage), &env, &temp_storage);
-                        output_rows.into_iter().map(move |output_row| {
-                            Row::pack(
-                                // This is still quadratic, in that we decode `input_row` again
-                                // for each output row. We can avoid that by using `datums` but
-                                // the lifetimes are a bit awkward (as best as I can tell).
-                                input_row
-                                    .iter()
-                                    .chain(output_row.iter())
-                                    .zip(replace.iter())
-                                    .map(|(datum, demand)| {
-                                        if let Some(bogus) = demand {
-                                            bogus.clone()
-                                        } else {
-                                            datum
-                                        }
-                                    }),
-                            )
-                        })
+                        output_rows
+                            .into_iter()
+                            .map(move |output_row| {
+                                Row::pack(
+                                    datums
+                                        .iter()
+                                        .cloned()
+                                        .chain(output_row.iter())
+                                        .zip(replace.iter())
+                                        .map(|(datum, demand)| {
+                                            if let Some(bogus) = demand {
+                                                bogus.clone()
+                                            } else {
+                                                datum
+                                            }
+                                        }),
+                                )
+                            })
+                            // The collection avoids the lifetime issues of the `datums` borrow,
+                            // which allows us to avoid multiple unpackings of `input_row`. We
+                            // could avoid this allocation with a custom iterator that understands
+                            // the borrowing, but it probably isn't the leading order issue here.
+                            .collect::<Vec<_>>()
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
