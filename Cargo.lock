@@ -88,6 +88,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8df72488e87761e772f14ae0c2480396810e51b2c2ade912f97f0f7e5b95e3c"
+dependencies = [
+ "proc-macro2 1.0.7",
+ "quote 1.0.2",
+ "syn 1.0.11",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2170,9 +2181,9 @@ checksum = "676e8eb2b1b4c9043511a9b7bea0915320d7e502b0a079fb03f9635a5252b18c"
 
 [[package]]
 name = "postgres"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96dd5c8eddec65a5497798ebde2e5c74a93ef8b66782c1b09eeab9bb8538aebc"
+checksum = "47cb5f148a31d981d6a5f88f82c6fcc9b5aeb1b6c626d56568f9e007308acfbf"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -3148,7 +3159,6 @@ dependencies = [
  "tokio",
  "uuid 0.8.1",
  "walkdir",
- "whoami",
 ]
 
 [[package]]
@@ -3214,6 +3224,7 @@ dependencies = [
  "sql-parser",
  "tokio",
  "tokio-postgres",
+ "whoami",
 ]
 
 [[package]]
@@ -3478,10 +3489,11 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c03cb0c66092269a9b280e9e4956cb23ce00b8a6b1b393f7700f7732ac4bf133"
+checksum = "b4794270a16f0095a02a752e6cbe9618ef440397af5eb409fa9eb826650ccbdb"
 dependencies = [
+ "async-trait",
  "byteorder",
  "bytes",
  "fallible-iterator",
