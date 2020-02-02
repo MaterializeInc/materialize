@@ -22,7 +22,6 @@
 //!       if wrong, record the error
 
 use std::borrow::ToOwned;
-use std::env;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -374,22 +373,13 @@ impl State {
         let executor = runtime.handle().clone();
 
         let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
-        // TODO(benesch): setting these defaults should be handled by symbiosis,
-        // but is blocked on https://github.com/sfackler/rust-postgres/issues/534.
-        let symbiosis_url = format!(
-            "postgres://{user}@{host}:{port}",
-            user = env::var("PGUSER").unwrap_or_else(|_| whoami::username()),
-            host = env::var("PGHOST").unwrap_or_else(|_| "localhost".into()),
-            port = env::var("PGPORT").unwrap_or_else(|_| "5432".into()),
-        );
-
-        let (source_tx, source_rx) = std::sync::mpsc::channel::<coord::TimestampMessage>();
-        let (ts_tx, ts_rx) = std::sync::mpsc::channel::<coord::TimestampMessage>();
+        let (source_tx, source_rx) = std::sync::mpsc::channel();
+        let (ts_tx, ts_rx) = std::sync::mpsc::channel();
 
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
             num_timely_workers: NUM_TIMELY_WORKERS,
-            symbiosis_url: Some(&symbiosis_url),
+            symbiosis_url: Some("postgres://"),
             logging: logging_config.as_ref(),
             bootstrap_sql: "".into(),
             data_directory: None,

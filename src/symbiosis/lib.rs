@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::env;
 
 use chrono::Utc;
 use failure::{bail, format_err};
@@ -43,7 +44,36 @@ pub struct Postgres {
 
 impl Postgres {
     pub async fn open_and_erase(url: &str) -> Result<Self, failure::Error> {
-        let (client, conn) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+        let mut config: tokio_postgres::Config = url.parse()?;
+        let username = whoami::username();
+        if config.get_user().is_none() {
+            config.user(
+                env::var("PGUSER")
+                    .ok()
+                    .as_deref()
+                    .unwrap_or_else(|| &username),
+            );
+        }
+        if config.get_password().is_none() {
+            if let Ok(password) = env::var("PGPASSWORD") {
+                config.password(password);
+            }
+        }
+        if config.get_dbname().is_none() {
+            if let Ok(dbname) = env::var("PGDATABASE") {
+                config.dbname(&dbname);
+            }
+        }
+        if config.get_hosts().is_empty() {
+            config.host(
+                env::var("PGHOST")
+                    .ok()
+                    .as_deref()
+                    .unwrap_or_else(|| "localhost"),
+            );
+        }
+        let (client, conn) = config
+            .connect(tokio_postgres::NoTls)
             .await
             .map_err(|err| format_err!("Postgres connection failed: {}", err))?;
 
