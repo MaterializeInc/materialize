@@ -81,6 +81,7 @@ impl Codec {
         code: &'static str,
         message: String,
         detail: Option<String>,
+        hint: Option<String>,
     ) {
         dst.put_u8(b'S');
         dst.put_string(severity);
@@ -88,9 +89,13 @@ impl Codec {
         dst.put_string(code);
         dst.put_u8(b'M');
         dst.put_string(&message);
-        if let Some(ref detail) = detail {
+        if let Some(detail) = &detail {
             dst.put_u8(b'D');
             dst.put_string(detail);
+        }
+        if let Some(hint) = &hint {
+            dst.put_u8(b'H');
+            dst.put_string(hint);
         }
         dst.put_u8(b'\0');
     }
@@ -231,13 +236,28 @@ impl Encoder for Codec {
                 code,
                 message,
                 detail,
-            } => Self::encode_error_notice_response(dst, severity.string(), code, message, detail),
+            } => Self::encode_error_notice_response(
+                dst,
+                severity.string(),
+                code,
+                message,
+                detail,
+                None,
+            ),
             BackendMessage::NoticeResponse {
                 severity,
                 code,
                 message,
                 detail,
-            } => Self::encode_error_notice_response(dst, severity.string(), code, message, detail),
+                hint,
+            } => Self::encode_error_notice_response(
+                dst,
+                severity.string(),
+                code,
+                message,
+                detail,
+                hint,
+            ),
         }
 
         // Overwrite length placeholder with true length.
