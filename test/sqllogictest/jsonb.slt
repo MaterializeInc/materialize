@@ -1441,7 +1441,7 @@ query TT
 SELECT * from jsonb_each('{}'::JSONB) q
 ----
 
-query TT colnames
+query TT colnames,rowsort
 SELECT * from jsonb_each('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
 ----
 key  value
@@ -1463,7 +1463,7 @@ query TT
 SELECT * from jsonb_each('{}'::JSONB) q
 ----
 
-query TT colnames
+query TT colnames,rowsort
 SELECT * from jsonb_each('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
 ----
 key  value
@@ -1489,7 +1489,7 @@ query TT
 SELECT * from jsonb_each_text('{}'::JSONB) q
 ----
 
-query TT colnames
+query TT colnames,rowsort
 SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
 ----
 key  value
@@ -1515,7 +1515,7 @@ query TT
 SELECT * from jsonb_each_text('{}'::JSONB) q
 ----
 
-query TT colnames
+query TT colnames,rowsort
 SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
 ----
 key  value
