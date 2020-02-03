@@ -85,7 +85,7 @@ mz::PeekResults mz::peekView(pqxx::connection &c, const std::string &name, const
             }
         }
     });
-    
+
     return {time, results};
 }
 

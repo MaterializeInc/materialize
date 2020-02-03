@@ -60,4 +60,3 @@ void createMaterializedView(pqxx::connection& c, const std::string &name, const 
 PeekResults peekView(pqxx::connection& c, const std::string& name, const std::optional<std::string>& order,
                      std::optional<unsigned> limit);
 }
-

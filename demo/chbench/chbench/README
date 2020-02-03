@@ -1,5 +1,6 @@
 This implementation of the CH-benCHmark was created for the UNIX platform. It uses unixODBC
 and pthreads.
+
 Additionally, it can handle different SQL dialects.
 
 To add a new dialect:
@@ -54,5 +55,3 @@ To run it:
         --out-dir <OUTPUT_PATH>
 
         example: ./chBenchmark run -dmysql -uroot -a5 -t10 -w60 -r300
-
-

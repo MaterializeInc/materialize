@@ -113,4 +113,3 @@ const char* Config::UnrecognizedDialectException::what() const noexcept {
 
 Config::UnrecognizedDialectException::UnrecognizedDialectException(const std::string &dialect) :
  what_rendered { "Unrecognized dialect: " + dialect } {}
-
