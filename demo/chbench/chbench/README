@@ -12,8 +12,14 @@ To add a new dialect:
 To build it:
     requirements are:
     - libodbc (included in unixODBC, version 2.3.2 required!)
+    - libpqxx
     - GNU make (version 3.81 recommended)
     - c++11 compiler (gcc 4.7 recommended)
+
+      brew install unixodbc libpqxx libconfig
+      mkdir build
+      cmake ..
+      make -j 5
 
     1. Adjust "Makefile" if needed, for example:
     - CC to appropriate c++11 compiler
