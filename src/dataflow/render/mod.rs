@@ -222,7 +222,40 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         worker_index,
                         Some(&object.id.to_string()),
                     );
+                    // Under the premise that this is always an arrange_by aroung a global get,
+                    // this will leave behind the arrangements bound to the global get, so that
+                    // we will not tidy them up in the next pass.
                 }
+
+                // After building each object, we want to tear down all other cached collections
+                // and arrangements to avoid accidentally providing hits on local identifiers.
+                // We could relax this if we better understood which expressions are dangerous
+                // (e.g. expressions containing gets of local identifiers not covered by a let).
+                //
+                // TODO: Improve collection and arrangement re-use.
+                context.collections.retain(|e, _| {
+                    if let RelationExpr::Get {
+                        id: Id::Global(_),
+                        typ: _,
+                    } = e
+                    {
+                        true
+                    } else {
+                        false
+                    }
+                });
+                context.local.retain(|e, _| {
+                    if let RelationExpr::Get {
+                        id: Id::Global(_),
+                        typ: _,
+                    } = e
+                    {
+                        true
+                    } else {
+                        false
+                    }
+                });
+                // We do not install in `context.trace`, and can skip deleting things from it.
             }
 
             for (export_id, index_desc, typ) in &dataflow.index_exports {
