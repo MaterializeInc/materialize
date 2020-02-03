@@ -2,6 +2,7 @@
 base = "www"
 publish = "public"
 command = "hugo --gc --baseURL $URL"
+ignore = "../ci/www/changed.sh"
 environment = { HUGO_VERSION = "0.58.3" }
 
 [context.deploy-preview]
