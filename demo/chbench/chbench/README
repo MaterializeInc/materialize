@@ -1,0 +1,58 @@
+This implementation of the CH-benCHmark was created for the UNIX platform. It uses unixODBC
+and pthreads.
+Additionally, it can handle different SQL dialects.
+
+To add a new dialect:
+    - put a new dialect file in the "dialect" directory
+    - implement the interface given in "dialect/Dialect.h"
+    - see "dialect/HanaDialect.h" as example
+    - modify the "DialectStrategy::getInstance()" function in "dialect/DialectStrategy.cpp"
+
+
+To build it:
+    requirements are:
+    - libodbc (included in unixODBC, version 2.3.2 required!)
+    - libpqxx
+    - GNU make (version 3.81 recommended)
+    - c++11 compiler (gcc 4.7 recommended)
+
+      brew install unixodbc libpqxx libconfig
+      mkdir build
+      cmake ..
+      make -j 5
+
+    1. Adjust "Makefile" if needed, for example:
+    - CC to appropriate c++11 compiler
+    - add -L/path/to/libodbc/directory to LDFLAGS
+
+    2. make
+
+
+To run it:
+    1. Make sure all required libraries can be found, for example:
+    - export LD_LIBRARY_PATH=/path/to/libodbc/directory
+
+    2. Make sure you can connect to the system under test using unixODBC's "isql":
+    - isql yourDataSourceName yourDatabaseUser yourPassword
+
+    3. Create initial database as CSV files:
+        chBenchmark gen [--warehouses <COUNT>] [--out-dir <PATH>]
+
+        example: ./chBenchmark gen -w50 -ogen
+
+    4. Run test:
+        chBenchmark
+        -run
+        --dsn <DATA_SOURCE_NAME>
+        --username <DBS_USER>
+        --password <DBS_PASSWORD>
+        --analytic-threads <ANALYTICAL_CLIENTS>
+        --transactional-threads <TRANSACTIONAL_CLIENTS>
+        --warmup-seconds <SECONDS>
+        --run-seconds <SECONDS>
+        --gen-dir <PATH>
+        --out-dir <OUTPUT_PATH>
+
+        example: ./chBenchmark run -dmysql -uroot -a5 -t10 -w60 -r300
+
+
