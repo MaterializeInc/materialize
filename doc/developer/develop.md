@@ -234,6 +234,72 @@ So an example of this is:
 1. `git tag -a v0.1 v0.1-rc` and `git push origin v0.1`
 1. 🎉 celebrate 🎉
 
+#### What happens on the sad path
+
+So far the release process only describes what happens when things go smoothly, and
+releases are bug-free. But there are also several things that can happen that can cause
+us to revisit old releases and pre-releases:
+
+1. Testing can fail for reasons unrelated to the materialized codebase.
+2. Testing can fail for reasons _related_ to the materialized codebase.
+3. Bugs can be found post-release that are considered high-enough severity that we want
+   to backport a bugfix.
+
+Depending on the current level of automation, the solution for 1 is either to manually
+re-run the tests, or to push a new tag. In the world where we have this fully automated
+creating a new tag for `v0.1-prerelease` to kick off new tests _may_ look like:
+
+    git tag -a v0.1-prerelease1 v0.1-prerelease
+    git push origin v0.1-prerelease1
+
+Alternatively, clicking through some CI interfaces to trigger long-running jobs will be
+necessary.
+
+No matter our level of automation, 2 & 3 have a very similar _solution_: Add a branch for
+the tag, with the name of the eventual release, and start doing work on it. These
+branches will become permanent, and so should have a long-lived name, like
+`release-v<VERSION>`.
+
+Here is a walkthrough of a bad-case happening at every step in the release process:
+
+1. Commit `A` is tagged `git tag -a v0.1-prerelease A`
+1. Short tests run successfully, long tests are started
+1. A memory leak is discovered in the long-running tests
+1. The fix is tested and merged to `master` as commit `B`
+1. A fix branch is created: `git checkout -b release-v0.1 v0.1-prerelease`
+1. The branch on master is applied to the release branch: `git cherry-pick B`
+1. That is tagged `git tag -a v0.1-prerelease1 B`
+1. Both the branch and the tag ar pushed:
+
+        git push origin release-v0.1
+        git push origin v0.1-prerelease1
+1. Long running tests pass this time, which means tag `v0.1-rc` is created
+1. A critically incorrect error message is discovered on `master` commit `C` that we
+   would like to backport
+1. We apply it to the release branch, tag it, and push both:
+
+        git checkout release-v0.1
+        git cherry-pick C
+        git tag -a v0.1-rc1 release-v0.1
+        git push origin release-v0.1
+        git push origin v0.1-rc1
+1. Long-running tests succeed again, the release is published to github and all
+   distribution channels:
+
+        git tag -a v0.1 v0.1-rc1
+1. Four days later a customer points out a security flaw, which we fix in `master` on
+   commit `D`
+1. The fix is deemed important enough for us to backport
+1. We do the same dance as before, targeting a release version of `0.1.1`, but starting
+   as a prerelease:
+
+        git checkout release-v0.1
+        git cherry-pick D
+        git tag -a v0.1.1-prerelease release-v0.1
+        git push origin release-v0.1
+        git push origin v0.1.1-prerelease
+1. If all tests pass we tag it as `v0.1.1-rc` and then `v0.1.1`
+
 ### Git details
 
 Nikhil highly recommends that you configure `git pull` to use rebase instead
