@@ -295,3 +295,57 @@ SELECT age, ascii_num * 2 as result FROM (
 100  236
 103  210
 103  236
+
+# regression test for https://github.com/MaterializeInc/materialize/issues/1708
+
+statement ok
+CREATE TABLE tab0(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col3 INTEGER)
+
+statement ok
+INSERT INTO tab0 VALUES(0,1,2,63)
+
+statement ok
+INSERT INTO tab0 VALUES(87,63,3,4)
+
+query I rowsort
+SELECT pk FROM tab0 WHERE
+(
+  col3 IN (
+    SELECT col0 FROM tab0
+  )
+)
+----
+0
+
+query I rowsort
+SELECT pk FROM tab0 WHERE
+(
+  (
+    col0 IN (
+      SELECT col3 FROM tab0 WHERE col3 IN (
+        SELECT col0 FROM tab0
+      )
+    )
+  )
+)
+----
+87
+
+query I rowsort
+SELECT pk FROM tab0 WHERE
+(
+  col3 IN (
+    SELECT col0 FROM tab0
+  )
+  OR
+  (
+    col0 IN (
+      SELECT col3 FROM tab0 WHERE col3 IN (
+        SELECT col0 FROM tab0
+      )
+    )
+  )
+)
+----
+0
+87

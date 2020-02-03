@@ -50,28 +50,11 @@ pub struct ScopeItem {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct OuterScopeItem {
-    /// The actual scope item.
-    scope_item: ScopeItem,
-    /// The "outerness" of this scope item. An item from the parent scope is
-    /// level 0. An item from the parent's parent scope is level 1. And so on.
-    level: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScopeLevel {
-    /// The inner scope.
-    Inner,
-    /// The outer scope with the specified level.
-    Outer(usize),
-}
-
-#[derive(Debug, Clone)]
 pub struct Scope {
     // items in this query
     pub items: Vec<ScopeItem>,
     // items inherited from an enclosing query
-    pub outer_items: Vec<OuterScopeItem>,
+    pub outer_scope: Option<Box<Scope>>,
 }
 
 impl ScopeItem {
@@ -91,21 +74,7 @@ impl Scope {
     pub fn empty(outer_scope: Option<Scope>) -> Self {
         Scope {
             items: vec![],
-            outer_items: if let Some(mut outer_scope) = outer_scope {
-                for mut item in &mut outer_scope.outer_items {
-                    item.level += 1;
-                }
-                outer_scope
-                    .outer_items
-                    .into_iter()
-                    .chain(outer_scope.items.into_iter().map(|item| OuterScopeItem {
-                        scope_item: item,
-                        level: 0,
-                    }))
-                    .collect()
-            } else {
-                vec![]
-            },
+            outer_scope: outer_scope.map(Box::new),
         }
     }
 
@@ -147,20 +116,25 @@ impl Scope {
         self.items.len()
     }
 
-    fn iter_items(&self) -> impl Iterator<Item = (usize, &ScopeItem, ScopeLevel)> {
-        self.items
-            .iter()
-            .enumerate()
-            .map(|(pos, item)| (pos, item, ScopeLevel::Inner))
-    }
-
-    fn iter_outer_items(
-        &self,
-    ) -> impl Iterator<Item = (usize, &ScopeItem, ScopeLevel)> + DoubleEndedIterator {
-        self.outer_items
-            .iter()
-            .enumerate()
-            .map(|(pos, oitem)| (pos, &oitem.scope_item, ScopeLevel::Outer(oitem.level)))
+    fn all_items(&self) -> Vec<(usize, usize, &ScopeItem)> {
+        // These are in order of preference eg
+        // given scopes A(B(C))
+        // items from C should be preferred to items from B to items from A
+        let mut items = vec![];
+        let mut level = 0;
+        let mut scope = self;
+        loop {
+            for (column, item) in scope.items.iter().enumerate() {
+                items.push((level, column, item));
+            }
+            if let Some(outer_scope) = &scope.outer_scope {
+                scope = outer_scope;
+                level += 1;
+            } else {
+                break;
+            }
+        }
+        items
     }
 
     fn resolve<'a, Matches>(
@@ -172,27 +146,24 @@ impl Scope {
         Matches: Fn(&ScopeItemName) -> bool,
     {
         let mut results = self
-            .iter_items()
-            // We reverse the outer items so that we prefer closer scopes.
-            // E.g., given A(B(C)), items from C should be preferred to items
-            // from B to items from A.
-            .chain(self.iter_outer_items().rev())
-            .map(|(pos, item, level)| item.names.iter().map(move |name| (pos, item, level, name)))
-            .flatten()
-            .filter(|(_pos, item, _level, name)| (matches)(name) && item.nameable);
+            .all_items()
+            .into_iter()
+            .flat_map(|(level, column, item)| {
+                item.names
+                    .iter()
+                    .map(move |name| (level, column, item, name))
+            })
+            .filter(|(_level, _column, item, name)| (matches)(name) && item.nameable);
         match results.next() {
             None => bail!("column \"{}\" does not exist", name_in_error),
-            Some((pos, _item, level, name)) => {
+            Some((level, column, _item, name)) => {
                 if results
-                    .find(|(pos2, item, level2, _name)| {
-                        pos != *pos2 && level == *level2 && item.nameable
+                    .find(|(level2, column2, item, _name)| {
+                        column != *column2 && level == *level2 && item.nameable
                     })
                     .is_none()
                 {
-                    match level {
-                        ScopeLevel::Inner => Ok((ColumnRef::Inner(pos), name)),
-                        ScopeLevel::Outer(_) => Ok((ColumnRef::Outer(pos), name)),
-                    }
+                    Ok((ColumnRef { level, column }, name))
                 } else {
                     bail!("Column name {} is ambiguous", name_in_error)
                 }
@@ -234,25 +205,33 @@ impl Scope {
             .iter()
             .enumerate()
             .find(|(_, item)| item.expr.as_ref() == Some(expr))
-            .map(|(i, item)| (ColumnRef::Inner(i), item.names.first()))
+            .map(|(i, item)| {
+                (
+                    ColumnRef {
+                        level: 0,
+                        column: i,
+                    },
+                    item.names.first(),
+                )
+            })
     }
 
     pub fn product(self, right: Self) -> Self {
-        assert!(self.outer_items == right.outer_items);
+        assert!(self.outer_scope == right.outer_scope);
         Scope {
             items: self
                 .items
                 .into_iter()
                 .chain(right.items.into_iter())
                 .collect(),
-            outer_items: self.outer_items,
+            outer_scope: self.outer_scope,
         }
     }
 
     pub fn project(&self, columns: &[usize]) -> Self {
         Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
-            outer_items: self.outer_items.clone(),
+            outer_scope: self.outer_scope.clone(),
         }
     }
 }
