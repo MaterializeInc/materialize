@@ -4,6 +4,8 @@
 // distributed without the express permission of Materialize, Inc.
 
 use chrono::prelude::*;
+use chrono::DateTime;
+use protobuf::well_known_types::Timestamp;
 use protobuf::RepeatedField;
 use rand::distributions::Distribution;
 use rand::seq::SliceRandom;
@@ -29,6 +31,14 @@ impl RecordState {
     }
 }
 
+fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
+    let mut ret = Timestamp::new();
+    ret.set_seconds(time.timestamp());
+    ret.set_nanos(time.timestamp_subsec_nanos() as i32);
+
+    ret
+}
+
 /// Construct a Batch that depends on `state`
 ///
 /// In particular this will have somewhat sensible values for all fields, and
@@ -38,20 +48,21 @@ pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> Batch {
 
     let dur_val = rng.gen_range(15, 1_000);
     let dur = chrono::Duration::seconds(dur_val);
-    let interval_start = state.last_time;
-    let interval_end = interval_start.checked_add_signed(dur).unwrap();
-    state.last_time = interval_end;
+    let interval_start_time = state.last_time.clone();
+    let interval_start = protobuf_timestamp(state.last_time);
+    state.last_time = state.last_time.checked_add_signed(dur).unwrap();
+    let interval_end = protobuf_timestamp(state.last_time);
 
     let mut records = RepeatedField::<Record>::new();
 
     for _ in 0..rng.gen_range(1, 50) {
-        records.push(random_record(rng, interval_start.clone(), dur_val));
+        records.push(random_record(rng, interval_start_time, dur_val));
     }
 
     let mut batch = Batch::new();
     batch.set_id(id.to_string());
-    batch.set_interval_start(interval_start.to_rfc3339());
-    batch.set_interval_end(interval_end.to_rfc3339());
+    batch.set_interval_start(interval_start);
+    batch.set_interval_end(interval_end);
     batch.set_records(records);
 
     batch
@@ -82,8 +93,8 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
 
     let mut record = Record::new();
     record.set_id(UuidB64::new().to_string());
-    record.set_interval_start(interval_start.to_rfc3339());
-    record.set_interval_end(interval_end.to_rfc3339());
+    record.set_interval_start(protobuf_timestamp(interval_start));
+    record.set_interval_end(protobuf_timestamp(interval_end));
     record.set_meter(meter);
     record.set_value(val as u32);
     record.set_info(ResourceInfo::random(rng));

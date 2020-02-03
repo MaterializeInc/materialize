@@ -69,7 +69,7 @@ fn compile_proto_descriptors(specs: &[&str]) -> Result<()> {
                 out,
                 includes: &["resources"],
                 input: &[spec],
-                include_imports: false,
+                include_imports: true,
             };
             protoc
                 .write_descriptor_set(args)

@@ -44,6 +44,7 @@ fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> R
                 FieldType::String => ScalarType::String,
                 FieldType::Bytes => ScalarType::Bytes,
                 FieldType::Message(m) => {
+                    println!("{:?}", m);
                     for f in m.fields().iter() {
                         validate_proto_field_resolved(&f, descriptors)?;
                     }
@@ -269,7 +270,6 @@ fn datum_from_serde_proto_nested<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
         ProtoValue::F32(f) => json_number(f),
         ProtoValue::F64(f) => json_number(f),
         ProtoValue::String(s) => Ok(Datum::String(s)),
-        ProtoValue::Bytes(b) => Ok(Datum::Bytes(b)),
         _ => bail!("Unsupported type for Datum from serde_protobuf::Value"),
     }
 }
@@ -306,8 +306,8 @@ fn default_datum_from_field_nested<'a>(
                 .name(),
         )),
         FieldType::String => Ok(Datum::String("")),
-        FieldType::Bytes => Ok(Datum::Bytes(&[])),
         FieldType::Message(_) => Ok(Datum::Null),
+        FieldType::Bytes => bail!("Nested bytes are not supported"),
         FieldType::Group => bail!("Unions are currently not supported"),
         FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
         FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
@@ -579,7 +579,17 @@ mod tests {
         file_descriptor_set.set_file(repeated_field);
 
         let descriptors = Descriptors::from_proto(&file_descriptor_set);
-        // TODO: should we be validating that message_name exists?
+        let relation = super::validate_descriptors(message_name, &descriptors)
+            .expect("Failed to parse descriptor");
+
+        sanity_check_relation(
+            &relation,
+            descriptors
+                .message_by_name(message_name)
+                .expect("message should be in the descriptor set"),
+            &descriptors,
+        )
+        .expect("Sanity checking descriptors failed");
         super::Decoder::new(descriptors, message_name)
     }
 
@@ -590,7 +600,6 @@ mod tests {
         test_record.set_int_field(1);
         test_record.set_string_field("one".to_string());
         test_record.set_int64_field(10000);
-        test_record.set_bytes_field(b"foo".to_vec());
         test_record.set_color_field(Color::BLUE);
         test_record.set_uint_field(5);
         test_record.set_uint64_field(55);
@@ -612,7 +621,6 @@ mod tests {
             Datum::Int32(1),
             Datum::String("one"),
             Datum::Int64(10000),
-            Datum::Bytes(&[102, 111, 111]),
             Datum::String("BLUE"),
             Datum::Decimal(Significand::new(5)),
             Datum::Decimal(Significand::new(55)),
@@ -643,7 +651,6 @@ mod tests {
             Datum::Int32(1),
             Datum::String(""),
             Datum::Int64(0),
-            Datum::Bytes(&[]),
             Datum::String("RED"),
             Datum::Decimal(Significand::new(0)),
             Datum::Decimal(Significand::new(0)),
@@ -710,7 +717,6 @@ mod tests {
             assert_eq!(
                 datumdict,
                 vec![
-                    ("bytes_field", Datum::Bytes(&[])),
                     ("color_field", Datum::String("RED")),
                     ("double_field", Datum::Float64(OrderedFloat::from(0.0))),
                     ("float_field", Datum::Float64(OrderedFloat::from(0.0))),
@@ -798,7 +804,6 @@ mod tests {
                     assert_eq!(
                         datumdict,
                         vec![
-                            ("bytes_field", Datum::Bytes(&[])),
                             ("color_field", Datum::String("RED")),
                             ("double_field", Datum::Float64(OrderedFloat::from(0.0))),
                             ("float_field", Datum::Float64(OrderedFloat::from(0.0))),
