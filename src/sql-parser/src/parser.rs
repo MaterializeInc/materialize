@@ -1020,6 +1020,16 @@ impl Parser {
 
         let (ts_string, tz_string) = datetime::split_timestamp_string(value);
 
+        if ts_string.is_empty() {
+            return parser_err!(
+                self,
+                range,
+                "Parsed timestamp string is empty! timestamp: {:} timezone: {:}",
+                ts_string,
+                tz_string
+            );
+        }
+
         let mut pdt = datetime::build_parsed_datetime_timestamp(ts_string).map_err({
             let range = range.clone();
             |e| self.error(range, e)
