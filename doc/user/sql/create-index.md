@@ -6,10 +6,10 @@ menu:
     parent: 'sql'
 ---
 
-{{< warning >}}
-This is an advanced feature of Materialized; most users will not
-need to manually create indexes to maximize the value Materialize offers.
-{{< /warning >}}
+{{< warning >}} This is an advanced feature of Materialized; most users will not
+need to manually create indexes to maximize the value Materialize offers, as
+running `CREATE MATERIALIZED VIEW` automatically creates all required indexes to
+eagerly materialize that view. {{< /warning >}}
 
 `CREATE INDEX` creates an in-memory index on a view.
 
