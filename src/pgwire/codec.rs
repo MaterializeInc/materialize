@@ -351,6 +351,7 @@ impl Decoder for Codec {
                         b'D' => decode_describe(buf)?,
                         b'B' => decode_bind(buf)?,
                         b'E' => decode_execute(buf)?,
+                        b'H' => decode_flush(buf)?,
                         b'S' => decode_sync(buf)?,
                         b'C' => decode_close(buf)?,
 
@@ -508,6 +509,11 @@ fn decode_execute(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
         portal_name,
         max_rows,
     })
+}
+
+fn decode_flush(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    // Nothing more to decode.
+    Ok(FrontendMessage::Flush)
 }
 
 fn decode_sync(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {

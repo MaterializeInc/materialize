@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use failure::bail;
-use futures::sink::SinkExt;
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::sink::{self, SinkExt};
+use futures::stream::{StreamExt, TryStreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::{debug, trace};
@@ -22,6 +22,7 @@ use tokio_util::codec::Framed;
 
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
+use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::Session;
 
@@ -87,7 +88,7 @@ where
     CONN_SECRETS.generate(conn_id);
 
     let mut machine = StateMachine {
-        conn: &mut Framed::new(conn, Codec::new()),
+        conn: &mut Framed::new(conn, Codec::new()).buffer(32),
         conn_id,
         conn_secrets: CONN_SECRETS.clone(),
         cmdq_tx,
@@ -115,7 +116,7 @@ impl State {
 }
 
 pub struct StateMachine<'a, A> {
-    conn: &'a mut Framed<A, Codec>,
+    conn: &'a mut sink::Buffer<Framed<A, Codec>, BackendMessage>,
     conn_id: u32,
     conn_secrets: SecretManager,
     cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
@@ -140,7 +141,7 @@ where
                 // If we haven't left the startup state, we need to tell the
                 // decoder to expect another startup message, as startup
                 // messages don't have a message type header.
-                self.conn.codec_mut().reset_decode_state();
+                self.conn.get_mut().codec_mut().reset_decode_state();
             }
         }
     }
@@ -206,6 +207,7 @@ where
                 self.close_statement(session, name).await?
             }
             Some(FrontendMessage::ClosePortal { name }) => self.close_portal(session, name).await?,
+            Some(FrontendMessage::Flush) => self.flush(session).await?,
             Some(FrontendMessage::Sync) => self.sync(session).await?,
             Some(FrontendMessage::Terminate) => State::Done,
             None => State::Done,
@@ -306,8 +308,7 @@ where
         messages.extend(notices);
         messages.push(BackendMessage::ReadyForQuery(session.transaction().into()));
         self.send_all(messages).await?;
-
-        Ok(State::Ready(session))
+        self.flush(session).await
     }
 
     async fn cancel_request(
@@ -328,6 +329,7 @@ where
     async fn encryption_request(&mut self, session: Session) -> Result<State, comm::Error> {
         self.send(BackendMessage::EncryptionResponse(EncryptionType::None))
             .await?;
+        self.conn.flush().await?;
         Ok(State::Startup(session))
     }
 
@@ -612,11 +614,16 @@ where
         Ok(State::Ready(session))
     }
 
+    async fn flush(&mut self, session: Session) -> Result<State, comm::Error> {
+        self.conn.flush().await?;
+        Ok(State::Ready(session))
+    }
+
     async fn sync(&mut self, session: Session) -> Result<State, comm::Error> {
         self.conn
             .send(BackendMessage::ReadyForQuery(session.transaction().into()))
             .await?;
-        Ok(State::Ready(session))
+        self.flush(session).await
     }
 
     async fn send_describe_rows(
@@ -810,10 +817,12 @@ where
                 Ok(Some(updates)) => {
                     let updates = updates?;
                     count += updates.len();
-                    let messages = updates.into_iter().map(|update| {
-                        BackendMessage::CopyData(message::encode_update(update, typ))
-                    });
-                    self.send_all(messages).await?;
+                    for update in updates {
+                        self.send(BackendMessage::CopyData(message::encode_update(
+                            update, typ,
+                        )))
+                        .await?;
+                    }
                 }
                 Err(time::Elapsed { .. }) => {
                     // It's been a while since we've had any data to send, and
@@ -834,10 +843,10 @@ where
                     // desired notifications via POLLRDHUP [0].
                     //
                     // [0]: https://lkml.org/lkml/2003/7/12/116
-                    let empty = BackendMessage::CopyData(vec![]);
-                    self.send_all(iter::once(empty)).await?;
+                    self.send(BackendMessage::CopyData(vec![])).await?;
                 }
             }
+            self.conn.flush().await?;
         }
 
         let tag = format!("COPY {}", count);
@@ -857,21 +866,19 @@ where
 
     async fn send(&mut self, message: BackendMessage) -> Result<(), comm::Error> {
         trace!("cid={} send={:?}", self.conn_id, message);
-        Ok(self.conn.send(message).await?)
+        Ok(self.conn.enqueue(message).await?)
     }
 
     async fn send_all(
         &mut self,
         messages: impl IntoIterator<Item = BackendMessage>,
     ) -> Result<(), comm::Error> {
-        let conn_id = self.conn_id;
-        Ok(self
-            .conn
-            .send_all(&mut stream::iter(messages.into_iter().map(|m| {
-                trace!("cid={} send={:?}", conn_id, m);
-                Ok(m)
-            })))
-            .await?)
+        // N.B. we intentionally don't use `self.conn.send_all` here to avoid
+        // flushing the sink unnecessarily.
+        for m in messages {
+            self.send(m).await?;
+        }
+        Ok(())
     }
 
     async fn error(
