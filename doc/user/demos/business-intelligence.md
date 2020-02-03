@@ -111,10 +111,10 @@ Metabase](/images/demos/bi_architecture_diagram.png)
     git clone git@github.com:MaterializeInc/materialize.git
     ```
 
-2. Move to the `ex/chBench` dir:
+2. Move to the `demo/chbench` dir:
 
     ```shell
-    cd <path to materialize>/ex/chbench
+    cd <path to materialize>/demo/chbench
     ```
 
 3. Deploy and start all of the components we've listed above.
@@ -137,7 +137,7 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can get Materialize to read data from Kafka, and define the views we want
 Materialize to maintain for us.
 
-1. Launch a new terminal window and `cd <path to materialize>/ex/chbench`.
+1. Launch a new terminal window and `cd <path to materialize>/demo/chbench`.
 
 1. Launch the Materialize CLI (`mzcli`) by running:
 

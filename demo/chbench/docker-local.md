@@ -26,12 +26,12 @@ distributions or for macOS.
    sudo apt install -y jq
    ```
 
-2. Edit `ex/chbench/docker-compose.yml` to remove all references to the
+2. Edit `demo/chbench/docker-compose.yml` to remove all references to the
    following containers: `materialize`, `cli`, and all the metrics-related
    containers (beginning with `grafana` and continuing to the end of the file).
    Make sure you don't delete the `volumes` section at the bottom.
 
-1. From the `ex/chbench` directory, start up all the containers (except the ones
+1. From the `demo/chbench` directory, start up all the containers (except the ones
    you removed):
 
    ```shell

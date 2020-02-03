@@ -66,9 +66,9 @@ overview and doesn't contain any actual instruction.
 ## Hands-on experience
 
 To see what this feels like in action, we have a simple demo in
-`materialize/ex/simple-demo`.
+`materialize/demo/simple-demo`.
 
-For something slightly more involved, check out `materialize/ex/chbench`.
+For something slightly more involved, check out `materialize/demo/chbench`.
 
 ## Related pages
 
