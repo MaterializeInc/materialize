@@ -17,7 +17,7 @@ futures = "0.3"
 lazy_static = "1.4.0"
 libc = "0.2.66"
 log = "0.4.8"
-smallvec = "1.1"
+smallvec = "1.2"
 tokio = { version = "0.2", features = ["io-util", "rt-threaded", "tcp"] }
 
 [dev-dependencies]
