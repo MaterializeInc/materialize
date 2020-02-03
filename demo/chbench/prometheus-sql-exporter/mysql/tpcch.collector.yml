@@ -3,10 +3,6 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-# These collections depend on views created by the bootstrap.sql script, which
-# is run automatically by docker-compose, but which should be run manually if you want to
-# test locally.
-
 collector_name: tpcch
 metrics:
   - metric_name: mysql_tpcch_table_rows

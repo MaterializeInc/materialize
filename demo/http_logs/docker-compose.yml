@@ -19,7 +19,7 @@ services:
     ports:
       - *materialized
     init: true
-    command: -w4 --bootstrap-sql=/usr/local/etc/materialized/bootstrap.sql
+    command: -w4
     volumes:
       - logfile:/log
 

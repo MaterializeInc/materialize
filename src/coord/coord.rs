@@ -32,9 +32,10 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PeekWhen, Sink, SinkConnector,
-    TailSinkConnector, Timestamp, Update, View,
+    DataflowDesc, ExternalSourceConnector, Index, IndexDesc, PeekResponse, PeekWhen, Sink,
+    SinkConnector, TailSinkConnector, Timestamp, Update, View,
 };
+use expr::transform::Optimizer;
 use expr::{
     EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr,
     SourceInstanceId,
@@ -65,7 +66,6 @@ where
     pub num_timely_workers: usize,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<&'a LoggingConfig>,
-    pub bootstrap_sql: String,
     pub data_directory: Option<&'a Path>,
     pub executor: &'a tokio::runtime::Handle,
     pub ts_channel: Option<TimestampChannel>,
@@ -79,7 +79,7 @@ where
     switchboard: comm::Switchboard<C>,
     broadcast_tx: comm::broadcast::Sender<SequencedCommand>,
     num_timely_workers: usize,
-    optimizer: expr::transform::Optimizer,
+    optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of view) -> (existing indexes)
@@ -127,58 +127,105 @@ where
             None
         };
 
+        let mut optimizer = Optimizer::default();
+
         let catalog_path = catalog_path.as_deref();
         let catalog = if let Some(logging_config) = config.logging {
-            Catalog::open(
-                catalog_path,
-                logging_config
-                    .active_logs()
-                    .iter()
-                    .map(|log| {
-                        (
-                            log.id(),
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: "mz_catalog".into(),
-                                item: log.name().into(),
-                            },
-                            CatalogItem::View(View {
-                                raw_sql: "<system log>".to_string(),
-                                // Dummy placeholder
-                                relation_expr: OptimizedRelationExpr::declare_optimized(
-                                    RelationExpr::constant(
-                                        vec![vec![]],
-                                        log.schema().typ().clone(),
-                                    ),
+            Catalog::open(catalog_path, |catalog| {
+                for log_src in logging_config.active_logs() {
+                    catalog.insert_item(
+                        log_src.id(),
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: "mz_catalog".into(),
+                            item: log_src.name().into(),
+                        },
+                        CatalogItem::View(View {
+                            raw_sql: "<system log>".to_string(),
+                            // Dummy placeholder
+                            relation_expr: OptimizedRelationExpr::declare_optimized(
+                                RelationExpr::constant(
+                                    vec![vec![]],
+                                    log_src.schema().typ().clone(),
                                 ),
-                                eval_env: EvalEnv::default(),
-                                desc: log.schema(),
-                            }),
-                        )
-                    })
-                    .chain(logging_config.active_logs().iter().map(|log| {
-                        (
-                            log.index_id(),
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: "mz_catalog".into(),
-                                item: format!("{}_primary_idx", log.name()),
-                            },
-                            CatalogItem::Index(dataflow_types::Index::new_from_cols(
-                                log.id(),
-                                log.index_by(),
-                                &log.schema(),
-                            )),
-                        )
-                    })),
-            )?
+                            ),
+                            eval_env: EvalEnv::default(),
+                            desc: log_src.schema(),
+                        }),
+                    );
+                    catalog.insert_item(
+                        log_src.index_id(),
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: "mz_catalog".into(),
+                            item: format!("{}_primary_idx", log_src.name()),
+                        },
+                        CatalogItem::Index(dataflow_types::Index::new_from_cols(
+                            log_src.id(),
+                            log_src.index_by(),
+                            &log_src.schema(),
+                        )),
+                    );
+                }
+
+                for log_view in logging_config.active_views() {
+                    let params = Params {
+                        datums: Row::pack(&[]),
+                        types: vec![],
+                    };
+                    let session = sql::Session::default();
+                    let stmt = sql::parse(log_view.sql.to_owned())
+                        .expect("failed to parse bootstrap sql")
+                        .into_element();
+                    match sql::plan(catalog, &session, stmt, &params) {
+                        MaybeFuture::Immediate(Some(Ok(Plan::CreateView {
+                            name: _,
+                            view,
+                            replace,
+                            materialize,
+                        }))) => {
+                            assert!(replace.is_none());
+                            assert!(materialize);
+                            let view = View {
+                                raw_sql: view.raw_sql,
+                                relation_expr: optimizer.optimize(
+                                    view.relation_expr,
+                                    &HashMap::new(),
+                                    &view.eval_env,
+                                ),
+                                desc: view.desc,
+                                eval_env: view.eval_env,
+                            };
+                            let index = auto_generate_primary_idx(&view, log_view.id);
+                            catalog.insert_item(
+                                log_view.id,
+                                FullName {
+                                    database: DatabaseSpecifier::Ambient,
+                                    schema: "mz_catalog".into(),
+                                    item: log_view.name.into(),
+                                },
+                                CatalogItem::View(view),
+                            );
+                            catalog.insert_item(
+                                log_view.index_id,
+                                FullName {
+                                    database: DatabaseSpecifier::Ambient,
+                                    schema: "mz_catalog".into(),
+                                    item: format!("{}_primary_idx", log_view.name),
+                                },
+                                CatalogItem::Index(index),
+                            );
+                        }
+                        err => panic!("failed to load bootstrap view: {:?}", err),
+                    }
+                }
+            })?
         } else {
-            Catalog::open(catalog_path, iter::empty())?
+            Catalog::open(catalog_path, |_| ())?
         };
 
         let executor = config.executor;
         executor.enter(move || {
-            let bootstrap_sql = config.bootstrap_sql;
             let logging = config.logging;
             let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
             broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
@@ -226,27 +273,22 @@ where
                         GlobalId::User(_) => {
                             coord.create_index_dataflow(name.to_string(), id, index)
                         }
-                        GlobalId::System(_) => coord.insert_index(id, index.desc, Some(1_000)),
+                        GlobalId::System(_) => {
+                            // TODO(benesch): a smarter way to determine whether this system index
+                            // is on a logging source or a logging view. Probably logging sources
+                            // should not be catalog views.
+                            if logging
+                                .unwrap()
+                                .active_views()
+                                .iter()
+                                .any(|v| v.index_id == id)
+                            {
+                                coord.create_index_dataflow(name.to_string(), id, index)
+                            } else {
+                                coord.insert_index(id, index.desc, Some(1_000))
+                            }
+                        }
                     },
-                }
-            }
-
-            if coord.catalog.bootstrapped() {
-                // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
-                // the first connection ID used is 1. As long as that remains the case,
-                // 0 is safe to use here.
-                let conn_id = 0;
-                let params = Params {
-                    datums: Row::pack(&[]),
-                    types: vec![],
-                };
-                let mut session = sql::Session::default();
-                // TODO(benesch): these bootstrap statements should be run in a
-                // single transaction, so that we don't leave the catalog in a
-                // partially-bootstrapped state if one fails.
-                for stmt in sql::parse(bootstrap_sql)? {
-                    block_on(coord.handle_statement(&session, stmt, &params))
-                        .and_then(|plan| coord.sequence_plan(&mut session, plan, conn_id))?;
                 }
             }
 
@@ -1794,7 +1836,6 @@ impl ViewState {
     }
 }
 
-use dataflow_types::Index;
 pub fn auto_generate_primary_idx(view: &View<OptimizedRelationExpr>, view_id: GlobalId) -> Index {
     let keys = view.relation_expr.as_ref().typ().keys;
     let keys = if let Some(keys) = keys.first() {

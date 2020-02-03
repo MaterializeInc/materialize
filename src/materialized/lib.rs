@@ -76,8 +76,6 @@ pub struct Config {
     /// The addresses of each process in the cluster, including this node,
     /// in order of process ID.
     pub addresses: Vec<SocketAddr>,
-    /// SQL to run if bootstrapping a new cluster.
-    pub bootstrap_sql: String,
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: Option<PathBuf>,
     /// An optional symbiosis endpoint. See the
@@ -250,7 +248,6 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             num_timely_workers,
             symbiosis_url: config.symbiosis_url.as_deref(),
             logging: logging_config.as_ref(),
-            bootstrap_sql: config.bootstrap_sql,
             data_directory: config.data_directory.as_deref(),
             ts_channel: if config.timestamp_frequency.is_some() {
                 Some(TimestampChannel {

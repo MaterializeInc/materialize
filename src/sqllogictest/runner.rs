@@ -381,7 +381,6 @@ impl State {
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
             logging: logging_config.as_ref(),
-            bootstrap_sql: "".into(),
             data_directory: None,
             executor: &executor,
             ts_channel: Some(TimestampChannel {

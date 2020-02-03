@@ -166,24 +166,35 @@ VIEWS
 names_view
 
 > SHOW FULL VIEWS FROM mz_catalog
-VIEWS                            TYPE   QUERYABLE MATERIALIZED
---------------------------------------------------------------
-mz_arrangement_sharing           SYSTEM true      true
-mz_arrangement_sizes             SYSTEM true      true
-mz_catalog_names                 SYSTEM true      true
-mz_dataflow_channels             SYSTEM true      true
-mz_dataflow_operator_addresses   SYSTEM true      true
-mz_dataflow_operators            SYSTEM true      true
-mz_materialization_dependencies  SYSTEM true      true
-mz_materialization_frontiers     SYSTEM true      true
-mz_materializations              SYSTEM true      true
-mz_peek_active                   SYSTEM true      true
-mz_peek_durations                SYSTEM true      true
-mz_scheduling_elapsed            SYSTEM true      true
-mz_scheduling_histogram          SYSTEM true      true
-mz_scheduling_parks              SYSTEM true      true
-mz_view_foreign_keys             SYSTEM true      true
-mz_view_keys                     SYSTEM true      true
+VIEWS                             TYPE   QUERYABLE MATERIALIZED
+---------------------------------------------------------------
+mz_arrangement_sharing            SYSTEM true      true
+mz_arrangement_sizes              SYSTEM true      true
+mz_catalog_names                  SYSTEM true      true
+mz_dataflow_channels              SYSTEM true      true
+mz_dataflow_operator_addresses    SYSTEM true      true
+mz_dataflow_operators             SYSTEM true      true
+mz_materialization_dependencies   SYSTEM true      true
+mz_materialization_frontiers      SYSTEM true      true
+mz_materializations               SYSTEM true      true
+mz_peek_active                    SYSTEM true      true
+mz_peek_durations                 SYSTEM true      true
+mz_scheduling_elapsed             SYSTEM true      true
+mz_scheduling_histogram           SYSTEM true      true
+mz_scheduling_parks               SYSTEM true      true
+mz_view_foreign_keys              SYSTEM true      true
+mz_view_keys                      SYSTEM true      true
+mz_addresses_with_unit_length     SYSTEM true      true
+mz_dataflow_names                 SYSTEM true      true
+mz_dataflow_operator_dataflows    SYSTEM true      true
+mz_perf_arrangement_records       SYSTEM true      true
+mz_perf_dependency_frontiers      SYSTEM true      true
+mz_perf_peek_durations_aggregates SYSTEM true      true
+mz_perf_peek_durations_bucket     SYSTEM true      true
+mz_perf_peek_durations_core       SYSTEM true      true
+mz_records_per_dataflow           SYSTEM true      true
+mz_records_per_dataflow_global    SYSTEM true      true
+mz_records_per_dataflow_operator  SYSTEM true      true
 
 # test that information in shows correctly responds to materialization and unmaterialization
 

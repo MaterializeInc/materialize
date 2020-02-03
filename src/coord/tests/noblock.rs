@@ -29,7 +29,6 @@ fn no_block() {
         num_timely_workers: 1,
         symbiosis_url: None,
         logging: logging_config.as_ref(),
-        bootstrap_sql: "".into(),
         data_directory: None,
         executor: &executor,
         ts_channel: None,
