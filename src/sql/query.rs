@@ -109,7 +109,13 @@ fn plan_expr_or_col_index<'a>(
                     max
                 );
             }
-            Some(Ok((ScalarExpr::Column(ColumnRef::Inner(n - 1)), None)))
+            Some(Ok((
+                ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: n - 1,
+                }),
+                None,
+            )))
         }
         _ => None,
     }
@@ -150,7 +156,7 @@ fn plan_query(
             plan_expr_or_col_index(ecx, &obe.expr, Some(ScalarType::String), "ORDER BY")?;
         // If the expression is a reference to an existing column,
         // do not introduce a new column to support it.
-        if let ScalarExpr::Column(ColumnRef::Inner(column)) = expr {
+        if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
             order_by.push(ColumnOrder {
                 column,
                 desc: match obe.asc {
@@ -408,7 +414,11 @@ fn plan_view_select(
                 .find(|existing_expr| **existing_expr == expr)
                 .is_none()
             {
-                let scope_item = if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr {
+                let scope_item = if let ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: old_column,
+                }) = &expr
+                {
                     // If we later have `SELECT foo.*` then we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
                     // This is really hard to do right using SQL name resolution, so instead we just track the movement here.
                     select_all_mapping.insert(*old_column, new_column);
@@ -698,9 +708,10 @@ fn plan_table_function(
                         // convert value column to text, leave key column as is
                         let num_old_columns = ecx.scope.len();
                         call = call
-                            .map(vec![ScalarExpr::Column(ColumnRef::Inner(
-                                num_old_columns + 1,
-                            ))
+                            .map(vec![ScalarExpr::Column(ColumnRef {
+                                level: 0,
+                                column: num_old_columns + 1,
+                            })
                             .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
                             .project(
                                 (0..num_old_columns)
@@ -712,8 +723,11 @@ fn plan_table_function(
                         // convert value column to text
                         let num_old_columns = ecx.scope.len();
                         call = call
-                            .map(vec![ScalarExpr::Column(ColumnRef::Inner(num_old_columns))
-                                .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
+                            .map(vec![ScalarExpr::Column(ColumnRef {
+                                level: 0,
+                                column: num_old_columns,
+                            })
+                            .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
                             .project(
                                 (0..num_old_columns)
                                     .chain(vec![num_old_columns + 1])
@@ -854,7 +868,13 @@ fn plan_select_item<'a>(
                 })?;
                 let mut scope_item = item.clone();
                 scope_item.expr = None;
-                Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), scope_item))
+                Ok((
+                    ScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: *j,
+                    }),
+                    scope_item,
+                ))
             })
             .collect::<Result<Vec<_>, _>>(),
         SelectItem::QualifiedWildcard(table_name) => {
@@ -888,7 +908,13 @@ fn plan_select_item<'a>(
                     })?;
                     let mut scope_item = item.clone();
                     scope_item.expr = None;
-                    Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), scope_item))
+                    Ok((
+                        ScalarExpr::Column(ColumnRef {
+                            level: 0,
+                            column: *j,
+                        }),
+                        scope_item,
+                    ))
                 })
                 .collect::<Result<Vec<_>, _>>()
         }
@@ -1054,29 +1080,47 @@ fn plan_using_constraint(
         let (l, _) = left_scope.resolve_column(column_name)?;
         let (r, _) = right_scope.resolve_column(column_name)?;
         let l = match l {
-            ColumnRef::Inner(l) => l,
-            ColumnRef::Outer(_) => bail!(
+            ColumnRef {
+                level: 0,
+                column: l,
+            } => l,
+            _ => bail!(
                 "Internal error: name {} in USING resolved to outer column",
                 column_name
             ),
         };
         let r = match r {
-            ColumnRef::Inner(r) => r,
-            ColumnRef::Outer(_) => bail!(
+            ColumnRef {
+                level: 0,
+                column: r,
+            } => r,
+            _ => bail!(
                 "Internal error: name {} in USING resolved to outer column",
                 column_name
             ),
         };
         join_exprs.push(ScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
-            expr1: Box::new(ScalarExpr::Column(ColumnRef::Inner(l))),
-            expr2: Box::new(ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r))),
+            expr1: Box::new(ScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: l,
+            })),
+            expr2: Box::new(ScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: left_scope.len() + r,
+            })),
         });
         map_exprs.push(ScalarExpr::CallVariadic {
             func: VariadicFunc::Coalesce,
             exprs: vec![
-                ScalarExpr::Column(ColumnRef::Inner(l)),
-                ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r)),
+                ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: l,
+                }),
+                ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: left_scope.len() + r,
+                }),
             ],
         });
         let mut names = left_scope.items[l].names.clone();
@@ -2978,8 +3022,16 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
                 expr1,
                 expr2,
             } => {
-                if let (Column(ColumnRef::Inner(l)), Column(ColumnRef::Inner(r))) =
-                    (&**expr1, &**expr2)
+                if let (
+                    Column(ColumnRef {
+                        level: 0,
+                        column: l,
+                    }),
+                    Column(ColumnRef {
+                        level: 0,
+                        column: r,
+                    }),
+                ) = (&**expr1, &**expr2)
                 {
                     equivalences.push((*l, *r));
                 }
@@ -3345,8 +3397,8 @@ struct QueryContext<'a> {
     lifetime: QueryLifetime,
     /// The scope of the outer relation expression.
     outer_scope: Scope,
-    /// The type of the outer relation expression.
-    outer_relation_type: RelationType,
+    /// The type of the outer relation expressions.
+    outer_relation_types: Vec<RelationType>,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
@@ -3358,7 +3410,7 @@ impl<'a> QueryContext<'a> {
             scx,
             lifetime,
             outer_scope: Scope::empty(None),
-            outer_relation_type: RelationType::empty(),
+            outer_relation_types: vec![],
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
         }
     }
@@ -3368,7 +3420,7 @@ impl<'a> QueryContext<'a> {
     }
 
     fn relation_type(&self, expr: &RelationExpr) -> RelationType {
-        expr.typ(&self.outer_relation_type, &self.param_types.borrow())
+        expr.typ(&self.outer_relation_types, &self.param_types.borrow())
     }
 }
 
@@ -3393,7 +3445,7 @@ struct ExprContext<'a> {
 impl<'a> ExprContext<'a> {
     fn column_type(&self, expr: &ScalarExpr) -> ColumnType {
         expr.typ(
-            &self.qcx.outer_relation_type,
+            &self.qcx.outer_relation_types,
             &self.relation_type,
             &self.qcx.param_types.borrow(),
         )
@@ -3408,15 +3460,13 @@ impl<'a> ExprContext<'a> {
             scx: self.qcx.scx,
             lifetime: self.qcx.lifetime,
             outer_scope: self.scope.clone(),
-            outer_relation_type: RelationType::new(
-                self.qcx
-                    .outer_relation_type
-                    .column_types
-                    .iter()
-                    .cloned()
-                    .chain(self.relation_type.column_types.iter().cloned())
-                    .collect(),
-            ),
+            outer_relation_types: self
+                .qcx
+                .outer_relation_types
+                .iter()
+                .chain(std::iter::once(self.relation_type))
+                .cloned()
+                .collect(),
             param_types: self.qcx.param_types.clone(),
         }
     }
