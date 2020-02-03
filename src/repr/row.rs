@@ -420,7 +420,7 @@ impl Row {
     /// allocation before packing the elements, ensuring only one allocation and no
     /// redundant copies required.
     ///
-    /// This could also be done for cloneable iterators, though we would need to be
+    /// TODO: This could also be done for cloneable iterators, though we would need to be
     /// very careful to avoid using it when iterators are either expensive or have
     /// side effects.
     pub fn pack_slice<'a, I, D>(slice: &[Datum<'a>]) -> Row {
@@ -606,7 +606,7 @@ impl RowPacker {
 
     /// Appends the datums of an entire `Row`.
     pub fn extend_by_row(&mut self, row: &Row) {
-        self.data.extend(row.data.iter().cloned());
+        self.data.extend(&*row.data);
     }
 
     /// Finish packing and return a `Row`
