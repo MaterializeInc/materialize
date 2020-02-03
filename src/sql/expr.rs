@@ -992,14 +992,11 @@ where
         .iter()
         .map(|col_ref| col_ref.decorrelated_column(&outer_arities))
         .collect::<HashSet<_>>();
-    let mut permutation = HashMap::new();
-    let mut key = vec![];
-    for col in 0..oa {
-        if outer_columns_decorrelated.contains(&col) {
-            permutation.insert(col, key.len());
-            key.push(col);
-        }
-    }
+    let mut key = outer_columns_decorrelated
+        .iter()
+        .map(|i| *i)
+        .collect::<Vec<_>>();
+    key.sort();
 
     // rewrite col_refs in inner to point to the correct column in outer.project(key)
     inner.visit_columns(0, &mut |depth, col_ref| {
