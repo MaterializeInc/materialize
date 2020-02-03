@@ -483,18 +483,22 @@ fn rounding_downscale(v: i128, scale: usize) -> i128 {
 
 impl fmt::Display for Decimal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let significand = self.significand.abs();
-        let factor = 10_i128.pow(u32::from(self.scale));
-        let ip = significand / factor;
-        let mut scale = self.scale as usize;
         // NOTE(benesch): `fmt:Formatter` uses "precision" to mean "how many
         // digits to display to the right of the decimal point," which we call
         // scale.
-        let desired_scale = f.precision().unwrap_or(scale);
-        let buf = if desired_scale == 0 {
-            rounding_downscale(significand, scale).to_string()
+        let desired_scale = f.precision().unwrap_or(self.scale as usize);
+        // A desired scale of zero is special because it requires rounding the
+        // integral part. For all other desired scales, the rounding instead
+        // applies to the fractional part.
+        if desired_scale == 0 {
+            let ip = rounding_downscale(self.significand, self.scale as usize);
+            f.pad_integral(ip >= 0, "", &ip.abs().to_string())
         } else {
+            let significand = self.significand.abs();
+            let factor = 10_i128.pow(u32::from(self.scale));
+            let ip = significand / factor;
             let mut fp = significand - (ip * factor);
+            let mut scale = self.scale as usize;
             if desired_scale < scale {
                 // The format string requests less fractional digits than
                 // present. Round to the desired scale.
@@ -509,10 +513,8 @@ impl fmt::Display for Decimal {
                 // present. Fill in the missing digits as zeros.
                 buf.push('0');
             }
-            buf
-        };
-        let nonneg = self.significand >= 0 || (ip == 0 && desired_scale == 0);
-        f.pad_integral(nonneg, "", &buf)
+            f.pad_integral(self.significand >= 0, "", &buf)
+        }
     }
 }
 
@@ -561,6 +563,7 @@ mod tests {
         assert_eq!(format!("{}", Significand::new(0).with_scale(5)), "0.00000");
         assert_eq!(format!("{:.0}", Significand::new(-10).with_scale(5)), "0");
         assert_eq!(format!("{}", Significand::new(42).with_scale(0)), "42");
+        assert_eq!(format!("{:.0}", Significand::new(-6).with_scale(1)), "-1");
         assert_eq!(format!("{:.0}", Significand::new(-19).with_scale(1)), "-2");
         assert_eq!(format!("{:.0}", Significand::new(19).with_scale(1)), "2");
         assert_eq!(format!("{}", Significand::new(70).with_scale(2)), "0.70");
