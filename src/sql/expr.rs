@@ -606,7 +606,7 @@ impl ScalarExpr {
     /// This requires removing all nested subqueries, which we can do moving them into `inner` using `RelationExpr::applied_to`.
     /// We expect that `inner` has already been decorrelated, so that:
     /// * the first `outer_arities[0]` columns of `inner` hold values from the outermost scope
-    /// * the first `outer_arities[1]` columns of `inner` hold values from the next outermost scope
+    /// * the next `outer_arities[1]` columns of `inner` hold values from the next outermost scope
     /// * ...etc
     /// * the remaining columns of `inner` hold values from the inner scope (i.e., the direct input to `self`)
     fn applied_to(
