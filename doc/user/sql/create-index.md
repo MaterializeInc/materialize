@@ -26,9 +26,12 @@ for each materialized view, which represents the results of the view's embedded
 `SELECT` statement. As the view's dataflow operators receive new data, the view
 maintains this index's state, ensuring it continually reflects this new data.
 
-However, views can also maintain additional indexes. Importantly, though, these
-additional indexes _are not_ like traditional secondary indexes&mdash;they store
-a copy of all rows in the result set.
+However, views can also maintain additional indexes, and are not restricted to
+maintaining zero or one indexes. Advanced users may want to create these indexes
+to speed up certain read query patterns without creating a `MATERIALIZED VIEW`
+for each query. Importantly, though, these additional indexes _are not_ like
+traditional secondary indexes&mdash;each index stores a copy of all rows in the
+result set.
 
 ### When to create indexes
 
