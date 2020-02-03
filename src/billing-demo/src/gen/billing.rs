@@ -336,8 +336,8 @@ impl ::protobuf::reflect::ProtobufValue for ResourceInfo {
 pub struct Record {
     // message fields
     pub id: ::std::string::String,
-    pub interval_start: ::std::string::String,
-    pub interval_end: ::std::string::String,
+    pub interval_start: ::protobuf::SingularPtrField<::protobuf::well_known_types::Timestamp>,
+    pub interval_end: ::protobuf::SingularPtrField<::protobuf::well_known_types::Timestamp>,
     pub meter: ::std::string::String,
     pub value: u32,
     pub info: ::protobuf::SingularPtrField<ResourceInfo>,
@@ -383,56 +383,70 @@ impl Record {
         ::std::mem::replace(&mut self.id, ::std::string::String::new())
     }
 
-    // string interval_start = 2;
+    // .google.protobuf.Timestamp interval_start = 2;
 
 
-    pub fn get_interval_start(&self) -> &str {
-        &self.interval_start
+    pub fn get_interval_start(&self) -> &::protobuf::well_known_types::Timestamp {
+        self.interval_start.as_ref().unwrap_or_else(|| ::protobuf::well_known_types::Timestamp::default_instance())
     }
     pub fn clear_interval_start(&mut self) {
         self.interval_start.clear();
     }
 
+    pub fn has_interval_start(&self) -> bool {
+        self.interval_start.is_some()
+    }
+
     // Param is passed by value, moved
-    pub fn set_interval_start(&mut self, v: ::std::string::String) {
-        self.interval_start = v;
+    pub fn set_interval_start(&mut self, v: ::protobuf::well_known_types::Timestamp) {
+        self.interval_start = ::protobuf::SingularPtrField::some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_interval_start(&mut self) -> &mut ::std::string::String {
-        &mut self.interval_start
+    pub fn mut_interval_start(&mut self) -> &mut ::protobuf::well_known_types::Timestamp {
+        if self.interval_start.is_none() {
+            self.interval_start.set_default();
+        }
+        self.interval_start.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_interval_start(&mut self) -> ::std::string::String {
-        ::std::mem::replace(&mut self.interval_start, ::std::string::String::new())
+    pub fn take_interval_start(&mut self) -> ::protobuf::well_known_types::Timestamp {
+        self.interval_start.take().unwrap_or_else(|| ::protobuf::well_known_types::Timestamp::new())
     }
 
-    // string interval_end = 3;
+    // .google.protobuf.Timestamp interval_end = 3;
 
 
-    pub fn get_interval_end(&self) -> &str {
-        &self.interval_end
+    pub fn get_interval_end(&self) -> &::protobuf::well_known_types::Timestamp {
+        self.interval_end.as_ref().unwrap_or_else(|| ::protobuf::well_known_types::Timestamp::default_instance())
     }
     pub fn clear_interval_end(&mut self) {
         self.interval_end.clear();
     }
 
+    pub fn has_interval_end(&self) -> bool {
+        self.interval_end.is_some()
+    }
+
     // Param is passed by value, moved
-    pub fn set_interval_end(&mut self, v: ::std::string::String) {
-        self.interval_end = v;
+    pub fn set_interval_end(&mut self, v: ::protobuf::well_known_types::Timestamp) {
+        self.interval_end = ::protobuf::SingularPtrField::some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_interval_end(&mut self) -> &mut ::std::string::String {
-        &mut self.interval_end
+    pub fn mut_interval_end(&mut self) -> &mut ::protobuf::well_known_types::Timestamp {
+        if self.interval_end.is_none() {
+            self.interval_end.set_default();
+        }
+        self.interval_end.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_interval_end(&mut self) -> ::std::string::String {
-        ::std::mem::replace(&mut self.interval_end, ::std::string::String::new())
+    pub fn take_interval_end(&mut self) -> ::protobuf::well_known_types::Timestamp {
+        self.interval_end.take().unwrap_or_else(|| ::protobuf::well_known_types::Timestamp::new())
     }
 
     // string meter = 4;
@@ -512,6 +526,16 @@ impl Record {
 
 impl ::protobuf::Message for Record {
     fn is_initialized(&self) -> bool {
+        for v in &self.interval_start {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        for v in &self.interval_end {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
         for v in &self.info {
             if !v.is_initialized() {
                 return false;
@@ -528,10 +552,10 @@ impl ::protobuf::Message for Record {
                     ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.id)?;
                 },
                 2 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.interval_start)?;
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.interval_start)?;
                 },
                 3 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.interval_end)?;
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.interval_end)?;
                 },
                 4 => {
                     ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.meter)?;
@@ -561,11 +585,13 @@ impl ::protobuf::Message for Record {
         if !self.id.is_empty() {
             my_size += ::protobuf::rt::string_size(1, &self.id);
         }
-        if !self.interval_start.is_empty() {
-            my_size += ::protobuf::rt::string_size(2, &self.interval_start);
+        if let Some(ref v) = self.interval_start.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
-        if !self.interval_end.is_empty() {
-            my_size += ::protobuf::rt::string_size(3, &self.interval_end);
+        if let Some(ref v) = self.interval_end.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
         if !self.meter.is_empty() {
             my_size += ::protobuf::rt::string_size(4, &self.meter);
@@ -586,11 +612,15 @@ impl ::protobuf::Message for Record {
         if !self.id.is_empty() {
             os.write_string(1, &self.id)?;
         }
-        if !self.interval_start.is_empty() {
-            os.write_string(2, &self.interval_start)?;
+        if let Some(ref v) = self.interval_start.as_ref() {
+            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         }
-        if !self.interval_end.is_empty() {
-            os.write_string(3, &self.interval_end)?;
+        if let Some(ref v) = self.interval_end.as_ref() {
+            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         }
         if !self.meter.is_empty() {
             os.write_string(4, &self.meter)?;
@@ -650,12 +680,12 @@ impl ::protobuf::Message for Record {
                     |m: &Record| { &m.id },
                     |m: &mut Record| { &mut m.id },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<::protobuf::well_known_types::Timestamp>>(
                     "interval_start",
                     |m: &Record| { &m.interval_start },
                     |m: &mut Record| { &mut m.interval_start },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<::protobuf::well_known_types::Timestamp>>(
                     "interval_end",
                     |m: &Record| { &m.interval_end },
                     |m: &mut Record| { &mut m.interval_end },
@@ -723,8 +753,8 @@ impl ::protobuf::reflect::ProtobufValue for Record {
 pub struct Batch {
     // message fields
     pub id: ::std::string::String,
-    pub interval_start: ::std::string::String,
-    pub interval_end: ::std::string::String,
+    pub interval_start: ::protobuf::SingularPtrField<::protobuf::well_known_types::Timestamp>,
+    pub interval_end: ::protobuf::SingularPtrField<::protobuf::well_known_types::Timestamp>,
     pub records: ::protobuf::RepeatedField<Record>,
     // special fields
     pub unknown_fields: ::protobuf::UnknownFields,
@@ -768,56 +798,70 @@ impl Batch {
         ::std::mem::replace(&mut self.id, ::std::string::String::new())
     }
 
-    // string interval_start = 3;
+    // .google.protobuf.Timestamp interval_start = 3;
 
 
-    pub fn get_interval_start(&self) -> &str {
-        &self.interval_start
+    pub fn get_interval_start(&self) -> &::protobuf::well_known_types::Timestamp {
+        self.interval_start.as_ref().unwrap_or_else(|| ::protobuf::well_known_types::Timestamp::default_instance())
     }
     pub fn clear_interval_start(&mut self) {
         self.interval_start.clear();
     }
 
+    pub fn has_interval_start(&self) -> bool {
+        self.interval_start.is_some()
+    }
+
     // Param is passed by value, moved
-    pub fn set_interval_start(&mut self, v: ::std::string::String) {
-        self.interval_start = v;
+    pub fn set_interval_start(&mut self, v: ::protobuf::well_known_types::Timestamp) {
+        self.interval_start = ::protobuf::SingularPtrField::some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_interval_start(&mut self) -> &mut ::std::string::String {
-        &mut self.interval_start
+    pub fn mut_interval_start(&mut self) -> &mut ::protobuf::well_known_types::Timestamp {
+        if self.interval_start.is_none() {
+            self.interval_start.set_default();
+        }
+        self.interval_start.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_interval_start(&mut self) -> ::std::string::String {
-        ::std::mem::replace(&mut self.interval_start, ::std::string::String::new())
+    pub fn take_interval_start(&mut self) -> ::protobuf::well_known_types::Timestamp {
+        self.interval_start.take().unwrap_or_else(|| ::protobuf::well_known_types::Timestamp::new())
     }
 
-    // string interval_end = 4;
+    // .google.protobuf.Timestamp interval_end = 4;
 
 
-    pub fn get_interval_end(&self) -> &str {
-        &self.interval_end
+    pub fn get_interval_end(&self) -> &::protobuf::well_known_types::Timestamp {
+        self.interval_end.as_ref().unwrap_or_else(|| ::protobuf::well_known_types::Timestamp::default_instance())
     }
     pub fn clear_interval_end(&mut self) {
         self.interval_end.clear();
     }
 
+    pub fn has_interval_end(&self) -> bool {
+        self.interval_end.is_some()
+    }
+
     // Param is passed by value, moved
-    pub fn set_interval_end(&mut self, v: ::std::string::String) {
-        self.interval_end = v;
+    pub fn set_interval_end(&mut self, v: ::protobuf::well_known_types::Timestamp) {
+        self.interval_end = ::protobuf::SingularPtrField::some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_interval_end(&mut self) -> &mut ::std::string::String {
-        &mut self.interval_end
+    pub fn mut_interval_end(&mut self) -> &mut ::protobuf::well_known_types::Timestamp {
+        if self.interval_end.is_none() {
+            self.interval_end.set_default();
+        }
+        self.interval_end.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_interval_end(&mut self) -> ::std::string::String {
-        ::std::mem::replace(&mut self.interval_end, ::std::string::String::new())
+    pub fn take_interval_end(&mut self) -> ::protobuf::well_known_types::Timestamp {
+        self.interval_end.take().unwrap_or_else(|| ::protobuf::well_known_types::Timestamp::new())
     }
 
     // repeated .billing.Record records = 7;
@@ -848,6 +892,16 @@ impl Batch {
 
 impl ::protobuf::Message for Batch {
     fn is_initialized(&self) -> bool {
+        for v in &self.interval_start {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
+        for v in &self.interval_end {
+            if !v.is_initialized() {
+                return false;
+            }
+        };
         for v in &self.records {
             if !v.is_initialized() {
                 return false;
@@ -864,10 +918,10 @@ impl ::protobuf::Message for Batch {
                     ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.id)?;
                 },
                 3 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.interval_start)?;
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.interval_start)?;
                 },
                 4 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.interval_end)?;
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.interval_end)?;
                 },
                 7 => {
                     ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.records)?;
@@ -887,11 +941,13 @@ impl ::protobuf::Message for Batch {
         if !self.id.is_empty() {
             my_size += ::protobuf::rt::string_size(1, &self.id);
         }
-        if !self.interval_start.is_empty() {
-            my_size += ::protobuf::rt::string_size(3, &self.interval_start);
+        if let Some(ref v) = self.interval_start.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
-        if !self.interval_end.is_empty() {
-            my_size += ::protobuf::rt::string_size(4, &self.interval_end);
+        if let Some(ref v) = self.interval_end.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
         for value in &self.records {
             let len = value.compute_size();
@@ -906,11 +962,15 @@ impl ::protobuf::Message for Batch {
         if !self.id.is_empty() {
             os.write_string(1, &self.id)?;
         }
-        if !self.interval_start.is_empty() {
-            os.write_string(3, &self.interval_start)?;
+        if let Some(ref v) = self.interval_start.as_ref() {
+            os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         }
-        if !self.interval_end.is_empty() {
-            os.write_string(4, &self.interval_end)?;
+        if let Some(ref v) = self.interval_end.as_ref() {
+            os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_raw_varint32(v.get_cached_size())?;
+            v.write_to_with_cached_sizes(os)?;
         }
         for v in &self.records {
             os.write_tag(7, ::protobuf::wire_format::WireTypeLengthDelimited)?;
@@ -964,12 +1024,12 @@ impl ::protobuf::Message for Batch {
                     |m: &Batch| { &m.id },
                     |m: &mut Batch| { &mut m.id },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<::protobuf::well_known_types::Timestamp>>(
                     "interval_start",
                     |m: &Batch| { &m.interval_start },
                     |m: &mut Batch| { &mut m.interval_start },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<::protobuf::well_known_types::Timestamp>>(
                     "interval_end",
                     |m: &Batch| { &m.interval_end },
                     |m: &mut Batch| { &mut m.interval_end },
@@ -1022,20 +1082,22 @@ impl ::protobuf::reflect::ProtobufValue for Batch {
 }
 
 static file_descriptor_proto_data: &'static [u8] = b"\
-    \n\x17resources/billing.proto\x12\x07billing\"\x8f\x01\n\x0cResourceInfo\
-    \x12\x17\n\x07cpu_num\x18\x01\x20\x01(\x05R\x06cpuNum\x12\x1b\n\tmemory_\
-    gb\x18\x02\x20\x01(\x05R\x08memoryGb\x12\x17\n\x07disk_gb\x18\x03\x20\
-    \x01(\x05R\x06diskGb\x12\x1b\n\tclient_id\x18\x04\x20\x01(\x05R\x08clien\
-    tId\x12\x13\n\x05vm_id\x18\x05\x20\x01(\x05R\x04vmId\"\xb9\x01\n\x06Reco\
-    rd\x12\x0e\n\x02id\x18\x01\x20\x01(\tR\x02id\x12%\n\x0einterval_start\
-    \x18\x02\x20\x01(\tR\rintervalStart\x12!\n\x0cinterval_end\x18\x03\x20\
-    \x01(\tR\x0bintervalEnd\x12\x14\n\x05meter\x18\x04\x20\x01(\tR\x05meter\
-    \x12\x14\n\x05value\x18\x05\x20\x01(\rR\x05value\x12)\n\x04info\x18\x06\
-    \x20\x01(\x0b2\x15.billing.ResourceInfoR\x04info\"\x8c\x01\n\x05Batch\
-    \x12\x0e\n\x02id\x18\x01\x20\x01(\tR\x02id\x12%\n\x0einterval_start\x18\
-    \x03\x20\x01(\tR\rintervalStart\x12!\n\x0cinterval_end\x18\x04\x20\x01(\
-    \tR\x0bintervalEnd\x12)\n\x07records\x18\x07\x20\x03(\x0b2\x0f.billing.R\
-    ecordR\x07recordsb\x06proto3\
+    \n\x17resources/billing.proto\x12\x07billing\x1a\x1fgoogle/protobuf/time\
+    stamp.proto\"\x8f\x01\n\x0cResourceInfo\x12\x17\n\x07cpu_num\x18\x01\x20\
+    \x01(\x05R\x06cpuNum\x12\x1b\n\tmemory_gb\x18\x02\x20\x01(\x05R\x08memor\
+    yGb\x12\x17\n\x07disk_gb\x18\x03\x20\x01(\x05R\x06diskGb\x12\x1b\n\tclie\
+    nt_id\x18\x04\x20\x01(\x05R\x08clientId\x12\x13\n\x05vm_id\x18\x05\x20\
+    \x01(\x05R\x04vmId\"\xf1\x01\n\x06Record\x12\x0e\n\x02id\x18\x01\x20\x01\
+    (\tR\x02id\x12A\n\x0einterval_start\x18\x02\x20\x01(\x0b2\x1a.google.pro\
+    tobuf.TimestampR\rintervalStart\x12=\n\x0cinterval_end\x18\x03\x20\x01(\
+    \x0b2\x1a.google.protobuf.TimestampR\x0bintervalEnd\x12\x14\n\x05meter\
+    \x18\x04\x20\x01(\tR\x05meter\x12\x14\n\x05value\x18\x05\x20\x01(\rR\x05\
+    value\x12)\n\x04info\x18\x06\x20\x01(\x0b2\x15.billing.ResourceInfoR\x04\
+    info\"\xc4\x01\n\x05Batch\x12\x0e\n\x02id\x18\x01\x20\x01(\tR\x02id\x12A\
+    \n\x0einterval_start\x18\x03\x20\x01(\x0b2\x1a.google.protobuf.Timestamp\
+    R\rintervalStart\x12=\n\x0cinterval_end\x18\x04\x20\x01(\x0b2\x1a.google\
+    .protobuf.TimestampR\x0bintervalEnd\x12)\n\x07records\x18\x07\x20\x03(\
+    \x0b2\x0f.billing.RecordR\x07recordsb\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {
