@@ -994,7 +994,7 @@ where
         .collect::<HashSet<_>>();
     let mut key = outer_columns_decorrelated
         .iter()
-        .map(|i| *i)
+        .copied()
         .collect::<Vec<_>>();
     key.sort();
 
