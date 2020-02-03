@@ -47,12 +47,15 @@ services:
       KAFKA_JMX_PORT: 9991
   billing-demo:
     image: materialize/billing-demo:latest
+    entrypoint: /bin/bash
     volumes:
       - db-data:/var/lib/billing-demo/data
     environment:
       - RUST_LOG=billing-demo=debug,info
-    command: --message-count 1000 --materialized-host materialized --kafka-host kafka --csv-file-name /var/lib/billing-demo/data/prices.csv
+    command: -c "wait-for-it materialized:6875 kafka:9092 --
+      billing-demo --message-count 1000 --materialized-host materialized
+      --kafka-host kafka --csv-file-name /var/lib/billing-demo/data/prices.csv"
     depends_on: [kafka, materialized]
 
 volumes:
-    db-data:
+  db-data:
