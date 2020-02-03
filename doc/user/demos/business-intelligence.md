@@ -23,7 +23,12 @@ incrementally updates them as new data comes in. Unlike the traditional RDBMS
 model, which doesn't rely on previously completed work, Materialize minimizes
 the time required to provide fresh answers.
 
-## Deployment
+## Overview
+
+In this demo, we'll take the role of a business that has a transactional
+workload running against our servers. To support the business' goals, we'll
+stand up a BI tool to perform analytic-style queries over that transactional
+data.
 
 BI tools often sit on top of complex infrastructure, which is unreasonable to
 spin up for a demo. To let you get a feel of what Materialize is like to use
@@ -31,7 +36,7 @@ without an enormous investment of time, we've built out a Docker Compose file
 that can take care of the entire deployment for you.
 
 In this section, we'll cover the "what" and "why" of our proposed deployment
-using Materialize to provide real time analytics within Metabase, an open source
+using Materialize to provide real-time analytics within Metabase, an open source
 business intelligence tool.
 
 ### Dataset & load generator
@@ -116,6 +121,9 @@ Metabase](/images/demos/bi_architecture_diagram.png)
     ```shell
     cd <path to materialize>/demo/chbench
     ```
+
+    You can also find the demo's code on
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/master/demo/chbench).
 
 3. Deploy and start all of the components we've listed above.
 
@@ -362,3 +370,9 @@ different people, let's highlight what the expected workflow is.
 
 Of course, it's possible to change this workflow to make it more self-service,
 etc. but this is a reasonable workflow.
+
+## Related pages
+
+- [Microservice demo](../microservice)
+- [Log parsing demo](../log-parsing)
+- [`CREATE SOURCE`](../../sql/create-source)

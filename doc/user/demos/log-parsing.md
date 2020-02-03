@@ -20,10 +20,13 @@ structure on it, and then let you define views you want to maintain on that
 data&mdash;just as you would with any SQL table. This opens up new opportunities
 for both real-time business and operational analysis.
 
-## Deployment
+## Overview
 
 In this demo, we'll look at parsing server logs for a mock e-commerce site, and
 extracting some business insights from them.
+
+In the rest of this section, we'll cover the "what" and "why" of our proposed
+deployment using Materialize to provide real-time log parsing.
 
 ### Server
 
@@ -76,7 +79,7 @@ We will connect to Materialize through `mzcli`, which is our forked version of
     width="300"
 >}}
 
-## Demo as a concept
+## Conceptual overview
 
 Our overall goal in this demo is to take unstructured log files, impose
 structure on them through regex, and then perform queries to extract some
@@ -250,6 +253,9 @@ In a future iteration, we'll make this demo more interactive.
     cd <path to materialize>/demo/http_logs
     ```
 
+    You can also find the demo's code on
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/master/demo/http_logs).
+
 3. Deploy and start all of the components we've listed above.
 
     Note that pulling down all of the Docker images necessary for the demo takes
@@ -373,5 +379,7 @@ In this demo, we saw:
 
 ## Related pages
 
+- [Microservice demo](../microservice)
+- [Business intelligence demo](../business-intelligence)
 - [`CREATE SOURCE`](../../sql/create-source)
 - [Functions + Operators](../../sql/functions)
