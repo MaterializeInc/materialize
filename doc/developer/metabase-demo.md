@@ -15,7 +15,7 @@ with Docker, although many steps are the same between the three.
 
 ### Starting the Docker containers and loading data
 
-First, we use [this script](https://github.com/MaterializeInc/materialize/blob/master/ex/chbench/dc.sh)
+First, we use [this script](https://github.com/MaterializeInc/materialize/blob/master/demo/chbench/dc.sh)
 to pull the necessary Docker images, bring containers up with Docker compose, and
 load an initial set of data. To do that, we run:
 

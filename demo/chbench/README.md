@@ -26,7 +26,9 @@ want to increase memory available to Docker Engine using the following steps:
    4. Click "Apply and Restart".
    5. Continue with the `docker-compose` steps listed above.
 
-To get started, bring up the Docker Compose containers in the background. To do this, open up a new shell, and from the Materialize repository, change to the `ex/chbench` directory and type the following three commands after each other:
+To get started, bring up the Docker Compose containers in the background. To do
+this, open up a new shell, and from the Materialize repository, change to the
+`demo/chbench` directory and type the following three commands after each other:
 
 ```shell session
 $ docker-compose up -d --build
@@ -136,7 +138,7 @@ $ docker-compose run schema-registry flush-tables
 ## Using the MySQL CLI
 
 If you want to access a MySQL shell, run the following in the
-`ex/chbench` directory:
+`demo/chbench` directory:
 
 ```
 docker-compose run mysqlcli
@@ -219,7 +221,7 @@ Finally, we're ready to go change into the `terraform` directory and run
 `terraform apply`:
 
 ```shell
-cd ex/chbench/terraform
+cd demo/chbench/terraform
 terraform init # this is only needed the first time
 terraform apply
 ```
@@ -246,6 +248,10 @@ Welcome to Ubuntu 18.04.3 LTS (GNU/Linux 4.15.0-1051-aws x86_64)
  * Documentation:  https://help.ubuntu.com
  * Management:     https://landscape.canonical.com
  * Support:        https://ubuntu.com/advantage
+
+
+To save money, *please* make sure you run `terraform destroy` when you're done
+with your AWS instance.
 
 ---- 8< ----
 ```
@@ -280,7 +286,7 @@ brew install packer
 Then, from this directory, run Packer:
 
 ```shell
-cd ex/chbench
+cd demo/chbench
 packer build packer.json
 ```
 
