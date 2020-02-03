@@ -37,7 +37,7 @@ View                     Key_name                            Column_name  Expres
 materialize.public.bar   materialize.public.bar_primary_idx  z            NULL         false 1
 materialize.public.bar   materialize.public.bar_idx          NULL         substr(z,␠3) true  1
 
-query TTTTBI colnames rowsort
+query TTTTBI colnames
 SHOW INDEX FROM foo
 ----
 View                     Key_name                            Column_name  Expression  Null   Seq_in_index
@@ -51,7 +51,7 @@ materialize.public.foo   materialize.public.edge_columns     NULL         floor(
 statement ok
 DROP INDEX foo_idx
 
-query TTTTBI colnames rowsort
+query TTTTBI colnames,rowsort
 SHOW INDEX in foo
 ----
 View                    Key_name                            Column_name  Expression  Null   Seq_in_index
@@ -64,7 +64,7 @@ materialize.public.foo  materialize.public.edge_columns     NULL         floor(c
 statement ok
 DROP INDEX edge_columns
 
-query TTTTBI colnames rowsort
+query TTTTBI colnames,rowsort
 SHOW INDEX in foo
 ----
 View                    Key_name                            Column_name  Expression  Null   Seq_in_index
