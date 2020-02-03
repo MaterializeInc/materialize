@@ -17,7 +17,7 @@ name = "materialized"
 path = "bin/materialized.rs"
 
 [dependencies]
-backtrace = { version = "0.3.42", features = ["coresymbolication"] }
+backtrace = { version = "0.3.43", features = ["coresymbolication"] }
 comm = { path = "../comm" }
 compile-time-run = "0.2.8"
 coord = { path = "../coord" }
