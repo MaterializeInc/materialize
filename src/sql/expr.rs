@@ -290,7 +290,7 @@ impl RelationExpr {
                 Ok(input.project(outputs))
             }
             Map { input, scalars } => {
-                let mut input = input.applied_to(id_gen, get_outer.clone(), outer_arities)?;
+                let mut input = input.applied_to(id_gen, get_outer, outer_arities)?;
                 for scalar in scalars {
                     let old_arity = input.arity();
                     let scalar = scalar.applied_to(id_gen, outer_arities, &mut input)?;
@@ -304,7 +304,7 @@ impl RelationExpr {
                 Ok(input)
             }
             FlatMapUnary { input, func, expr } => {
-                let mut input = input.applied_to(id_gen, get_outer.clone(), outer_arities)?;
+                let mut input = input.applied_to(id_gen, get_outer, outer_arities)?;
                 let old_arity = input.arity();
                 let expr = expr.applied_to(id_gen, outer_arities, &mut input)?;
                 let new_arity = input.arity();
@@ -321,7 +321,7 @@ impl RelationExpr {
                 Ok(input)
             }
             Filter { input, predicates } => {
-                let mut input = input.applied_to(id_gen, get_outer.clone(), outer_arities)?;
+                let mut input = input.applied_to(id_gen, get_outer, outer_arities)?;
                 for predicate in predicates {
                     let old_arity = input.arity();
                     let predicate = predicate.applied_to(id_gen, outer_arities, &mut input)?;
