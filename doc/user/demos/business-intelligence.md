@@ -178,7 +178,7 @@ Materialize to maintain for us.
 1. Create a straightforward view of the underlying data.
 
     ```sql
-    CREATE VIEW q01 as SELECT
+    CREATE MATERIALIZED VIEW q01 as SELECT
         ol_number,
         sum(ol_quantity) as sum_qty,
         sum(ol_amount) as sum_amount,
@@ -284,12 +284,14 @@ Materialize to maintain for us.
 
 1. Click **Ask a question**.
 
+1. Click **Native query**.
+
 1. From **Select a database**, select **tpcch**.
 
 1. In the query editor, enter:
 
     ```sql
-    -- CREATE VIEW q01 as SELECT
+    -- CREATE MATERIALIZED VIEW q01 as SELECT
     --     ol_number,
     --     sum(ol_quantity) as sum_qty,
     --     sum(ol_amount) as sum_amount,
@@ -352,9 +354,9 @@ In this demo, we saw:
 
 ### Typical operation
 
-In this demo, you'll be "playing" the role of both infrastructure engineer and
-business analyst; that is to say, you'll be both deploying Materialize, as well
-as running queries within your BI tool, Metabase.
+In this demo, you "played" the role of both infrastructure engineer and
+business analyst; that is to say, you both deployed Materialize, as well
+as ran queries within your BI tool, Metabase.
 
 To give you a sense of what this experience would look like if you were two
 different people, let's highlight what the expected workflow is.
