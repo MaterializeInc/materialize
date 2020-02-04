@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use expr::GlobalId;
 
 use crate::names::{DatabaseSpecifier, FullName};
-use crate::CatalogItem;
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
 
@@ -104,7 +103,7 @@ impl Connection {
             .collect()
     }
 
-    pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, CatalogItem)>, failure::Error> {
+    pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, Vec<u8>)>, failure::Error> {
         self.inner
             .prepare(
                 "SELECT items.gid, databases.name, schemas.name, items.name, items.definition
@@ -118,7 +117,7 @@ impl Connection {
                 let database: Option<String> = row.get(1)?;
                 let schema: String = row.get(2)?;
                 let item: String = row.get(3)?;
-                let definition: SqlVal<CatalogItem> = row.get(4)?;
+                let definition: Vec<u8> = row.get(4)?;
                 Ok((
                     id.0,
                     FullName {
@@ -126,7 +125,7 @@ impl Connection {
                         schema,
                         item,
                     },
-                    definition.0,
+                    definition,
                 ))
             })?
             .collect()
@@ -211,14 +210,14 @@ impl Transaction<'_> {
         id: GlobalId,
         schema_id: i64,
         item_name: &str,
-        item: &CatalogItem,
+        item: &[u8],
     ) -> Result<(), failure::Error> {
         match self
             .inner
             .prepare_cached(
                 "INSERT INTO items (gid, schema_id, name, definition) VALUES (?, ?, ?, ?)",
             )?
-            .execute(params![SqlVal(&id), schema_id, item_name, SqlVal(item)])
+            .execute(params![SqlVal(&id), schema_id, item_name, item])
         {
             Ok(_) => Ok(()),
             Err(err) if is_constraint_violation(&err) => {

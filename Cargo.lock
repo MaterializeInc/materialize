@@ -306,6 +306,7 @@ checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 name = "catalog"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "dataflow-types",
  "expr",
  "failure",
@@ -453,6 +454,7 @@ dependencies = [
  "rdkafka",
  "repr",
  "rusqlite",
+ "serde_json",
  "sql",
  "symbiosis",
  "timely",
