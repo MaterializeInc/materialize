@@ -85,7 +85,7 @@ The following options are valid within the `WITH` clause.
 
 Field | Value
 ------|-----
-`tail` | Continually check the file for new content; as new content arrives, process it using other `WITH` options. (Only valid for file sources)
+`tail` | Continually check the file for new content; as new content arrives, process it using other `WITH` options. (Only valid for file sources).
 
 All field names are case-sensitive.
 
@@ -103,16 +103,13 @@ All field names are case-sensitive.
 
 Field | Value
 ------|-----
-message_name | The protobuf message name
-regex | A regular expression whose capture groups define the columns of the relation. For more detail, see [Regex on file sources](#regex-on-file-sources)
+message_name | The protobuf message name.
+regex | A regular expression whose capture groups define the columns of the relation. For more detail, see [Regex on file sources](#regex-on-file-sources).
 n | The number of columns expected in each record of the CSV source.
 char | The delimiter of the CSV source. ASCII comma by default (`','`). This must be an ASCII character; other Unicode code points are not supported.
 url | The URL of the Confluent schema registry to get schema information from.
 schema_file_path | The absolute path to a file containing the schema.
 inline_schema | A string representing the schema.
-
-
-
 
 ## Streaming source details
 
