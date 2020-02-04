@@ -4,4 +4,6 @@
 !src
 !flush-tables
 !mz-default.cfg
+!*.asc
+!*.ini
 **/*.o
