@@ -38,7 +38,7 @@ const mz::Config& mz::defaultConfig() {
             "materialize.public.mysql_tpcch_supplier"
         },
         .viewPattern = "mysql.tpcch.%",
-        .materializedUrl = "postgresql://materialized:6875/?sslmode=disable",
+        .materializedUrl = "postgresql://materialized:6875/materialize?sslmode=disable",
         .kafkaUrl = "kafka://kafka:9092",
         .schemaRegistryUrl = "http://schema-registry:8081",
         .hQueries = {},

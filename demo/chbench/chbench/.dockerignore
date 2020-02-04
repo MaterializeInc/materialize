@@ -7,3 +7,5 @@
 !*.asc
 !*.ini
 **/*.o
+!mysql.asc
+!odbc.ini

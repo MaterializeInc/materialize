@@ -24,7 +24,7 @@ services:
     ports:
      - *materialized
     init: true
-    command: -w1
+    command: -w1 --timestamp-frequency=10ms
     environment:
       # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
       - MZ_LOG=pgwire=debug,info
