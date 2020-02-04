@@ -246,7 +246,8 @@ load_test() {
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
         --peek-conns=5 --flush-every=30 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
-        -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg
+        -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
+	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
 }
 
 # Generate changes for the demo
@@ -258,7 +259,8 @@ demo_load() {
         --peek-conns=0 --flush-every=30 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
         --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
-        --config-file-path=/etc/chbenchmark/mz-default.cfg
+        --config-file-path=/etc/chbenchmark/mz-default.cfg \
+	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
 }
 
 main "$@"
