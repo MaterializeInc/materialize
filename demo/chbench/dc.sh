@@ -244,7 +244,7 @@ load_test() {
     runv docker-compose run -d chbench run \
         --mz-sources --mz-views=q01,q02,q06,q08,q09,q12,q14,q17,q19 \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
-        --peek-conns=5 --flush-every=30 \
+        --peek-conns=5 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
         -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
 	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
