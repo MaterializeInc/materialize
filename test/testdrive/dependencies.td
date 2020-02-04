@@ -28,12 +28,12 @@ $ set schema={
     ]
   }
 
-> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
-! CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' USING SCHEMA '${schema}'
+! CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 catalog item 's' already exists
 
-> CREATE SOURCE IF NOT EXISTS s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE IF NOT EXISTS s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW test1 AS SELECT 1;
 
@@ -99,7 +99,7 @@ catalog item 'test2' does not exist
 ! DROP VIEW test4;
 catalog item 'test4' does not exist
 
-> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
 

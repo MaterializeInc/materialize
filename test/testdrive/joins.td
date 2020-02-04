@@ -63,11 +63,11 @@ $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
 $ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE names_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}'
-  USING SCHEMA '${names-schema}'
+> CREATE SOURCE names_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}' FORMAT AVRO
+  USING SCHEMA '${names-schema}' ENVELOPE DEBEZIUM
 
-> CREATE SOURCE mods_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-mods-${testdrive.seed}'
-  USING SCHEMA '${mods-schema}'
+> CREATE SOURCE mods_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-mods-${testdrive.seed}' FORMAT AVRO
+  USING SCHEMA '${mods-schema}' ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW names AS SELECT * FROM names_source
 

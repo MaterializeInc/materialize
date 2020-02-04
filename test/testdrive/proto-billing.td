@@ -4,8 +4,8 @@
 # distributed without the express permission of Materialize, Inc.
 
 > CREATE SOURCE billing_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Batch'
   USING SCHEMA '${testdrive.protobuf-descriptors}'
-  WITH (format = 'protobuf-descriptor', message_name = '.Batch')
 > CREATE MATERIALIZED VIEW billing AS SELECT * FROM billing_source
 
 $ kafka-ingest format=protobuf topic=messages message=.Batch timestamp=1

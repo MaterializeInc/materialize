@@ -27,7 +27,7 @@ $ set schema={
     ]
   }
 
-> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
 {"before": null, "after": {"X": 1, "Y": 1}}
@@ -82,10 +82,10 @@ $ set dummy={
     ]
   }
 
-! CREATE SOURCE v2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${dummy}'
+! CREATE SOURCE v2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${dummy}' ENVELOPE DEBEZIUM
 catalog item 'v2' already exists
 
-! CREATE SOURCE i FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${dummy}'
+! CREATE SOURCE i FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${dummy}' ENVELOPE DEBEZIUM
 catalog item 'i' already exists
 
 ! CREATE INDEX s ON v2(x)
@@ -142,7 +142,7 @@ s is not of type VIEW
 # test that the names of the deleted objects can be used to create objects of other types
 > CREATE MATERIALIZED VIEW s AS SELECT 84 AS b
 
-> CREATE SOURCE i FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE i FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE INDEX v ON s(b)
 
