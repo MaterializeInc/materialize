@@ -13,4 +13,4 @@ User=materialize
 Group=materialize
 
 Environment=MZROOT=/var/lib/materialize
-ExecStart=/usr/bin/materialized -D ${MZROOT}/mzdata 
+ExecStart=/usr/bin/materialized -D ${MZROOT}/mzdata
