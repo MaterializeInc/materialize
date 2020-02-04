@@ -96,6 +96,25 @@ impl CatalogItem {
             CatalogItem::Index(_) => "index",
         }
     }
+
+    /// Collects the identifiers of the dataflows that this item depends
+    /// upon.
+    pub fn uses(&self) -> Vec<GlobalId> {
+        match self {
+            CatalogItem::Source(_src) => Vec::new(),
+            CatalogItem::Sink(sink) => vec![sink.from.0],
+            CatalogItem::View(view) => {
+                let mut out = Vec::new();
+                view.relation_expr.as_ref().global_uses(&mut out);
+                out
+            }
+            CatalogItem::Index(idx) => {
+                let mut out = Vec::new();
+                out.push(idx.desc.on_id);
+                out
+            }
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -118,20 +137,7 @@ impl CatalogEntry {
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
-        match &self.inner {
-            CatalogItem::Source(_src) => Vec::new(),
-            CatalogItem::Sink(sink) => vec![sink.from.0],
-            CatalogItem::View(view) => {
-                let mut out = Vec::new();
-                view.relation_expr.as_ref().global_uses(&mut out);
-                out
-            }
-            CatalogItem::Index(idx) => {
-                let mut out = Vec::new();
-                out.push(idx.desc.on_id);
-                out
-            }
-        }
+        self.inner.uses()
     }
 
     /// Returns the `CatalogItem` associated with this catalog entry.
@@ -210,6 +216,18 @@ impl Catalog {
         f(&mut catalog);
 
         for (id, name, def) in catalog.storage.load_items()? {
+            for use_id in def.uses() {
+                if catalog.by_id.get(&use_id).is_none() && use_id.is_system() {
+                    // TODO(benesch): one day not all logging views will be
+                    // system views. Producing the error message here also
+                    // violates module boundaries; the catalog shouldn't really
+                    // know about logging views vs other system views.
+                    bail!(
+                        "catalog item '{}' depends on system logging, but logging is disabled",
+                        name
+                    );
+                }
+            }
             catalog.insert_item(id, name, def);
             if let GlobalId::User(id) = id {
                 catalog.id = cmp::max(catalog.id, id);

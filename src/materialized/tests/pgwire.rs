@@ -214,7 +214,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     }
 
     {
-        let (_server, mut client) = util::start_server(config)?;
+        let (_server, mut client) = util::start_server(config.clone())?;
         assert_eq!(
             client
                 .query("SHOW VIEWS", &[])?
@@ -231,6 +231,18 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<String>>(),
             &["v"]
         );
+    }
+
+    {
+        let config = config.logging_granularity(None);
+        match util::start_server(config) {
+            Ok(_) => panic!("server unexpectedly booted with corrupted catalog"),
+            Err(e) => assert_eq!(
+                e.to_string(),
+                "catalog item 'materialize.public.logging_derived' depends on system logging, \
+                 but logging is disabled"
+            ),
+        }
     }
 
     Ok(())
