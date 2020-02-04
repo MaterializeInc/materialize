@@ -1,7 +1,7 @@
-# Copyright 2019 Materialize, Inc. All rights reserved.
-#
-# This file is part of Materialize. Materialize may not be used or
-# distributed without the express permission of Materialize, Inc.
+## Copyright 2019 Materialize, Inc. All rights reserved.
+##
+## This file is part of Materialize. Materialize may not be used or
+## distributed without the express permission of Materialize, Inc.
 #
 #$ set schema={
 #    "type": "record",
@@ -41,10 +41,10 @@
 #{"before": null, "after": {"a": 1, "b": 2}}
 #
 #
-#> CREATE SOURCE data_byo FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}' CONSISTENCY 'testdrive-data-consistency-${testdrive.seed}'
-#> CREATE SOURCE data2_byo FROM 'kafka://${testdrive.kafka-addr}/testdrive-data2-${testdrive.seed}' USING SCHEMA '${schema}' CONSISTENCY 'testdrive-data-consistency-${testdrive.seed}'
-#> CREATE SOURCE data_rt FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
-#> CREATE SOURCE data2_rt FROM 'kafka://${testdrive.kafka-addr}/testdrive-data2-${testdrive.seed}' USING SCHEMA '${schema}'
+#> CREATE SOURCE data_byo FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
+#> CREATE SOURCE data2_byo FROM 'kafka://${testdrive.kafka-addr}/testdrive-data2-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
+#> CREATE SOURCE data_rt FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+#> CREATE SOURCE data2_rt FROM 'kafka://${testdrive.kafka-addr}/testdrive-data2-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 #
 #> CREATE MATERIALIZED VIEW view_byo AS SELECT b, sum(a) FROM data_byo  GROUP BY b
 #> CREATE MATERIALIZED VIEW view2_byo AS SELECT b, sum(a) FROM data2_byo  GROUP BY b
