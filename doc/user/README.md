@@ -42,7 +42,7 @@ Railroad diagrams consist of two parts:
 1. Ensure your diagram looks like you want using
    <https://www.bottlecaps.de/rr/ui>.
 2. Go to `/www/util/rr-diagram-gen/`
-3. Run `make`.
+3. Run `make run`.
 
 You can now include the diagram on a page using:
 
