@@ -11,9 +11,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-branch=$(git rev-parse --abbrev-ref HEAD)
-if [[ "$branch" = master ]]; then
-    spec=$CACHED_COMMIT_REF
+if [[ "$BRANCH" = master ]]; then
+    spec=HEAD^
 else
     git fetch https://"$DEPLOY_KEY"@github.com/MaterializeInc/materialize.git master
     spec=FETCH_HEAD...
