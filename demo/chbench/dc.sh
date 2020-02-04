@@ -155,7 +155,7 @@ bring_up_introspection() {
 bring_up_metabase() {
     if [ ! -f metabase/materialize-driver-0.0.1-SNAPSHOT-standalone.jar ]; then
         echo "Materialize Metabase driver not found, downloading..."
-        curl -L "https://github.com/MaterializeInc/metabase-materialize-driver/releases/download/0.0.1/materialize-driver-0.0.1-SNAPSHOT-standalone.jar" \
+        curl -L "https://github.com/MaterializeInc/metabase-materialize-driver/releases/download/0.0.2/materialize-driver-0.0.2-SNAPSHOT-standalone.jar" \
           -o metabase/materialize-driver-0.0.1-SNAPSHOT-standalone.jar
     fi
 
