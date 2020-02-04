@@ -230,6 +230,7 @@ USING SCHEMA REGISTRY 'http://schema-registry:8081';
 ```sql
 CREATE SOURCE 'mysql.simple.user'
 FROM 'kafka://kafka:9092'
+FORMAT AVRO
 USING SCHEMA '{
   "type": "record",
   "name": "envelope",
@@ -250,7 +251,8 @@ USING SCHEMA '{
     },
     { "name": "after", "type": ["row", "null"] }
   ]
-}';
+}'
+ENVELOPE DEBEZIUM;
 ```
 
 ### Creating a source from a static CSV
@@ -258,15 +260,11 @@ USING SCHEMA '{
 ```sql
 CREATE SOURCE test
 FROM 'file:///test.csv'
-WITH (
-    format='csv',
-    columns=5
-);
+FORMAT CSV WITH 5 COLUMNS;
 ```
 
 - The prefix for the file is `file://`, which is followed by the absolute path
   to the file (`/test.csv` in this example), resulting in `file:///test.csv`.
-- The `WITH` clause's `format` and `csv` fields are required and case-sensitive.
 
 ### Creating a source from a dynamic, unstructured file
 
@@ -283,8 +281,8 @@ We'll create a source that takes in these entire lines and extracts the file off
 ```sql
 CREATE SOURCE hex
 FROM  'file:///xxd.log'
+FORMAT REGEX '(?P<offset>[0-9a-f]{8}): (?:[0-9a-f]{4} ){8} (?P<decoded>.*)$'
 WITH (
-    regex='(?P<offset>[0-9a-f]{8}): (?:[0-9a-f]{4} ){8} (?P<decoded>.*)$',
     tail=true
 );
 ```
