@@ -35,9 +35,12 @@ with it. Enter a psql shell connected to Materialize:
 psql -h localhost -p 6875
 ```
 
-And create the sources:
+Set the database and create the sources:
 
 ```console
+$ set database to "materialize";
+SET
+
 $ CREATE SOURCES LIKE 'mysql.tpcch.%'
   FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';
 mysql_tpcch_customer
@@ -71,15 +74,18 @@ check that you have a `Materialize` .jar in your Metabase's
 `/plugins` directory. If not, follow steps [here](https://github.com/MaterializeInc/metabase-materialize-driver).
 
 There are three groups of fields:
-- Your metabase user:
-  + Simply fill in the user information fields.
 
-    I recommend using `mz` / `consistent1` in case you get logged out.
-- In order for metabase to connect with Materialize inside our `docker-compose` cluster,
-  use the following host and port information:
-  + Host: `materialized`
-  + Port: `6875`
-- Username, and database are required but not checked (issue #1467) you can just put `mz`
+| Field         | Value           |
+| ------------- | -------------:|
+| Name          | materialize   |
+| Host          | materialized  |
+| Database      | materialize   |
+| Port          | 6875          |
+| Database username      | default      |
+| Database password | default      |
+
+
+- Username and password are required but not checked (issue #1467) you can just put `mz`
   for all of them.
 
 Next, you will either agree/disagree to send analytics back to Metabase.
@@ -123,7 +129,7 @@ the Metabase interactive SQL editor.
 - A Simple count:
     - Create the view:
       ```sql
-      CREATE VIEW orderline_count AS
+      CREATE MATERIALIZED VIEW orderline_count AS
       SELECT count(*) FROM mysql_tpcch_orderline;
       ```
     - Use the view:
@@ -133,18 +139,18 @@ the Metabase interactive SQL editor.
     - For comparison, you can run the full query on a source once you
       have materialized it. To do so:
       ```sql
-      CREATE VIEW orderline_view
+      CREATE MATERIALIZED VIEW orderline_view
       AS SELECT * FROM mysql_tpcch_orderline;
       ```
       And then running the full query on the view:
       ```sql
-      SELECT count(*) FROM mysql_tpcch_orderline_view;
+      SELECT count(*) FROM orderline_view;
       ```
 
 - Q01:
     - Create the view:
       ```sql
-        CREATE VIEW q01 AS
+        CREATE MATERIALIZED VIEW q01 AS
         SELECT
             ol_number,
             sum(ol_quantity) AS sum_qty,
@@ -162,12 +168,8 @@ the Metabase interactive SQL editor.
         SELECT * FROM q01;
       ```
     - For comparison, you can run the full query on the underlying
-      source once you have materialized it. To do so:
-      ```sql
-      CREATE VIEW orderline_view
-      AS SELECT * FROM mysql_tpcch_orderline;
-      ```
-      And then running the full query on the view:
+      source once you have materialized it. To do so, run the following
+      query on the materialized `orderline_view` view:
       ```sql
         SELECT
             ol_number,
@@ -176,7 +178,7 @@ the Metabase interactive SQL editor.
             avg(ol_quantity) AS avg_qty,
             avg(ol_amount) AS avg_amount,
             count(*) AS count_order
-        FROM mysql_tpcch_orderline_view
+        FROM orderline_view
         WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
         GROUP BY ol_number
         ORDER BY ol_number;
@@ -222,7 +224,7 @@ points:
 
 - Query 2
     ```sql
-    CREATE VIEW q02 AS
+    CREATE MATERIALIZED VIEW q02 AS
     SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
     FROM
         mysql_tpcch_item,
@@ -257,7 +259,7 @@ points:
     ```
 - Query 3
     ```sql
-    CREATE VIEW q03 AS
+    CREATE MATERIALIZED VIEW q03 AS
     SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d
     FROM
         mysql_tpcch_customer,
