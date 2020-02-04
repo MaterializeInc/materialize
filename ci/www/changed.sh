@@ -13,11 +13,12 @@ cd "$(dirname "$0")/../.."
 
 branch=$(git rev-parse --abbrev-ref HEAD)
 if [[ "$branch" = master ]]; then
-    spec=HEAD^
+    spec=$CACHED_COMMIT_REF
 else
-    spec=master...
+    git fetch https://"$DEPLOY_KEY"@github.com/MaterializeInc/materialize.git master
+    spec=FETCH_HEAD...
 fi
 
 # Netlify doesn't follow symlinks as of 03 Feb 2020, so we need to explicitly
 # check for changes in doc/user too.
-exec git diff --quiet "$spec" -- doc/user www
+exec git diff --quiet "$spec" -- doc/user www 1>&2
