@@ -5,3 +5,5 @@
 !flush-tables
 !mz-default.cfg
 **/*.o
+!mysql.asc
+!odbc.ini
