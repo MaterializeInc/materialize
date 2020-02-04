@@ -99,7 +99,7 @@ Metabase expects you to input data into three sets of fields:
 
 1. "Usage data preferences"
 
-    In this section, you will either agree or disagree to send 
+    In this section, you will either agree or disagree to send
     analytics back to Metabase. You will be able to proceed either way.
 
 You should now be able to see the main Metabase dashboard.
