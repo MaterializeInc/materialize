@@ -61,8 +61,8 @@ impl MzClient {
 
         let query = format!(
             "CREATE SOURCE {source} FROM 'kafka://{kafka_url}/{topic}' \
-             USING SCHEMA '\\x{descriptor}' \
-             WITH (format='protobuf-descriptor', message_name='{message}')",
+             FORMAT PROTOBUF MESSAGE '{message}' \
+             USING SCHEMA '\\x{descriptor}'",
             descriptor = encoded,
             kafka_url = kafka_url,
             topic = kafka_topic_name,
