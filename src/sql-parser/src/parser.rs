@@ -1470,6 +1470,7 @@ impl Parser {
     }
 
     pub fn parse_format(&mut self) -> Result<Format, ParserError> {
+        self.expect_keyword("FORMAT")?;
         let format = if self.parse_keywords(vec!["AVRO", "USING"]) {
             Format::Avro(self.parse_avro_schema()?)
         } else if self.parse_keywords(vec!["PROTOBUF", "MESSAGE"]) {
@@ -1502,10 +1503,12 @@ impl Parser {
             Format::Json
         } else if self.parse_keyword("TEXT") {
             Format::Text
+        } else if self.parse_keyword("RAW") {
+            Format::Raw
         } else {
             return self.expected(
                 self.peek_range(),
-                "AVRO, PROTOBUF, REGEX, CSV, JSON, or TEXT",
+                "AVRO, PROTOBUF, REGEX, CSV, JSON, TEXT, or RAW",
                 self.peek_token(),
             );
         };
@@ -1554,11 +1557,7 @@ impl Parser {
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let url = self.parse_literal_string()?;
-        let format = if self.parse_keyword("FORMAT") {
-            self.parse_format()?
-        } else {
-            Default::default()
-        };
+        let format = self.parse_format()?;
         let envelope = if self.parse_keyword("ENVELOPE") {
             self.parse_envelope()?
         } else {

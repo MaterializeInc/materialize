@@ -267,7 +267,7 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     let path = Path::join(temp_dir.path(), "file");
     fs::write(&path, "")?;
     client.batch_execute(&*format!(
-        "CREATE SOURCE s FROM 'file://{}' WITH (tail = true)",
+        "CREATE SOURCE s FROM 'file://{}' FORMAT RAW WITH (tail = true)",
         path.display()
     ))?;
     client.batch_execute("CREATE MATERIALIZED VIEW v AS SELECT * FROM s")?;

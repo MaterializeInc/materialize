@@ -341,6 +341,7 @@ define_keywords!(
     QUARTER,
     RANGE,
     RANK,
+    RAW,
     READ,
     READS,
     REAL,

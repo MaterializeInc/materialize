@@ -3618,32 +3618,10 @@ fn parse_create_source_csv_custom_delim() {
 }
 
 #[test]
-fn parse_create_source_raw() {
+fn parse_missing_format() {
     let sql = "CREATE SOURCE foo FROM 'bar' WITH (answer = 42)";
-    match verified_stmt(sql) {
-        Statement::CreateSource {
-            name,
-            url,
-            format,
-            envelope,
-            with_options,
-            if_not_exists,
-        } => {
-            assert_eq!("foo", name.to_string());
-            assert_eq!("bar", url);
-            assert_eq!(Format::Raw, format);
-            assert_eq!(
-                with_options,
-                vec![SqlOption {
-                    name: "answer".into(),
-                    value: Value::Number("42".into())
-                },]
-            );
-            assert_eq!(Envelope::None, envelope);
-            assert!(!if_not_exists);
-        }
-        _ => unreachable!(),
-    }
+    let err = parse_sql_statements(sql).unwrap_err();
+    assert_eq!("Expected FORMAT, found: WITH", err.message);
 }
 
 #[test]
@@ -3685,7 +3663,7 @@ fn parse_create_source_default_envelope() {
 
 #[test]
 fn parse_create_source_if_not_exists() {
-    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar'";
+    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' FORMAT RAW";
     match verified_stmt(sql) {
         Statement::CreateSource { if_not_exists, .. } => {
             assert!(if_not_exists);
