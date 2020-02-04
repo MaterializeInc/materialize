@@ -1420,37 +1420,110 @@ impl Parser {
         })
     }
 
+    pub fn parse_format(&mut self) -> Result<Format, ParserError> {
+        let format = if self.parse_keywords(vec!["AVRO", "USING"]) {
+            Format::Avro(self.parse_avro_schema()?)
+        } else if self.parse_keywords(vec!["PROTOBUF", "MESSAGE"]) {
+            let message_name = self.parse_literal_string()?;
+            self.expect_keyword("USING")?;
+            let schema = self.parse_schema()?;
+            Format::Protobuf {
+                message_name,
+                schema,
+            }
+        } else if self.parse_keyword("REGEX") {
+            let regex = self.parse_literal_string()?;
+            Format::Regex(regex)
+        } else if self.parse_keywords(vec!["CSV", "WITH"]) {
+            let n_cols = self.parse_literal_uint()? as usize;
+            self.expect_keyword("COLUMNS")?;
+            let delimiter = if self.parse_keywords(vec!["DELIMITED", "BY"]) {
+                let s = self.parse_literal_string()?;
+                match s.len() {
+                    1 => Ok(s.chars().next().unwrap()),
+                    _ => {
+                        self.expected(self.peek_range(), "one-character string", self.peek_token())
+                    }
+                }?
+            } else {
+                ','
+            };
+            Format::Csv { n_cols, delimiter }
+        } else if self.parse_keyword("JSON") {
+            Format::Json
+        } else if self.parse_keyword("TEXT") {
+            Format::Text
+        } else {
+            return self.expected(
+                self.peek_range(),
+                "AVRO, PROTOBUF, REGEX, CSV, JSON, or TEXT",
+                self.peek_token(),
+            );
+        };
+        Ok(format)
+    }
+
+    pub fn parse_avro_schema(&mut self) -> Result<AvroSchema, ParserError> {
+        let avro_schema = if self.parse_keywords(vec!["CONFLUENT", "SCHEMA", "REGISTRY"]) {
+            AvroSchema::CsrUrl(self.parse_literal_string()?)
+        } else if self.parse_keyword("SCHEMA") {
+            self.prev_token();
+            AvroSchema::Schema(self.parse_schema()?)
+        } else {
+            return self.expected(
+                self.peek_range(),
+                "CONFLUENT SCHEMA REGISTRY or SCHEMA",
+                self.peek_token(),
+            );
+        };
+        Ok(avro_schema)
+    }
+
+    pub fn parse_schema(&mut self) -> Result<Schema, ParserError> {
+        self.expect_keyword("SCHEMA")?;
+        let schema = if self.parse_keyword("FILE") {
+            Schema::File(self.parse_literal_string()?.into())
+        } else {
+            Schema::Inline(self.parse_literal_string()?)
+        };
+        Ok(schema)
+    }
+
+    pub fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
+        let envelope = if self.parse_keyword("NONE") {
+            Envelope::None
+        } else if self.parse_keyword("DEBEZIUM") {
+            Envelope::Debezium
+        } else {
+            return self.expected(self.peek_range(), "NONE or DEBEZIUM", self.peek_token());
+        };
+        Ok(envelope)
+    }
+
     pub fn parse_create_source(&mut self) -> Result<Statement, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let url = self.parse_literal_string()?;
-        let schema = if self.parse_keywords(vec!["USING", "SCHEMA"]) {
-            Some(if self.parse_keyword("FILE") {
-                SourceSchema::File(self.parse_literal_string()?)
-            } else if self.parse_keyword("REGISTRY") {
-                SourceSchema::Registry(self.parse_literal_string()?)
-            } else {
-                SourceSchema::Inline(self.parse_literal_string()?)
-            })
+        let format = if self.parse_keyword("FORMAT") {
+            self.parse_format()?
         } else {
-            None
+            Default::default()
+        };
+        let envelope = if self.parse_keyword("ENVELOPE") {
+            self.parse_envelope()?
+        } else {
+            Default::default()
         };
         let with_options = self.parse_with_options()?;
-        let consistency = if self.parse_keyword("CONSISTENCY") {
-            let url = self.parse_literal_string()?;
-            SourceTimestamp::BringYourOwn(url)
-        } else {
-            SourceTimestamp::RealTime
-        };
 
         Ok(Statement::CreateSource {
             name,
             url,
-            schema,
+            format,
+            envelope,
             with_options,
             if_not_exists,
-            consistency,
         })
     }
 
@@ -1462,18 +1535,11 @@ impl Parser {
         self.expect_keywords(&["USING", "SCHEMA", "REGISTRY"])?;
         let schema_registry = self.parse_literal_string()?;
         let with_options = self.parse_with_options()?;
-        let consistency = if self.parse_keyword("CONSISTENCY") {
-            let url = self.parse_literal_string()?;
-            SourceTimestamp::BringYourOwn(url)
-        } else {
-            SourceTimestamp::RealTime
-        };
         Ok(Statement::CreateSources {
             like,
             url,
             schema_registry,
             with_options,
-            consistency,
         })
     }
 

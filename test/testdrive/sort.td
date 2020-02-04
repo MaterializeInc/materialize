@@ -25,7 +25,7 @@ $ set schema={
     ]
   }
 
-> CREATE SOURCE foobar FROM 'kafka://${testdrive.kafka-addr}/testdrive-foobar-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE foobar FROM 'kafka://${testdrive.kafka-addr}/testdrive-foobar-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42
 {"before": null, "after": {"quote": "I have a theory that it's impossible to prove anything, but I can't prove it.", "val": 2079}}

@@ -48,8 +48,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 {"before": null, "after": null}
 
-> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
-  USING SCHEMA '${schema}'
+> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
+  USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data
 

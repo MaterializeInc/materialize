@@ -162,12 +162,26 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     }
                 };
 
+                // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
+                // a hypothetical future avro_extract, protobuf_extract, etc.
                 let stream = decode(&source, src.connector.encoding, &dataflow.debug_name);
+
+                let collection = match src.connector.envelope {
+                    Envelope::None => stream.as_collection(),
+                    Envelope::Debezium => {
+                        // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+                        stream.as_collection().explode(|row| {
+                            let mut datums = row.unpack();
+                            let diff = datums.pop().unwrap().unwrap_int64() as isize;
+                            Some((Row::pack(datums.into_iter()), diff))
+                        })
+                    }
+                };
 
                 // Introduce the stream by name, as an unarranged collection.
                 context.collections.insert(
                     RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
-                    stream.as_collection(),
+                    collection,
                 );
                 let token = Rc::new(capability);
                 source_tokens.insert(src_id.sid, token.clone());

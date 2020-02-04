@@ -57,7 +57,7 @@ fn no_block() {
         let (oneshot_tx, oneshot_rx) = oneshot::channel();
         cmd_tx.send(Command::Parse {
             name: "hang".into(),
-            sql: "CREATE SOURCE foo FROM 'kafka://localhost:9092/foo' USING SCHEMA REGISTRY 'http://localhost:9999'".into(),
+            sql: "CREATE SOURCE foo FROM 'kafka://localhost:9092/foo' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:9999'".into(),
             session,
             tx: oneshot_tx,
         }).await.unwrap();

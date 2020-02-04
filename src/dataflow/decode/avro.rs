@@ -35,7 +35,7 @@ where
                             Ok(diff_pair) => {
                                 EVENTS_COUNTER.avro.success.inc();
                                 if let Some(before) = diff_pair.before {
-                                    session.give((before, *cap.time(), -1));
+                                    session.give((before, *cap.time(), 1));
                                 }
                                 if let Some(after) = diff_pair.after {
                                     session.give((after, *cap.time(), 1));

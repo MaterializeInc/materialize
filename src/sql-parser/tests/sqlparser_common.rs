@@ -3392,19 +3392,22 @@ fn parse_create_materialized_view() {
 
 #[test]
 fn parse_create_source_inline_schema() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA 'baz' WITH (name = 'val')";
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT AVRO USING SCHEMA 'baz' WITH (name = 'val')";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
             url,
-            schema,
+            format,
+            envelope,
             with_options,
             if_not_exists,
-            consistency: _,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
-            assert_eq!(SourceSchema::Inline("baz".into()), schema.unwrap());
+            assert_eq!(
+                Format::Avro(AvroSchema::Schema(Schema::Inline("baz".into()))),
+                format
+            );
             assert_eq!(
                 with_options,
                 vec![SqlOption {
@@ -3412,6 +3415,7 @@ fn parse_create_source_inline_schema() {
                     value: Value::SingleQuotedString("val".into())
                 },]
             );
+            assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
         }
         _ => unreachable!(),
@@ -3419,33 +3423,170 @@ fn parse_create_source_inline_schema() {
 }
 
 #[test]
-fn parse_create_source_file_schema_multiple_args() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA FILE 'path' WITH (format = 'someformat', message_name = 'somemessage')";
+fn parse_create_source_file_schema_protobuf_multiple_args() {
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT PROTOBUF MESSAGE 'somemessage' USING SCHEMA FILE 'path' WITH (foo = 'bar', quux = 'baz')";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
             url,
-            schema,
+            format,
+            envelope,
             with_options,
             if_not_exists,
-            consistency: _,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
-            assert_eq!(SourceSchema::File("path".into()), schema.unwrap());
+            assert_eq!(
+                Format::Protobuf {
+                    message_name: "somemessage".into(),
+                    schema: Schema::File("path".into())
+                },
+                format
+            );
             assert_eq!(
                 with_options,
                 vec![
                     SqlOption {
-                        name: "format".into(),
-                        value: Value::SingleQuotedString("someformat".into())
+                        name: "foo".into(),
+                        value: Value::SingleQuotedString("bar".into())
                     },
                     SqlOption {
-                        name: "message_name".into(),
-                        value: Value::SingleQuotedString("somemessage".into())
+                        name: "quux".into(),
+                        value: Value::SingleQuotedString("baz".into())
                     },
                 ]
             );
+            assert_eq!(Envelope::None, envelope);
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_regex() {
+    let sql =
+        "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' FORMAT REGEX '(asdf)|(jkl)' WITH (tail = true)";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            url,
+            format,
+            envelope,
+            with_options,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", url);
+            assert_eq!(Format::Regex("(asdf)|(jkl)".into()), format);
+            assert_eq!(
+                with_options,
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(true)
+                },]
+            );
+            assert_eq!(Envelope::None, envelope);
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_csv() {
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT CSV WITH 3 COLUMNS WITH (tail = false)";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            url,
+            format,
+            envelope,
+            with_options,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", url);
+            assert_eq!(
+                Format::Csv {
+                    n_cols: 3,
+                    delimiter: ','
+                },
+                format
+            );
+            assert_eq!(
+                with_options,
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(false)
+                },]
+            );
+            assert_eq!(Envelope::None, envelope);
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_csv_custom_delim() {
+    let sql =
+        "CREATE SOURCE foo FROM 'bar' FORMAT CSV WITH 3 COLUMNS DELIMITED BY '|' WITH (tail = false)";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            url,
+            format,
+            envelope,
+            with_options,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", url);
+            assert_eq!(
+                Format::Csv {
+                    n_cols: 3,
+                    delimiter: '|'
+                },
+                format
+            );
+            assert_eq!(
+                with_options,
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(false)
+                },]
+            );
+            assert_eq!(Envelope::None, envelope);
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_raw() {
+    let sql = "CREATE SOURCE foo FROM 'bar' WITH (answer = 42)";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            url,
+            format,
+            envelope,
+            with_options,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", url);
+            assert_eq!(Format::Raw, format);
+            assert_eq!(
+                with_options,
+                vec![SqlOption {
+                    name: "answer".into(),
+                    value: Value::Number("42".into())
+                },]
+            );
+            assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
         }
         _ => unreachable!(),
@@ -3454,54 +3595,36 @@ fn parse_create_source_file_schema_multiple_args() {
 
 #[test]
 fn parse_create_source_registry() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA REGISTRY 'http://localhost:8081'";
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
             url,
-            schema,
+            format,
+            envelope,
             with_options,
             if_not_exists,
-            consistency,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
             assert_eq!(
-                SourceSchema::Registry("http://localhost:8081".into()),
-                schema.unwrap()
+                Format::Avro(AvroSchema::CsrUrl("http://localhost:8081".into())),
+                format
             );
             assert_eq!(with_options, vec![]);
             assert!(!if_not_exists);
-            assert_eq!(consistency, SourceTimestamp::RealTime);
+            assert_eq!(Envelope::Debezium, envelope);
         }
         _ => unreachable!(),
     }
 }
 
 #[test]
-fn parse_create_source_consistency() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA REGISTRY 'http://localhost:8081' CONSISTENCY 'test'";
+fn parse_create_source_default_envelope() {
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'";
     match verified_stmt(sql) {
-        Statement::CreateSource {
-            name,
-            url,
-            schema,
-            with_options,
-            if_not_exists,
-            consistency,
-        } => {
-            assert_eq!("foo", name.to_string());
-            assert_eq!("bar", url);
-            assert_eq!(
-                SourceSchema::Registry("http://localhost:8081".into()),
-                schema.unwrap()
-            );
-            assert_eq!(
-                consistency,
-                SourceTimestamp::BringYourOwn(String::from("test"))
-            );
-            assert_eq!(with_options, vec![]);
-            assert!(!if_not_exists);
+        Statement::CreateSource { envelope, .. } => {
+            assert_eq!(Envelope::None, envelope);
         }
         _ => unreachable!(),
     }
@@ -3533,7 +3656,6 @@ fn parse_create_sources() {
             url,
             schema_registry,
             with_options,
-            consistency: _,
         } => {
             assert!(like.is_none());
             assert_eq!("kafka://whatever", url);
@@ -3553,7 +3675,6 @@ fn parse_create_sources_with_like_regex() {
             url,
             schema_registry,
             with_options,
-            consistency: SourceTimestamp::RealTime,
         } => {
             match like {
                 Some(value) => assert_eq!("%foo%", value),

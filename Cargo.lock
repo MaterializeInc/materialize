@@ -3110,6 +3110,7 @@ dependencies = [
  "failure",
  "futures",
  "interchange",
+ "itertools",
  "ore",
  "pgrepr",
  "pretty_assertions",
