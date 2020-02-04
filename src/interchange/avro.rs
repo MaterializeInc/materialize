@@ -6,6 +6,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
+use std::iter;
 
 use avro_rs::schema::{RecordField, Schema, SchemaFingerprint, UnionSchema};
 use avro_rs::types::Value;
@@ -21,7 +22,6 @@ use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
-use core::iter;
 
 /// Validates an Avro key schema for use as a source.
 ///
