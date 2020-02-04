@@ -19,7 +19,7 @@ futures = "0.3"
 interchange = { path = "../interchange" }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
-regex = "1.3.3"
+regex = "1.3.4"
 repr = { path = "../repr" }
 sql-parser = { path = "../sql-parser" }
 tokio = { version = "0.2.9", features = ["fs"] }
