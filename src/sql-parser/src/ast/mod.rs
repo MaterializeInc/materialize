@@ -566,16 +566,10 @@ impl fmt::Display for Envelope {
     }
 }
 
-impl Default for Format {
-    fn default() -> Self {
-        Self::Raw
-    }
-}
-
 impl fmt::Display for Format {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Raw => write!(f, "RAW"), // this is unreachable as long as the default is Raw, but include it in case we ever change that
+            Self::Raw => write!(f, "RAW"),
             Self::Avro(inner) => write!(f, "AVRO USING {}", inner),
             Self::Protobuf {
                 message_name,
@@ -914,9 +908,7 @@ impl fmt::Display for Statement {
                     name,
                     Value::SingleQuotedString(url.clone())
                 )?;
-                if *format != Default::default() {
-                    write!(f, " FORMAT {}", format)?;
-                }
+                write!(f, " FORMAT {}", format)?;
                 if *envelope != Default::default() {
                     write!(f, " ENVELOPE {}", envelope)?;
                 }

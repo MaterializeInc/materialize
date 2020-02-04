@@ -3,4 +3,5 @@ format_spec ::=
   'PROTOBUF MESSAGE' message_name 'USING' schema_spec |
   'REGEX' regex |
   'CSV WITH' n 'COLUMNS' ('DELIMITED BY' char)? |
-  'TEXT'
+  'TEXT' |
+  'RAW'
