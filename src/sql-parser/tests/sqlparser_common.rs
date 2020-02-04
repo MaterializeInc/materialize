@@ -3567,11 +3567,6 @@ fn parse_create_source_csv_custom_delim() {
 #[test]
 fn parse_missing_format() {
     let sql = "CREATE SOURCE foo FROM 'bar' WITH (answer = 42)";
-}
-
-#[test]
-fn parse_create_source_raw() {
-    let sql = "CREATE SOURCE foo FROM 'bar' WITH (answer = 42)";
     let err = parse_sql_statements(sql).unwrap_err();
     assert_eq!("Expected FORMAT, found: WITH", err.message);
 }
