@@ -79,8 +79,6 @@ _src&lowbar;name_ | The name for the source, which is used as its table name wit
 **ENVELOPE** _envelope_ | The envelope type, either **NONE** or **DEBEZIUM**. **NONE** implies that each record appends to the source. **DEBEZIUM** requires records to have `before` and `after` fields, allowing deletes, inserts, and updates. It is currently only supported for Avro-format Kafka sources.
 **WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
 
-[//]: <> (_avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/spec.html) for the topic.)
-[//]: <> (**REGISTRY** _registry&lowbar;src_ | Use the Confluent schema registry at _registry&lowbar;src_ to define the structure of the Kafka source.)
 #### `WITH` options
 
 The following options are valid within the `WITH` clause.
