@@ -8,12 +8,12 @@ menu:
 
 `interval` data expresses a duration of time.
 
-| Detail           | Info                                                                                                 |
-| ---------------- | ---------------------------------------------------------------------------------------------------- |
-| **Quick Syntax** | `INTERVAL '1' MINUTE` <br/> `INTERVAL '1-2 3 4:5:6.7'` <br/>`INTERVAL '1 year 2.3 days 4.5 seconds'` |
-| **Size**         | 32 bytes                                                                                             |
-| **Min value**    | -9223372036854775807 months, -9223372036854775807 seconds, -999999999 nanoseconds                    |
-| **Max value**    | 9223372036854775807 months, 9223372036854775807 seconds, 999999999 nanoseconds                       |
+Detail | Info
+-------|-----
+**Quick Syntax** | `INTERVAL '1' MINUTE` <br/> `INTERVAL '1-2 3 4:5:6.7'` <br/>`INTERVAL '1 year 2.3 days 4.5 seconds'`
+**Size** | 32 bytes
+**Min value** | -9223372036854775807 months, -9223372036854775807 seconds, -999999999 nanoseconds
+**Max value** | 9223372036854775807 months, 9223372036854775807 seconds, 999999999 nanoseconds
 
 ## Syntax
 
@@ -29,10 +29,12 @@ menu:
 
 {{< diagram "time-units.html" >}}
 
-| Field            | Definition                                                                                                                                                                                                                                                                |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| _head&lowbar;time&lowbar;unit_ | Return an interval without `time_unit`s larger than `head_time_unit`. Note that this differs from PostgreSQL's implementation, which ignores this clause.                                                                                                                 |
-| _tail&lowbar;time&lowbar;unit_ | 1. Return an interval without `time_unit` smaller than `tail_time_unit`.<br/><br/>2. If the final `time_expr` is only a number, treat the `time_expr` as belonging to `tail_time_unit`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`. |
+Field | Use
+------|----
+_ym&lowbar;str_ | A string representing years and months in `Y-M D` format.
+_time&lowbar;str_ | A string representing hours, minutes, seconds, and nanoseconds in `H:M:S.NS` format.
+_head&lowbar;time&lowbar;unit_ | Return an interval without `time_unit`s larger than `head_time_unit`. Note that this differs from PostgreSQL's implementation, which ignores this clause.
+_tail&lowbar;time&lowbar;unit_ | 1. Return an interval without `time_unit` smaller than `tail_time_unit`.<br/><br/>2. If the final `time_expr` is only a number, treat the `time_expr` as belonging to `tail_time_unit`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`.
 
 ## Details
 
@@ -41,22 +43,22 @@ menu:
 Materialize strives for full PostgreSQL compatibility with `time_exprs`, which
 offers support for two types of `time_expr` syntax:
 
--   SQL Standard, i.e. `'Y-M D H:M:S.NS'`
--   PostgreSQL, i.e. repeated `int.frac time_unit`, e.g.:
-    -   `'1 year 2 months 3.4 days 5 hours 6 minutes 7.8 seconds'`
-    -   `'1y 2mon 3.4d 5h 6m 7.8s'`
+- SQL Standard, i.e. `'Y-M D H:M:S.NS'`
+- PostgreSQL, i.e. repeated `int.frac time_unit`, e.g.:
+    - `'1 year 2 months 3.4 days 5 hours 6 minutes 7.8 seconds'`
+    - `'1y 2mon 3.4d 5h 6m 7.8s'`
 
 Like PostgreSQL, Materialize's implementation includes the following
 stipulations:
 
--   You can freely mix SQL Standard- and PostgreSQL-style `time_expr`s.
--   You can write `time_expr`s in any order, e.g `'H:M:S.NS Y-M'`.
--   Each `time_unit` can only be written once.
--   SQL Standard `time_expr` uses the following groups of `time_unit`s:
+- You can freely mix SQL Standard- and PostgreSQL-style `time_expr`s.
+- You can write `time_expr`s in any order, e.g `'H:M:S.NS Y-M'`.
+- Each `time_unit` can only be written once.
+- SQL Standard `time_expr` uses the following groups of `time_unit`s:
 
-    -   `Y-M`
-    -   `D`
-    -   `H:M:S.NS`
+    - `Y-M`
+    - `D`
+    - `H:M:S.NS`
 
     Using a SQL Standard `time_expr` to write to any of these `time_units`
     writes to all other `time_units` in the same group, even if that `time_unit`
@@ -66,12 +68,28 @@ stipulations:
     0 seconds. You cannot then include another `time_expr` which writes to the
     seconds `time_unit`.
 
--   Only PostgreSQL `time_expr`s support non-second fractional `time_units`, e.g.
+- Only PostgreSQL `time_expr`s support non-second fractional `time_units`, e.g.
     `1.2 days`. Materialize only supports 9 places of decimal precision.
 
 ### Valid casts
 
 `interval` does not support any casts.
+
+### Valid operations
+
+`interval` data supports the following operations with other types.
+
+Operation | Computes
+----------|------------
+[`date`](../date) `+` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`date`](../date) `-` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`date`](../date) `-` [`date`](../date) | [`interval`](../interval)
+[`timestamp`](../timestamp) `+` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`timestamp`](../timestamp) `-` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`timestamp`](../timestamp) `-` [`timestamp`](../timestamp) | [`interval`](../interval)
+[`time`](../time) `+` [`interval`](../interval) | `time`
+[`time`](../time) `-` [`interval`](../interval) | `time`
+[`time`](../time) `-` [`time`](../time) | [`interval`](../interval)
 
 ## Examples
 
@@ -161,7 +179,7 @@ SELECT TIMESTAMP '2020-01-01 8:00:00' + INTERVAL '1' DAY AS ts_interaction;
 ```
 
 ```nofmt
-        ts_interaction
--------------------------------
- 2020-01-02 08:00:00.000000000
+   ts_interaction
+---------------------
+ 2020-01-02 08:00:00
 ```

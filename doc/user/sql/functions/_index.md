@@ -49,6 +49,21 @@ Operator | Computes
  `/` | Division
  `%` | Modulo
 
+### Time-like
+
+Operation | Computes
+----------|------------
+[`date`](../date) `+` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`date`](../date) `-` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`date`](../date) `+` [`time`](../time) | [`timestamp`](../timestamp)
+[`date`](../date) `-` [`date`](../date) | [`interval`](../interval)
+[`timestamp`](../timestamp) `+` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`timestamp`](../timestamp) `-` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`timestamp`](../timestamp) `-` [`timestamp`](../timestamp) | [`interval`](../interval)
+[`time`](../time) `+` [`interval`](../interval) | `time`
+[`time`](../time) `-` [`interval`](../interval) | `time`
+[`time`](../time) `-` [`time`](../time) | [`interval`](../interval)
+
 ### JSON
 
 {{% json-operators %}}
