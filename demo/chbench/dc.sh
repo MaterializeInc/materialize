@@ -247,7 +247,7 @@ load_test() {
         --peek-conns=5 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
         -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
-	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
 }
 
 # Generate changes for the demo
