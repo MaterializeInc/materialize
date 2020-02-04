@@ -7,7 +7,7 @@ use std::error::Error;
 use std::str;
 
 use bytes::{BufMut, BytesMut};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
@@ -36,6 +36,8 @@ pub enum Value {
     Float8(f64),
     /// A date.
     Date(NaiveDate),
+    /// A time.
+    Time(NaiveTime),
     /// A date and time, without a timezone.
     Timestamp(NaiveDateTime),
     /// A date and time, with a timezone.
@@ -65,6 +67,7 @@ impl Value {
             (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
+            (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
             (Datum::TimestampTz(ts), ScalarType::TimestampTz) => Some(Value::TimestampTz(ts)),
             (Datum::Interval(iv), ScalarType::Interval) => Some(Value::Interval(Interval(iv))),
@@ -94,6 +97,7 @@ impl Value {
             Value::Float4(f) => (Datum::Float32(f.into()), ScalarType::Float32),
             Value::Float8(f) => (Datum::Float64(f.into()), ScalarType::Float64),
             Value::Date(d) => (Datum::Date(d), ScalarType::Date),
+            Value::Time(t) => (Datum::Time(t), ScalarType::Time),
             Value::Timestamp(ts) => (Datum::Timestamp(ts), ScalarType::Timestamp),
             Value::TimestampTz(ts) => (Datum::TimestampTz(ts), ScalarType::TimestampTz),
             Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
@@ -125,6 +129,7 @@ impl Value {
             Value::Bool(b) => strconv::format_bool(buf, *b),
             Value::Bytea(b) => strconv::format_bytes(buf, b),
             Value::Date(d) => strconv::format_date(buf, *d),
+            Value::Time(t) => strconv::format_time(buf, *t),
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Interval(iv) => strconv::format_interval(buf, iv.0),
@@ -145,6 +150,7 @@ impl Value {
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
             Value::Date(d) => d.to_sql(&PgType::DATE, buf),
+            Value::Time(t) => t.to_sql(&PgType::TIME, buf),
             Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
             Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
             Value::Interval(iv) => iv.to_sql(&PgType::INTERVAL, buf),
@@ -188,6 +194,7 @@ impl Value {
             Type::Float4 => Value::Float4(strconv::parse_float32(raw)?),
             Type::Float8 => Value::Float8(strconv::parse_float64(raw)?),
             Type::Date => Value::Date(strconv::parse_date(raw)?),
+            Type::Time => Value::Time(strconv::parse_time(raw)?),
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
             Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
@@ -216,6 +223,7 @@ impl Value {
             }
             Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
+            Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Unknown => panic!("cannot decode unknown type"),
@@ -237,6 +245,7 @@ pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
         Type::Jsonb => ScalarType::Jsonb,
         Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
         Type::Text => ScalarType::String,
+        Type::Time => ScalarType::Time,
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
         Type::Unknown => ScalarType::Unknown,

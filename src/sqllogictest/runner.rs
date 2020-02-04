@@ -335,6 +335,7 @@ fn format_row(
                 (Type::Text, Datum::Int64(i)) => format!("{}", i),
                 (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
                 (Type::Text, Datum::Date(d)) => d.to_string(),
+                (Type::Text, Datum::Time(t)) => t.to_string(),
                 (Type::Text, Datum::Timestamp(d)) => d.to_string(),
                 (Type::Text, Datum::TimestampTz(d)) => d.to_string(),
                 (Type::Text, Datum::Interval(iv)) => iv.to_string(),

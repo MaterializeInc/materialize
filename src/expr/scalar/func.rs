@@ -523,6 +523,52 @@ fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
 }
 
+fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let date = a.unwrap_date();
+    let time = b.unwrap_time();
+
+    Datum::Timestamp(
+        NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms_nano(
+            time.hour(),
+            time.minute(),
+            time.second(),
+            time.nanosecond(),
+        ),
+    )
+}
+
+fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let date = a.unwrap_date();
+    let interval = b.unwrap_interval();
+
+    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = add_timestamp_months(dt, interval.months);
+    Datum::Timestamp(add_timestamp_duration(
+        dt,
+        interval.is_positive_dur,
+        interval.duration,
+    ))
+}
+
+fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let time = a.unwrap_time();
+    let interval = b.unwrap_interval();
+    let date = match chrono::Duration::from_std(interval.duration) {
+        Ok(d) => d,
+        Err(_) => return Datum::Null,
+    };
+
+    let time = if interval.is_positive_dur {
+        let (t, _) = time.overflowing_add_signed(date);
+        t
+    } else {
+        let (t, _) = time.overflowing_sub_signed(date);
+        t
+    };
+
+    Datum::Time(time)
+}
+
 fn ceil_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().ceil())
 }
@@ -660,6 +706,46 @@ fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
 fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
+}
+
+fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_date() - b.unwrap_date())
+}
+
+fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_time() - b.unwrap_time())
+}
+
+fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let date = a.unwrap_date();
+    let interval = b.unwrap_interval();
+
+    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
+    let dt = add_timestamp_months(dt, -interval.months);
+    Datum::Timestamp(add_timestamp_duration(
+        dt,
+        !interval.is_positive_dur,
+        interval.duration,
+    ))
+}
+
+fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let time = a.unwrap_time();
+    let interval = b.unwrap_interval();
+    let date = match chrono::Duration::from_std(interval.duration) {
+        Ok(d) => d,
+        Err(_) => return Datum::Null,
+    };
+
+    let time = if interval.is_positive_dur {
+        let (t, _) = time.overflowing_sub_signed(date);
+        t
+    } else {
+        let (t, _) = time.overflowing_add_signed(date);
+        t
+    };
+
+    Datum::Time(time)
 }
 
 fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1386,6 +1472,9 @@ pub enum BinaryFunc {
     AddFloat64,
     AddTimestampInterval,
     AddTimestampTzInterval,
+    AddDateInterval,
+    AddDateTime,
+    AddTimeInterval,
     AddDecimal,
     SubInt32,
     SubInt64,
@@ -1395,6 +1484,10 @@ pub enum BinaryFunc {
     SubTimestampTz,
     SubTimestampInterval,
     SubTimestampTzInterval,
+    SubDate,
+    SubDateInterval,
+    SubTime,
+    SubTimeInterval,
     SubDecimal,
     MulInt32,
     MulInt64,
@@ -1502,6 +1595,9 @@ impl BinaryFunc {
             BinaryFunc::AddFloat64 => add_float64(a, b),
             BinaryFunc::AddTimestampInterval => add_timestamp_interval(a, b),
             BinaryFunc::AddTimestampTzInterval => add_timestamptz_interval(a, b),
+            BinaryFunc::AddDateTime => add_date_time(a, b),
+            BinaryFunc::AddDateInterval => add_date_interval(a, b),
+            BinaryFunc::AddTimeInterval => add_time_interval(a, b),
             BinaryFunc::AddDecimal => add_decimal(a, b),
             BinaryFunc::SubInt32 => sub_int32(a, b),
             BinaryFunc::SubInt64 => sub_int64(a, b),
@@ -1511,6 +1607,10 @@ impl BinaryFunc {
             BinaryFunc::SubTimestampTz => sub_timestamptz(a, b),
             BinaryFunc::SubTimestampInterval => sub_timestamp_interval(a, b),
             BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval(a, b),
+            BinaryFunc::SubDate => sub_date(a, b),
+            BinaryFunc::SubDateInterval => sub_date_interval(a, b),
+            BinaryFunc::SubTime => sub_time(a, b),
+            BinaryFunc::SubTimeInterval => sub_time_interval(a, b),
             BinaryFunc::SubDecimal => sub_decimal(a, b),
             BinaryFunc::MulInt32 => mul_int32(a, b),
             BinaryFunc::MulInt64 => mul_int64(a, b),
@@ -1587,7 +1687,7 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable || is_div_mod)
             }
 
-            SubTimestamp | SubTimestampTz => {
+            SubTimestamp | SubTimestampTz | SubDate => {
                 ColumnType::new(ScalarType::Interval).nullable(in_nullable)
             }
 
@@ -1640,9 +1740,15 @@ impl BinaryFunc {
             AddTimestampInterval
             | SubTimestampInterval
             | AddTimestampTzInterval
-            | SubTimestampTzInterval => input1_type,
+            | SubTimestampTzInterval
+            | AddTimeInterval
+            | SubTimeInterval => input1_type,
 
-            DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(true),
+            AddDateInterval | SubDateInterval | AddDateTime | DateTrunc => {
+                ColumnType::new(ScalarType::Timestamp).nullable(true)
+            }
+
+            SubTime => ColumnType::new(ScalarType::Interval).nullable(true),
 
             JsonbGetInt64 | JsonbGetString | JsonbConcat | JsonbDeleteInt64 | JsonbDeleteString => {
                 ColumnType::new(ScalarType::Jsonb).nullable(true)
@@ -1672,18 +1778,25 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddInt64 => f.write_str("+"),
             BinaryFunc::AddFloat32 => f.write_str("+"),
             BinaryFunc::AddFloat64 => f.write_str("+"),
+            BinaryFunc::AddDecimal => f.write_str("+"),
             BinaryFunc::AddTimestampInterval => f.write_str("+"),
             BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
-            BinaryFunc::AddDecimal => f.write_str("+"),
+            BinaryFunc::AddDateTime => f.write_str("+"),
+            BinaryFunc::AddDateInterval => f.write_str("+"),
+            BinaryFunc::AddTimeInterval => f.write_str("+"),
             BinaryFunc::SubInt32 => f.write_str("-"),
             BinaryFunc::SubInt64 => f.write_str("-"),
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
+            BinaryFunc::SubDecimal => f.write_str("-"),
             BinaryFunc::SubTimestamp => f.write_str("-"),
             BinaryFunc::SubTimestampTz => f.write_str("-"),
             BinaryFunc::SubTimestampInterval => f.write_str("-"),
             BinaryFunc::SubTimestampTzInterval => f.write_str("-"),
-            BinaryFunc::SubDecimal => f.write_str("-"),
+            BinaryFunc::SubDate => f.write_str("-"),
+            BinaryFunc::SubDateInterval => f.write_str("-"),
+            BinaryFunc::SubTime => f.write_str("-"),
+            BinaryFunc::SubTimeInterval => f.write_str("-"),
             BinaryFunc::MulInt32 => f.write_str("*"),
             BinaryFunc::MulInt64 => f.write_str("*"),
             BinaryFunc::MulFloat32 => f.write_str("*"),

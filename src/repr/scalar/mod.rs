@@ -6,7 +6,7 @@
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use failure::format_err;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,8 @@ pub enum Datum<'a> {
     Float64(OrderedFloat<f64>),
     /// A Date
     Date(NaiveDate),
+    /// A Time without a Date
+    Time(NaiveTime),
     /// A DateTime
     Timestamp(NaiveDateTime),
     /// A time zone aware DateTime
@@ -77,6 +79,16 @@ impl<'a> Datum<'a> {
         let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
             .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?;
         Ok(Datum::Date(d))
+    }
+
+    pub fn from_hms_nano(
+        hour: u8,
+        minute: u8,
+        second: u8,
+        nano: u32,
+    ) -> Result<Datum<'static>, failure::Error> {
+        let t = NaiveTime::from_hms_nano(hour.into(), minute.into(), second.into(), nano);
+        Ok(Datum::Time(t))
     }
 
     /// Create a Datum representing a Timestamp
@@ -204,6 +216,13 @@ impl<'a> Datum<'a> {
         }
     }
 
+    pub fn unwrap_time(&self) -> chrono::NaiveTime {
+        match self {
+            Datum::Time(t) => *t,
+            _ => panic!("Datum::unwrap_time called on {:?}", self),
+        }
+    }
+
     pub fn unwrap_timestamp(&self) -> chrono::NaiveDateTime {
         match self {
             Datum::Timestamp(ts) => *ts,
@@ -297,6 +316,8 @@ impl<'a> Datum<'a> {
                     (Datum::Float64(_), _) => false,
                     (Datum::Date(_), ScalarType::Date) => true,
                     (Datum::Date(_), _) => false,
+                    (Datum::Time(_), ScalarType::Time) => true,
+                    (Datum::Time(_), _) => false,
                     (Datum::Timestamp(_), ScalarType::Timestamp) => true,
                     (Datum::Timestamp(_), _) => false,
                     (Datum::TimestampTz(_), ScalarType::TimestampTz) => true,
@@ -482,6 +503,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Float32(num) => write!(f, "{}", num),
             Datum::Float64(num) => write!(f, "{}", num),
             Datum::Date(d) => write!(f, "{}", d),
+            Datum::Time(t) => write!(f, "{}", t),
             Datum::Timestamp(t) => write!(f, "{}", t),
             Datum::TimestampTz(t) => write!(f, "{}", t),
             Datum::Interval(iv) => write!(f, "{}", iv),
@@ -547,6 +569,7 @@ pub enum ScalarType {
     /// be less than or equal to the precision.
     Decimal(u8, u8),
     Date,
+    Time,
     Timestamp,
     TimestampTz,
     /// A possibly-negative time span
@@ -578,6 +601,7 @@ impl<'a> ScalarType {
             ScalarType::Float64 => Datum::Float64(OrderedFloat(0.0)),
             ScalarType::Decimal(_, _) => Datum::Decimal(Significand::new(0)),
             ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
+            ScalarType::Time => Datum::Time(NaiveTime::from_hms(0, 0, 0)),
             ScalarType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
             ScalarType::TimestampTz => {
                 Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc))
@@ -606,6 +630,7 @@ impl PartialEq for ScalarType {
             | (Float32, Float32)
             | (Float64, Float64)
             | (Date, Date)
+            | (Time, Time)
             | (Timestamp, Timestamp)
             | (TimestampTz, TimestampTz)
             | (Interval, Interval)
@@ -621,6 +646,7 @@ impl PartialEq for ScalarType {
             | (Float64, _)
             | (Decimal(_, _), _)
             | (Date, _)
+            | (Time, _)
             | (Timestamp, _)
             | (TimestampTz, _)
             | (Interval, _)
@@ -648,12 +674,13 @@ impl Hash for ScalarType {
                 state.write_u8(*s);
             }
             Date => state.write_u8(7),
-            Timestamp => state.write_u8(8),
-            TimestampTz => state.write_u8(9),
-            Interval => state.write_u8(10),
-            Bytes => state.write_u8(11),
-            String => state.write_u8(12),
-            Jsonb => state.write_u8(13),
+            Time => state.write_u8(8),
+            Timestamp => state.write_u8(9),
+            TimestampTz => state.write_u8(10),
+            Interval => state.write_u8(11),
+            Bytes => state.write_u8(12),
+            String => state.write_u8(13),
+            Jsonb => state.write_u8(14),
         }
     }
 }
@@ -675,6 +702,7 @@ impl fmt::Display for ScalarType {
             Float64 => f.write_str("f64"),
             Decimal(p, s) => write!(f, "decimal({}, {})", p, s),
             Date => f.write_str("date"),
+            Time => f.write_str("time"),
             Timestamp => f.write_str("timestamp"),
             TimestampTz => f.write_str("timestamptz"),
             Interval => f.write_str("interval"),

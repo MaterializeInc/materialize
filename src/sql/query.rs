@@ -28,8 +28,8 @@ use failure::{bail, ensure, format_err, ResultExt};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, ExtractField, Function, Ident, JoinConstraint, JoinOperator,
-    ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
-    TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+    ObjectName, ParsedDate, ParsedTime, ParsedTimestamp, Query, Select, SelectItem, SetExpr,
+    SetOperator, TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -2342,9 +2342,11 @@ fn plan_arithmetic_op<'a>(
             let coalesce = match (&ltype.scalar_type, &rtype.scalar_type) {
                 (Decimal(_, _), Decimal(_, _))
                 | (Date, _)
+                | (Time, _)
                 | (Timestamp, _)
                 | (TimestampTz, _)
                 | (_, Date)
+                | (_, Time)
                 | (_, Timestamp)
                 | (_, TimestampTz)
                 | (Jsonb, _)
@@ -2415,22 +2417,7 @@ fn plan_arithmetic_op<'a>(
         }
     };
 
-    // Step 2. Promote dates to intervals.
-    //
-    // Dates can't be added to intervals, but timestamps can, and dates are
-    // trivially promotable to intervals.
-    if let Date = &ltype.scalar_type {
-        let expr = plan_cast_internal(ecx, &op, lexpr, Timestamp)?;
-        ltype = ecx.column_type(&expr);
-        lexpr = expr;
-    }
-    if let Date = &rtype.scalar_type {
-        let expr = plan_cast_internal(ecx, &op, rexpr, Timestamp)?;
-        rtype = ecx.column_type(&expr);
-        rexpr = expr;
-    }
-
-    // Step 3a. Plan the arithmetic operation for decimals.
+    // Step 2a. Plan the arithmetic operation for decimals.
     //
     // Decimal arithmetic requires special support from the planner, because
     // the precision and scale of the decimal is erased in the dataflow
@@ -2472,7 +2459,7 @@ fn plan_arithmetic_op<'a>(
         _ => (),
     }
 
-    // Step 3b. Plan the arithmetic operation for all other types.
+    // Step 2b. Plan the arithmetic operation for all other types.
     let func = match op {
         Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
             (Int32, Int32) => AddInt32,
@@ -2491,6 +2478,24 @@ fn plan_arithmetic_op<'a>(
                 mem::swap(&mut ltype, &mut rtype);
                 AddTimestampTzInterval
             }
+            (Date, Interval) => AddDateInterval,
+            (Interval, Date) => {
+                mem::swap(&mut lexpr, &mut rexpr);
+                mem::swap(&mut ltype, &mut rtype);
+                AddDateInterval
+            }
+            (Date, Time) => AddDateTime,
+            (Time, Date) => {
+                mem::swap(&mut lexpr, &mut rexpr);
+                mem::swap(&mut ltype, &mut rtype);
+                AddDateTime
+            }
+            (Time, Interval) => AddTimeInterval,
+            (Interval, Time) => {
+                mem::swap(&mut lexpr, &mut rexpr);
+                mem::swap(&mut ltype, &mut rtype);
+                AddTimeInterval
+            }
             _ => bail!(
                 "no overload for {} + {}",
                 ltype.scalar_type,
@@ -2506,6 +2511,10 @@ fn plan_arithmetic_op<'a>(
             (TimestampTz, TimestampTz) => SubTimestampTz,
             (Timestamp, Interval) => SubTimestampInterval,
             (TimestampTz, Interval) => SubTimestampTzInterval,
+            (Date, Date) => SubDate,
+            (Date, Interval) => SubDateInterval,
+            (Time, Time) => SubTime,
+            (Time, Interval) => SubTimeInterval,
             (Jsonb, Int32) => {
                 rexpr = rexpr.call_unary(UnaryFunc::CastInt32ToInt64);
                 JsonbDeleteInt64
@@ -2913,7 +2922,18 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             )?,
             ScalarType::TimestampTz,
         ),
-        Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
+        Value::Time(
+            _,
+            ParsedTime {
+                hour,
+                minute,
+                second,
+                nano,
+            },
+        ) => (
+            Datum::from_hms_nano(*hour, *minute, *second, *nano)?,
+            ScalarType::Time,
+        ),
         Value::Interval(iv) => {
             let i = iv.compute_interval()?;
             (Datum::Interval(i.into()), ScalarType::Interval)
