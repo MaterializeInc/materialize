@@ -73,23 +73,34 @@ connections, choose `Materialize`. If you don't see `Materialize`,
 check that you have a `Materialize` .jar in your Metabase's
 `/plugins` directory. If not, follow steps [here](https://github.com/MaterializeInc/metabase-materialize-driver).
 
-There are three groups of fields:
+Metabase expects you to input data into three sets of fields:
 
-| Field         | Value           |
-| ------------- | -------------:|
-| Name          | materialize   |
-| Host          | materialized  |
-| Database      | materialize   |
-| Port          | 6875          |
-| Database username      | default      |
-| Database password | default      |
+1. "What should we call you?"
 
+   The fields in this section require personal information and are
+   therefore up to you to fill out! Be sure to note your username
+   and password.
 
-- Username and password are required but not checked (issue #1467) you can just put `mz`
-  for all of them.
+1. "Add your data"
 
-Next, you will either agree/disagree to send analytics back to Metabase.
-You will be able to continue through either way.
+   In this section, you're telling Metabase how to connect to Materialize.
+   To connect correctly, use the following values:
+
+    | Field         | Value           |
+    | ------------- | -------------:|
+    | Name          | materialize   |
+    | Host          | materialized  |
+    | Database      | materialize   |
+    | Port          | 6875          |
+    | Database username      | default      |
+    | Database password | default      |
+
+    NB: Username and password are required but not currently checked (issue #1467).
+
+1. "Usage data preferences"
+
+    In this section, you will either agree or disagree to send
+    analytics back to Metabase. You will be able to proceed either way.
 
 You should now be able to see the main Metabase dashboard.
 
