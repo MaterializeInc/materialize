@@ -1,0 +1,6 @@
+*.o
+chbenchmark
+gen
+log
+out
+build
