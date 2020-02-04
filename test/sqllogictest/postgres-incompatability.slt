@@ -1,0 +1,44 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+# Materialize chooses numeric precision at planning time rather than carrying it the value like postgres.
+# This can lead to different answers when using coalesce, case or similar which have the potential to select different precision values at runtime in postgres.
+
+mode cockroach
+
+query R
+SELECT COALESCE(1, 2.000)
+----
+1.000
+
+query RR
+SELECT + 3 + + COALESCE ( 33, + + AVG ( - 81 ) + + + CAST ( - 37 AS INTEGER ) ) / - 52, + 98 AS col0
+----
+2.365384700000 98
+
+query R
+SELECT CASE 24 WHEN - - 89 + ( + ( + - 42 ) ) * + - 50 THEN NULL ELSE + 23 * - 45 END / COALESCE ( - 87, - 93 * - 8 * + + AVG ( 10 ) / 94 * - ( 21 ), + 79 ) * 95 * + 65
+----
+72865.000000000000
+
+query R
+SELECT DISTINCT + 49 - + 94 + + 97 / - 52 / - COALESCE ( - COUNT ( * ), ( - - 34 ) - + AVG ( 68 ), - + 57 + + 61 ) AS col1
+----
+-46.800000000000
+
+query R
+SELECT ALL ( - COUNT ( * ) ) + + - COUNT ( * ) + 36 / COALESCE ( + CAST ( 76 AS INTEGER ), COUNT ( * ) - - + 21 * 44 * + COALESCE ( 61, - AVG ( 41 ) / - 34 ) + COALESCE ( 67, - ( 69 ), - 75 + 35 * + ( 78 * - 20 ) ) * + 36, 99 ) * + 65
+----
+24.000000000000
+
+query R
+SELECT ALL 44 * COALESCE ( + 6, 5 + + - 61, - COALESCE ( - + 1, + 78 * - - 4 * - AVG ( NULLIF ( + 78, - - 85 * 17 + - + 64 ) ) - - MIN ( + + 36 ) ) ) / 68 * 18 - + - 84 * + - 92 * - 41 + - + 0
+----
+316916.400000000000
+
+query R
+SELECT 78 + - MAX ( DISTINCT - 32 ) / COALESCE ( - 25, 13 + MIN ( + 12 ) + - CAST ( NULL AS INTEGER ) * + MAX ( 8 ) * + AVG ( + + 43 ) ) * + 61 + ( + 36 ) + + ( 17 ) + - + 40 * + + 82
+----
+-3222.200000000000
