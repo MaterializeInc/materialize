@@ -26,7 +26,7 @@ class MySqlDialect : public Dialect {
         "DROP DATABASE IF EXISTS tpcch"};
 
     std::vector<const char*> createSchemaStatements = {
-        "CREATE DATABASE tpcch",
+        "CREATE DATABASE IF NOT EXISTS tpcch",
 
         "CREATE TABLE tpcch.warehouse (\n"
         "	w_id integer,\n"
