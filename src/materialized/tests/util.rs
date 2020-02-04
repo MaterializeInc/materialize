@@ -8,12 +8,27 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
+    logging_granularity: Option<Duration>,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            data_directory: None,
+            logging_granularity: Some(Duration::from_millis(10)),
+        }
+    }
 }
 
 impl Config {
+    pub fn logging_granularity(mut self, granularity: Option<Duration>) -> Self {
+        self.logging_granularity = granularity;
+        self
+    }
+
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
         self.data_directory = Some(data_directory.into());
         self
@@ -22,7 +37,7 @@ impl Config {
 
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
     let server = Server(materialized::serve(materialized::Config {
-        logging_granularity: Some(Duration::from_millis(10)),
+        logging_granularity: config.logging_granularity,
         timestamp_frequency: None,
         max_increment_ts_size: 1000,
         threads: 1,

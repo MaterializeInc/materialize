@@ -71,6 +71,22 @@ impl GlobalId {
     pub fn user(v: usize) -> GlobalId {
         GlobalId::User(v)
     }
+
+    /// Reports whether this ID is in the system namespace.
+    pub fn is_system(&self) -> bool {
+        match self {
+            GlobalId::System(_) => true,
+            GlobalId::User(_) => false,
+        }
+    }
+
+    /// Reports whether this ID is in the user namespace.
+    pub fn is_user(&self) -> bool {
+        match self {
+            GlobalId::System(_) => false,
+            GlobalId::User(_) => true,
+        }
+    }
 }
 
 impl fmt::Display for GlobalId {
