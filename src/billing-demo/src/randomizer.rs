@@ -15,6 +15,8 @@ use uuid_b64::UuidB64;
 
 use crate::gen::billing::{Batch, Record, ResourceInfo};
 
+pub static NUM_CLIENTS: u32 = 100;
+
 pub trait Randomizer {
     fn random(rng: &mut impl Rng) -> Self;
 }
@@ -112,7 +114,7 @@ impl Randomizer for ResourceInfo {
         resource_info.set_cpu_num(*POSSIBLE_CPUS.choose(rng).unwrap());
         resource_info.set_memory_gb(*POSSIBLE_MEM.choose(rng).unwrap());
         resource_info.set_disk_gb(*POSSIBLE_DISK.choose(rng).unwrap());
-        resource_info.set_client_id(rng.gen_range(1, 100));
+        resource_info.set_client_id(rng.gen_range(1, NUM_CLIENTS as i32));
         resource_info.set_vm_id(rng.gen_range(1000, 2000));
 
         resource_info

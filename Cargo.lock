@@ -191,6 +191,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "chrono",
+ "csv",
  "env_logger",
  "futures",
  "futures-channel",

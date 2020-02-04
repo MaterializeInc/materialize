@@ -18,13 +18,6 @@ macro_rules! query {
 /// With two arguments, no source_name will be passed to the query
 #[macro_export]
 macro_rules! exec_query {
-    ($client:ident, $config:ident, $fname:tt) => {{
-        let q = format!(query!($fname), source_name = $config.source_name);
-        if let Err(e) = $client.execute(&q, &[]).await {
-            log::error!("{} ({}) executing query {}", e, e.source().unwrap(), q)
-        }
-    }};
-
     ($client:ident, $fname:tt) => {{
         let q = format!(query!($fname));
         if let Err(e) = $client.execute(&q, &[]).await {

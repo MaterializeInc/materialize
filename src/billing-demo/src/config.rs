@@ -8,6 +8,9 @@ use std::time::Duration;
 use parse_duration::parse as parse_duration;
 use structopt::StructOpt;
 
+pub static KAFKA_SOURCE_NAME: &str = "billing_source";
+pub static CSV_SOURCE_NAME: &str = "price_source";
+
 #[derive(Clone, Debug, StructOpt)]
 pub struct Args {
     /// The materialized host
@@ -36,15 +39,10 @@ pub struct Args {
     #[structopt(long, default_value = "billing")]
     pub kafka_topic: String,
 
-    #[structopt(long, default_value = "billing_source")]
-    pub source_name: String,
+    #[structopt(long)]
+    pub csv_file_name: String,
 
-    #[structopt(long, default_value = "billing")]
-    pub view_name: String,
-
-    /// Whether or not to delete the source and view before starting
-    ///
-    /// By default this deletes the 'source-name' and 'view-name'
+    /// Whether or not to delete the sources and views before starting
     #[structopt(long)]
     pub preserve_source: bool,
 }
@@ -66,8 +64,7 @@ impl Args {
             port: self.materialized_port,
             kafka_url: self.kafka_url(),
             kafka_topic: self.kafka_topic.clone(),
-            source_name: self.source_name.clone(),
-            view_name: self.view_name.clone(),
+            csv_file_name: self.csv_file_name.clone(),
             preserve_source: self.preserve_source,
         }
     }
@@ -92,7 +89,6 @@ pub struct MzConfig {
     pub port: u16,
     pub kafka_url: String,
     pub kafka_topic: String,
-    pub source_name: String,
-    pub view_name: String,
+    pub csv_file_name: String,
     pub preserve_source: bool,
 }

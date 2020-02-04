@@ -41,11 +41,12 @@ async fn run() -> Result<()> {
     env_logger::init();
 
     log::info!(
-        "starting up message_count={} mzd={}:{} kafka={}",
+        "starting up message_count={} mzd={}:{} kafka={} preserve_source={}",
         config.message_count,
         config.materialized_host,
         config.materialized_port,
-        config.kafka_url()
+        config.kafka_url(),
+        config.preserve_source
     );
 
     let k_config = config.kafka_config();
@@ -97,34 +98,45 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
 
     if !config.preserve_source {
         let sources = client.show_sources().await?;
-        if any_matches(&sources, &config.source_name) {
-            client.drop_source(&config.source_name).await?;
+        if any_matches(&sources, config::KAFKA_SOURCE_NAME) {
+            client.drop_source(config::KAFKA_SOURCE_NAME).await?;
+            client.drop_source(config::CSV_SOURCE_NAME).await?;
         }
     }
 
     let sources = client.show_sources().await?;
-    if !any_matches(&sources, &config.source_name) {
+    if !any_matches(&sources, config::KAFKA_SOURCE_NAME) {
+        client
+            .create_csv_source(
+                &config.csv_file_name,
+                config::CSV_SOURCE_NAME,
+                randomizer::NUM_CLIENTS,
+            )
+            .await?;
+
         client
             .create_proto_source(
                 proto::BILLING_DESCRIPTOR,
                 &config.kafka_url,
                 &config.kafka_topic,
-                &config.source_name,
+                config::KAFKA_SOURCE_NAME,
                 proto::BILLING_MESSAGE_NAME,
             )
             .await?;
 
-        exec_query!(client, config, "billing_raw_data");
+        exec_query!(client, "billing_raw_data");
+        exec_query!(client, "billing_prices");
         exec_query!(client, "billing_batches");
         exec_query!(client, "billing_records");
         exec_query!(client, "billing_agg_by_minute");
         exec_query!(client, "billing_agg_by_hour");
         exec_query!(client, "billing_agg_by_day");
         exec_query!(client, "billing_agg_by_month");
+        exec_query!(client, "billing_monthly_statement");
     } else {
         log::info!(
             "source '{}' already exists, not recreating",
-            config.source_name
+            config::KAFKA_SOURCE_NAME
         );
     }
     Ok(())
