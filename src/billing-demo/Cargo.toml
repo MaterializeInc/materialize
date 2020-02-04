@@ -21,7 +21,7 @@ rand = "0.7.3"
 rand_distr = "0.2.2"
 rdkafka = { version = "0.23.1", features = ["cmake-build"] }
 structopt = "0.3.7"
-thiserror = "1.0.9"
+thiserror = "1.0.10"
 tokio = { version = "0.2.10", features = ["full"] }
 tokio-postgres = "0.5.1"
 url = "2.1.1"
