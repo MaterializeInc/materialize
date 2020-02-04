@@ -3415,7 +3415,7 @@ fn parse_create_source_inline_schema() {
                     value: Value::SingleQuotedString("val".into())
                 },]
             );
-            assert_eq!(Envelope::Debezium, envelope);
+            assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
         }
         _ => unreachable!(),
