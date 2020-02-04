@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Copyright 2020 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+set -euo pipefail
+
+mkdir -p /var/lib/materialize/
+if [[ $(getent passwd materialize) = "" ]]; then
+    adduser --disabled-login --disabled-password --system materialize
+fi
+chown materialize:materialize /var/lib/materialize/
