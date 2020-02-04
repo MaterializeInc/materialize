@@ -118,7 +118,7 @@ services:
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
   chbench:
     init: true
-    build: chbench
+    image: materialize/chbenchmark
     depends_on: [mysql]
     volumes:
       - chbench-gen:/gen
