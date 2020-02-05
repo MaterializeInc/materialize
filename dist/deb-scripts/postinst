@@ -10,3 +10,5 @@ set -euo pipefail
 adduser --system materialize
 mkdir -p /var/lib/materialize/
 chown materialize:materialize /var/lib/materialize/
+
+systemctl daemon-reload
