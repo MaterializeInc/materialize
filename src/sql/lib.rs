@@ -7,16 +7,15 @@
 
 #![deny(missing_debug_implementations)]
 
-use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
-
-use ::expr::{GlobalId, RelationExpr};
-use catalog::names::FullName;
+use ::expr::GlobalId;
+use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::{Catalog, CatalogEntry};
+use dataflow_types::{IndexDesc, PeekWhen, RowSetFinishing, Sink, Source};
 use ore::future::MaybeFuture;
-use repr::{RelationDesc, Row, ScalarType};
+use repr::{RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
-pub use session::{PreparedStatement, Session, TransactionStatus};
+pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ObjectType, Statement};
 pub use statement::StatementContext;
 
@@ -40,13 +39,15 @@ pub enum Plan {
         if_not_exists: bool,
     },
     CreateSchema {
-        database_name: String,
+        database_name: DatabaseSpecifier,
         schema_name: String,
         if_not_exists: bool,
     },
     CreateIndex {
         name: FullName,
-        index: Index,
+        desc: IndexDesc,
+        raw_sql: String,
+        relation_type: RelationType,
         if_not_exists: bool,
     },
     CreateSource {
@@ -67,7 +68,9 @@ pub enum Plan {
     },
     CreateView {
         name: FullName,
-        view: View<RelationExpr>,
+        raw_sql: String,
+        relation_expr: ::expr::RelationExpr,
+        desc: RelationDesc,
         /// The ID of the object that this view is replacing, if any.
         replace: Option<GlobalId>,
         /// whether we should auto-materialize the view
@@ -77,7 +80,7 @@ pub enum Plan {
         name: String,
     },
     DropSchema {
-        database_name: String,
+        database_name: DatabaseSpecifier,
         schema_name: String,
     },
     DropItems {
@@ -85,6 +88,8 @@ pub enum Plan {
         ty: ObjectType,
     },
     EmptyQuery,
+    ShowAllVariables,
+    ShowVariable(String),
     SetVariable {
         /// The name of the variable
         name: String,
@@ -106,12 +111,11 @@ pub enum Plan {
         source: ::expr::RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
-        eval_env: ::expr::EvalEnv,
         materialize: bool,
     },
     Tail(CatalogEntry),
     SendRows(Vec<Row>),
-    ExplainPlan(::expr::RelationExpr, ::expr::EvalEnv),
+    ExplainPlan(::expr::RelationExpr),
     SendDiffs {
         id: GlobalId,
         updates: Vec<(Row, isize)>,
@@ -147,7 +151,7 @@ pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
 /// Produces a [`Plan`] from a [`Statement`].
 pub fn plan(
     catalog: &Catalog,
-    session: &Session,
+    session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
 ) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
