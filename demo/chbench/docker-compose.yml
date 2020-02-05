@@ -134,7 +134,7 @@ services:
        --run-seconds=1
 
   cli:
-    build: cli
+    image: materialize/cli
     init: true
     # if you run the terminal with a dark background uncomment these lines
     # environment:
