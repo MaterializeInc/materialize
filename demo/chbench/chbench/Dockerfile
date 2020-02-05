@@ -5,11 +5,15 @@
 
 FROM ubuntu:disco
 
+COPY mysql.asc .
+COPY odbc.ini /etc/odbc.ini
+COPY . workdir/
+
 RUN apt-get update && apt-get install -qy curl gnupg2 \
     && curl -s 'https://packages.confluent.io/deb/5.3/archive.key' | apt-key add - \
     && echo 'deb [arch=amd64] https://packages.confluent.io/deb/5.3 stable main' >> /etc/apt/sources.list \
     && apt-get update \
-    && apt-get install -qy \
+    && apt-get install -qy -o Dpkg::Options::="--force-confold" \
         build-essential \
         cmake \
         confluent-schema-registry \
@@ -25,13 +29,7 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
         unixodbc \
         unixodbc-dev \
     && locale-gen en_US.UTF-8 \
-    ;
-
-COPY mysql.asc .
-COPY odbc.ini /etc/odbc.ini
-COPY . workdir/
-
-RUN gpg --import mysql.asc \
+    && gpg --import mysql.asc \
     && rm mysql.asc \
     && echo "trusted-key 8C718D3B5072E1F5" >> ~/.gnupg/gpg.conf \
     && curl -fsSL \
@@ -49,6 +47,21 @@ RUN gpg --import mysql.asc \
     && cmake -DCMAKE_BUILD_TYPE=Release .. \
     && make \
     && mv chbenchmark /usr/local/bin/chBenchmark \
+    && cd .. \
+    && rm -rf build \
+    && apt-get remove -y \
+        build-essential \
+        cmake \
+        confluent-schema-registry \
+        curl \
+        jq \
+        libconfig++-dev \
+        libpqxx-dev \
+        locales \
+        openjdk-8-jre \
+        postgresql-server-dev-11 \
+        unixodbc-dev \
+    && apt-get autoremove -y \
     ;
 
 COPY ./flush-tables /usr/local/bin/flush-tables

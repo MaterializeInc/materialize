@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+EXEC_DIR="${0%/*}"
+
+# shellcheck source=SCRIPTDIR/../../../misc/shlib/shlib.bash
+source "$EXEC_DIR/../../../misc/shlib/shlib.bash"
+
 REPO=materialize/chbenchmark
 PUSH=n
 
@@ -14,10 +19,10 @@ Build the docker image, and optionally push the latest tag"
 
 main() {
     parse_args "$@"
-    cd "${0%/*}"
-    docker build -t $REPO:latest -t $REPO:local .
+    cd "$EXEC_DIR"
+    runv docker build -t $REPO:latest -t $REPO:local .
     if [[ $PUSH = y ]]; then
-        docker push $REPO:latest
+        runv docker push $REPO:latest
     fi
 }
 
