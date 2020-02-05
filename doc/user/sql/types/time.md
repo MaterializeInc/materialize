@@ -13,7 +13,7 @@ Detail | Info
 **Quick Syntax** | `TIME '01:23:45'`
 **Size** | 4 bytes
 **Min value** | `TIME '00:00:00'`
-**Max value** | `TIME '23:59:59.999999';`
+**Max value** | `TIME '23:59:59.999999'`
 
 ## Syntax
 
