@@ -23,7 +23,7 @@ use timely::worker::Worker as TimelyWorker;
 use dataflow_types::Timestamp;
 use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, RelationType, Row, RowArena};
 
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
@@ -46,7 +46,8 @@ pub(crate) fn build_local_input<A: Allocate>(
     local_inputs: &mut HashMap<GlobalId, LocalInput>,
     index_id: GlobalId,
     name: &str,
-    index: Index,
+    index: IndexDesc,
+    on_type: RelationType,
 ) {
     let worker_index = worker.index();
     let name = format!("Dataflow: {}", name);
@@ -56,20 +57,20 @@ pub(crate) fn build_local_input<A: Allocate>(
             let mut context = Context::<_, _, _, Timestamp>::new();
             let ((handle, capability), stream) = region.new_unordered_input();
             if worker_index == 0 {
-                local_inputs.insert(index.desc.on_id, LocalInput { handle, capability });
+                local_inputs.insert(index.on_id, LocalInput { handle, capability });
             }
-            let get_expr = RelationExpr::global_get(index.desc.on_id, index.relation_type.clone());
+            let get_expr = RelationExpr::global_get(index.on_id, on_type);
             context
                 .collections
                 .insert(get_expr.clone(), stream.as_collection());
             context.render_arranged(
-                &get_expr.clone().arrange_by(&[index.desc.keys.clone()]),
+                &get_expr.clone().arrange_by(&[index.keys.clone()]),
                 &EvalEnv::default(),
                 region,
                 worker_index,
                 Some(&index_id.to_string()),
             );
-            match context.arrangement(&get_expr, &index.desc.keys) {
+            match context.arrangement(&get_expr, &index.keys) {
                 Some(ArrangementFlavor::Local(local)) => {
                     manager.set(
                         index_id,

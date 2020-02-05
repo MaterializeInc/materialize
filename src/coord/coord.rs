@@ -602,7 +602,8 @@ where
                             SequencedCommand::CreateLocalInput {
                                 name: name.to_string(),
                                 index_id,
-                                index: index.clone(),
+                                index: index.desc.clone(),
+                                on_type: index.relation_type,
                                 advance_to: self.local_input_time,
                             },
                         );
