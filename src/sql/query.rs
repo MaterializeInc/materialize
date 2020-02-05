@@ -88,11 +88,7 @@ pub fn plan_index_exprs<'a>(
     on_desc: &RelationDesc,
     exprs: &[Expr],
 ) -> Result<Vec<::expr::ScalarExpr>, failure::Error> {
-    let scope = Scope::from_source(
-        None,
-        on_desc.iter_names(),
-        Some(Scope::empty(None)),
-    );
+    let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
     let qcx = &QueryContext::root(scx, QueryLifetime::Static);
     let ecx = &ExprContext {
         qcx: &qcx,

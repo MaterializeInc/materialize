@@ -15,27 +15,27 @@ use std::path::PathBuf;
 
 use failure::{bail, format_err, ResultExt};
 use futures::future::join_all;
-use sql_parser::ast::{
-    AvroSchema, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
-    ShowStatementFilter, Stage, Statement, Value,
-};
+use itertools::Itertools;
 use url::Url;
 
+use ::expr::{EvalEnv, GlobalId};
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, Consistency, CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector,
-    FileSourceConnector, Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
+    FileSourceConnector, Index, IndexDesc, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
     ProtobufEncoding, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
-use expr as relationexpr;
 use futures::future::TryFutureExt;
 use interchange::{avro, protobuf};
 use ore::collections::CollectionExt;
 use ore::future::MaybeFuture;
-use relationexpr::{EvalEnv, GlobalId};
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use sql_parser::ast::{
+    AvroSchema, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
+    ShowStatementFilter, Stage, Statement, Value,
+};
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
@@ -509,21 +509,38 @@ fn handle_show_indexes(
                 && entry.uses() == vec![from_entry.id()]
         })
         .flat_map(|entry| match entry.item() {
-            CatalogItem::Index(dataflow_types::Index { raw_keys, .. }) => {
+            CatalogItem::Index(dataflow_types::Index {
+                desc,
+                relation_type,
+                raw_sql,
+                ..
+            }) => {
+                let key_sqls = match crate::parse(raw_sql.to_owned())
+                    .expect("raw_sql cannot be invalid")
+                    .into_element()
+                {
+                    Statement::CreateIndex { key_parts, .. } => key_parts,
+                    _ => unreachable!(),
+                };
                 let mut row_subset = Vec::new();
-                for (seq_in_index, key_sql) in raw_keys.iter().enumerate() {
-                    let (col_name, func) = if key_sql.is_column_name {
-                        (Datum::from(&*key_sql.raw_sql), Datum::Null)
+                for (i, (key_expr, key_sql)) in desc.keys.iter().zip_eq(key_sqls).enumerate() {
+                    let key_sql = key_sql.to_string();
+                    let is_column_name = match key_expr {
+                        expr::ScalarExpr::Column(_) => true,
+                        _ => false,
+                    };
+                    let (col_name, func) = if is_column_name {
+                        (Datum::String(&key_sql), Datum::Null)
                     } else {
-                        (Datum::Null, Datum::from(&*key_sql.raw_sql))
+                        (Datum::Null, Datum::String(&key_sql))
                     };
                     row_subset.push(Row::pack(&vec![
-                        Datum::from(&*from_entry.name().to_string()),
-                        Datum::from(&*entry.name().to_string()),
+                        Datum::String(&from_entry.name().to_string()),
+                        Datum::String(&entry.name().to_string()),
                         col_name,
                         func,
-                        Datum::from(key_sql.nullable),
-                        Datum::from((seq_in_index + 1) as i64),
+                        Datum::from(key_expr.typ(relation_type).nullable),
+                        Datum::from((i + 1) as i64),
                     ]));
                 }
                 row_subset
@@ -668,6 +685,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
 }
 
 fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+    let raw_sql = stmt.to_string();
     let (name, on_name, key_parts, if_not_exists) = match stmt {
         Statement::CreateIndex {
             name,
@@ -689,12 +707,15 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
             schema: on_name.schema.clone(),
             item: normalize::ident(name),
         },
-        index: Index::new(
-            catalog_entry.id(),
-            keys,
-            key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
-            catalog_entry.desc()?,
-        ),
+        index: Index {
+            desc: IndexDesc {
+                on_id: catalog_entry.id(),
+                keys,
+            },
+            raw_sql,
+            relation_type: catalog_entry.desc()?.typ().clone(),
+            eval_env: EvalEnv::default(),
+        },
         if_not_exists,
     })
 }
@@ -766,8 +787,8 @@ fn handle_create_view(
         handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
     if !finishing.is_trivial() {
         //TODO: materialize#724 - persist finishing information with the view?
-        relation_expr = relationexpr::RelationExpr::Project {
-            input: Box::new(relationexpr::RelationExpr::TopK {
+        relation_expr = expr::RelationExpr::Project {
+            input: Box::new(expr::RelationExpr::TopK {
                 input: Box::new(relation_expr),
                 group_key: vec![],
                 order_key: finishing.order_by,
@@ -1260,7 +1281,7 @@ fn handle_query(
     query: Query,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+) -> Result<(expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
     Ok((expr.decorrelate()?, desc, finishing))

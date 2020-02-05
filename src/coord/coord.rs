@@ -23,6 +23,7 @@ use futures::future::FutureExt;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
+use itertools::Itertools;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
@@ -160,11 +161,19 @@ where
                             schema: "mz_catalog".into(),
                             item: format!("{}_primary_idx", log_src.name()),
                         },
-                        CatalogItem::Index(dataflow_types::Index::new_from_cols(
-                            log_src.id(),
-                            log_src.index_by(),
-                            &log_src.schema(),
-                        )),
+                        CatalogItem::Index(Index {
+                            desc: IndexDesc {
+                                on_id: log_src.id(),
+                                keys: log_src
+                                    .index_by()
+                                    .into_iter()
+                                    .map(ScalarExpr::Column)
+                                    .collect(),
+                            },
+                            raw_sql: index_sql(&log_src.schema(), &log_src.index_by()),
+                            relation_type: log_src.schema().typ().clone(),
+                            eval_env: EvalEnv::default(),
+                        }),
                     );
                 }
 
@@ -1843,5 +1852,28 @@ pub fn auto_generate_primary_idx(view: &View<OptimizedRelationExpr>, view_id: Gl
     } else {
         (0..view.desc.typ().column_types.len()).collect()
     };
-    Index::new_from_cols(view_id, keys, &view.desc)
+    Index {
+        raw_sql: index_sql(&view.desc, &keys),
+        desc: IndexDesc {
+            on_id: view_id,
+            keys: keys.into_iter().map(ScalarExpr::Column).collect(),
+        },
+        relation_type: view.desc.typ().clone(),
+        eval_env: EvalEnv::default(),
+    }
+}
+
+fn index_sql(desc: &RelationDesc, keys: &[usize]) -> String {
+    // TODO(benesch): this is morally wrong, but not in a way that is visible
+    // to the user.
+    format!(
+        "CREATE INDEX todo ON todo ({})",
+        keys.iter()
+            .map(|i| desc
+                .get_name(i)
+                .as_ref()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| i.to_string()))
+            .join(", "),
+    )
 }
