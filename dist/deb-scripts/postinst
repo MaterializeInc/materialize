@@ -7,8 +7,6 @@
 
 set -euo pipefail
 
+adduser --system materialize
 mkdir -p /var/lib/materialize/
-if [[ $(getent passwd materialize) = "" ]]; then
-    adduser --disabled-login --disabled-password --system materialize
-fi
 chown materialize:materialize /var/lib/materialize/
