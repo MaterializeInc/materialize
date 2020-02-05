@@ -59,7 +59,7 @@ copyright_files=$(grep -vE \
     -e '^netlify.toml$' \
     -e '^rust-toolchain$' \
     -e '^rustfmt.toml$' \
-    -e '(^|/)requirements.txt$' \
+    -e '(^|/)requirements.*\.txt$' \
     -e '\.(md|json|asc|png|jpe?g|svg|eot|ttf|woff2?)$' \
     -e '^www/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^misc/docker/ci-builder/ssh_known_hosts$' \

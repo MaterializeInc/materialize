@@ -25,20 +25,21 @@ services:
 
   server:
     init: true
-    build: server
+    image: materialize/http-demo:2020-02-05
     ports:
       - *server
     volumes:
       - logfile:/log
-    command: /bin/sh -c "./app.py 2> /log/requests"
+    command: /bin/sh -c "./server.py 2> /log/requests"
 
   client:
+    image: materialize/http-demo:2020-02-05
     init: true
-    build: loadgen
     depends_on: [server]
+    command: ./loadgen.py
 
   cli:
-    build: cli
+    image: materialize/cli
     init: true
     # if you run the terminal with a dark background uncomment these lines
     # environment:
@@ -47,9 +48,11 @@ services:
       - materialized
 
   setup:
-    build: cli
+    image: materialize/cli
     depends_on:
       - materialized
-    command: setup.sh
+    volumes:
+      - .:/mounted
+    command: /mounted/setup.sh
 volumes:
   logfile:
