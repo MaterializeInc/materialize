@@ -210,7 +210,7 @@ Materialize to maintain for us.
    across 6 tables:
 
     ```sql
-    CREATE VIEW q07 AS
+    CREATE MATERIALIZED VIEW q07 AS
     SELECT
         su_nationkey AS supp_nation,
         substr(c_state, 1, 1) AS cust_nation,
