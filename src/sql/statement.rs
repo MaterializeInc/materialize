@@ -678,14 +678,11 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
         _ => unreachable!(),
     };
     let on_name = scx.resolve_name(on_name)?;
-    let (catalog_entry, keys) = query::plan_index(scx, &on_name, &key_parts)?;
+    let catalog_entry = scx.catalog.get(&on_name)?;
+    let keys = query::plan_index_exprs(scx, catalog_entry.desc()?, &key_parts)?;
     if !object_type_matches(ObjectType::View, catalog_entry.item()) {
         bail!("{} is not a view", on_name);
     }
-    let keys = keys
-        .into_iter()
-        .map(|x| x.lower_uncorrelated())
-        .collect::<Vec<_>>();
     Ok(Plan::CreateIndex {
         name: FullName {
             database: on_name.database.clone(),
