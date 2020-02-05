@@ -37,11 +37,12 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, Index, PeekResponse, RowSetFinishing, Timestamp, Update,
+    compare_columns, DataflowDesc, Diff, IndexDesc, PeekResponse, RowSetFinishing, Timestamp,
+    Update,
 };
 use expr::{EvalEnv, GlobalId, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, RelationType, Row, RowArena};
 
 use super::render;
 use crate::arrangement::{
@@ -113,7 +114,8 @@ pub enum SequencedCommand {
     CreateLocalInput {
         name: String,
         index_id: GlobalId,
-        index: Index,
+        index: IndexDesc,
+        on_type: RelationType,
         advance_to: Timestamp,
     },
     /// Insert `updates` into the local input named `id`.
@@ -580,9 +582,10 @@ where
                 name,
                 index_id,
                 index,
+                on_type,
                 advance_to,
             } => {
-                let view_id = index.desc.on_id;
+                let view_id = index.on_id;
                 render::build_local_input(
                     &mut self.traces,
                     self.inner,
@@ -590,6 +593,7 @@ where
                     index_id,
                     &name,
                     index,
+                    on_type,
                 );
                 self.reported_frontiers
                     .insert(index_id, Antichain::from_elem(0));
