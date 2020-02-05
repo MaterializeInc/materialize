@@ -2,4 +2,4 @@ CREATE MATERIALIZED VIEW billing_raw_data AS
 SELECT
     *
 FROM
-    {source_name};
+    billing_source;

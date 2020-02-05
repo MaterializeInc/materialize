@@ -26,6 +26,12 @@ pub enum Error {
 
     #[error("Waiting for futures to complete")]
     JoinError(#[from] tokio::task::JoinError),
+
+    #[error("Unable to find csv file")]
+    CsvReadError(#[from] csv::Error),
+
+    #[error("Unable to flush csv file")]
+    CsvFlushError(#[from] std::io::Error),
 }
 
 impl From<String> for Error {

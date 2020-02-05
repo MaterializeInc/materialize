@@ -5,7 +5,9 @@
 
 use std::marker::Sync;
 
+use csv::Writer;
 use postgres_types::ToSql;
+use rand::Rng;
 use tokio_postgres::{Client, NoTls};
 
 use crate::error::Result;
@@ -45,6 +47,7 @@ impl MzClient {
 
     pub async fn drop_source(&self, name: &str) -> Result<()> {
         let q = format!("DROP SOURCE {} CASCADE", name);
+        log::debug!("deleting source=> {}", q);
         self.0.execute(&*q, &[]).await?;
         Ok(())
     }
@@ -71,6 +74,37 @@ impl MzClient {
         );
         log::debug!("creating source=> {}", query);
 
+        self.0.execute(&*query, &[]).await?;
+        Ok(())
+    }
+
+    pub async fn create_csv_source(
+        &self,
+        file_name: &str,
+        source_name: &str,
+        num_clients: u32,
+    ) -> Result<()> {
+        let mut writer = Writer::from_path(file_name)?;
+        use rand::SeedableRng;
+        let rng = &mut rand::rngs::StdRng::from_seed(rand::random());
+
+        for i in 1..num_clients {
+            writer.write_record(&[
+                i.to_string(),
+                rng.gen_range(1, 10).to_string(),
+                rng.gen_range(1, 10).to_string(),
+            ])?;
+        }
+
+        writer.flush()?;
+        let query = format!(
+            "CREATE SOURCE {source} FROM 'file://{file}' \
+             FORMAT CSV WITH 3 COLUMNS",
+            source = source_name,
+            file = file_name,
+        );
+
+        log::debug!("creating csv source=> {}", query);
         self.0.execute(&*query, &[]).await?;
         Ok(())
     }

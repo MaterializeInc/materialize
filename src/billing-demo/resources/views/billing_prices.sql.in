@@ -1,0 +1,9 @@
+CREATE MATERIALIZED VIEW billing_prices AS
+SELECT
+column1::int AS client_id,
+((column2::float) / 1000.0) AS price_per_cpu_ms,
+((column3::float) / 1000.0) AS price_per_gb_ms
+
+FROM
+
+price_source;
