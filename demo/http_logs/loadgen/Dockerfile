@@ -5,11 +5,14 @@
 
 FROM ubuntu:bionic
 
-RUN apt-get update && apt-get install -qy aspell
+RUN apt-get update -o Acquire::Languages=none \
+    && apt-get install -qy -o Dpkg::Options::=--force-unsafe-io \
+         aspell \
+    && aspell -d en dump master | aspell -l en expand | grep '^[a-z]*$' > words.txt \
+    && apt-get remove -y aspell \
+    && apt-get autoremove -y
 
-RUN aspell -d en dump master | aspell -l en expand | grep '^[a-z]*$' > words.txt
-
-FROM python:3.8
+FROM python:3.8-slim
 
 COPY . /app
 COPY --from=0 words.txt /app/words.txt
