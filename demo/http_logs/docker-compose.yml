@@ -38,7 +38,7 @@ services:
     depends_on: [server]
 
   cli:
-    build: cli
+    image: materialize/cli
     init: true
     # if you run the terminal with a dark background uncomment these lines
     # environment:
@@ -47,9 +47,11 @@ services:
       - materialized
 
   setup:
-    build: cli
+    image: materialize/cli
     depends_on:
       - materialized
-    command: setup.sh
+    volumes:
+      - .:/mounted
+    command: /mounted/setup.sh
 volumes:
   logfile:
