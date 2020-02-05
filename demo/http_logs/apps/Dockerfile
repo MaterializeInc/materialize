@@ -18,6 +18,6 @@ COPY . /app
 COPY --from=0 words.txt /app/words.txt
 WORKDIR /app
 
-RUN pip install -r requirements.txt
+RUN pip install -r requirements-server.txt -r requirements-loadgen.txt
 
-CMD ["./main.py"]
+CMD ["./server.py"]
