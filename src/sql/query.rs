@@ -34,8 +34,7 @@ use sql_parser::ast::{
 use uuid::Uuid;
 
 use ::expr::{DateTruncTo, Id};
-use catalog::names::{FullName, PartialName};
-use catalog::CatalogEntry;
+use catalog::names::PartialName;
 use dataflow_types::RowSetFinishing;
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
@@ -82,6 +81,28 @@ pub fn plan_root_query(
         param_types.push(typ);
     }
     Ok((expr, desc, finishing, param_types))
+}
+
+pub fn plan_index_exprs<'a>(
+    scx: &'a StatementContext,
+    on_desc: &RelationDesc,
+    exprs: &[Expr],
+) -> Result<Vec<::expr::ScalarExpr>, failure::Error> {
+    let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
+    let qcx = &QueryContext::root(scx, QueryLifetime::Static);
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "CREATE INDEX",
+        scope: &scope,
+        relation_type: on_desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+    };
+    let mut out = vec![];
+    for expr in exprs {
+        out.push(plan_expr(ecx, expr, Some(ScalarType::String))?.lower_uncorrelated());
+    }
+    Ok(out)
 }
 
 fn plan_expr_or_col_index<'a>(
@@ -530,35 +551,6 @@ fn plan_view_select(
     }
 
     Ok((relation_expr, project_scope))
-}
-
-pub fn plan_index<'a>(
-    scx: &'a StatementContext,
-    on_name: &FullName,
-    key_parts: &[Expr],
-) -> Result<(&'a CatalogEntry, Vec<ScalarExpr>), failure::Error> {
-    let item = scx.catalog.get(on_name)?;
-    let desc = item.desc()?;
-    let scope = Scope::from_source(
-        Some(on_name.clone().into()),
-        desc.iter_names(),
-        Some(Scope::empty(None)),
-    );
-    let qcx = &QueryContext::root(scx, QueryLifetime::Static);
-    let ecx = &ExprContext {
-        qcx: &qcx,
-        name: "CREATE INDEX",
-        scope: &scope,
-        relation_type: desc.typ(),
-        allow_aggregates: false,
-        allow_subqueries: false,
-    };
-
-    let keys = key_parts
-        .iter()
-        .map(|key_part| plan_expr(ecx, key_part, Some(ScalarType::String)))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((item, keys))
 }
 
 fn plan_table_with_joins<'a>(

@@ -401,21 +401,11 @@ pub struct TailSinkConnector {
     pub since: Timestamp,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KeySql {
-    pub raw_sql: String,
-    /// true if the raw_sql is a column name, false if it is a function
-    pub is_column_name: bool,
-    /// true if the raw_sql evaluates to a nullable expression
-    pub nullable: bool,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
-    /// Numbers of the columns to be arranged, in order of decreasing primacy.
-    /// the columns to evaluate and arrange on.
+    /// Expressions to be arranged, in order of decreasing primacy.
     pub keys: Vec<ScalarExpr>,
 }
 
@@ -424,61 +414,9 @@ pub struct IndexDesc {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Index {
     pub desc: IndexDesc,
-    /// the human-friendly description on each column for `SHOW INDEXES` to show
-    pub raw_keys: Vec<KeySql>,
+    pub raw_sql: String,
     /// Types of the columns of the `on_id` collection.
     pub relation_type: RelationType,
     /// The evaluation environment for the expressions in `funcs`.
     pub eval_env: EvalEnv,
-}
-
-impl Index {
-    pub fn new(
-        on_id: GlobalId,
-        keys: Vec<ScalarExpr>,
-        key_strings: Vec<String>,
-        desc: &RelationDesc,
-    ) -> Self {
-        let on_relation_type = desc.typ();
-        let nullables = keys
-            .iter()
-            .map(|key| key.typ(on_relation_type).nullable)
-            .collect::<Vec<_>>();
-        let raw_keys = key_strings
-            .into_iter()
-            .zip(keys.iter().zip(nullables))
-            .map(|(key_string, (key, nullable))| KeySql {
-                raw_sql: key_string,
-                is_column_name: match key {
-                    ScalarExpr::Column(_i) => true,
-                    _ => false,
-                },
-                nullable,
-            })
-            .collect();
-        Index {
-            desc: IndexDesc { on_id, keys },
-            relation_type: on_relation_type.clone(),
-            eval_env: EvalEnv::default(),
-            raw_keys,
-        }
-    }
-
-    pub fn new_from_cols(on_id: GlobalId, keys: Vec<usize>, desc: &RelationDesc) -> Self {
-        Index::new(
-            on_id,
-            keys.iter()
-                .map(|c| ScalarExpr::Column(*c))
-                .collect::<Vec<_>>(),
-            keys.into_iter()
-                .map(|c| {
-                    desc.get_name(&c)
-                        .as_ref()
-                        .map(|name| name.to_string())
-                        .unwrap_or_else(|| c.to_string())
-                })
-                .collect::<Vec<_>>(),
-            desc,
-        )
-    }
 }
