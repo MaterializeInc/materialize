@@ -21,7 +21,7 @@ services:
     ports:
      - *materialized
     init: true
-    command: --threads 8
+    command: --threads 1
     environment:
       - MZ_LOG=dataflow=error,info
       - DIFFERENTIAL_EAGER_MERGE=1000
