@@ -30,6 +30,8 @@ Detail | Info
 
 Field | Use
 ------|-----
+_date&lowbar;str_ | A string representing a date in `Y-M-D` format.
+_time&lowbar;str_ | A string representing a time of day in `H:M:S.NS` format.
 _tz&lowbar;offset_ | The timezone's distance, in hours, from UTC.
 
 ## Details
@@ -51,6 +53,19 @@ You can [cast](../../functions/cast) `timestamp` or `timestamptz` to:
 You cannot cast `timestamp` or `timestamptz` to any other type.
 
 Notably, you also cannot cast between `timestamp` and `timestamptz`.
+
+### Valid operations
+
+`timestamp` data supports the following operations with other types.
+
+Operation | Computes
+----------|------------
+[`date`](../date) `+` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`date`](../date) `-` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`date`](../date) `+` [`time`](../time) | [`timestamp`](../timestamp)
+[`timestamp`](../timestamp) `+` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`timestamp`](../timestamp) `-` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`timestamp`](../timestamp) `-` [`timestamp`](../timestamp) | [`interval`](../interval)
 
 ## Examples
 

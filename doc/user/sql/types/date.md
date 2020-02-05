@@ -20,6 +20,10 @@ Detail | Info
 
 {{< diagram "type-date.html" >}}
 
+Field | Use
+------|----
+_date&lowbar;str_ | A string representing a date in `Y-M-D` format.
+
 ## Details
 
 ### Valid casts
@@ -35,6 +39,17 @@ You can [cast](../../functions/cast) `date` to:
 #### To `date`
 
 You cannot cast any other type to `date`.
+
+### Valid operations
+
+`time` data supports the following operations with other types.
+
+Operation | Computes
+----------|------------
+[`date`](../date) `+` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`date`](../date) `-` [`interval`](../interval) | [`timestamp`](../timestamp)
+[`date`](../date) `+` [`time`](../time) | [`timestamp`](../timestamp)
+[`date`](../date) `-` [`date`](../date) | [`interval`](../interval)
 
 ## Examples
 

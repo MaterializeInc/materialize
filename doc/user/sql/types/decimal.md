@@ -23,7 +23,7 @@ Detail | Info
 
 {{< diagram "type-decimal-val.html" >}}
 
-Field | Definition
+Field | Use
 ------|-----------
 **E**_exp_ | Multiply the number preceeding **E** by 10<sup>exp</sup>
 
@@ -31,7 +31,7 @@ Field | Definition
 
 {{< diagram "type-decimal-def.html" >}}
 
-Field | Definition
+Field | Use
 ------|-----------
 _precision_ | The total number of decimal values to track, e.g., `100` has a precision of 3. However, all `decimal` values in Materialize have a precision of 38.
 _scale_ | The total number of fractional decimal values to track, e.g. `.321` has a scale of 3. _scale_ cannot exceed the maximum precision.

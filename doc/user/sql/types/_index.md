@@ -15,5 +15,6 @@ Type | Use | Size (bytes) | Syntax
 [`interval`](interval) | Duration of time | 32 | `INTERVAL '1-2 3 4:5:6.7'`
 [`jsonb`](jsonb) | JSON | Variable | `'{"1":2,"3":4}'::JSONB`
 [`string`](string) | Unicode string | Variable | `'foo'`
+[`time`](time) | Time without date | 4 | `TIME '01:23:45'`
 [`timestamp`](timestamp) | Date and time | 8 | `TIMESTAMP '2007-02-01 15:04:05'`
 [`timestamptz`](timestamp) | Date and time with timezone | 8 | `TIMESTAMPTZ '2007-02-01 15:04:05+06'`

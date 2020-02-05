@@ -1,2 +1,2 @@
 type_date ::=
-  'DATE' "'" yyyy '-' mm '-' dd "'"
+  'DATE' "'" date_str "'"

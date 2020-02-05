@@ -1,2 +1,2 @@
 type_timestamp ::=
-  'TIMESTAMP' "'" yyyy-mm-dd hh-mm-ss "'"
+  'TIMESTAMP' "'" date_str time_str? "'"
