@@ -28,7 +28,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogEntry, CatalogItem};
+use catalog::{Catalog, CatalogItem};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -527,27 +527,45 @@ where
             Plan::CreateDatabase {
                 name,
                 if_not_exists,
-            } => match self.catalog.create_database(name) {
-                Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
-                Err(err) => Err(err),
-            },
+            } => {
+                let ops = vec![
+                    catalog::Op::CreateDatabase { name: name.clone() },
+                    catalog::Op::CreateSchema {
+                        database_name: name,
+                        schema_name: "public".into(),
+                    },
+                ];
+                match self.catalog_transact(ops) {
+                    Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
+                    Err(_) if if_not_exists => {
+                        Ok(ExecuteResponse::CreatedDatabase { existed: true })
+                    }
+                    Err(err) => Err(err),
+                }
+            }
 
             Plan::CreateSchema {
                 database_name,
                 schema_name,
                 if_not_exists,
-            } => match self.catalog.create_schema(database_name, schema_name) {
-                Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
-                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
-                Err(err) => Err(err),
-            },
+            } => {
+                let op = catalog::Op::CreateSchema {
+                    database_name,
+                    schema_name,
+                };
+                match self.catalog_transact(vec![op]) {
+                    Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
+                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
+                    Err(err) => Err(err),
+                }
+            }
 
             Plan::CreateTable {
                 name,
                 desc,
                 if_not_exists,
             } => {
+                let view_id = self.catalog.allocate_id();
                 let view = View {
                     raw_sql: "<created by CREATE TABLE>".to_string(),
                     relation_expr: OptimizedRelationExpr::declare_optimized(
@@ -561,13 +579,24 @@ where
                     eval_env: EvalEnv::default(),
                     desc,
                 };
-                match self.register_view(&name, &view) {
-                    Ok(view_id) => {
+                let index_id = self.catalog.allocate_id();
+                let mut index_name = name.clone();
+                index_name.item += "_primary_idx";
+                let index = auto_generate_primary_idx(&view, view_id);
+                match self.catalog_transact(vec![
+                    catalog::Op::CreateItem {
+                        id: view_id,
+                        name: name.clone(),
+                        item: CatalogItem::View(view.clone()),
+                    },
+                    catalog::Op::CreateItem {
+                        id: index_id,
+                        name: index_name,
+                        item: CatalogItem::Index(index.clone()),
+                    },
+                ]) {
+                    Ok(_) => {
                         self.insert_view(view_id, &view);
-                        let mut index_name = name.clone();
-                        index_name.item += "_primary_idx";
-                        let index = auto_generate_primary_idx(&view, view_id);
-                        let index_id = self.register_index(&index_name, &index)?;
                         broadcast(
                             &mut self.broadcast_tx,
                             SequencedCommand::CreateLocalInput {
@@ -589,19 +618,38 @@ where
                 name,
                 source,
                 if_not_exists,
-            } => match self.register_source(&name, &source) {
-                Ok(source_id) => {
-                    self.sources.insert(source_id, source);
-                    Ok(ExecuteResponse::CreatedSource { existed: false })
+            } => {
+                let source_id = self.catalog.allocate_id();
+                let op = catalog::Op::CreateItem {
+                    id: source_id,
+                    name,
+                    item: CatalogItem::Source(source.clone()),
+                };
+                match self.catalog_transact(vec![op]) {
+                    Ok(()) => {
+                        self.sources.insert(source_id, source);
+                        Ok(ExecuteResponse::CreatedSource { existed: false })
+                    }
+                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+                    Err(err) => Err(err),
                 }
-                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
-                Err(err) => Err(err),
-            },
+            }
 
             Plan::CreateSources(mut sources) => {
                 sources.retain(|(name, _)| self.catalog.get(name).is_err());
-                for (name, source) in sources.iter() {
-                    let source_id = self.register_source(&name, source)?;
+                let mut source_ids = vec![];
+                let mut ops = vec![];
+                for (name, source) in &sources {
+                    let id = self.catalog.allocate_id();
+                    source_ids.push(id);
+                    ops.push(catalog::Op::CreateItem {
+                        id,
+                        name: name.clone(),
+                        item: CatalogItem::Source(source.clone()),
+                    });
+                }
+                self.catalog_transact(ops)?;
+                for (source_id, (_, source)) in source_ids.into_iter().zip_eq(&sources) {
                     self.sources.insert(source_id, source.clone());
                 }
                 Ok(send_immediate_rows(
@@ -616,22 +664,22 @@ where
                 name,
                 sink,
                 if_not_exists,
-            } => match self
-                .catalog
-                .create_item(name.clone(), CatalogItem::Sink(sink.clone()))
-            {
-                Ok(id) => {
-                    self.report_catalog_update(
-                        id,
-                        self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
-                        true,
-                    );
-                    self.create_sink_dataflow(name.to_string(), id, sink);
-                    Ok(ExecuteResponse::CreatedSink { existed: false })
+            } => {
+                let id = self.catalog.allocate_id();
+                let op = catalog::Op::CreateItem {
+                    id,
+                    name: name.clone(),
+                    item: CatalogItem::Sink(sink.clone()),
+                };
+                match self.catalog_transact(vec![op]) {
+                    Ok(()) => {
+                        self.create_sink_dataflow(name.to_string(), id, sink);
+                        Ok(ExecuteResponse::CreatedSink { existed: false })
+                    }
+                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSink { existed: true }),
+                    Err(err) => Err(err),
                 }
-                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSink { existed: true }),
-                Err(err) => Err(err),
-            },
+            }
 
             Plan::CreateView {
                 name,
@@ -639,21 +687,37 @@ where
                 replace,
                 materialize,
             } => {
+                let mut ops = vec![];
                 if let Some(id) = replace {
-                    let drops = self.catalog.drop_items(&[id])?;
-                    self.drop_items(&drops);
+                    ops.extend(self.catalog.drop_items_ops(&[id]));
                 }
+                let view_id = self.catalog.allocate_id();
                 let view = self.optimize_view(view);
-                let id = self.register_view(&name, &view)?;
-                self.insert_view(id, &view);
-                if materialize {
+                ops.push(catalog::Op::CreateItem {
+                    id: view_id,
+                    name: name.clone(),
+                    item: CatalogItem::View(view.clone()),
+                });
+                let (index_id, index) = if materialize {
                     let mut index_name = name.clone();
-                    let mut dataflow = DataflowDesc::new(name.to_string());
-                    self.build_view_collection(&id, &view, &mut dataflow);
-                    let index = auto_generate_primary_idx(&view, id);
+                    let index = auto_generate_primary_idx(&view, view_id);
                     index_name.item += "_primary_idx";
-                    let index_id = self.register_index(&index_name, &index)?;
-                    self.build_arrangement(&index_id, index, dataflow);
+                    let index_id = self.catalog.allocate_id();
+                    ops.push(catalog::Op::CreateItem {
+                        id: index_id,
+                        name: index_name,
+                        item: CatalogItem::Index(index.clone()),
+                    });
+                    (Some(index_id), Some(index))
+                } else {
+                    (None, None)
+                };
+                self.catalog_transact(ops)?;
+                self.insert_view(view_id, &view);
+                if materialize {
+                    let mut dataflow = DataflowDesc::new(name.to_string());
+                    self.build_view_collection(&view_id, &view, &mut dataflow);
+                    self.build_arrangement(&index_id.unwrap(), index.unwrap(), dataflow);
                 }
                 Ok(ExecuteResponse::CreatedView)
             }
@@ -662,18 +726,26 @@ where
                 name,
                 index,
                 if_not_exists,
-            } => match self.register_index(&name, &index) {
-                Ok(id) => {
-                    self.create_index_dataflow(name.to_string(), id, index);
-                    Ok(ExecuteResponse::CreatedIndex { existed: false })
+            } => {
+                let id = self.catalog.allocate_id();
+                let op = catalog::Op::CreateItem {
+                    id,
+                    name: name.clone(),
+                    item: CatalogItem::Index(index.clone()),
+                };
+                match self.catalog_transact(vec![op]) {
+                    Ok(()) => {
+                        self.create_index_dataflow(name.to_string(), id, index);
+                        Ok(ExecuteResponse::CreatedIndex { existed: false })
+                    }
+                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
+                    Err(err) => Err(err),
                 }
-                Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
-                Err(err) => Err(err),
-            },
+            }
 
             Plan::DropDatabase { name } => {
-                let drops = self.catalog.drop_database(name)?;
-                self.drop_items(&drops);
+                let ops = self.catalog.drop_database_ops(name);
+                self.catalog_transact(ops)?;
                 Ok(ExecuteResponse::DroppedDatabase)
             }
 
@@ -681,14 +753,14 @@ where
                 database_name,
                 schema_name,
             } => {
-                let drops = self.catalog.drop_schema(database_name, schema_name)?;
-                self.drop_items(&drops);
+                let ops = self.catalog.drop_schema_ops(database_name, schema_name);
+                self.catalog_transact(ops)?;
                 Ok(ExecuteResponse::DroppedSchema)
             }
 
             Plan::DropItems { items, ty } => {
-                let drops = self.catalog.drop_items(&items)?;
-                self.drop_items(&drops);
+                let ops = self.catalog.drop_items_ops(&items);
+                self.catalog_transact(ops)?;
                 Ok(match ty {
                     ObjectType::Schema => unreachable!(),
                     ObjectType::Source => ExecuteResponse::DroppedSource,
@@ -999,56 +1071,53 @@ where
         }
     }
 
-    /// Register sources as described by `sources`.
-    ///
-    /// This method installs descriptions of each source in `sources` in the
-    /// coordinator, so that they can be recovered when used by name in views.
-    fn register_source(
-        &mut self,
-        name: &FullName,
-        source: &dataflow_types::Source,
-    ) -> Result<GlobalId, failure::Error> {
-        let id = self
-            .catalog
-            .create_item(name.clone(), CatalogItem::Source(source.clone()))?;
-        self.report_catalog_update(
-            id,
-            self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
-            true,
-        );
-        Ok(id)
-    }
+    fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), failure::Error> {
+        let mut sources_to_drop: Vec<GlobalId> = Vec::new();
+        let mut views_to_drop: Vec<GlobalId> = Vec::new();
+        let mut sinks_to_drop: Vec<GlobalId> = Vec::new();
+        let mut indexes_to_drop: Vec<GlobalId> = Vec::new();
 
-    fn register_view(
-        &mut self,
-        name: &FullName,
-        view: &dataflow_types::View<OptimizedRelationExpr>,
-    ) -> Result<GlobalId, failure::Error> {
-        let id = self
-            .catalog
-            .create_item(name.clone(), CatalogItem::View(view.clone()))?;
-        self.report_catalog_update(
-            id,
-            self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
-            true,
-        );
-        Ok(id)
-    }
+        for status in self.catalog.transact(ops)? {
+            match status {
+                catalog::OpStatus::CreatedItem(id) => {
+                    let name = self.catalog.humanize_id(expr::Id::Global(id)).unwrap();
+                    self.report_catalog_update(id, name, true);
+                }
+                catalog::OpStatus::DroppedItem(entry) => {
+                    self.report_catalog_update(entry.id(), entry.name().to_string(), false);
+                    match entry.item() {
+                        CatalogItem::Source(_) => sources_to_drop.push(entry.id()),
+                        CatalogItem::View(_) => views_to_drop.push(entry.id()),
+                        CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
+                        CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
+                    }
+                }
+                _ => (),
+            }
+        }
 
-    fn register_index(
-        &mut self,
-        name: &FullName,
-        index: &dataflow_types::Index,
-    ) -> Result<GlobalId, failure::Error> {
-        let id = self
-            .catalog
-            .create_item(name.clone(), CatalogItem::Index(index.clone()))?;
-        self.report_catalog_update(
-            id,
-            self.catalog.humanize_id(expr::Id::Global(id)).unwrap(),
-            true,
-        );
-        Ok(id)
+        if !sources_to_drop.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSources(sources_to_drop),
+            );
+        }
+        if !views_to_drop.is_empty() {
+            for id in views_to_drop {
+                self.views.remove(&id);
+            }
+        }
+        if !sinks_to_drop.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSinks(sinks_to_drop),
+            );
+        }
+        if !indexes_to_drop.is_empty() {
+            self.drop_indexes(indexes_to_drop);
+        }
+
+        Ok(())
     }
 
     fn import_source_or_view(
@@ -1222,47 +1291,6 @@ where
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
         );
-    }
-
-    fn drop_items(&mut self, entries: &[CatalogEntry]) {
-        let mut sources_to_drop: Vec<GlobalId> = Vec::new();
-        let mut views_to_drop: Vec<GlobalId> = Vec::new();
-        let mut sinks_to_drop: Vec<GlobalId> = Vec::new();
-        let mut indexes_to_drop: Vec<GlobalId> = Vec::new();
-        for entry in entries {
-            match entry.item() {
-                CatalogItem::Source(_) => sources_to_drop.push(entry.id()),
-                CatalogItem::View(_) => {
-                    views_to_drop.push(entry.id());
-                }
-                CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
-                CatalogItem::Index(_) => indexes_to_drop.push(entry.id()),
-            }
-            self.report_catalog_update(entry.id(), entry.name().to_string(), false);
-        }
-
-        if !sources_to_drop.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropSources(sources_to_drop),
-            );
-        }
-
-        if !views_to_drop.is_empty() {
-            for id in views_to_drop {
-                self.views.remove(&id);
-            }
-        }
-        if !sinks_to_drop.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropSinks(sinks_to_drop),
-            );
-        }
-
-        if !indexes_to_drop.is_empty() {
-            self.drop_indexes(indexes_to_drop);
-        }
     }
 
     pub fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
@@ -1578,22 +1606,7 @@ where
         }
     }
 
-    /// Updates the since frontier of a named index.
-    ///
-    /// This frontier tracks compaction frontier, and represents a lower bound on times for
-    /// which the associated trace is certain to produce valid results. For times greater
-    /// or equal to some element of the since frontier the accumulation will be correct,
-    /// and for other times no such guarantee holds.
-    #[allow(dead_code)]
-    fn update_since(&mut self, name: &GlobalId, since: &[Timestamp]) {
-        if let Some(index_state) = self.indexes.get_mut(name) {
-            index_state.since.clear();
-            index_state.since.extend(since.iter().cloned());
-        }
-    }
-
     /// The since frontier of a maintained index, if it exists.
-    #[allow(dead_code)]
     fn since_of(&self, name: &GlobalId) -> Option<&Antichain<Timestamp>> {
         if let Some(index_state) = self.indexes.get(name) {
             Some(&index_state.since)
