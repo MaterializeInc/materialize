@@ -144,8 +144,8 @@ Implicit in this design are a few key points:
 
 Check out:
 
-- [Get started](../get-started)
-- [`CREATE SOURCES`](../sql/create-sources)
+- [Get started](../../get-started)
+- [`CREATE SOURCES`](../../sql/create-sources)
 
 [1]:
 https://paper.dropbox.com/doc/Materialize-Product--AbHSqqXlN5YNKHiYEXm3EKyNAg-eMbfh2QTOCPrU7drExDCm
