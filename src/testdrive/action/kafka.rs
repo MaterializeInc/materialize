@@ -190,7 +190,7 @@ enum RawSchema {
         /// The name of the message to be sent
         message: String,
     },
-    Raw,
+    Bytes,
 }
 
 /// The parsed format
@@ -206,7 +206,7 @@ enum ParsedSchema {
         parser: &'static dyn Fn(&str) -> Result<crate::protobuf::DynMessage, failure::Error>,
         validator: &'static dyn Fn(&[u8]) -> Result<Box<dyn std::fmt::Debug>, failure::Error>,
     },
-    Raw,
+    Bytes,
 }
 
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
@@ -222,7 +222,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             let message = cmd.args.string("message")?;
             RawSchema::Proto { message }
         }
-        "raw" => RawSchema::Raw {},
+        "raw" => RawSchema::Bytes {},
         _ => return Err(format!("Unknown message format: {}", format)),
     };
 
@@ -353,7 +353,7 @@ impl IngestAction {
                 },
                 _ => return Err(format!("unknown testdrive protobuf message: {}", message)),
             },
-            RawSchema::Raw {} => ParsedSchema::Raw {},
+            RawSchema::Bytes {} => ParsedSchema::Bytes {},
         };
 
         let futs = FuturesUnordered::new();
@@ -389,7 +389,7 @@ impl IngestAction {
                     let _parsed = validator(&buf)
                         .map_err(|e| format!("error validating proto row={}\nerror={}", row, e))?;
                 }
-                ParsedSchema::Raw {} => {
+                ParsedSchema::Bytes {} => {
                     buf = row.as_bytes().to_vec();
                 }
             }

@@ -878,8 +878,8 @@ async fn handle_create_dataflow(
                         Some(_) => bail!("tail must be a boolean"),
                     };
                     let (encoding, desc) = match format {
-                        Format::Raw => (
-                            DataEncoding::Raw,
+                        Format::Bytes => (
+                            DataEncoding::Bytes,
                             RelationDesc::new(
                                 RelationType::new(vec![
                                     ColumnType::new(ScalarType::Bytes),

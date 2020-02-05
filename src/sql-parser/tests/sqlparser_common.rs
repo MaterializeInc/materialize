@@ -3663,7 +3663,7 @@ fn parse_create_source_default_envelope() {
 
 #[test]
 fn parse_create_source_if_not_exists() {
-    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' FORMAT RAW";
+    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' FORMAT BYTES";
     match verified_stmt(sql) {
         Statement::CreateSource { if_not_exists, .. } => {
             assert!(if_not_exists);

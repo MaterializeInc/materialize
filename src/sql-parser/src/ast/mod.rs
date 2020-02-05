@@ -526,7 +526,7 @@ impl fmt::Display for AvroSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Format {
-    Raw,
+    Bytes,
     Avro(AvroSchema),
     Protobuf {
         message_name: String,
@@ -569,7 +569,7 @@ impl fmt::Display for Envelope {
 impl fmt::Display for Format {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Raw => write!(f, "RAW"),
+            Self::Bytes => write!(f, "BYTES"),
             Self::Avro(inner) => write!(f, "AVRO USING {}", inner),
             Self::Protobuf {
                 message_name,

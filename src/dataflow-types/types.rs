@@ -284,7 +284,7 @@ pub enum DataEncoding {
         regex: Regex,
     },
     Protobuf(ProtobufEncoding),
-    Raw,
+    Bytes,
     Text,
 }
 

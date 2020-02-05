@@ -1503,12 +1503,12 @@ impl Parser {
             Format::Json
         } else if self.parse_keyword("TEXT") {
             Format::Text
-        } else if self.parse_keyword("RAW") {
-            Format::Raw
+        } else if self.parse_keyword("BYTES") {
+            Format::Bytes
         } else {
             return self.expected(
                 self.peek_range(),
-                "AVRO, PROTOBUF, REGEX, CSV, JSON, TEXT, or RAW",
+                "AVRO, PROTOBUF, REGEX, CSV, JSON, TEXT, or BYTES",
                 self.peek_token(),
             );
         };

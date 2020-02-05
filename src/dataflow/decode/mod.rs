@@ -86,7 +86,7 @@ where
         DataEncoding::Avro(enc) => avro(stream, &enc.raw_schema, enc.schema_registry_url),
         DataEncoding::Regex { regex } => regex_fn(stream, regex, name),
         DataEncoding::Protobuf(enc) => protobuf(stream, &enc.descriptors, &enc.message_name),
-        DataEncoding::Raw => raw(stream),
+        DataEncoding::Bytes => raw(stream),
         DataEncoding::Text => raw(stream).map(|(row, r, d)| {
             let datums = row.unpack();
             (

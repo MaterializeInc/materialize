@@ -1345,7 +1345,7 @@ macro_rules! make_visitor {
         ) {
             use Format::*;
             match format {
-                Raw | Json | Text | Csv { .. } => (),
+                Bytes | Json | Text | Csv { .. } => (),
                 Avro(avro_schema) => visitor.visit_avro_schema(avro_schema),
                 Protobuf {message_name, schema} => {
                     visitor.visit_literal_string(message_name);
