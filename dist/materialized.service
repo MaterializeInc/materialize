@@ -9,8 +9,7 @@ After=network.target
 
 [Service]
 Type=exec
-User=_Materialize
-Group=_Materialize
+User=materialize
+Group=materialize
 
-Environment=MZROOT=/var/lib/materialize
-ExecStart=/usr/bin/materialized -D ${MZROOT}/mzdata
+ExecStart=/usr/bin/materialized -D /var/lib/materialize/mzdata
