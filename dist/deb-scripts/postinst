@@ -9,7 +9,7 @@ set -euo pipefail
 
 # The weird username is intended to be unlikely
 # to conflict with real local users.
-adduser --system _Materialize
+adduser --system --force-badname _Materialize
 mkdir -p /var/lib/materialize/
 chown _Materialize:_Materialize /var/lib/materialize/
 
