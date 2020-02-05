@@ -57,8 +57,8 @@ log files.
 In this demo, Materialize...
 
 - Creates a dynamic file source for the log file. This means it continually
-  polls the file for updates (known as "tailing the file"), and streams new data
-  to materialized views that depend on the source. Because of Materialize's
+  watches the file for updates (known as "tailing the file"), and streams new
+  data to materialized views that depend on the source. Because of Materialize's
   architecture, this means that new events are fully processed by views with
   incredibly low latency.
 - Imposes a structure on the log files passing incoming lines through a regular
@@ -169,7 +169,7 @@ Argument | Function
 `requests` | The source's name
 `file:///log/requests` | The location of the file (`/log/requests`) prefixed by `file://`
 `regex='...'` | The regex that structures our logs and generates column names, which we've outlined in [Impose structure with regex](#impose-a-structure-with-regex).
-`tail=true` | Indicates to Materialize that this file is dynamically updated and it should regularly poll the file for new data.
+`tail=true` | Indicates to Materialize that this file is dynamically updated and should be watched for new data.
 
 In essence, what we've said here is that we want to continually read from the
 log file, and take each unseen string in it, and extract the columns we've
@@ -332,7 +332,7 @@ get a chance to see how Materialize can handle queries on our data.
     -----|------------
     `avg_dps_for_searcher` | Average number of detail pages viewed by users who search
     `top_products` | Most commonly viewed product pages
-    `avg_dps_for_searcher` | Count of unique visitors, determined by IP address
+    `unique_visitors` | Count of unique visitors, determined by IP address
 
 1. To see the query that underlies this view, use `SHOW CREATE VIEW`:
 
