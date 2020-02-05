@@ -7,8 +7,10 @@
 
 set -euo pipefail
 
-adduser --system materialize
+# The weird username is intended to be unlikely
+# to conflict with real local users.
+adduser --system _Materialize
 mkdir -p /var/lib/materialize/
-chown materialize:materialize /var/lib/materialize/
+chown _Materialize:_Materialize /var/lib/materialize/
 
 systemctl daemon-reload
