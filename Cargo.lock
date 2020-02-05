@@ -25,9 +25,9 @@ checksum = "5d2e7343e7fc9de883d1b0341e0b13970f764c14101234857d2ddafa1cb1cac2"
 
 [[package]]
 name = "aho-corasick"
-version = "0.7.6"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58fb5e95d83b38284460a5fda7d6470aa0b8844d283a0b614b8535e880800d2d"
+checksum = "5f56c476256dc249def911d6f7580b5fc7e875895b5d7ee88f5d602208035744"
 dependencies = [
  "memchr",
 ]
@@ -88,6 +88,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8df72488e87761e772f14ae0c2480396810e51b2c2ade912f97f0f7e5b95e3c"
+dependencies = [
+ "proc-macro2 1.0.7",
+ "quote 1.0.2",
+ "syn 1.0.11",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -137,9 +148,9 @@ dependencies = [
 
 [[package]]
 name = "backtrace"
-version = "0.3.42"
+version = "0.3.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4b1549d804b6c73f4817df2ba073709e96e426f12987127c48e6745568c350b"
+checksum = "7f80256bc78f67e7df7e36d77366f636ed976895d91fe2ab9efa3973e8fe8c4f"
 dependencies = [
  "backtrace-sys",
  "cfg-if",
@@ -328,9 +339,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-if"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b486ce3ccf7ffd79fdeb678eac06a9e6c09fc88d33836340becb8fffe87c5e33"
+checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
 name = "chrono"
@@ -433,9 +444,13 @@ dependencies = [
  "expr",
  "failure",
  "futures",
+ "itertools",
+ "log",
  "ore",
  "pgrepr",
+ "rdkafka",
  "repr",
+ "rusqlite",
  "sql",
  "symbiosis",
  "timely",
@@ -728,7 +743,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#fbea6a8ec599c6173642bf5b40a19ea3024d537d"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#2f7e24f3843cab43a71a2cb99a7fed05e2394045"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1279,9 +1294,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "0.13.1"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bf49cfb32edee45d890537d9057d1b02ed55f53b7b6a30bae83a38c9231749e"
+checksum = "fa1c527bbc634be72aa7ba31e4e4def9bbb020f5416916279b7c705cd838893e"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -1962,7 +1977,7 @@ dependencies = [
  "lazy_static 1.4.0",
  "libc",
  "log",
- "smallvec 1.1.0",
+ "smallvec 1.2.0",
  "tokio",
 ]
 
@@ -1995,7 +2010,7 @@ dependencies = [
  "cloudabi",
  "libc",
  "redox_syscall",
- "smallvec 1.1.0",
+ "smallvec 1.2.0",
  "winapi 0.3.8",
 ]
 
@@ -2139,9 +2154,9 @@ checksum = "676e8eb2b1b4c9043511a9b7bea0915320d7e502b0a079fb03f9635a5252b18c"
 
 [[package]]
 name = "postgres"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96dd5c8eddec65a5497798ebde2e5c74a93ef8b66782c1b09eeab9bb8538aebc"
+checksum = "47cb5f148a31d981d6a5f88f82c6fcc9b5aeb1b6c626d56568f9e007308acfbf"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -2252,9 +2267,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-error"
-version = "0.4.5"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b79a464461615532fcc8a6ed8296fa66cc12350c18460ab3f4594a6cee0fcb6"
+checksum = "875077759af22fa20b610ad4471d8155b321c89c3f2785526c9839b099be4e0a"
 dependencies = [
  "proc-macro-error-attr",
  "proc-macro2 1.0.7",
@@ -2265,9 +2280,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-error-attr"
-version = "0.4.5"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23832e5eae6bac56bbac190500eef1aaede63776b5cd131eaa4ee7fe120cd892"
+checksum = "c5717d9fa2664351a01ed73ba5ef6df09c01a521cb42cb65a061432a826f3c7a"
 dependencies = [
  "proc-macro2 1.0.7",
  "quote 1.0.2",
@@ -2697,9 +2712,9 @@ checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
 name = "regex"
-version = "1.3.3"
+version = "1.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5508c1941e4e7cb19965abef075d35a9a8b5cdf0846f30b4050e9b55dc55e87"
+checksum = "322cf97724bea3ee221b78fe25ac9c46114ebb51747ad5babd51a2fc6a8235a8"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -2718,9 +2733,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.6.13"
+version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e734e891f5b408a29efbf8309e656876276f49ab6a6ac208600b4419bd893d90"
+checksum = "b28dfe3fe9badec5dbf0a79a9cccad2cfc2ab5484bdb3e44cbd1ae8b3ba2be06"
 
 [[package]]
 name = "remove_dir_all"
@@ -2825,9 +2840,9 @@ dependencies = [
 
 [[package]]
 name = "rustversion"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a0538bd897e17257b0128d2fd95c2ed6df939374073a36166051a79e2eb7986"
+checksum = "b3bba175698996010c4f6dce5e7f173b6eb781fce25d2cfc45e27091ce0b79f6"
 dependencies = [
  "proc-macro2 1.0.7",
  "quote 1.0.2",
@@ -3028,9 +3043,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44e59e0c9fa00817912ae6e4e6e3c4fe04455e75699d06eedc7d85917ed8e8f4"
+checksum = "5c2fb2ec9bcd216a5b0d0ccf31ab17b5ed1d627960edff65bbe95d3ce221cefc"
 
 [[package]]
 name = "socket2"
@@ -3068,6 +3083,7 @@ dependencies = [
  "failure",
  "futures",
  "interchange",
+ "itertools",
  "ore",
  "pgrepr",
  "pretty_assertions",
@@ -3117,7 +3133,6 @@ dependencies = [
  "tokio",
  "uuid 0.8.1",
  "walkdir",
- "whoami",
 ]
 
 [[package]]
@@ -3138,9 +3153,9 @@ checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
 
 [[package]]
 name = "structopt"
-version = "0.3.8"
+version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df136b42d76b1fbea72e2ab3057343977b04b4a2e00836c3c7c0673829572713"
+checksum = "a1bcbed7d48956fcbb5d80c6b95aedb553513de0a1b451ea92679d999c010e98"
 dependencies = [
  "clap",
  "lazy_static 1.4.0",
@@ -3149,9 +3164,9 @@ dependencies = [
 
 [[package]]
 name = "structopt-derive"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd50a87d2f7b8958055f3e73a963d78feaccca3836767a9069844e34b5b03c0a"
+checksum = "095064aa1f5b94d14e635d0a5684cf140c43ae40a0fd990708d38f5d669e5f64"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -3183,6 +3198,7 @@ dependencies = [
  "sql-parser",
  "tokio",
  "tokio-postgres",
+ "whoami",
 ]
 
 [[package]]
@@ -3220,9 +3236,9 @@ dependencies = [
 
 [[package]]
 name = "syn-mid"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fd3937748a7eccff61ba5b90af1a20dbf610858923a9192ea0ecb0cb77db1d0"
+checksum = "7be3539f6c128a931cf19dcee741c1af532c7fd387baa739c03dd2e96479338a"
 dependencies = [
  "proc-macro2 1.0.7",
  "quote 1.0.2",
@@ -3318,18 +3334,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f357d1814b33bc2dc221243f8424104bfe72dbe911d5b71b3816a2dff1c977e"
+checksum = "205684fd018ca14432b12cce6ea3d46763311a571c3d294e71ba3f01adcf1aad"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb2e25d25307eb8436894f727aba8f65d07adf02e5b35a13cebed48bd282bfef"
+checksum = "57e4d2e50ca050ed44fb58309bdce3efa79948f84f9993ad1978de5eebdce5a7"
 dependencies = [
  "proc-macro2 1.0.7",
  "quote 1.0.2",
@@ -3413,9 +3429,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1fc73332507b971a5010664991a441b5ee0de92017f5a0e8b00fd684573045b"
+checksum = "8fdd17989496f49cdc57978c96f0c9fe5e4a58a8bddc6813c449a4624f6a030b"
 dependencies = [
  "bytes",
  "fnv",
@@ -3437,20 +3453,22 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50a61f268a3db2acee8dcab514efc813dc6dbe8a00e86076f935f94304b59a7a"
+checksum = "f4b1e7ed7d5d4c2af3d999904b0eebe76544897cdbfb2b9684bed2174ab20f7c"
 dependencies = [
+ "proc-macro2 1.0.7",
  "quote 1.0.2",
  "syn 1.0.11",
 ]
 
 [[package]]
 name = "tokio-postgres"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c03cb0c66092269a9b280e9e4956cb23ce00b8a6b1b393f7700f7732ac4bf133"
+checksum = "b4794270a16f0095a02a752e6cbe9618ef440397af5eb409fa9eb826650ccbdb"
 dependencies = [
+ "async-trait",
  "byteorder",
  "bytes",
  "fallible-iterator",

@@ -44,6 +44,7 @@ fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> R
                 FieldType::String => ScalarType::String,
                 FieldType::Bytes => ScalarType::Bytes,
                 FieldType::Message(m) => {
+                    println!("{:?}", m);
                     for f in m.fields().iter() {
                         validate_proto_field_resolved(&f, descriptors)?;
                     }
@@ -163,6 +164,7 @@ impl Decoder {
         let msg_name = &self.message_name;
         extract_row(
             deserialized_message,
+            &self.descriptors,
             self.descriptors.message_by_name(&msg_name).ok_or_else(|| {
                 format_err!(
                     "Message should be included in the descriptor set {:?}",
@@ -175,6 +177,7 @@ impl Decoder {
 
 fn extract_row(
     deserialized_message: SerdeValue,
+    descriptors: &Descriptors,
     message_descriptors: &MessageDescriptor,
 ) -> Result<Option<Row>> {
     let deserialized_message = match deserialized_message {
@@ -189,18 +192,10 @@ fn extract_row(
         let key = SerdeValue::String(f.name().to_string());
         let value = deserialized_message.get(&key);
 
-        if let Some(SerdeValue::Option(Some(value))) = value {
-            row = json_from_serde_value(&value, row)?;
-        } else if let Some(SerdeValue::Seq(_inner)) = value {
-            // Note(rkhaitan) This control flow feels extremely weird to me
-            // but the library gives different types in very different
-            // 'packaging / wrapping' of Options so this seemed like the cleanest
-            // thing to do
-            row = json_from_serde_value(&value.unwrap(), row)?;
-        } else if let Some(default) = f.default_value() {
-            row.push(datum_from_serde_proto(default)?);
+        if let Some(value) = value {
+            row = json_from_serde_value(&value, row, f, descriptors)?;
         } else {
-            row.push(Datum::Null);
+            row.push(default_datum_from_field(f, descriptors)?);
         }
     }
 
@@ -223,11 +218,112 @@ fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
     }
 }
 
+fn default_datum_from_field<'a>(
+    f: &'a FieldDescriptor,
+    descriptors: &'a Descriptors,
+) -> Result<Datum<'a>> {
+    if let Some(default) = f.default_value() {
+        return datum_from_serde_proto(default);
+    }
+
+    if f.is_repeated() {
+        return Ok(Datum::Null);
+    }
+
+    match f.field_type(descriptors) {
+        FieldType::Bool => Ok(Datum::False),
+        FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => Ok(Datum::Int32(0)),
+        FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => Ok(Datum::Int64(0)),
+        FieldType::Enum(e) => Ok(Datum::String(
+            e.value_by_number(0)
+                .expect("Error while deserializing protobuf: expected enum to have zero variant")
+                .name(),
+        )),
+        FieldType::Float => Ok(Datum::Float32(OrderedFloat::from(0.0))),
+        FieldType::Double => Ok(Datum::Float64(OrderedFloat::from(0.0))),
+        FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
+            Ok(Datum::Decimal(Significand::new(0)))
+        }
+        FieldType::String => Ok(Datum::String("")),
+        FieldType::Bytes => Ok(Datum::Bytes(&[])),
+        FieldType::Message(_) => Ok(Datum::Null),
+        FieldType::Group => bail!("Unions are currently not supported"),
+        FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
+        FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
+    }
+}
+
+fn json_number<N: ToPrimitive + std::fmt::Display>(i: &N) -> Result<Datum<'static>> {
+    Ok(Datum::Float64(OrderedFloat::from(i.to_f64().ok_or_else(
+        || format_err!("couldn't convert {} into an f64", i),
+    )?)))
+}
+
+fn datum_from_serde_proto_nested<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
+    match val {
+        ProtoValue::Bool(true) => Ok(Datum::True),
+        ProtoValue::Bool(false) => Ok(Datum::False),
+        ProtoValue::I32(i) => json_number(i),
+        ProtoValue::I64(i) => json_number(i),
+        ProtoValue::U32(u) => json_number(u),
+        ProtoValue::U64(u) => json_number(u),
+        ProtoValue::F32(f) => json_number(f),
+        ProtoValue::F64(f) => json_number(f),
+        ProtoValue::String(s) => Ok(Datum::String(s)),
+        _ => bail!("Unsupported type for Datum from serde_protobuf::Value"),
+    }
+}
+
+fn default_datum_from_field_nested<'a>(
+    f: &'a FieldDescriptor,
+    descriptors: &'a Descriptors,
+) -> Result<Datum<'a>> {
+    if let Some(default) = f.default_value() {
+        return datum_from_serde_proto_nested(default);
+    }
+
+    if f.is_repeated() {
+        return Ok(Datum::Null);
+    }
+
+    match f.field_type(descriptors) {
+        FieldType::Bool => Ok(Datum::False),
+        FieldType::Int32
+        | FieldType::SInt32
+        | FieldType::SFixed32
+        | FieldType::Int64
+        | FieldType::SInt64
+        | FieldType::SFixed64
+        | FieldType::UInt32
+        | FieldType::UInt64
+        | FieldType::Fixed32
+        | FieldType::Fixed64
+        | FieldType::Float
+        | FieldType::Double => Ok(Datum::Float64(OrderedFloat::from(0.0))),
+        FieldType::Enum(e) => Ok(Datum::String(
+            e.value_by_number(0)
+                .expect("Error while deserializing protobuf: expected enum to have zero variant")
+                .name(),
+        )),
+        FieldType::String => Ok(Datum::String("")),
+        FieldType::Message(_) => Ok(Datum::Null),
+        FieldType::Bytes => bail!("Nested bytes are not supported"),
+        FieldType::Group => bail!("Unions are currently not supported"),
+        FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
+        FieldType::UnresolvedEnum(e) => bail!("Unresolved enum {} not supported", e),
+    }
+}
+
 /// Convert an arbitrary [`SerdeValue`] into a [`Datum`], possibly creating a jsonb value
 ///
 /// Top-level values are converted to equivalent Datums, but in the case of a nested
 /// type, all numeric types will be converted to f64s (issue #1476)
-fn json_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Result<RowPacker> {
+fn json_from_serde_value(
+    val: &SerdeValue,
+    mut packer: RowPacker,
+    f: &FieldDescriptor,
+    descriptors: &Descriptors,
+) -> Result<RowPacker> {
     packer.push(match val {
         SerdeValue::Bool(true) => Datum::True,
         SerdeValue::Bool(false) => Datum::False,
@@ -243,26 +339,30 @@ fn json_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Result<RowP
         SerdeValue::F64(f) => Datum::Float64((*f).into()),
         SerdeValue::String(s) => Datum::String(s),
         SerdeValue::Bytes(b) => Datum::Bytes(b),
+        SerdeValue::Option(s) => {
+            if let Some(s) = s {
+                return json_from_serde_value(&s, packer, f, descriptors);
+            }
+
+            default_datum_from_field(f, descriptors)?
+        }
         SerdeValue::Seq(_) | SerdeValue::Map(_) => {
-            return json_nested_from_serde_value(val, packer);
+            return json_nested_from_serde_value(val, packer, f, descriptors);
         }
-        SerdeValue::Char(_) | SerdeValue::Unit | SerdeValue::Option(_) | SerdeValue::Newtype(_) => {
-            bail!(
-                "Unsupported type for Datum from serde_value::Value: {:?}",
-                val
-            )
-        }
+        SerdeValue::Char(_) | SerdeValue::Unit | SerdeValue::Newtype(_) => bail!(
+            "Unsupported type for Datum from serde_value::Value: {:?}",
+            val
+        ),
     });
     Ok(packer)
 }
 
-fn json_nested_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Result<RowPacker> {
-    fn json_number<N: ToPrimitive + std::fmt::Display>(i: &N) -> Result<Datum<'static>> {
-        Ok(Datum::Float64(OrderedFloat::from(i.to_f64().ok_or_else(
-            || format_err!("couldn't convert {} into an f64", i),
-        )?)))
-    }
-
+fn json_nested_from_serde_value(
+    val: &SerdeValue,
+    mut packer: RowPacker,
+    f: &FieldDescriptor,
+    descriptors: &Descriptors,
+) -> Result<RowPacker> {
     packer.push(match val {
         SerdeValue::Bool(true) => Datum::True,
         SerdeValue::Bool(false) => Datum::False,
@@ -283,26 +383,42 @@ fn json_nested_from_serde_value(val: &SerdeValue, mut packer: RowPacker) -> Resu
         SerdeValue::Seq(s) => {
             return packer.try_push_list_with(|mut packer| {
                 for value in s {
-                    packer = json_nested_from_serde_value(&value, packer)?;
+                    packer = json_nested_from_serde_value(&value, packer, f, descriptors)?;
                 }
                 Ok(packer)
             });
+        }
+        SerdeValue::Option(v) => {
+            if let Some(v) = v {
+                return json_nested_from_serde_value(&v, packer, f, descriptors);
+            }
+
+            default_datum_from_field_nested(f, descriptors)?
         }
         SerdeValue::Map(m) => {
             let mut kvs = m.iter().collect::<Vec<_>>();
             kvs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
             kvs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
             return packer.try_push_dict_with(|mut packer| {
+                let nested_message_descriptor = f.field_type(descriptors);
                 for (k, v) in kvs {
-                    match (k, v) {
-                        (SerdeValue::String(s), SerdeValue::Option(Some(val))) => {
+                    match k {
+                        SerdeValue::String(s) => {
                             packer.push(Datum::String(s.as_str()));
-                            packer = json_nested_from_serde_value(&val, packer)?;
-                        }
-                        (SerdeValue::String(_), SerdeValue::Option(None)) => (),
-                        (SerdeValue::String(s), SerdeValue::Seq(_seq)) => {
-                            packer.push(Datum::String(s.as_str()));
-                            packer = json_nested_from_serde_value(&v, packer)?;
+
+                            let nested_message_descriptor = match nested_message_descriptor {
+                                FieldType::Message(m) => m,
+                                _ => bail!("Nested message is the wrong type"),
+                            };
+
+                            packer = json_nested_from_serde_value(
+                                &v,
+                                packer,
+                                nested_message_descriptor
+                                    .field_by_name(s)
+                                    .expect("Expected this to work"),
+                                descriptors,
+                            )?;
                         }
                         _ => bail!("Unrecognized value while trying to parse a nested message"),
                     }
@@ -463,7 +579,17 @@ mod tests {
         file_descriptor_set.set_file(repeated_field);
 
         let descriptors = Descriptors::from_proto(&file_descriptor_set);
-        // TODO: should we be validating that message_name exists?
+        let relation = super::validate_descriptors(message_name, &descriptors)
+            .expect("Failed to parse descriptor");
+
+        sanity_check_relation(
+            &relation,
+            descriptors
+                .message_by_name(message_name)
+                .expect("message should be in the descriptor set"),
+            &descriptors,
+        )
+        .expect("Sanity checking descriptors failed");
         super::Decoder::new(descriptors, message_name)
     }
 
@@ -474,7 +600,6 @@ mod tests {
         test_record.set_int_field(1);
         test_record.set_string_field("one".to_string());
         test_record.set_int64_field(10000);
-        test_record.set_bytes_field(b"foo".to_vec());
         test_record.set_color_field(Color::BLUE);
         test_record.set_uint_field(5);
         test_record.set_uint64_field(55);
@@ -496,7 +621,6 @@ mod tests {
             Datum::Int32(1),
             Datum::String("one"),
             Datum::Int64(10000),
-            Datum::Bytes(&[102, 111, 111]),
             Datum::String("BLUE"),
             Datum::Decimal(Significand::new(5)),
             Datum::Decimal(Significand::new(55)),
@@ -525,14 +649,13 @@ mod tests {
 
         let expected = vec![
             Datum::Int32(1),
-            Datum::Null,
-            Datum::Null,
-            Datum::Null,
-            Datum::Null,
-            Datum::Null,
-            Datum::Null,
-            Datum::Null,
-            Datum::Null,
+            Datum::String(""),
+            Datum::Int64(0),
+            Datum::String("RED"),
+            Datum::Decimal(Significand::new(0)),
+            Datum::Decimal(Significand::new(0)),
+            Datum::Float32(OrderedFloat::from(0.0)),
+            Datum::Float64(OrderedFloat::from(0.0)),
         ];
 
         assert_eq!(datums, expected);
@@ -594,8 +717,14 @@ mod tests {
             assert_eq!(
                 datumdict,
                 vec![
+                    ("color_field", Datum::String("RED")),
+                    ("double_field", Datum::Float64(OrderedFloat::from(0.0))),
+                    ("float_field", Datum::Float64(OrderedFloat::from(0.0))),
+                    ("int64_field", Datum::Float64(OrderedFloat::from(0.0))),
                     ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
                     ("string_field", Datum::String("one")),
+                    ("uint64_field", Datum::Float64(OrderedFloat::from(0.0))),
+                    ("uint_field", Datum::Float64(OrderedFloat::from(0.0))),
                 ]
             );
         } else {
@@ -674,7 +803,16 @@ mod tests {
                     let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
                     assert_eq!(
                         datumdict,
-                        vec![("int_field", Datum::Float64(OrderedFloat::from(1.0))),]
+                        vec![
+                            ("color_field", Datum::String("RED")),
+                            ("double_field", Datum::Float64(OrderedFloat::from(0.0))),
+                            ("float_field", Datum::Float64(OrderedFloat::from(0.0))),
+                            ("int64_field", Datum::Float64(OrderedFloat::from(0.0))),
+                            ("int_field", Datum::Float64(OrderedFloat::from(1.0))),
+                            ("string_field", Datum::String("")),
+                            ("uint64_field", Datum::Float64(OrderedFloat::from(0.0))),
+                            ("uint_field", Datum::Float64(OrderedFloat::from(0.0))),
+                        ]
                     );
                 } else {
                     panic!("Expected the inner elements to be dicts of datums");

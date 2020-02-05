@@ -1,0 +1,7 @@
+format_spec ::=
+  'AVRO USING' avro_schema_spec |
+  'PROTOBUF MESSAGE' message_name 'USING' schema_spec |
+  'REGEX' regex |
+  'CSV WITH' n 'COLUMNS' ('DELIMITED BY' char)? |
+  'TEXT' |
+  'RAW'

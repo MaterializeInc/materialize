@@ -65,6 +65,7 @@ copyright_files=$(grep -vE \
     -e '^misc/docker/ci-builder/ssh_known_hosts$' \
     -e '\.(protospec|pb)$' \
     -e '\.in$' \
+    -e 'demo/chbench/chbench' \
     <<< "$files"
 )
 

@@ -32,4 +32,4 @@ RUN apt-get update \
 
 COPY watch-sql /usr/local/bin/watch-sql
 
-CMD ["mzcli", "host=materialized port=6875 sslmode=disable"]
+CMD ["mzcli", "host=materialized port=6875 sslmode=disable dbname=materialize"]

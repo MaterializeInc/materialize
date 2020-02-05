@@ -23,7 +23,7 @@ use std::fmt;
 mod datetime;
 pub use datetime::{
     DateTimeField, DateTimeFieldValue, ExtractField, Interval, IntervalValue, ParsedDate,
-    ParsedDateTime, ParsedTimestamp,
+    ParsedDateTime, ParsedTime, ParsedTimestamp,
 };
 
 #[derive(Debug)]
@@ -51,7 +51,7 @@ pub enum Value {
     /// `DATE '...'` literals
     Date(String, ParsedDate),
     /// `TIME '...'` literals
-    Time(String),
+    Time(String, ParsedTime),
     /// `TIMESTAMP '...'` literals
     Timestamp(String, ParsedTimestamp),
     /// `TIMESTAMP WITH TIME ZONE` literals
@@ -78,7 +78,7 @@ impl fmt::Display for Value {
             Value::HexStringLiteral(v) => write!(f, "X'{}'", v),
             Value::Boolean(v) => write!(f, "{}", v),
             Value::Date(v, _) => write!(f, "DATE '{}'", escape_single_quote_string(v)),
-            Value::Time(v) => write!(f, "TIME '{}'", escape_single_quote_string(v)),
+            Value::Time(v, _) => write!(f, "TIME '{}'", escape_single_quote_string(v)),
             Value::Timestamp(v, _) => write!(f, "TIMESTAMP '{}'", escape_single_quote_string(v)),
             Value::TimestampTz(v, _) => write!(
                 f,

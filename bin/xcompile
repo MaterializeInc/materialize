@@ -40,6 +40,7 @@ build() {
 
     export AR=x86_64-unknown-linux-gnu-ar
     export LD=x86_64-unknown-linux-gnu-ld
+    export RANLIB=x86_64-unknown-linux-gnu-ranlib
     export CPP=x86_64-unknown-linux-gnu-cpp
     export CC=x86_64-unknown-linux-gnu-cc
     export CXX=x86_64-unknown-linux-gnu-c++

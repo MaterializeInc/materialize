@@ -1372,7 +1372,7 @@ fn parse_literal_date() {
 Parse error:
 SELECT DATE '0-00-00'
             ^^^^^^^^^
-YEAR in DATE \'0-00-00\' cannot be zero."
+Invalid DATE \'0-00-00\': YEAR cannot be zero."
             .to_string(),
         parse_sql_statements("SELECT DATE '0-00-00'")
             .unwrap_err()
@@ -1384,7 +1384,7 @@ YEAR in DATE \'0-00-00\' cannot be zero."
 Parse error:
 SELECT DATE '1-00-00'
             ^^^^^^^^^
-MONTH in DATE \'1-00-00\' must be a number between 1 and 12, got: 0"
+Invalid DATE \'1-00-00\': MONTH must be (1, 12), got 0"
             .to_string()),
         parse_sql_statements("SELECT DATE '1-00-00'")
             .unwrap_err()
@@ -1395,7 +1395,7 @@ MONTH in DATE \'1-00-00\' must be a number between 1 and 12, got: 0"
 Parse error:
 SELECT DATE '1-01-00'
             ^^^^^^^^^
-DAY in DATE \'1-01-00\' cannot be zero"
+Invalid DATE \'1-01-00\': DAY cannot be zero."
             .to_string()),
         parse_sql_statements("SELECT DATE '1-01-00'")
             .unwrap_err()
@@ -1420,7 +1420,60 @@ fn parse_literal_time() {
     let sql = "SELECT TIME '01:23:34'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Time("01:23:34".into())),
+        &Expr::Value(Value::Time(
+            "01:23:34".into(),
+            ParsedTime {
+                hour: 1,
+                minute: 23,
+                second: 34,
+                nano: 0,
+            }
+        )),
+        expr_from_projection(only(&select.projection)),
+    );
+
+    let sql = "SELECT TIME '01:23'";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Value(Value::Time(
+            "01:23".into(),
+            ParsedTime {
+                hour: 1,
+                minute: 23,
+                second: 0,
+                nano: 0,
+            }
+        )),
+        expr_from_projection(only(&select.projection)),
+    );
+
+    let sql = "SELECT TIME '01:23.45'";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Value(Value::Time(
+            "01:23.45".into(),
+            ParsedTime {
+                hour: 0,
+                minute: 1,
+                second: 23,
+                nano: 450_000_000,
+            }
+        )),
+        expr_from_projection(only(&select.projection)),
+    );
+
+    let sql = "SELECT TIME '01:23:34.56'";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Value(Value::Time(
+            "01:23:34.56".into(),
+            ParsedTime {
+                hour: 1,
+                minute: 23,
+                second: 34,
+                nano: 560_000_000,
+            }
+        )),
         expr_from_projection(only(&select.projection)),
     );
 }
@@ -3392,18 +3445,22 @@ fn parse_create_materialized_view() {
 
 #[test]
 fn parse_create_source_inline_schema() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA 'baz' WITH (name = 'val')";
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT AVRO USING SCHEMA 'baz' WITH (name = 'val')";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
             url,
-            schema,
+            format,
+            envelope,
             with_options,
             if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
-            assert_eq!(SourceSchema::Inline("baz".into()), schema.unwrap());
+            assert_eq!(
+                Format::Avro(AvroSchema::Schema(Schema::Inline("baz".into()))),
+                format
+            );
             assert_eq!(
                 with_options,
                 vec![SqlOption {
@@ -3411,6 +3468,7 @@ fn parse_create_source_inline_schema() {
                     value: Value::SingleQuotedString("val".into())
                 },]
             );
+            assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
         }
         _ => unreachable!(),
@@ -3418,32 +3476,40 @@ fn parse_create_source_inline_schema() {
 }
 
 #[test]
-fn parse_create_source_file_schema_multiple_args() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA FILE 'path' WITH (format = 'someformat', message_name = 'somemessage')";
+fn parse_create_source_file_schema_protobuf_multiple_args() {
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT PROTOBUF MESSAGE 'somemessage' USING SCHEMA FILE 'path' WITH (foo = 'bar', quux = 'baz')";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
             url,
-            schema,
+            format,
+            envelope,
             with_options,
             if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
-            assert_eq!(SourceSchema::File("path".into()), schema.unwrap());
+            assert_eq!(
+                Format::Protobuf {
+                    message_name: "somemessage".into(),
+                    schema: Schema::File("path".into())
+                },
+                format
+            );
             assert_eq!(
                 with_options,
                 vec![
                     SqlOption {
-                        name: "format".into(),
-                        value: Value::SingleQuotedString("someformat".into())
+                        name: "foo".into(),
+                        value: Value::SingleQuotedString("bar".into())
                     },
                     SqlOption {
-                        name: "message_name".into(),
-                        value: Value::SingleQuotedString("somemessage".into())
+                        name: "quux".into(),
+                        value: Value::SingleQuotedString("baz".into())
                     },
                 ]
             );
+            assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
         }
         _ => unreachable!(),
@@ -3451,24 +3517,145 @@ fn parse_create_source_file_schema_multiple_args() {
 }
 
 #[test]
-fn parse_create_source_registry() {
-    let sql = "CREATE SOURCE foo FROM 'bar' USING SCHEMA REGISTRY 'http://localhost:8081'";
+fn parse_create_source_regex() {
+    let sql =
+        "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' FORMAT REGEX '(asdf)|(jkl)' WITH (tail = true)";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
             url,
-            schema,
+            format,
+            envelope,
+            with_options,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", url);
+            assert_eq!(Format::Regex("(asdf)|(jkl)".into()), format);
+            assert_eq!(
+                with_options,
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(true)
+                },]
+            );
+            assert_eq!(Envelope::None, envelope);
+            assert!(if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_csv() {
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT CSV WITH 3 COLUMNS WITH (tail = false)";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            url,
+            format,
+            envelope,
             with_options,
             if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", url);
             assert_eq!(
-                SourceSchema::Registry("http://localhost:8081".into()),
-                schema.unwrap()
+                Format::Csv {
+                    n_cols: 3,
+                    delimiter: ','
+                },
+                format
+            );
+            assert_eq!(
+                with_options,
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(false)
+                },]
+            );
+            assert_eq!(Envelope::None, envelope);
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_csv_custom_delim() {
+    let sql =
+        "CREATE SOURCE foo FROM 'bar' FORMAT CSV WITH 3 COLUMNS DELIMITED BY '|' WITH (tail = false)";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            url,
+            format,
+            envelope,
+            with_options,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", url);
+            assert_eq!(
+                Format::Csv {
+                    n_cols: 3,
+                    delimiter: '|'
+                },
+                format
+            );
+            assert_eq!(
+                with_options,
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(false)
+                },]
+            );
+            assert_eq!(Envelope::None, envelope);
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_missing_format() {
+    let sql = "CREATE SOURCE foo FROM 'bar' WITH (answer = 42)";
+    let err = parse_sql_statements(sql).unwrap_err();
+    assert_eq!("Expected FORMAT, found: WITH", err.message);
+}
+
+#[test]
+fn parse_create_source_registry() {
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            url,
+            format,
+            envelope,
+            with_options,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", url);
+            assert_eq!(
+                Format::Avro(AvroSchema::CsrUrl("http://localhost:8081".into())),
+                format
             );
             assert_eq!(with_options, vec![]);
             assert!(!if_not_exists);
+            assert_eq!(Envelope::Debezium, envelope);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_default_envelope() {
+    let sql = "CREATE SOURCE foo FROM 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'";
+    match verified_stmt(sql) {
+        Statement::CreateSource { envelope, .. } => {
+            assert_eq!(Envelope::None, envelope);
         }
         _ => unreachable!(),
     }
@@ -3476,7 +3663,7 @@ fn parse_create_source_registry() {
 
 #[test]
 fn parse_create_source_if_not_exists() {
-    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar'";
+    let sql = "CREATE SOURCE IF NOT EXISTS foo FROM 'bar' FORMAT RAW";
     match verified_stmt(sql) {
         Statement::CreateSource { if_not_exists, .. } => {
             assert!(if_not_exists);

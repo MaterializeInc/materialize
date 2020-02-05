@@ -8,31 +8,41 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
-    bootstrap_sql: String,
+    logging_granularity: Option<Duration>,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            data_directory: None,
+            logging_granularity: Some(Duration::from_millis(10)),
+        }
+    }
 }
 
 impl Config {
-    pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
-        self.data_directory = Some(data_directory.into());
+    pub fn logging_granularity(mut self, granularity: Option<Duration>) -> Self {
+        self.logging_granularity = granularity;
         self
     }
 
-    pub fn bootstrap_sql(mut self, bootstrap_sql: impl Into<String>) -> Self {
-        self.bootstrap_sql = bootstrap_sql.into();
+    pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
+        self.data_directory = Some(data_directory.into());
         self
     }
 }
 
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
     let server = Server(materialized::serve(materialized::Config {
-        logging_granularity: Some(Duration::from_millis(10)),
+        logging_granularity: config.logging_granularity,
+        timestamp_frequency: None,
+        max_increment_ts_size: 1000,
         threads: 1,
         process: 0,
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
-        bootstrap_sql: config.bootstrap_sql,
         data_directory: config.data_directory,
         symbiosis_url: None,
         gather_metrics: false,
@@ -55,16 +65,23 @@ impl Server {
         config
     }
 
+    pub fn pg_config_async(&self) -> tokio_postgres::Config {
+        let local_addr = self.0.local_addr();
+        let mut config = tokio_postgres::Config::new();
+        config
+            .host(&local_addr.ip().to_string())
+            .port(local_addr.port())
+            .user("root");
+        config
+    }
+
     pub fn connect(&self) -> Result<postgres::Client, Box<dyn Error>> {
         Ok(self.pg_config().connect(postgres::NoTls)?)
     }
 
     pub async fn connect_async(&self) -> Result<tokio_postgres::Client, Box<dyn Error>> {
-        let local_addr = self.0.local_addr();
-        let (client, conn) = tokio_postgres::Config::new()
-            .host(&local_addr.ip().to_string())
-            .port(local_addr.port())
-            .user("root")
+        let (client, conn) = self
+            .pg_config_async()
             .connect(tokio_postgres::NoTls)
             .await?;
         tokio::spawn(async move {

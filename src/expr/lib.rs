@@ -15,7 +15,7 @@ pub mod like;
 pub mod pretty;
 pub mod transform;
 
-pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId};
+pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, SourceInstanceId};
 pub use relation::func::{AggregateFunc, UnaryTableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::{AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr};

@@ -24,7 +24,7 @@ services:
     ports:
      - *materialized
     init: true
-    command: -w1 --bootstrap-sql=/usr/local/etc/materialized/bootstrap.sql
+    command: -w1 --timestamp-frequency=10ms
     environment:
       # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
       - MZ_LOG=pgwire=debug,info
@@ -118,7 +118,7 @@ services:
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
   chbench:
     init: true
-    build: chbench
+    image: materialize/chbenchmark
     depends_on: [mysql]
     volumes:
       - chbench-gen:/gen
@@ -152,7 +152,7 @@ services:
     image: metabase/metabase:v0.34.1
     depends_on: [materialized]
     volumes:
-      - ./metabase/materialize-driver-0.0.1-SNAPSHOT-standalone.jar:/plugins/materialize-driver-0.0.1-SNAPSHOT-standalone.jar
+      - ./metabase/materialize-driver.jar:/plugins/materialize-driver.jar
     ports:
       - *metabase
 

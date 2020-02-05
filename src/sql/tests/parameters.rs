@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::error::Error;
-use std::iter;
 
 use catalog::Catalog;
 use ore::collections::CollectionExt;
@@ -13,7 +12,7 @@ use sql::Session;
 
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
-    let catalog = Catalog::open(None, iter::empty())?;
+    let catalog = Catalog::open(None, |_| ())?;
     let session = Session::default();
     let test_cases = vec![
         (

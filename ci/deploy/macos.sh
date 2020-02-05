@@ -17,7 +17,6 @@ cargo build --bin materialized --release
 # TODO(benesch): extract into shared script.
 mkdir -p scratch/materialized/{bin,etc/materialized}
 cp target/release/materialized scratch/materialized/bin
-cp misc/dist/etc/materialized/bootstrap.sql scratch/materialized/etc/materialized
 tar czf materialized.tar.gz -C scratch materialized
 
 aws s3 cp \

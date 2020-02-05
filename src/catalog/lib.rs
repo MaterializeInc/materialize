@@ -19,7 +19,7 @@ use crate::names::{DatabaseSpecifier, FullName, PartialName};
 
 pub mod names;
 
-mod sql;
+pub mod sql;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -96,6 +96,25 @@ impl CatalogItem {
             CatalogItem::Index(_) => "index",
         }
     }
+
+    /// Collects the identifiers of the dataflows that this item depends
+    /// upon.
+    pub fn uses(&self) -> Vec<GlobalId> {
+        match self {
+            CatalogItem::Source(_src) => Vec::new(),
+            CatalogItem::Sink(sink) => vec![sink.from.0],
+            CatalogItem::View(view) => {
+                let mut out = Vec::new();
+                view.relation_expr.as_ref().global_uses(&mut out);
+                out
+            }
+            CatalogItem::Index(idx) => {
+                let mut out = Vec::new();
+                out.push(idx.desc.on_id);
+                out
+            }
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -118,20 +137,7 @@ impl CatalogEntry {
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
-        match &self.inner {
-            CatalogItem::Source(_src) => Vec::new(),
-            CatalogItem::Sink(sink) => vec![sink.from.0],
-            CatalogItem::View(view) => {
-                let mut out = Vec::new();
-                view.relation_expr.as_ref().global_uses(&mut out);
-                out
-            }
-            CatalogItem::Index(idx) => {
-                let mut out = Vec::new();
-                out.push(idx.desc.on_id);
-                out
-            }
-        }
+        self.inner.uses()
     }
 
     /// Returns the `CatalogItem` associated with this catalog entry.
@@ -156,12 +162,12 @@ impl CatalogEntry {
 }
 
 impl Catalog {
-    /// Opens or creates a `Catalog` that stores data at `path`. Initial
-    /// catalog items in `items` will be inserted into the catalog before any
-    /// persisted catalog items are loaded.
-    pub fn open<I>(path: Option<&Path>, items: I) -> Result<Catalog, failure::Error>
+    /// Opens or creates a `Catalog` that stores data at `path`. The
+    /// `initialize` callback will be invoked after database and schemas are
+    /// loaded but before any persisted user items are loaded.
+    pub fn open<F>(path: Option<&Path>, f: F) -> Result<Catalog, failure::Error>
     where
-        I: Iterator<Item = (GlobalId, FullName, CatalogItem)>,
+        F: FnOnce(&mut Self),
     {
         let storage = sql::Connection::open(path)?;
 
@@ -203,15 +209,25 @@ impl Catalog {
             );
         }
 
-        // Insert system items. This has to be done after databases and schemas
-        // are loaded, but before any items, as items might depend on these
-        // system items, but these system items depend on the system
-        // database/schema being installed.
-        for (id, name, item) in items {
-            catalog.insert_item(id, name, item);
-        }
+        // Invoke callback so that it can install system items. This has to be
+        // done after databases and schemas are loaded, but before any items, as
+        // items might depend on these system items, but these system items
+        // depend on the system database/schema being installed.
+        f(&mut catalog);
 
         for (id, name, def) in catalog.storage.load_items()? {
+            for use_id in def.uses() {
+                if catalog.by_id.get(&use_id).is_none() && use_id.is_system() {
+                    // TODO(benesch): one day not all logging views will be
+                    // system views. Producing the error message here also
+                    // violates module boundaries; the catalog shouldn't really
+                    // know about logging views vs other system views.
+                    bail!(
+                        "catalog item '{}' depends on system logging, but logging is disabled",
+                        name
+                    );
+                }
+            }
             catalog.insert_item(id, name, def);
             if let GlobalId::User(id) = id {
                 catalog.id = cmp::max(catalog.id, id);
@@ -337,7 +353,7 @@ impl Catalog {
         }
     }
 
-    fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
+    pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
         info!("create {} {} ({})", item.type_string(), name, id);
         let entry = CatalogEntry {
             inner: item,
@@ -363,45 +379,7 @@ impl Catalog {
         self.by_id.insert(entry.id, entry);
     }
 
-    pub fn create_database(&mut self, name: String) -> Result<(), failure::Error> {
-        self.transact(vec![
-            Op::CreateDatabase { name: name.clone() },
-            Op::CreateSchema {
-                database_name: name,
-                schema_name: "public".into(),
-            },
-        ])?;
-        Ok(())
-    }
-
-    pub fn create_schema(
-        &mut self,
-        database_name: String,
-        schema_name: String,
-    ) -> Result<(), failure::Error> {
-        self.transact(vec![Op::CreateSchema {
-            database_name,
-            schema_name,
-        }])?;
-        Ok(())
-    }
-
-    pub fn create_item(
-        &mut self,
-        name: FullName,
-        item: CatalogItem,
-    ) -> Result<GlobalId, failure::Error> {
-        let id = match self
-            .transact(vec![Op::CreateItem { name, item }])?
-            .as_slice()
-        {
-            [OpStatus::CreatedItem(id)] => *id,
-            _ => unreachable!(),
-        };
-        Ok(id)
-    }
-
-    pub fn drop_database(&mut self, name: String) -> Result<Vec<CatalogEntry>, failure::Error> {
+    pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
         let mut ops = vec![];
         if let Some(database) = self.by_name.get(&name) {
             for (schema_name, schema) in &database.schemas {
@@ -413,21 +391,10 @@ impl Catalog {
             }
             ops.push(Op::DropDatabase { name });
         }
-        Ok(self
-            .transact(ops)?
-            .into_iter()
-            .filter_map(|status| match status {
-                OpStatus::DroppedItem(entry) => Some(entry),
-                _ => None,
-            })
-            .collect())
+        ops
     }
 
-    pub fn drop_schema(
-        &mut self,
-        database_name: String,
-        schema_name: String,
-    ) -> Result<Vec<CatalogEntry>, failure::Error> {
+    pub fn drop_schema_ops(&mut self, database_name: String, schema_name: String) -> Vec<Op> {
         let mut ops = vec![];
         if let Some(database) = self.by_name.get(&database_name) {
             if let Some(schema) = database.schemas.get(&schema_name) {
@@ -438,29 +405,15 @@ impl Catalog {
                 })
             }
         }
-        Ok(self
-            .transact(ops)?
-            .into_iter()
-            .filter_map(|status| match status {
-                OpStatus::DroppedItem(entry) => Some(entry),
-                _ => None,
-            })
-            .collect())
+        ops
     }
 
-    pub fn drop_items(&mut self, ids: &[GlobalId]) -> Result<Vec<CatalogEntry>, failure::Error> {
+    pub fn drop_items_ops(&mut self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
         for &id in ids {
             Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut HashSet::new());
         }
-        Ok(self
-            .transact(ops)?
-            .into_iter()
-            .filter_map(|status| match status {
-                OpStatus::DroppedItem(entry) => Some(entry),
-                _ => None,
-            })
-            .collect())
+        ops
     }
 
     fn drop_schema_items(
@@ -489,7 +442,7 @@ impl Catalog {
         }
     }
 
-    fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<OpStatus>, failure::Error> {
+    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<OpStatus>, failure::Error> {
         trace!("transact: {:?}", ops);
 
         #[derive(Debug, Clone)]
@@ -540,7 +493,7 @@ impl Catalog {
                         schema_name,
                     }
                 }
-                Op::CreateItem { name, item } => {
+                Op::CreateItem { id, name, item } => {
                     let database_id = match &name.database {
                         DatabaseSpecifier::Name(name) => tx.load_database_id(&name)?,
                         DatabaseSpecifier::Ambient => {
@@ -548,10 +501,8 @@ impl Catalog {
                         }
                     };
                     let schema_id = tx.load_schema_id(database_id, &name.schema)?;
-                    self.id += 1;
-                    let id = GlobalId::user(self.id);
                     tx.insert_item(id, schema_id, &name.item, &item)?;
-                    Action::CreateItem { name, item, id }
+                    Action::CreateItem { id, name, item }
                 }
                 Op::DropDatabase { name } => {
                     tx.remove_database(&name)?;
@@ -663,11 +614,6 @@ impl Catalog {
     pub fn iter(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.by_id.iter().map(|(_id, entry)| entry)
     }
-
-    /// Whether this catalog instance bootstrapped its on-disk state.
-    pub fn bootstrapped(&self) -> bool {
-        self.storage.bootstrapped()
-    }
 }
 
 impl IdHumanizer for Catalog {
@@ -680,7 +626,7 @@ impl IdHumanizer for Catalog {
 }
 
 #[derive(Debug, Clone)]
-enum Op {
+pub enum Op {
     CreateDatabase {
         name: String,
     },
@@ -689,6 +635,7 @@ enum Op {
         schema_name: String,
     },
     CreateItem {
+        id: GlobalId,
         name: FullName,
         item: CatalogItem,
     },

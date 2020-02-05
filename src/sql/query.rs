@@ -28,14 +28,13 @@ use failure::{bail, ensure, format_err, ResultExt};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, ExtractField, Function, Ident, JoinConstraint, JoinOperator,
-    ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
-    TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+    ObjectName, ParsedDate, ParsedTime, ParsedTimestamp, Query, Select, SelectItem, SetExpr,
+    SetOperator, TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
 use ::expr::{DateTruncTo, Id};
-use catalog::names::{FullName, PartialName};
-use catalog::CatalogEntry;
+use catalog::names::PartialName;
 use dataflow_types::RowSetFinishing;
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
@@ -84,6 +83,28 @@ pub fn plan_root_query(
     Ok((expr, desc, finishing, param_types))
 }
 
+pub fn plan_index_exprs<'a>(
+    scx: &'a StatementContext,
+    on_desc: &RelationDesc,
+    exprs: &[Expr],
+) -> Result<Vec<::expr::ScalarExpr>, failure::Error> {
+    let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
+    let qcx = &QueryContext::root(scx, QueryLifetime::Static);
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "CREATE INDEX",
+        scope: &scope,
+        relation_type: on_desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+    };
+    let mut out = vec![];
+    for expr in exprs {
+        out.push(plan_expr(ecx, expr, Some(ScalarType::String))?.lower_uncorrelated());
+    }
+    Ok(out)
+}
+
 fn plan_expr_or_col_index<'a>(
     ecx: &ExprContext,
     e: &'a Expr,
@@ -109,7 +130,13 @@ fn plan_expr_or_col_index<'a>(
                     max
                 );
             }
-            Some(Ok((ScalarExpr::Column(ColumnRef::Inner(n - 1)), None)))
+            Some(Ok((
+                ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: n - 1,
+                }),
+                None,
+            )))
         }
         _ => None,
     }
@@ -150,7 +177,7 @@ fn plan_query(
             plan_expr_or_col_index(ecx, &obe.expr, Some(ScalarType::String), "ORDER BY")?;
         // If the expression is a reference to an existing column,
         // do not introduce a new column to support it.
-        if let ScalarExpr::Column(ColumnRef::Inner(column)) = expr {
+        if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
             order_by.push(ColumnOrder {
                 column,
                 desc: match obe.asc {
@@ -408,7 +435,11 @@ fn plan_view_select(
                 .find(|existing_expr| **existing_expr == expr)
                 .is_none()
             {
-                let scope_item = if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr {
+                let scope_item = if let ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: old_column,
+                }) = &expr
+                {
                     // If we later have `SELECT foo.*` then we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
                     // This is really hard to do right using SQL name resolution, so instead we just track the movement here.
                     select_all_mapping.insert(*old_column, new_column);
@@ -520,35 +551,6 @@ fn plan_view_select(
     }
 
     Ok((relation_expr, project_scope))
-}
-
-pub fn plan_index<'a>(
-    scx: &'a StatementContext,
-    on_name: &FullName,
-    key_parts: &[Expr],
-) -> Result<(&'a CatalogEntry, Vec<ScalarExpr>), failure::Error> {
-    let item = scx.catalog.get(on_name)?;
-    let desc = item.desc()?;
-    let scope = Scope::from_source(
-        Some(on_name.clone().into()),
-        desc.iter_names(),
-        Some(Scope::empty(None)),
-    );
-    let qcx = &QueryContext::root(scx, QueryLifetime::Static);
-    let ecx = &ExprContext {
-        qcx: &qcx,
-        name: "CREATE INDEX",
-        scope: &scope,
-        relation_type: desc.typ(),
-        allow_aggregates: false,
-        allow_subqueries: false,
-    };
-
-    let keys = key_parts
-        .iter()
-        .map(|key_part| plan_expr(ecx, key_part, Some(ScalarType::String)))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((item, keys))
 }
 
 fn plan_table_with_joins<'a>(
@@ -698,9 +700,10 @@ fn plan_table_function(
                         // convert value column to text, leave key column as is
                         let num_old_columns = ecx.scope.len();
                         call = call
-                            .map(vec![ScalarExpr::Column(ColumnRef::Inner(
-                                num_old_columns + 1,
-                            ))
+                            .map(vec![ScalarExpr::Column(ColumnRef {
+                                level: 0,
+                                column: num_old_columns + 1,
+                            })
                             .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
                             .project(
                                 (0..num_old_columns)
@@ -712,8 +715,11 @@ fn plan_table_function(
                         // convert value column to text
                         let num_old_columns = ecx.scope.len();
                         call = call
-                            .map(vec![ScalarExpr::Column(ColumnRef::Inner(num_old_columns))
-                                .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
+                            .map(vec![ScalarExpr::Column(ColumnRef {
+                                level: 0,
+                                column: num_old_columns,
+                            })
+                            .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
                             .project(
                                 (0..num_old_columns)
                                     .chain(vec![num_old_columns + 1])
@@ -854,7 +860,13 @@ fn plan_select_item<'a>(
                 })?;
                 let mut scope_item = item.clone();
                 scope_item.expr = None;
-                Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), scope_item))
+                Ok((
+                    ScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: *j,
+                    }),
+                    scope_item,
+                ))
             })
             .collect::<Result<Vec<_>, _>>(),
         SelectItem::QualifiedWildcard(table_name) => {
@@ -888,7 +900,13 @@ fn plan_select_item<'a>(
                     })?;
                     let mut scope_item = item.clone();
                     scope_item.expr = None;
-                    Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), scope_item))
+                    Ok((
+                        ScalarExpr::Column(ColumnRef {
+                            level: 0,
+                            column: *j,
+                        }),
+                        scope_item,
+                    ))
                 })
                 .collect::<Result<Vec<_>, _>>()
         }
@@ -1054,29 +1072,47 @@ fn plan_using_constraint(
         let (l, _) = left_scope.resolve_column(column_name)?;
         let (r, _) = right_scope.resolve_column(column_name)?;
         let l = match l {
-            ColumnRef::Inner(l) => l,
-            ColumnRef::Outer(_) => bail!(
+            ColumnRef {
+                level: 0,
+                column: l,
+            } => l,
+            _ => bail!(
                 "Internal error: name {} in USING resolved to outer column",
                 column_name
             ),
         };
         let r = match r {
-            ColumnRef::Inner(r) => r,
-            ColumnRef::Outer(_) => bail!(
+            ColumnRef {
+                level: 0,
+                column: r,
+            } => r,
+            _ => bail!(
                 "Internal error: name {} in USING resolved to outer column",
                 column_name
             ),
         };
         join_exprs.push(ScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
-            expr1: Box::new(ScalarExpr::Column(ColumnRef::Inner(l))),
-            expr2: Box::new(ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r))),
+            expr1: Box::new(ScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: l,
+            })),
+            expr2: Box::new(ScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: left_scope.len() + r,
+            })),
         });
         map_exprs.push(ScalarExpr::CallVariadic {
             func: VariadicFunc::Coalesce,
             exprs: vec![
-                ScalarExpr::Column(ColumnRef::Inner(l)),
-                ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r)),
+                ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: l,
+                }),
+                ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: left_scope.len() + r,
+                }),
             ],
         });
         let mut names = left_scope.items[l].names.clone();
@@ -2298,9 +2334,11 @@ fn plan_arithmetic_op<'a>(
             let coalesce = match (&ltype.scalar_type, &rtype.scalar_type) {
                 (Decimal(_, _), Decimal(_, _))
                 | (Date, _)
+                | (Time, _)
                 | (Timestamp, _)
                 | (TimestampTz, _)
                 | (_, Date)
+                | (_, Time)
                 | (_, Timestamp)
                 | (_, TimestampTz)
                 | (Jsonb, _)
@@ -2371,22 +2409,7 @@ fn plan_arithmetic_op<'a>(
         }
     };
 
-    // Step 2. Promote dates to intervals.
-    //
-    // Dates can't be added to intervals, but timestamps can, and dates are
-    // trivially promotable to intervals.
-    if let Date = &ltype.scalar_type {
-        let expr = plan_cast_internal(ecx, &op, lexpr, Timestamp)?;
-        ltype = ecx.column_type(&expr);
-        lexpr = expr;
-    }
-    if let Date = &rtype.scalar_type {
-        let expr = plan_cast_internal(ecx, &op, rexpr, Timestamp)?;
-        rtype = ecx.column_type(&expr);
-        rexpr = expr;
-    }
-
-    // Step 3a. Plan the arithmetic operation for decimals.
+    // Step 2a. Plan the arithmetic operation for decimals.
     //
     // Decimal arithmetic requires special support from the planner, because
     // the precision and scale of the decimal is erased in the dataflow
@@ -2428,7 +2451,7 @@ fn plan_arithmetic_op<'a>(
         _ => (),
     }
 
-    // Step 3b. Plan the arithmetic operation for all other types.
+    // Step 2b. Plan the arithmetic operation for all other types.
     let func = match op {
         Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
             (Int32, Int32) => AddInt32,
@@ -2447,6 +2470,24 @@ fn plan_arithmetic_op<'a>(
                 mem::swap(&mut ltype, &mut rtype);
                 AddTimestampTzInterval
             }
+            (Date, Interval) => AddDateInterval,
+            (Interval, Date) => {
+                mem::swap(&mut lexpr, &mut rexpr);
+                mem::swap(&mut ltype, &mut rtype);
+                AddDateInterval
+            }
+            (Date, Time) => AddDateTime,
+            (Time, Date) => {
+                mem::swap(&mut lexpr, &mut rexpr);
+                mem::swap(&mut ltype, &mut rtype);
+                AddDateTime
+            }
+            (Time, Interval) => AddTimeInterval,
+            (Interval, Time) => {
+                mem::swap(&mut lexpr, &mut rexpr);
+                mem::swap(&mut ltype, &mut rtype);
+                AddTimeInterval
+            }
             _ => bail!(
                 "no overload for {} + {}",
                 ltype.scalar_type,
@@ -2462,6 +2503,10 @@ fn plan_arithmetic_op<'a>(
             (TimestampTz, TimestampTz) => SubTimestampTz,
             (Timestamp, Interval) => SubTimestampInterval,
             (TimestampTz, Interval) => SubTimestampTzInterval,
+            (Date, Date) => SubDate,
+            (Date, Interval) => SubDateInterval,
+            (Time, Time) => SubTime,
+            (Time, Interval) => SubTimeInterval,
             (Jsonb, Int32) => {
                 rexpr = rexpr.call_unary(UnaryFunc::CastInt32ToInt64);
                 JsonbDeleteInt64
@@ -2869,7 +2914,18 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             )?,
             ScalarType::TimestampTz,
         ),
-        Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
+        Value::Time(
+            _,
+            ParsedTime {
+                hour,
+                minute,
+                second,
+                nano,
+            },
+        ) => (
+            Datum::from_hms_nano(*hour, *minute, *second, *nano)?,
+            ScalarType::Time,
+        ),
         Value::Interval(iv) => {
             let i = iv.compute_interval()?;
             (Datum::Interval(i.into()), ScalarType::Interval)
@@ -2978,8 +3034,16 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
                 expr1,
                 expr2,
             } => {
-                if let (Column(ColumnRef::Inner(l)), Column(ColumnRef::Inner(r))) =
-                    (&**expr1, &**expr2)
+                if let (
+                    Column(ColumnRef {
+                        level: 0,
+                        column: l,
+                    }),
+                    Column(ColumnRef {
+                        level: 0,
+                        column: r,
+                    }),
+                ) = (&**expr1, &**expr2)
                 {
                     equivalences.push((*l, *r));
                 }
@@ -3345,8 +3409,8 @@ struct QueryContext<'a> {
     lifetime: QueryLifetime,
     /// The scope of the outer relation expression.
     outer_scope: Scope,
-    /// The type of the outer relation expression.
-    outer_relation_type: RelationType,
+    /// The type of the outer relation expressions.
+    outer_relation_types: Vec<RelationType>,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
@@ -3358,7 +3422,7 @@ impl<'a> QueryContext<'a> {
             scx,
             lifetime,
             outer_scope: Scope::empty(None),
-            outer_relation_type: RelationType::empty(),
+            outer_relation_types: vec![],
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
         }
     }
@@ -3368,7 +3432,7 @@ impl<'a> QueryContext<'a> {
     }
 
     fn relation_type(&self, expr: &RelationExpr) -> RelationType {
-        expr.typ(&self.outer_relation_type, &self.param_types.borrow())
+        expr.typ(&self.outer_relation_types, &self.param_types.borrow())
     }
 }
 
@@ -3393,7 +3457,7 @@ struct ExprContext<'a> {
 impl<'a> ExprContext<'a> {
     fn column_type(&self, expr: &ScalarExpr) -> ColumnType {
         expr.typ(
-            &self.qcx.outer_relation_type,
+            &self.qcx.outer_relation_types,
             &self.relation_type,
             &self.qcx.param_types.borrow(),
         )
@@ -3408,15 +3472,13 @@ impl<'a> ExprContext<'a> {
             scx: self.qcx.scx,
             lifetime: self.qcx.lifetime,
             outer_scope: self.scope.clone(),
-            outer_relation_type: RelationType::new(
-                self.qcx
-                    .outer_relation_type
-                    .column_types
-                    .iter()
-                    .cloned()
-                    .chain(self.relation_type.column_types.iter().cloned())
-                    .collect(),
-            ),
+            outer_relation_types: self
+                .qcx
+                .outer_relation_types
+                .iter()
+                .chain(std::iter::once(self.relation_type))
+                .cloned()
+                .collect(),
             param_types: self.qcx.param_types.clone(),
         }
     }

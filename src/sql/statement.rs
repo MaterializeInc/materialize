@@ -7,6 +7,7 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
+use itertools::join;
 use std::collections::HashMap;
 use std::iter;
 use std::net::SocketAddr;
@@ -14,27 +15,27 @@ use std::path::PathBuf;
 
 use failure::{bail, format_err, ResultExt};
 use futures::future::join_all;
-use sql_parser::ast::{
-    Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
-    Stage, Statement, Value,
-};
+use itertools::Itertools;
 use url::Url;
 
+use ::expr::{EvalEnv, GlobalId};
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
-    AvroEncoding, CsvEncoding, DataEncoding, ExternalSourceConnector, FileSourceConnector, Index,
-    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, Sink,
-    SinkConnector, Source, SourceConnector, View,
+    AvroEncoding, Consistency, CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector,
+    FileSourceConnector, Index, IndexDesc, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
+    ProtobufEncoding, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
-use expr as relationexpr;
 use futures::future::TryFutureExt;
 use interchange::{avro, protobuf};
 use ore::collections::CollectionExt;
 use ore::future::MaybeFuture;
-use relationexpr::{EvalEnv, GlobalId};
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use sql_parser::ast::{
+    AvroSchema, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
+    ShowStatementFilter, Stage, Statement, Value,
+};
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
@@ -508,21 +509,38 @@ fn handle_show_indexes(
                 && entry.uses() == vec![from_entry.id()]
         })
         .flat_map(|entry| match entry.item() {
-            CatalogItem::Index(dataflow_types::Index { raw_keys, .. }) => {
+            CatalogItem::Index(dataflow_types::Index {
+                desc,
+                relation_type,
+                raw_sql,
+                ..
+            }) => {
+                let key_sqls = match crate::parse(raw_sql.to_owned())
+                    .expect("raw_sql cannot be invalid")
+                    .into_element()
+                {
+                    Statement::CreateIndex { key_parts, .. } => key_parts,
+                    _ => unreachable!(),
+                };
                 let mut row_subset = Vec::new();
-                for (seq_in_index, key_sql) in raw_keys.iter().enumerate() {
-                    let (col_name, func) = if key_sql.is_column_name {
-                        (Datum::from(&*key_sql.raw_sql), Datum::Null)
+                for (i, (key_expr, key_sql)) in desc.keys.iter().zip_eq(key_sqls).enumerate() {
+                    let key_sql = key_sql.to_string();
+                    let is_column_name = match key_expr {
+                        expr::ScalarExpr::Column(_) => true,
+                        _ => false,
+                    };
+                    let (col_name, func) = if is_column_name {
+                        (Datum::String(&key_sql), Datum::Null)
                     } else {
-                        (Datum::Null, Datum::from(&*key_sql.raw_sql))
+                        (Datum::Null, Datum::String(&key_sql))
                     };
                     row_subset.push(Row::pack(&vec![
-                        Datum::from(&*from_entry.name().to_string()),
-                        Datum::from(&*entry.name().to_string()),
+                        Datum::String(&from_entry.name().to_string()),
+                        Datum::String(&entry.name().to_string()),
                         col_name,
                         func,
-                        Datum::from(key_sql.nullable),
-                        Datum::from((seq_in_index + 1) as i64),
+                        Datum::from(key_expr.typ(relation_type).nullable),
+                        Datum::from((i + 1) as i64),
                     ]));
                 }
                 row_subset
@@ -667,6 +685,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
 }
 
 fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+    let raw_sql = stmt.to_string();
     let (name, on_name, key_parts, if_not_exists) = match stmt {
         Statement::CreateIndex {
             name,
@@ -677,26 +696,26 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
         _ => unreachable!(),
     };
     let on_name = scx.resolve_name(on_name)?;
-    let (catalog_entry, keys) = query::plan_index(scx, &on_name, &key_parts)?;
+    let catalog_entry = scx.catalog.get(&on_name)?;
+    let keys = query::plan_index_exprs(scx, catalog_entry.desc()?, &key_parts)?;
     if !object_type_matches(ObjectType::View, catalog_entry.item()) {
         bail!("{} is not a view", on_name);
     }
-    let keys = keys
-        .into_iter()
-        .map(|x| x.lower_uncorrelated())
-        .collect::<Vec<_>>();
     Ok(Plan::CreateIndex {
         name: FullName {
             database: on_name.database.clone(),
             schema: on_name.schema.clone(),
             item: normalize::ident(name),
         },
-        index: Index::new(
-            catalog_entry.id(),
-            keys,
-            key_parts.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
-            catalog_entry.desc()?,
-        ),
+        index: Index {
+            desc: IndexDesc {
+                on_id: catalog_entry.id(),
+                keys,
+            },
+            raw_sql,
+            relation_type: catalog_entry.desc()?.typ().clone(),
+            eval_env: EvalEnv::default(),
+        },
         if_not_exists,
     })
 }
@@ -768,8 +787,8 @@ fn handle_create_view(
         handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
     if !finishing.is_trivial() {
         //TODO: materialize#724 - persist finishing information with the view?
-        relation_expr = relationexpr::RelationExpr::Project {
-            input: Box::new(relationexpr::RelationExpr::TopK {
+        relation_expr = expr::RelationExpr::Project {
+            input: Box::new(expr::RelationExpr::TopK {
                 input: Box::new(relation_expr),
                 group_key: vec![],
                 order_key: finishing.order_by,
@@ -808,144 +827,73 @@ fn handle_create_view(
 }
 
 async fn handle_create_dataflow(
-    mut stmt: Statement,
+    stmt: Statement,
     current_database: String,
 ) -> Result<Plan, failure::Error> {
-    match &mut stmt {
+    match stmt {
         Statement::CreateSource {
             name,
             url,
-            schema,
+            format,
+            envelope,
             with_options,
             if_not_exists,
         } => {
-            let source_url = parse_source_url(url)?;
-            let mut format = KafkaSchemaFormat::Avro;
-            let mut message_name = None;
-            match source_url {
+            let mut with_options: HashMap<_, _> = with_options
+                .into_iter()
+                .map(|op| (op.name.value.to_ascii_lowercase(), op.value))
+                .collect();
+            let source_url = parse_source_url(&url)?;
+            let envelope = match envelope {
+                sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
+                sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
+            };
+
+            let result = match source_url {
                 SourceUrl::Kafka(KafkaUrl { addr, topic }) => {
-                    if !with_options.is_empty() {
-                        for with_op in with_options {
-                            match with_op.name.value.as_str() {
-                                "format" => {
-                                    format = match &with_op.value {
-                                        Value::SingleQuotedString(s) => match s.as_ref() {
-                                            "protobuf-descriptor" => KafkaSchemaFormat::Protobuf,
-                                            "avro" => KafkaSchemaFormat::Avro,
-                                            _ => bail!(
-                                            "Unrecognized source format: {:?} legal formats: {}",
-                                            s,
-                                            KafkaSchemaFormat::legal_formats().join(", ")
-                                        ),
-                                        },
-                                        _ => bail!("Source format must be a string"),
-                                    }
-                                }
-                                "message_name" => {
-                                    message_name = Some(match &with_op.value {
-                                        Value::SingleQuotedString(s) => s.to_string(),
-                                        _ => bail!("Message name has to be a string"),
-                                    });
-                                }
-                                _ => bail!("Unrecognized WITH option {}", with_op.name.value),
-                            }
-                        }
-                    }
+                    let consistency = match with_options.remove("consistency") {
+                        None => Consistency::RealTime,
+                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
+                        Some(_) => bail!("consistency must be a string"),
+                    };
                     if let Some(topic) = topic {
-                        if let Some(schema) = schema {
-                            let name = allocate_name(
-                                &current_database,
-                                normalize::object_name(name.clone())?,
-                            );
-                            let source =
-                                build_kafka_source(schema, addr, topic, format, message_name)
-                                    .await?;
-                            Ok(Plan::CreateSource {
-                                name,
-                                source,
-                                if_not_exists: *if_not_exists,
-                            })
-                        } else {
-                            bail!("Kafka sources require a schema.");
-                        }
+                        let name =
+                            allocate_name(&current_database, normalize::object_name(name.clone())?);
+                        let source =
+                            build_kafka_source(addr, topic, format.clone(), envelope, consistency)
+                                .await?;
+                        Ok(Plan::CreateSource {
+                            name,
+                            source,
+                            if_not_exists,
+                        })
                     } else {
                         bail!("source URL missing topic path: {}", url);
                     }
                 }
                 SourceUrl::Path(path) => {
-                    if schema.is_some() {
-                        bail!("file sources do not support schemas.");
-                    }
-                    let mut format = None;
-                    let mut n_cols: Option<usize> = None;
-                    let mut tail = false;
-                    let mut regex_str = None;
-                    for with_op in with_options {
-                        match with_op.name.value.as_str() {
-                            "columns" => {
-                                n_cols = Some(match &with_op.value {
-                                    Value::Number(s) => s.parse()?,
-                                    _ => bail!("`columns` must be a number."),
-                                });
-                            }
-                            "format" => {
-                                format = Some(match &with_op.value {
-                                    Value::SingleQuotedString(s) => match s.as_ref() {
-                                        "csv" => SourceFileFormat::Csv,
-                                        "text" => SourceFileFormat::Regex("(?P<line>.*)".into()),
-                                        _ => bail!("Unrecognized file format: {}", s),
-                                    },
-                                    _ => bail!("File format must be a string, e.g. 'csv'."),
-                                });
-                            }
-                            "tail" => {
-                                tail = match &with_op.value {
-                                    Value::Boolean(b) => *b,
-                                    _ => bail!("`tail` must be a boolean."),
-                                }
-                            }
-                            "regex" => {
-                                regex_str = Some(match &with_op.value {
-                                    Value::SingleQuotedString(s) => s,
-                                    _ => bail!("regex must be a string"),
-                                })
-                            }
-                            _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
-                        }
-                    }
-
-                    if regex_str.is_some() && format.is_some() {
-                        bail!("Can't specify both `format` and `regex`.")
-                    }
-
-                    let format = match format {
-                        Some(f) => f,
-                        None => match regex_str {
-                            Some(s) => SourceFileFormat::Regex(s.clone()),
-                            None => {
-                                bail!("File source requires a `format` or `regex` WITH option.")
-                            }
-                        },
+                    let tail = match with_options.remove("tail") {
+                        None => false,
+                        Some(Value::Boolean(b)) => b,
+                        Some(_) => bail!("tail must be a boolean"),
                     };
                     let (encoding, desc) = match format {
-                        SourceFileFormat::Csv => {
-                            let n_cols = match n_cols {
-                                Some(n) => n,
-                                None => bail!("Csv source requires a `columns` WITH option."),
-                            };
-                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
-                                .take(n_cols)
-                                .chain(iter::once(ColumnType::new(ScalarType::Int64)))
-                                .collect();
-                            let names = (1..=n_cols)
-                                .map(|i| Some(format!("column{}", i)))
-                                .chain(iter::once(Some("mz_line_no".into())));
-                            (
-                                DataEncoding::Csv(CsvEncoding { n_cols }),
-                                RelationDesc::new(RelationType::new(cols), names),
-                            )
+                        Format::Raw => (
+                            DataEncoding::Raw,
+                            RelationDesc::new(
+                                RelationType::new(vec![
+                                    ColumnType::new(ScalarType::Bytes),
+                                    ColumnType::new(ScalarType::Int64).nullable(true),
+                                ]),
+                                iter::once(Some(String::from("data")))
+                                    .chain(iter::once(Some(String::from("mz_line_no")))),
+                            ),
+                        ),
+                        Format::Avro(_) => bail!("Avro-format file sources are not yet supported"),
+                        Format::Protobuf { .. } => {
+                            bail!("Protobuf-format file sources are not yet supported")
                         }
-                        SourceFileFormat::Regex(s) => {
+                        Format::Regex(s) => {
                             let regex = match regex::Regex::new(&s) {
                                 Ok(r) => r,
                                 Err(e) => bail!("Error compiling regex: {}", e),
@@ -962,7 +910,7 @@ async fn handle_create_dataflow(
                                     None => Some(format!("column{}", i)),
                                     Some(ocn) => Some(String::from(ocn)),
                                 })
-                                .chain(iter::once(Some("mz_line_no".into())))
+                                .chain(iter::once(Some(String::from("mz_line_no"))))
                                 .collect();
                             let n_cols = names.len() - 1;
                             if n_cols == 0 {
@@ -971,14 +919,53 @@ async fn handle_create_dataflow(
                             let cols =
                                 iter::repeat(ColumnType::new(ScalarType::String).nullable(true))
                                     .take(n_cols)
-                                    .chain(iter::once(ColumnType::new(ScalarType::Int64)))
+                                    .chain(iter::once(
+                                        ColumnType::new(ScalarType::Int64).nullable(true),
+                                    ))
                                     .collect();
                             (
                                 DataEncoding::Regex { regex },
                                 RelationDesc::new(RelationType::new(cols), names),
                             )
                         }
+                        Format::Csv { n_cols, delimiter } => {
+                            let delimiter = match delimiter as u32 {
+                                0..=127 => delimiter as u8,
+                                _ => bail!("CSV delimiter must be an ASCII character"),
+                            };
+                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
+                                .take(n_cols)
+                                .chain(iter::once(
+                                    ColumnType::new(ScalarType::Int64).nullable(true),
+                                ))
+                                .collect();
+                            let names = (1..=n_cols)
+                                .map(|i| Some(format!("column{}", i)))
+                                .chain(iter::once(Some(String::from("mz_line_no"))));
+                            (
+                                DataEncoding::Csv(CsvEncoding { n_cols, delimiter }),
+                                RelationDesc::new(RelationType::new(cols), names),
+                            )
+                        }
+                        Format::Json => bail!("JSON-format file sources are not yet supported"),
+                        Format::Text => (
+                            DataEncoding::Text,
+                            RelationDesc::new(
+                                RelationType::new(vec![
+                                    ColumnType::new(ScalarType::String),
+                                    ColumnType::new(ScalarType::Int64).nullable(true),
+                                ]),
+                                iter::once(Some(String::from("text")))
+                                    .chain(iter::once(Some(String::from("mz_line_no")))),
+                            ),
+                        ),
                     };
+                    match envelope {
+                        dataflow_types::Envelope::None => {}
+                        dataflow_types::Envelope::Debezium => {
+                            bail!("Debezium-envelope file sources are not supported")
+                        }
+                    }
                     let source = Source {
                         connector: SourceConnector {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
@@ -986,6 +973,8 @@ async fn handle_create_dataflow(
                                 tail,
                             }),
                             encoding,
+                            envelope,
+                            consistency: Consistency::RealTime,
                         },
                         desc,
                     };
@@ -994,10 +983,17 @@ async fn handle_create_dataflow(
                     Ok(Plan::CreateSource {
                         name,
                         source,
-                        if_not_exists: *if_not_exists,
+                        if_not_exists,
                     })
                 }
+            };
+            if !with_options.is_empty() {
+                bail!(
+                    "Unexpected WITH options: {}",
+                    join(with_options.keys(), ",")
+                )
             }
+            result
         }
         Statement::CreateSources {
             like,
@@ -1005,17 +1001,22 @@ async fn handle_create_dataflow(
             schema_registry,
             with_options,
         } => {
-            if !with_options.is_empty() {
-                bail!("WITH options are not yet supported");
-            }
+            let mut with_options: HashMap<_, _> = with_options
+                .into_iter()
+                .map(|op| (op.name.value.to_ascii_lowercase(), op.value))
+                .collect();
             let schema_registry_url: Url = schema_registry.parse()?;
             let ccsr_client = ccsr::AsyncClient::new(schema_registry_url);
             let mut subjects = ccsr_client.list_subjects().await?;
             if let Some(value) = like {
-                let like_regex = build_like_regex_from_string(value)?;
+                let like_regex = build_like_regex_from_string(&value)?;
                 subjects.retain(|a| like_regex.is_match(a))
             }
-
+            let consistency = match with_options.remove("consistency") {
+                None => Consistency::RealTime,
+                Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
+                Some(_) => bail!("consistency must be a string"),
+            };
             let names = subjects.iter().filter_map(|s| {
                 let parts: Vec<&str> = s.rsplitn(2, '-').collect();
                 if parts.len() == 2 && parts[0] == "value" {
@@ -1041,29 +1042,46 @@ async fn handle_create_dataflow(
                     s
                 );
             }
+
+            if !with_options.is_empty() {
+                bail!(
+                    "Unexpected WITH options: {}",
+                    join(with_options.keys(), ",")
+                )
+            }
+
             async fn make_source(
                 topic_name: &str,
                 sql_name: FullName,
                 addr: SocketAddr,
                 schema_registry: &str,
+                consistency: Consistency,
             ) -> Result<(FullName, Source), failure::Error> {
                 Ok((
                     sql_name,
                     build_kafka_avro_source(
-                        &SourceSchema::Registry(schema_registry.to_owned()),
+                        AvroSchema::CsrUrl(schema_registry.to_owned()),
                         addr,
                         topic_name.to_owned(),
+                        consistency,
                     )
                     .await?,
                 ))
             }
             let sources = join_all(names.map(|(topic_name, sql_name)| {
-                make_source(topic_name, sql_name, addr, &*schema_registry)
+                make_source(
+                    topic_name,
+                    sql_name,
+                    addr,
+                    &*schema_registry,
+                    consistency.clone(),
+                )
             }))
             .await
             .into_iter()
             .collect::<Result<Vec<_>, _>>();
-            Ok(Plan::CreateSources(sources?))
+            let sources = sources?;
+            Ok(Plan::CreateSources(sources))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
@@ -1263,33 +1281,44 @@ fn handle_query(
     query: Query,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+) -> Result<(expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
     Ok((expr.decorrelate()?, desc, finishing))
 }
 
 fn build_kafka_source(
-    schema: &SourceSchema,
     kafka_addr: SocketAddr,
     topic: String,
-    format: KafkaSchemaFormat,
-    message_name: Option<String>,
-) -> MaybeFuture<Result<Source, failure::Error>> {
-    match (format, message_name) {
-        (KafkaSchemaFormat::Avro, None) => build_kafka_avro_source(schema, kafka_addr, topic),
-        (KafkaSchemaFormat::Protobuf, Some(m)) => {
-            build_kafka_protobuf_source(schema, kafka_addr, topic, m)
+    format: Format,
+    envelope: Envelope,
+    consistency: Consistency,
+) -> MaybeFuture<'static, Result<Source, failure::Error>> {
+    match (format, envelope) {
+        (Format::Avro(schema), Envelope::Debezium) => {
+            build_kafka_avro_source(schema, kafka_addr, topic, consistency)
         }
-        (KafkaSchemaFormat::Avro, Some(s)) => Err(format_err!(
-            "Invalid parameter message name {} provided for Avro source",
-            s
+        (Format::Avro(_), _) => {
+            Err(format_err!(
+                "Currently, only Avro in Debezium-envelope format is supported"
+            ))
+            .into() // TODO(brennan) -- there's no reason not to support this
+        }
+        (
+            Format::Protobuf {
+                message_name,
+                schema,
+            },
+            Envelope::None,
+        ) => build_kafka_protobuf_source(schema, kafka_addr, topic, message_name, consistency),
+        (Format::Protobuf { .. }, Envelope::Debezium) => Err(format_err!(
+            "Currently, Debezium-style envelopes are not supported for protobuf messages."
         ))
         .into(),
-        (KafkaSchemaFormat::Protobuf, None) => Err(format_err!(
-            "Missing message name parameter for a Protobuf source"
+        _ => Err(format_err!(
+            "Currently, Kafka sources only support Avro and Protobuf formats."
         ))
-        .into(),
+        .into(), // TODO(brennan)
     }
 }
 
@@ -1323,27 +1352,30 @@ async fn get_remote_avro_schema(url: Url, topic: String) -> Result<Schema, failu
 }
 
 fn build_kafka_avro_source(
-    schema: &SourceSchema,
+    schema: AvroSchema,
     kafka_addr: SocketAddr,
     topic: String,
-) -> MaybeFuture<Result<Source, failure::Error>> {
+    consistency: Consistency,
+) -> MaybeFuture<'static, Result<Source, failure::Error>> {
     let schema = match schema {
         // TODO(jldlaughlin): we need a way to pass in primary key information
         // when building a source from a string or file.
-        SourceSchema::Inline(schema) => Ok(Schema {
+        AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Ok(Schema {
             key_schema: None,
-            value_schema: schema.to_owned(),
+            value_schema: schema,
             schema_registry_url: None,
         })
         .into(),
-        SourceSchema::File(path) => MaybeFuture::Future(Box::pin(async move {
-            Ok(Schema {
-                key_schema: None,
-                value_schema: tokio::fs::read_to_string(path).await?,
-                schema_registry_url: None,
-            })
-        })),
-        SourceSchema::Registry(url) => {
+        AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
+            MaybeFuture::Future(Box::pin(async move {
+                Ok(Schema {
+                    key_schema: None,
+                    value_schema: tokio::fs::read_to_string(path).await?,
+                    schema_registry_url: None,
+                })
+            }))
+        }
+        AvroSchema::CsrUrl(url) => {
             let url: Result<Url, _> = url.parse();
             match url {
                 Err(err) => Err(err.into()).into(),
@@ -1378,6 +1410,8 @@ fn build_kafka_avro_source(
                         raw_schema: value_schema,
                         schema_registry_url,
                     }),
+                    envelope: Envelope::Debezium,
+                    consistency,
                 },
                 desc,
             })
@@ -1386,20 +1420,19 @@ fn build_kafka_avro_source(
 }
 
 fn build_kafka_protobuf_source(
-    schema: &SourceSchema,
+    schema: sql_parser::ast::Schema,
     kafka_addr: SocketAddr,
     topic: String,
     message_name: String,
-) -> MaybeFuture<Result<Source, failure::Error>> {
+    consistency: Consistency,
+) -> MaybeFuture<'static, Result<Source, failure::Error>> {
     let descriptors: MaybeFuture<Result<_, failure::Error>> = match schema {
-        SourceSchema::Inline(bytes) => strconv::parse_bytes(bytes).map_err(Into::into).into(),
-        SourceSchema::File(path) => {
+        sql_parser::ast::Schema::Inline(bytes) => {
+            strconv::parse_bytes(&bytes).map_err(Into::into).into()
+        }
+        sql_parser::ast::Schema::File(path) => {
             MaybeFuture::Future(Box::pin(tokio::fs::read(path).map_err(Into::into)))
         }
-        SourceSchema::Registry(_) => Err(format_err!(
-            "protobuf sources do not support schema registries"
-        ))
-        .into(),
     };
 
     descriptors.map(move |descriptors| {
@@ -1418,37 +1451,13 @@ fn build_kafka_protobuf_source(
                         descriptors,
                         message_name,
                     }),
+                    envelope: Envelope::None,
+                    consistency,
                 },
                 desc,
             })
         })
     })
-}
-
-enum KafkaSchemaFormat {
-    Avro,
-    Protobuf,
-}
-
-impl KafkaSchemaFormat {
-    pub fn legal_formats() -> &'static [&'static str] {
-        #[allow(dead_code)]
-        {
-            // the list below must match all the possible variants
-            use KafkaSchemaFormat::*;
-            let a = Avro;
-            match a {
-                Avro | Protobuf => (),
-            }
-        }
-
-        &["protobuf-descriptor", "avro"]
-    }
-}
-
-enum SourceFileFormat {
-    Csv,
-    Regex(String),
 }
 
 struct KafkaUrl {
@@ -1476,8 +1485,8 @@ fn parse_source_url(url: &str) -> Result<SourceUrl, failure::Error> {
                     url.host_str().unwrap()
                 );
             }
-            let pb: PathBuf = url.path().parse()?;
-            SourceUrl::Path(pb)
+            let path: PathBuf = url.path().parse()?;
+            SourceUrl::Path(path)
         }
         bad => bail!("Unrecognized source URL schema: {}", bad),
     };

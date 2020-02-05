@@ -11,7 +11,7 @@ use std::mem::{size_of, transmute};
 use crate::decimal::Significand;
 use crate::scalar::Interval;
 use crate::Datum;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
@@ -53,9 +53,31 @@ use serde::{Deserialize, Serialize};
 /// let datums = row.unpack();
 /// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
-#[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
     data: Box<[u8]>,
+}
+
+/// These implementations order first by length, and then by slice contents.
+/// This allows many comparisons to complete without dereferencing memory.
+impl PartialOrd for Row {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.data.len().cmp(&other.data.len()) {
+            std::cmp::Ordering::Less => Some(std::cmp::Ordering::Less),
+            std::cmp::Ordering::Greater => Some(std::cmp::Ordering::Greater),
+            std::cmp::Ordering::Equal => Some(self.data.cmp(&other.data)),
+        }
+    }
+}
+
+impl Ord for Row {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.data.len().cmp(&other.data.len()) {
+            std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Equal => self.data.cmp(&other.data),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -124,6 +146,7 @@ enum Tag {
     Float64,
     Decimal,
     Date,
+    Time,
     Timestamp,
     TimestampTz,
     Interval,
@@ -218,6 +241,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let d = read_copy::<NaiveDate>(data, offset);
             Datum::Date(d)
         }
+        Tag::Time => {
+            let t = read_copy::<NaiveTime>(data, offset);
+            Datum::Time(t)
+        }
         Tag::Timestamp => {
             let t = read_copy::<NaiveDateTime>(data, offset);
             Datum::Timestamp(t)
@@ -309,6 +336,10 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             data.push(Tag::Date as u8);
             push_copy!(data, d, NaiveDate);
         }
+        Datum::Time(t) => {
+            data.push(Tag::Time as u8);
+            push_copy!(data, t, NaiveTime);
+        }
         Datum::Timestamp(t) => {
             data.push(Tag::Timestamp as u8);
             push_copy!(data, t, NaiveDateTime);
@@ -348,6 +379,34 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
     }
 }
 
+/// Number of bytes required by the datum.
+///
+/// This is used to optimistically pre-allocate buffers for packing rows.
+pub fn datum_size(datum: &Datum) -> usize {
+    match datum {
+        Datum::Null => 1,
+        Datum::False => 1,
+        Datum::True => 1,
+        Datum::Int32(_) => 1 + size_of::<i32>(),
+        Datum::Int64(_) => 1 + size_of::<i64>(),
+        Datum::Float32(_) => 1 + size_of::<u32>(),
+        Datum::Float64(_) => 1 + size_of::<u64>(),
+        Datum::Date(_) => 1 + size_of::<NaiveDate>(),
+        Datum::Time(_) => 1 + size_of::<NaiveTime>(),
+        Datum::Timestamp(_) => 1 + size_of::<NaiveDateTime>(),
+        Datum::TimestampTz(_) => 1 + size_of::<DateTime<Utc>>(),
+        Datum::Interval(_) => {
+            1 + size_of::<i64>() + size_of::<u64>() + size_of::<u32>() + size_of::<bool>()
+        }
+        Datum::Decimal(_) => 1 + size_of::<Significand>(),
+        Datum::Bytes(bytes) => 1 + size_of::<usize>() + bytes.len(),
+        Datum::String(string) => 1 + size_of::<usize>() + string.as_bytes().len(),
+        Datum::List(list) => 1 + size_of::<usize>() + list.data.len(),
+        Datum::Dict(dict) => 1 + size_of::<usize>() + dict.data.len(),
+        Datum::JsonNull => 1,
+    }
+}
+
 // --------------------------------------------------------------------------------
 // public api
 
@@ -362,6 +421,22 @@ impl Row {
         let mut packer = RowPacker::new();
         packer.extend(iter);
         // drop the excess capacity
+        packer.finish()
+    }
+
+    /// Pack a slice of `Datum`s into a `Row`.
+    ///
+    /// This method has the advantage over `pack` that it can determine the required
+    /// allocation before packing the elements, ensuring only one allocation and no
+    /// redundant copies required.
+    ///
+    /// TODO: This could also be done for cloneable iterators, though we would need to be
+    /// very careful to avoid using it when iterators are either expensive or have
+    /// side effects.
+    pub fn pack_slice<'a, I, D>(slice: &[Datum<'a>]) -> Row {
+        let needed = slice.iter().map(|d| datum_size(d)).sum();
+        let mut packer = RowPacker::with_capacity(needed);
+        packer.extend(slice.iter());
         packer.finish()
     }
 
@@ -511,10 +586,16 @@ impl<'a> Iterator for DatumDictIter<'a> {
 }
 
 impl RowPacker {
+    /// Allocates an empty row packer.
     pub fn new() -> Self {
+        // TODO: Determine if this is the best default choice.
+        Self::with_capacity(1024 * 16)
+    }
+    /// Allocates an empty row packer with a supplied capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
         RowPacker {
             // make a big buffer up front to avoid resizing
-            data: Vec::with_capacity(1024 * 16),
+            data: Vec::with_capacity(capacity),
         }
     }
 
@@ -531,6 +612,11 @@ impl RowPacker {
         for datum in iter {
             self.push(*datum.borrow());
         }
+    }
+
+    /// Appends the datums of an entire `Row`.
+    pub fn extend_by_row(&mut self, row: &Row) {
+        self.data.extend(&*row.data);
     }
 
     /// Finish packing and return a `Row`
@@ -971,5 +1057,31 @@ mod tests {
             .is_err());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_datum_sizes() {
+        // Test the claims about various datum sizes.
+        let values_of_interest = vec![
+            Datum::Null,
+            Datum::False,
+            Datum::Int32(0),
+            Datum::Int64(0),
+            Datum::Float32(OrderedFloat(0.0)),
+            Datum::Float64(OrderedFloat(0.0)),
+            Datum::Decimal(Significand::new(0)),
+            Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
+            Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
+            Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)),
+            Datum::Interval(Interval::default()),
+            Datum::Bytes(&[]),
+            Datum::String(""),
+            Datum::JsonNull,
+        ];
+        for value in values_of_interest {
+            if !datum_size(&value) == Row::pack(Some(value)).data.len() {
+                panic!("Disparity in claimed size for {:?}", value);
+            }
+        }
     }
 }

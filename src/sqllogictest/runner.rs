@@ -22,7 +22,6 @@
 //!       if wrong, record the error
 
 use std::borrow::ToOwned;
-use std::env;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -31,6 +30,7 @@ use std::ops;
 use std::path::Path;
 use std::str;
 use std::thread;
+use std::time::Duration;
 
 use failure::{bail, ResultExt};
 use futures::executor::block_on;
@@ -39,6 +39,8 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use coord::ExecuteResponse;
+use coord::TimestampChannel;
+
 use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
@@ -271,9 +273,9 @@ pub(crate) struct State {
     // Drop order matters for these fields.
     cmd_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     _dataflow_workers: Box<dyn Drop>,
+    _timestamp_thread: Option<JoinOnDropHandle<()>>,
     _coord_thread: JoinOnDropHandle<()>,
     _runtime: tokio::runtime::Runtime,
-
     session: Session,
     conn_id: u32,
 }
@@ -333,6 +335,7 @@ fn format_row(
                 (Type::Text, Datum::Int64(i)) => format!("{}", i),
                 (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
                 (Type::Text, Datum::Date(d)) => d.to_string(),
+                (Type::Text, Datum::Time(t)) => t.to_string(),
                 (Type::Text, Datum::Timestamp(d)) => d.to_string(),
                 (Type::Text, Datum::TimestampTz(d)) => d.to_string(),
                 (Type::Text, Datum::Interval(iv)) => iv.to_string(),
@@ -371,24 +374,34 @@ impl State {
         let executor = runtime.handle().clone();
 
         let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
-        // TODO(benesch): setting these defaults should be handled by symbiosis,
-        // but is blocked on https://github.com/sfackler/rust-postgres/issues/534.
-        let symbiosis_url = format!(
-            "postgres://{user}@{host}:{port}",
-            user = env::var("PGUSER").unwrap_or_else(|_| whoami::username()),
-            host = env::var("PGHOST").unwrap_or_else(|_| "localhost".into()),
-            port = env::var("PGPORT").unwrap_or_else(|_| "5432".into()),
-        );
+        let (source_tx, source_rx) = std::sync::mpsc::channel();
+        let (ts_tx, ts_rx) = std::sync::mpsc::channel();
+
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
             num_timely_workers: NUM_TIMELY_WORKERS,
-            symbiosis_url: Some(&symbiosis_url),
+            symbiosis_url: Some("postgres://"),
             logging: logging_config.as_ref(),
-            bootstrap_sql: "".into(),
             data_directory: None,
             executor: &executor,
+            ts_channel: Some(TimestampChannel {
+                sender: source_tx,
+                receiver: ts_rx,
+            }),
         })?;
-        let coord_thread = thread::spawn(move || coord.serve(cmd_rx));
+
+        let mut tsper = coord::Timestamper::new(
+            Duration::from_millis(10),
+            1000,
+            None,
+            coord::TimestampChannel {
+                sender: ts_tx,
+                receiver: source_rx,
+            },
+        );
+
+        let coord_thread = thread::spawn(move || coord.serve(cmd_rx)).join_on_drop();
+        let ts_thread = thread::spawn(move || tsper.update()).join_on_drop();
 
         let dataflow_workers = dataflow::serve(
             vec![None],
@@ -396,6 +409,7 @@ impl State {
             process_id,
             switchboard,
             runtime.handle().clone(),
+            true,
             logging_config,
         )
         .unwrap();
@@ -403,7 +417,8 @@ impl State {
         Ok(State {
             cmd_tx,
             _dataflow_workers: Box::new(dataflow_workers),
-            _coord_thread: coord_thread.join_on_drop(),
+            _coord_thread: coord_thread,
+            _timestamp_thread: Some(ts_thread),
             _runtime: runtime,
             session: Session::default(),
             conn_id: 1,

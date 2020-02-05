@@ -15,12 +15,11 @@ message TestRecord {
   int32 int_field = 1;
   string string_field = 2;
   int64 int64_field = 3;
-  bytes bytes_field = 4;
-  Color color_field = 5;
-  uint32 uint_field = 6;
-  uint64 uint64_field = 7;
-  float float_field = 8;
-  double double_field = 9;
+  Color color_field = 4;
+  uint32 uint_field = 5;
+  uint64 uint64_field = 6;
+  float float_field = 7;
+  double double_field = 8;
 }
 
 message TestRepeatedRecord {

@@ -13,6 +13,12 @@ use sql::Session;
 /// The requests the client can make of a [`Coordinator`](crate::Coordinator).
 #[derive(Debug)]
 pub enum Command {
+    /// Notify the coordinator of a new client session.
+    Startup {
+        session: Session,
+        tx: futures::channel::oneshot::Sender<Response<Vec<StartupMessage>>>,
+    },
+
     /// Parse the specified SQL into a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
@@ -43,6 +49,11 @@ pub struct Response<T> {
 }
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Error>> + Send>>;
+
+#[derive(Debug)]
+pub enum StartupMessage {
+    UnknownSessionDatabase,
+}
 
 /// Response from the queue to an `Execute` command.
 pub enum ExecuteResponse {

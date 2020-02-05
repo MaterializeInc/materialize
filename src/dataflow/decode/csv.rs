@@ -18,6 +18,7 @@ use repr::{Datum, Row};
 pub fn csv<G>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     n_cols: usize,
+    delimiter: u8,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -37,6 +38,7 @@ where
                     for (line, line_no) in &*lines {
                         let mut csv_reader = csv::ReaderBuilder::new()
                             .has_headers(false)
+                            .delimiter(delimiter)
                             .from_reader(line.as_slice());
                         for result in csv_reader.records() {
                             let record = result.unwrap();

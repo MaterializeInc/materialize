@@ -9,19 +9,27 @@ statement ok
 CREATE TABLE data (input text)
 
 statement ok
-INSERT INTO data VALUES ('asdfjkl'), ('foo'), ('asdf'), ('testing,123'), (NULL), ('jkl'), ('some,csv');
+INSERT INTO data VALUES
+    ('asdfjkl'), ('foo'), ('asdf'), ('testing,123'),
+    (NULL), ('jkl'), ('some,csv')
 
-query TTT
-SELECT data.*, reg.* FROM data, regexp_extract('(asdf)|(?P<foo>jkl)', data.input) reg ORDER BY data.input
+query TTT colnames
+SELECT data.*, reg.*
+FROM data, regexp_extract('(asdf)|(?P<foo>jkl)', data.input) reg
+ORDER BY data.input
 ----
-asdf asdf NULL
-asdfjkl asdf NULL
-jkl NULL jkl
+input    column1  foo
+asdf     asdf     NULL
+asdfjkl  asdf     NULL
+jkl      NULL     jkl
 
-# TODO - Test that the regex columns have the correct nullability, once they actually do (#1685)
+# TODO(brennan): test that the regex columns have the correct nullability, once
+# they actually do (#1685).
 
-query TTT
-SELECT data.*, csv.* FROM data, csv_extract(2, data.input) csv ORDER BY data.input
+query TTT colnames
+SELECT data.*, csv.* FROM data, csv_extract(2, data.input) csv
+ORDER BY data.input
 ----
-some,csv some csv
-testing,123 testing 123
+input        column1  column2
+some,csv     some     csv
+testing,123  testing  123

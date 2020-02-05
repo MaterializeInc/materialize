@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 syntax = "proto3";
+import "google/protobuf/timestamp.proto";
 
 package billing;
 
@@ -17,8 +18,8 @@ message ResourceInfo {
 
 message Record {
   string id = 1;
-  string interval_start = 2;
-  string interval_end = 3;
+  google.protobuf.Timestamp interval_start = 2;
+  google.protobuf.Timestamp interval_end = 3;
 
   string meter = 4; // What's being measured
   uint32 value = 5;
@@ -28,8 +29,8 @@ message Record {
 
 message Batch {
   string id = 1; // idempotency key
-  string interval_start = 3;
-  string interval_end = 4;
+  google.protobuf.Timestamp interval_start = 3;
+  google.protobuf.Timestamp interval_end = 4;
 
   repeated Record records = 7;
 }

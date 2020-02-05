@@ -13,20 +13,36 @@ mod file;
 mod kafka;
 mod util;
 
+use expr::SourceInstanceId;
 pub use file::{file, FileReadStyle};
 pub use kafka::kafka;
 
 // A `SourceToken` indicates interest in a source. When the `SourceToken` is
 // dropped, its associated source will be stopped.
 pub struct SourceToken {
+    id: SourceInstanceId,
     capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
     activator: Activator,
+    timestamp_drop: Option<Rc<RefCell<Vec<SourceInstanceId>>>>,
+}
+
+impl SourceToken {
+    pub fn activate(&self) {
+        self.activator.activate();
+    }
 }
 
 impl Drop for SourceToken {
     fn drop(&mut self) {
         *self.capability.borrow_mut() = None;
         self.activator.activate();
+        if self.timestamp_drop.is_some() {
+            self.timestamp_drop
+                .as_ref()
+                .unwrap()
+                .borrow_mut()
+                .push(self.id);
+        }
     }
 }
 

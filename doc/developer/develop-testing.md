@@ -20,7 +20,7 @@ There are broadly three test suites:
 
   3. The long-running **performance and stability test suite**. This test suite
      has yet to be automated. At the moment it consists of engineers manually
-     running the demo in [ex/chbench/](/ex/chbench).
+     running the demo in [demo/chbench/](/demo/chbench).
 
 The unit/integration and system test suites are run on every PR and can easily
 be run locally. The goal is for these test suites to be quite fast, ideally

@@ -5,18 +5,22 @@ This guide details what you'll need to contribute to Materialize.
 Materialize is written in [Rust] and should compile on any recent stable
 version.
 
-As far as external components go, Materialize has hard dependencies on [Apache
-ZooKeeper] and [Apache Kafka]. It also has an optional dependency on the
-[Confluent Schema Registry]. Conveniently, the [Confluent Platform] bundles these
-three components into a single download, and the [Confluent CLI] allows easy
-management of the services for local development.
+Materialize can be connected to many different types of event sources:
+
+* Local files with line-by-line textual events, where structured data can be extracted
+  via regular expressions or CSV parsing.
+* Custom Kafka topics, where events are encoded with Protobuf or Avro, with support for
+  additional encoding formats coming soon.
+* Kafka topics managed by a CDC tool like Debezium, where events adhere to a particular
+  "envelope" format that distinguishes updates from insertions and deletions.
+* Streaming HTTP sources? Apache Pulsar sources? With a bit of elbow grease, support for
+  any message bus can be added to Materialize!
+
+Note that local file sources are intended only for ad-hoc experimentation and analysis.
+Production use cases are expected to use Kafka sources, which have a better availability
+and durability story.
 
 [Rust]: https://www.rust-lang.org
-[Apache ZooKeeper]: https://zookeeper.apache.org
-[Apache Kafka]: https://kafka.apache.org
-[Confluent Schema Registry]: https://www.confluent.io/confluent-schema-registry/
-[Confluent Platform]: https://www.confluent.io/product/confluent-platform/
-[Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
 
 ## Installing
 
@@ -33,8 +37,11 @@ Rustup will automatically select the correct toolchain version specified in
 
 [rustup]: https://www.rust-lang.org/tools/install
 
-
 ### Confluent Platform
+
+The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with several
+non-free Confluent tools, like the [Confluent Schema Registry] and [Control Center]. For
+local development, the [Confluent CLI] allows easy management of these services
 
 On macOS, the easiest installation method is to use [Homebrew]:
 
@@ -82,6 +89,14 @@ curl -L https://cnfl.io/cli | sh -s -- -b /usr/local/bin
 
 However, if this ever stops working, check out these great docs on the
 [Confluent CLI].
+
+
+[Apache ZooKeeper]: https://zookeeper.apache.org
+[Apache Kafka]: https://kafka.apache.org
+[Confluent Schema Registry]: https://www.confluent.io/confluent-schema-registry/
+[Confluent Platform]: https://www.confluent.io/product/confluent-platform/
+[Control Center]: https://www.confluent.io/confluent-control-center/
+[Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
 
 ## Building Materialize
 

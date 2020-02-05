@@ -43,12 +43,12 @@ INSERT INTO schemas VALUES
     (1, NULL, 'mz_catalog'),
     (2, NULL, 'pg_catalog'),
     (3, 1, 'public');
+
 ";
 
 #[derive(Debug)]
 pub struct Connection {
     inner: rusqlite::Connection,
-    bootstrapped: bool,
 }
 
 impl Connection {
@@ -57,10 +57,9 @@ impl Connection {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
         };
-
         let tx = sqlite.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
-        let bootstrapped = if app_id == 0 {
+        if app_id == 0 {
             tx.execute(
                 &format!("PRAGMA application_id = {}", APPLICATION_ID),
                 params![],
@@ -75,10 +74,7 @@ impl Connection {
         };
         tx.commit()?;
 
-        Ok(Connection {
-            inner: sqlite,
-            bootstrapped,
-        })
+        Ok(Connection { inner: sqlite })
     }
 
     pub fn load_databases(&self) -> Result<Vec<(i64, String)>, failure::Error> {
@@ -140,10 +136,6 @@ impl Connection {
         Ok(Transaction {
             inner: self.inner.transaction()?,
         })
-    }
-
-    pub fn bootstrapped(&self) -> bool {
-        self.bootstrapped
     }
 }
 
@@ -286,7 +278,7 @@ fn is_constraint_violation(err: &rusqlite::Error) -> bool {
     }
 }
 
-struct SqlVal<T>(pub T);
+pub struct SqlVal<T>(pub T);
 
 impl<T> ToSql for SqlVal<T>
 where

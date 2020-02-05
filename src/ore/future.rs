@@ -299,9 +299,52 @@ pub trait OreSinkExt<T>: Sink<T> {
     {
         Box::new(self)
     }
+
+    /// Like [`SinkExt::send`], but does not flush the sink after enqueuing
+    /// `item`.
+    fn enqueue(&mut self, item: T) -> Enqueue<Self, T> {
+        Enqueue {
+            sink: self,
+            item: Some(item),
+        }
+    }
 }
 
 impl<S, T> OreSinkExt<T> for S where S: Sink<T> {}
+
+/// Future for the [`enqueue`](OreSinkExt::enqueue) method.
+#[derive(Debug)]
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct Enqueue<'a, Si, Item>
+where
+    Si: ?Sized,
+{
+    sink: &'a mut Si,
+    item: Option<Item>,
+}
+
+impl<Si, Item> Future for Enqueue<'_, Si, Item>
+where
+    Si: Sink<Item> + Unpin + ?Sized,
+    Item: Unpin,
+{
+    type Output = Result<(), Si::Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = &mut *self;
+        if let Some(item) = this.item.take() {
+            let mut sink = Pin::new(&mut this.sink);
+            match sink.as_mut().poll_ready(cx)? {
+                Poll::Ready(()) => sink.as_mut().start_send(item)?,
+                Poll::Pending => {
+                    this.item = Some(item);
+                    return Poll::Pending;
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+}
 
 /// Constructs a sink that consumes its input and sends it nowhere.
 pub fn dev_null<T, E>() -> DevNull<T, E> {

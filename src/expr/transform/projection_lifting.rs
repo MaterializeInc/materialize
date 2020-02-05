@@ -94,13 +94,20 @@ impl ProjectionLifting {
                         .project(new_outputs);
                 }
             }
-            RelationExpr::FlatMapUnary { input, func, expr } => {
+            RelationExpr::FlatMapUnary {
+                input,
+                func,
+                expr,
+                demand,
+            } => {
                 self.action(input, gets);
                 if let RelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
                 {
+                    // TODO: Preserve demand.
+                    *demand = None;
                     // Retain projected columns and scalar columns.
                     let mut new_outputs = outputs.clone();
                     let inner_arity = inner.arity();

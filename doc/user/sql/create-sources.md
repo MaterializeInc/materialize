@@ -74,11 +74,10 @@ _avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/sp
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
-**FROM** _kafka&lowbar;src_ | The Kafka source you want to use (begins with `kafka://`).
-**FROM** _local&lowbar;file_ | The absolute path to the local file you want to use as a source (begins with `file://`).
-**REGISTRY** _registry&lowbar;src_ | Use the Confluent schema registry at _registry&lowbar;src_ to define the structure of the Kafka source.
-_avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/spec.html) for the topic.
-**WITH (** _option&lowbar;list_ **)** | Instructions for parsing your file sources. For more detail, see [`WITH` options](#with-options).
+**FROM** _source&lowbar;url_ | The Kafka URL or absolute file path of the source you want to use (begins with `kafka://` or `file://`).
+**FORMAT** _format&lowbar;spec_ | A description of the format of data in the source. For more detail, see [Format specifications](#format-spec).
+**ENVELOPE** _envelope_ | The envelope type, either **NONE** or **DEBEZIUM**. **NONE** implies that each record appends to the source. **DEBEZIUM** requires records to have `before` and `after` fields, allowing deletes, inserts, and updates. It is currently only supported for Avro-format Kafka sources.
+**WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
 
 #### `WITH` options
 
@@ -86,12 +85,31 @@ The following options are valid within the `WITH` clause.
 
 Field | Value
 ------|-----
-`tail` | Continually check the file for new content; as new content arrives, process it using other `WITH` options.
-`regex` | Use the provided regex to populate data (i.e. columns) in the source. For more info, see [Regex on file sources](#regex-on-file-sources).
-`format` | The file source's format. Currently, `csv` is the only supported format. Unstructured files should _not_ use this option and should rely on the `regex` option instead. For more info, see [CSV sources](#csv-sources).
-`columns` | The number of columns to read from the source; Materialize discards rows with other numbers of fields. When used with `csv`, this must be equal to the number of fields in the CSV's row.
+`tail` | Continually check the file for new content; as new content arrives, process it using other `WITH` options. (Only valid for file sources).
 
 All field names are case-sensitive.
+
+### Format specifications
+
+{{< diagram "format-spec.html" >}}
+
+### Avro schema specifications
+
+{{< diagram "avro-schema-spec.html" >}}
+
+### Standard schema specifications
+
+{{< diagram "schema-spec.html" >}}
+
+Field | Value
+------|-----
+message_name | The protobuf message name.
+regex | A regular expression whose capture groups define the columns of the relation. For more detail, see [Regex on file sources](#regex-on-file-sources).
+n | The number of columns expected in each record of the CSV source.
+char | The delimiter of the CSV source. ASCII comma by default (`','`). This must be an ASCII character; other Unicode code points are not supported.
+url | The URL of the Confluent schema registry to get schema information from.
+schema_file_path | The absolute path to a file containing the schema.
+inline_schema | A string representing the schema.
 
 ## Streaming source details
 
@@ -212,6 +230,7 @@ USING SCHEMA REGISTRY 'http://schema-registry:8081';
 ```sql
 CREATE SOURCE 'mysql.simple.user'
 FROM 'kafka://kafka:9092'
+FORMAT AVRO
 USING SCHEMA '{
   "type": "record",
   "name": "envelope",
@@ -232,7 +251,8 @@ USING SCHEMA '{
     },
     { "name": "after", "type": ["row", "null"] }
   ]
-}';
+}'
+ENVELOPE DEBEZIUM;
 ```
 
 ### Creating a source from a static CSV
@@ -240,15 +260,11 @@ USING SCHEMA '{
 ```sql
 CREATE SOURCE test
 FROM 'file:///test.csv'
-WITH (
-    format='csv',
-    columns=5
-);
+FORMAT CSV WITH 5 COLUMNS;
 ```
 
 - The prefix for the file is `file://`, which is followed by the absolute path
   to the file (`/test.csv` in this example), resulting in `file:///test.csv`.
-- The `WITH` clause's `format` and `csv` fields are required and case-sensitive.
 
 ### Creating a source from a dynamic, unstructured file
 
@@ -265,8 +281,8 @@ We'll create a source that takes in these entire lines and extracts the file off
 ```sql
 CREATE SOURCE hex
 FROM  'file:///xxd.log'
+FORMAT REGEX '(?P<offset>[0-9a-f]{8}): (?:[0-9a-f]{4} ){8} (?P<decoded>.*)$'
 WITH (
-    regex='(?P<offset>[0-9a-f]{8}): (?:[0-9a-f]{4} ){8} (?P<decoded>.*)$',
     tail=true
 );
 ```

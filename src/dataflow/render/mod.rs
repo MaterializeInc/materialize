@@ -4,8 +4,10 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
@@ -20,17 +22,19 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
 use dataflow_types::*;
-use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
+use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
 use repr::{Datum, Row, RowArena};
 
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
 use super::source;
 use super::source::FileReadStyle;
+use super::source::SourceToken;
 use crate::arrangement::manager::{TraceManager, WithDrop};
 use crate::decode::decode;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
+use crate::server::TimestampHistories;
 
 mod context;
 mod delta_join;
@@ -80,11 +84,16 @@ pub(crate) fn build_local_input<A: Allocate>(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_dataflow<A: Allocate>(
     dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
+    advance_timestamp: bool,
+    global_source_mappings: &mut HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
+    timestamp_histories: TimestampHistories,
+    timestamp_drops: Rc<RefCell<Vec<SourceInstanceId>>>,
     logger: &mut Option<Logger>,
     executor: &tokio::runtime::Handle,
 ) {
@@ -127,6 +136,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             region,
                             format!("kafka-{}-{}", first_export_id, source_number),
                             c,
+                            src_id,
+                            advance_timestamp,
+                            timestamp_histories.clone(),
+                            timestamp_drops.clone(),
                             read_from_kafka,
                         )
                     }
@@ -139,6 +152,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             FileReadStyle::ReadOnce
                         };
                         source::file(
+                            src_id,
                             region,
                             format!("csv-{}", src_id),
                             c.path,
@@ -147,14 +161,34 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         )
                     }
                 };
+
+                // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
+                // a hypothetical future avro_extract, protobuf_extract, etc.
                 let stream = decode(&source, src.connector.encoding, &dataflow.debug_name);
+
+                let collection = match src.connector.envelope {
+                    Envelope::None => stream.as_collection(),
+                    Envelope::Debezium => {
+                        // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+                        stream.as_collection().explode(|row| {
+                            let mut datums = row.unpack();
+                            let diff = datums.pop().unwrap().unwrap_int64() as isize;
+                            Some((Row::pack(datums.into_iter()), diff))
+                        })
+                    }
+                };
 
                 // Introduce the stream by name, as an unarranged collection.
                 context.collections.insert(
-                    RelationExpr::global_get(src_id, src.desc.typ().clone()),
-                    stream.as_collection(),
+                    RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
+                    collection,
                 );
-                source_tokens.insert(src_id, Rc::new(capability));
+                let token = Rc::new(capability);
+                source_tokens.insert(src_id.sid, token.clone());
+
+                // We also need to keep track of this mapping globally to activate Kakfa sources
+                // on timestamp advancement queries
+                global_source_mappings.insert(src_id, Rc::downgrade(&token));
             }
 
             let as_of = dataflow
@@ -202,7 +236,40 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         worker_index,
                         Some(&object.id.to_string()),
                     );
+                    // Under the premise that this is always an arrange_by aroung a global get,
+                    // this will leave behind the arrangements bound to the global get, so that
+                    // we will not tidy them up in the next pass.
                 }
+
+                // After building each object, we want to tear down all other cached collections
+                // and arrangements to avoid accidentally providing hits on local identifiers.
+                // We could relax this if we better understood which expressions are dangerous
+                // (e.g. expressions containing gets of local identifiers not covered by a let).
+                //
+                // TODO: Improve collection and arrangement re-use.
+                context.collections.retain(|e, _| {
+                    if let RelationExpr::Get {
+                        id: Id::Global(_),
+                        typ: _,
+                    } = e
+                    {
+                        true
+                    } else {
+                        false
+                    }
+                });
+                context.local.retain(|e, _| {
+                    if let RelationExpr::Get {
+                        id: Id::Global(_),
+                        typ: _,
+                    } = e
+                    {
+                        true
+                    } else {
+                        false
+                    }
+                });
+                // We do not install in `context.trace`, and can skip deleting things from it.
             }
 
             for (export_id, index_desc, typ) in &dataflow.index_exports {
@@ -367,23 +434,68 @@ where
                     self.collections.insert(relation_expr.clone(), collection);
                 }
 
-                RelationExpr::FlatMapUnary { input, func, expr } => {
+                RelationExpr::FlatMapUnary {
+                    input,
+                    func,
+                    expr,
+                    demand,
+                } => {
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
                     let func = func.clone();
                     let expr = expr.clone();
+
+                    // Determine for each output column if it should be replaced by a
+                    // small default value. This information comes from the "demand"
+                    // analysis, and is meant to allow us to avoid reproducing the
+                    // input in each output, if at all possible.
+                    let types = relation_expr.typ();
+                    let arity = types.column_types.len();
+                    let replace = (0..arity)
+                        .map(|col| {
+                            if demand.as_ref().map(|d| d.contains(&col)).unwrap_or(true) {
+                                None
+                            } else {
+                                Some({
+                                    let typ = &types.column_types[col];
+                                    if typ.nullable {
+                                        Datum::Null
+                                    } else {
+                                        typ.scalar_type.dummy_datum()
+                                    }
+                                })
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
                     let collection = self.collection(input).unwrap().flat_map(move |input_row| {
                         let datums = input_row.unpack();
+                        let replace = replace.clone();
                         let temp_storage = RowArena::new();
                         let output_rows =
                             func.eval(expr.eval(&datums, &env, &temp_storage), &env, &temp_storage);
                         output_rows
                             .into_iter()
-                            .map(|output_row| {
+                            .map(move |output_row| {
                                 Row::pack(
-                                    input_row.clone().into_iter().chain(output_row.into_iter()),
+                                    datums
+                                        .iter()
+                                        .cloned()
+                                        .chain(output_row.iter())
+                                        .zip(replace.iter())
+                                        .map(|(datum, demand)| {
+                                            if let Some(bogus) = demand {
+                                                bogus.clone()
+                                            } else {
+                                                datum
+                                            }
+                                        }),
                                 )
                             })
+                            // The collection avoids the lifetime issues of the `datums` borrow,
+                            // which allows us to avoid multiple unpackings of `input_row`. We
+                            // could avoid this allocation with a custom iterator that understands
+                            // the borrowing, but it probably isn't the leading order issue here.
                             .collect::<Vec<_>>()
                     });
 

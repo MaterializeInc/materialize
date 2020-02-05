@@ -94,14 +94,14 @@ $ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=2
 $ kafka-ingest format=avro topic=plurals schema=${plurals-schema} timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}'
-  USING SCHEMA '${names-schema}'
+> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}' FORMAT AVRO
+  USING SCHEMA '${names-schema}' ENVELOPE DEBEZIUM
 
-> CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/testdrive-mods-${testdrive.seed}'
-  USING SCHEMA '${mods-schema}'
+> CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/testdrive-mods-${testdrive.seed}' FORMAT AVRO
+  USING SCHEMA '${mods-schema}' ENVELOPE DEBEZIUM
 
-> CREATE SOURCE plurals FROM 'kafka://${testdrive.kafka-addr}/testdrive-plurals-${testdrive.seed}'
-  USING SCHEMA '${plurals-schema}'
+> CREATE SOURCE plurals FROM 'kafka://${testdrive.kafka-addr}/testdrive-plurals-${testdrive.seed}' FORMAT AVRO
+  USING SCHEMA '${plurals-schema}' ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names, mods, plurals WHERE names.num = mods.num AND names.name = plurals.num;

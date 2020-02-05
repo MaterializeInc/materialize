@@ -336,6 +336,17 @@ pub struct ParsedDate {
     pub day: u8,
 }
 
+/// The fields of a Time
+///
+/// This is not guaranteed to be a valid time of day
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParsedTime {
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub nano: u32,
+}
+
 /// The fields in a `Timestamp`
 ///
 /// Similar to a [`ParsedDateTime`], except that all the fields are required.
@@ -442,6 +453,51 @@ impl ParsedDateTime {
             }
             _ => failure::bail!("{} field set twice", f),
         }
+        Ok(())
+    }
+    pub fn validate_datelike_ymd(&self) -> Result<(), failure::Error> {
+        match (self.year, self.month, self.day) {
+            (Some(year), Some(month), Some(day)) => {
+                if year.unit == 0 {
+                    failure::bail!("YEAR cannot be zero.")
+                }
+
+                if month.unit > 12 || month.unit <= 0 {
+                    failure::bail!("MONTH must be (1, 12), got {}", month.unit)
+                }
+                if day.unit == 0 {
+                    failure::bail!("DAY cannot be zero.")
+                }
+                Ok(())
+            }
+            (_, _, _) => failure::bail!("YEAR, MONTH, DAY are all required."),
+        }
+    }
+    pub fn validate_timelike_hms(&self) -> Result<(), failure::Error> {
+        if let Some(hour) = self.hour {
+            if hour.unit > 23 {
+                failure::bail!("HOUR must be < 24, got {}", hour.unit)
+            }
+        }
+
+        if let Some(minute) = self.minute {
+            if minute.unit > 59 {
+                failure::bail!("HOUR must be < 60, got {}", minute.unit)
+            }
+        }
+
+        if let Some(second) = self.second {
+            if second.unit > 60 {
+                failure::bail!("SECOND must be < 61, got {}", second.unit)
+            }
+            if second.fraction > 1_000_000_000 {
+                failure::bail!(
+                    "NANOSECOND must be < 1_000_000_000, got {}",
+                    second.fraction
+                )
+            }
+        }
+
         Ok(())
     }
 }

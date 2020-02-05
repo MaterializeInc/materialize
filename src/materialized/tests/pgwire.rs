@@ -9,7 +9,9 @@ use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
+use futures::stream::{self, StreamExt, TryStreamExt};
 use postgres::error::SqlState;
+use tokio::runtime::Runtime;
 
 pub mod util;
 
@@ -116,18 +118,44 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 
     // Connecting to a nonexistent database should work, and creating that
     // database should work.
-    {
-        let mut client = server
-            .pg_config()
+    //
+    // TODO(benesch): we can use the sync client when this issue is fixed:
+    // https://github.com/sfackler/rust-postgres/issues/404.
+    Runtime::new()?.block_on(async {
+        let (client, mut conn) = server
+            .pg_config_async()
             .dbname("newdb")
-            .connect(postgres::NoTls)?;
+            .connect(postgres::NoTls)
+            .await?;
+        let (notice_tx, mut notice_rx) = futures::channel::mpsc::unbounded();
+        tokio::spawn(
+            stream::poll_fn(move |cx| conn.poll_message(cx))
+                .map_err(|e| panic!(e))
+                .forward(notice_tx),
+        );
+
         assert_eq!(
-            client.query_one("SHOW database", &[])?.get::<_, String>(0),
+            client
+                .query_one("SHOW database", &[])
+                .await?
+                .get::<_, String>(0),
             "newdb",
         );
-        client.batch_execute("CREATE DATABASE newdb")?;
-        client.batch_execute("CREATE MATERIALIZED VIEW v AS SELECT 1")?;
-    }
+        client.batch_execute("CREATE DATABASE newdb").await?;
+        client
+            .batch_execute("CREATE MATERIALIZED VIEW v AS SELECT 1")
+            .await?;
+
+        match notice_rx.next().await {
+            Some(tokio_postgres::AsyncMessage::Notice(n)) => {
+                assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
+                assert_eq!(n.message(), "session database \'newdb\' does not exist");
+            }
+            _ => panic!("missing database notice not generated"),
+        }
+
+        Ok::<_, Box<dyn Error>>(())
+    })?;
 
     // Connecting to an existing database should work.
     {
@@ -138,7 +166,7 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 
         // Sleep a little bit so the view catches up.
         // TODO(benesch): seriously? It's a view over a static query.
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(500));
 
         assert_eq!(
             // `v` here should refer to the `v` in `newdb.public` that we
@@ -170,12 +198,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     ore::log::init();
 
     let data_directory = tempfile::tempdir()?;
-    let config = util::Config::default()
-        .data_directory(data_directory.path().to_owned())
-        .bootstrap_sql(
-            "CREATE VIEW bootstrap1 AS SELECT 1;
-             CREATE VIEW bootstrap2 AS SELECT * FROM bootstrap1;",
-        );
+    let config = util::Config::default().data_directory(data_directory.path().to_owned());
 
     {
         let (_server, mut client) = util::start_server(config.clone())?;
@@ -191,14 +214,14 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     }
 
     {
-        let (_server, mut client) = util::start_server(config)?;
+        let (_server, mut client) = util::start_server(config.clone())?;
         assert_eq!(
             client
                 .query("SHOW VIEWS", &[])?
                 .into_iter()
                 .map(|row| row.get(0))
                 .collect::<Vec<String>>(),
-            &["bootstrap1", "bootstrap2", "constant", "logging_derived"]
+            &["constant", "logging_derived"]
         );
         assert_eq!(
             client
@@ -208,6 +231,18 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .collect::<Vec<String>>(),
             &["v"]
         );
+    }
+
+    {
+        let config = config.logging_granularity(None);
+        match util::start_server(config) {
+            Ok(_) => panic!("server unexpectedly booted with corrupted catalog"),
+            Err(e) => assert_eq!(
+                e.to_string(),
+                "catalog item 'materialize.public.logging_derived' depends on system logging, \
+                 but logging is disabled"
+            ),
+        }
     }
 
     Ok(())

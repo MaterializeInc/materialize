@@ -1,6 +1,5 @@
 create_source ::=
-  'CREATE SOURCE' src_name 'FROM'
-  (
-      kafka_src 'USING SCHEMA' ( 'REGISTRY' registry_src | avro_schema ) |
-      local_file 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
-  )
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name 'FROM' source_url
+  'FORMAT' format_spec
+  ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?

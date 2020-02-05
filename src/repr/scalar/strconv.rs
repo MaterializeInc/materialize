@@ -19,7 +19,7 @@
 //! string representations for the corresponding PostgreSQL type. Deviations
 //! should be considered a bug.
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use failure::bail;
 
 use ore::fmt::FormatBuffer;
@@ -121,6 +121,20 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", d)
+}
+
+/// Parses a `NaiveDateTime` from `s`.
+pub fn parse_time(_s: &str) -> Result<NaiveTime, failure::Error> {
+    bail!("parsing the timestamp text format is not yet supported")
+}
+
+/// Writes a [`NaiveDateTime`] timestamp to `buf`.
+pub fn format_time<F>(buf: &mut F, t: NaiveTime)
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", t.format("%H:%M:%S"));
+    format_nanos(buf, t.nanosecond());
 }
 
 /// Parses a `NaiveDateTime` from `s`.

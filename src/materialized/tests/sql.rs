@@ -11,14 +11,12 @@
 
 use std::error::Error;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use futures::stream::TryStreamExt;
-use tokio::runtime::Runtime;
 
 pub mod util;
 
@@ -94,7 +92,7 @@ fn test_regex_sources() -> Result<(), Box<dyn Error>> {
     );
 
     client.batch_execute(&*format!(
-        "CREATE SOURCE regex_source FROM 'file://{}' WITH (regex='{}')",
+        "CREATE SOURCE regex_source FROM 'file://{}' FORMAT REGEX '{}'",
         regex_path.display(),
         // Regex explained here: https://www.debuggex.com/r/k48kBEt-lTMUZbaw
         r#"(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -"#
@@ -140,7 +138,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     let temp_dir = tempfile::tempdir()?;
     let config = util::Config::default();
 
-    let (server, mut client) = util::start_server(config)?;
+    let (_server, mut client) = util::start_server(config)?;
 
     let fetch_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(benesch): use a blocking SELECT when that exists.
@@ -185,7 +183,7 @@ New York,NY,10004
     let line3 = ("bad,place\"".into(), "CA".into(), "92679".into(), 3);
 
     client.batch_execute(&*format!(
-        "CREATE SOURCE static_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3)",
+        "CREATE SOURCE static_csv_source FROM 'file://{}' FORMAT CSV WITH 3 COLUMNS",
         static_path.display(),
     ))?;
     client
@@ -199,7 +197,7 @@ New York,NY,10004
     append(&dynamic_path, b"")?;
 
     client.batch_execute(&*format!(
-        "CREATE SOURCE dynamic_csv_source FROM 'file://{}' WITH (format = 'csv', columns = 3, tail = true)",
+        "CREATE SOURCE dynamic_csv_source FROM 'file://{}' FORMAT CSV WITH 3 COLUMNS WITH (tail = true)",
         dynamic_path.display()
     ))?;
     client.batch_execute(
@@ -224,33 +222,26 @@ New York,NY,10004
     // Test the TAIL SQL command on the tailed file source. This is end-to-end
     // tailing: changes to the file will propagate through Materialized and
     // into the user's SQL console.
-    //
-    // We need to use the asynchronous Postgres client here, unless
-    // https://github.com/sfackler/rust-postgres/pull/531 gets fixed.
-    Runtime::new()?.block_on(async {
-        let client = server.connect_async().await?;
-        let mut tail_reader = Box::pin(client.copy_out("TAIL dynamic_csv").await?);
+    let cancel_token = client.cancel_token();
+    let mut tail_reader = client.copy_out("TAIL dynamic_csv")?.split(b'\n');
 
-        append(&dynamic_path, b"City 1,ST,00001\n")?;
-        assert!(tail_reader
-            .try_next()
-            .await?
-            .unwrap()
-            .starts_with(&b"City 1\tST\t00001\t4\tDiff: 1 at "[..]));
+    append(&dynamic_path, b"City 1,ST,00001\n")?;
+    assert!(tail_reader
+        .next()
+        .unwrap()?
+        .starts_with(&b"City 1\tST\t00001\t4\tDiff: 1 at "[..]));
 
-        append(&dynamic_path, b"City 2,ST,00002\n")?;
-        assert!(tail_reader
-            .try_next()
-            .await?
-            .unwrap()
-            .starts_with(&b"City 2\tST\t00002\t5\tDiff: 1 at "[..]));
+    append(&dynamic_path, b"City 2,ST,00002\n")?;
+    assert!(tail_reader
+        .next()
+        .unwrap()?
+        .starts_with(&b"City 2\tST\t00002\t5\tDiff: 1 at "[..]));
 
-        // The tail won't end until a cancellation request is sent.
-        client.cancel_query(tokio_postgres::NoTls).await?;
+    // The tail won't end until a cancellation request is sent.
+    cancel_token.cancel_query(postgres::NoTls)?;
 
-        assert_eq!(tail_reader.try_next().await?, None);
-        Ok::<_, Box<dyn Error>>(())
-    })?;
+    assert!(tail_reader.next().is_none());
+    drop(tail_reader);
 
     // Check that writing to the tailed file after the view and source are
     // dropped doesn't cause a crash (#1361).
@@ -276,7 +267,7 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     let path = Path::join(temp_dir.path(), "file");
     fs::write(&path, "")?;
     client.batch_execute(&*format!(
-        "CREATE SOURCE s FROM 'file://{}' WITH (format = 'text', tail = true)",
+        "CREATE SOURCE s FROM 'file://{}' FORMAT RAW WITH (tail = true)",
         path.display()
     ))?;
     client.batch_execute("CREATE MATERIALIZED VIEW v AS SELECT * FROM s")?;

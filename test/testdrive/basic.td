@@ -34,17 +34,17 @@ $ set schema={
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": null}
 
-> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
-! CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
-  USING SCHEMA FILE 'data-schema.json'
+! CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
+  USING SCHEMA FILE 'data-schema.json' ENVELOPE DEBEZIUM
 No such file or directory
 
 $ file-write path=data-schema.json
 \${schema}
 
-> CREATE SOURCE data2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
-  USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
+> CREATE SOURCE data2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
+  USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json' ENVELOPE DEBEZIUM
 
 > SHOW CREATE SOURCE data
 Source   Create Source
@@ -105,6 +105,17 @@ mz_scheduling_histogram
 mz_scheduling_parks
 mz_view_foreign_keys
 mz_view_keys
+mz_addresses_with_unit_length
+mz_dataflow_names
+mz_dataflow_operator_dataflows
+mz_perf_arrangement_records
+mz_perf_dependency_frontiers
+mz_perf_peek_durations_aggregates
+mz_perf_peek_durations_bucket
+mz_perf_peek_durations_core
+mz_records_per_dataflow
+mz_records_per_dataflow_global
+mz_records_per_dataflow_operator
 
 > SELECT * FROM test1;
 b  sum
@@ -121,6 +132,9 @@ sum   YES      int8
 > SHOW VIEWS FROM mz_catalog LIKE '%peek%';
 mz_peek_active
 mz_peek_durations
+mz_perf_peek_durations_aggregates
+mz_perf_peek_durations_bucket
+mz_perf_peek_durations_core
 
 > SHOW VIEWS LIKE '%data%';
 data_view

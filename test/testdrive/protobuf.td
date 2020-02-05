@@ -4,14 +4,14 @@
 # distributed without the express permission of Materialize, Inc.
 
 > CREATE SOURCE protomessages FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Struct'
   USING SCHEMA '${testdrive.protobuf-descriptors}'
-  WITH (format = 'protobuf-descriptor', message_name = '.Struct')
 
 > CREATE MATERIALIZED VIEW pm AS SELECT * FROM protomessages
 
 > CREATE SOURCE protomessages2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Struct'
   USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
-  WITH (format = 'protobuf-descriptor', message_name = '.Struct')
 
 > CREATE VIEW pm2 AS SELECT * FROM protomessages
 

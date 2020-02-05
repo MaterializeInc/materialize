@@ -35,7 +35,7 @@ resource "aws_instance" "chbench" {
     }
 
     provisioner "remote-exec" {
-        inline = ["cd materialize/ex/chbench && docker-compose build --pull"]
+        inline = ["cd materialize/demo/chbench && docker-compose build --pull"]
     }
 
     connection {

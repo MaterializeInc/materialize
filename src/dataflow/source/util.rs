@@ -6,6 +6,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use expr::SourceInstanceId;
+
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::source as timely_source;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
@@ -42,7 +44,13 @@ use super::{SourceStatus, SourceToken};
 /// [`SourceToken`]. When the last clone of the `SourceToken` is dropped, the
 /// `tick` function will no longer be called, and the capability will eventually
 /// be dropped.
-pub fn source<G, D, B, L>(scope: &G, name: &str, construct: B) -> (Stream<G, D>, SourceToken)
+pub fn source<G, D, B, L>(
+    id: SourceInstanceId,
+    timestamp: Option<Rc<RefCell<Vec<SourceInstanceId>>>>,
+    scope: &G,
+    name: &str,
+    construct: B,
+) -> (Stream<G, D>, SourceToken)
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
@@ -59,8 +67,10 @@ where
 
         // Export a token to the outside word that will keep this source alive.
         token = Some(SourceToken {
+            id,
             capability: cap.clone(),
             activator: scope.activator_for(&info.address[..]),
+            timestamp_drop: timestamp,
         });
 
         let mut tick = construct(info);

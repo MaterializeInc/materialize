@@ -2,8 +2,8 @@ CREATE MATERIALIZED VIEW billing_records AS
 SELECT
     r.value->>'id' id,
     billing_raw_data.id batch_id,
-    r.value->>'interval_start' interval_start,
-    r.value->>'interval_end' interval_end,
+    to_timestamp((r.value->'interval_start'->'seconds')::int) interval_start,
+    to_timestamp((r.value->'interval_end'->'seconds')::int)  interval_end,
     r.value->>'meter' meter,
     (r.value->'value')::int value,
     (r.value->'info'->'client_id')::int client_id,

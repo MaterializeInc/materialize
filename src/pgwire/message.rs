@@ -181,6 +181,11 @@ pub enum FrontendMessage {
         max_rows: i32,
     },
 
+    /// Flush any pending output.
+    ///
+    /// This command is part of the extended query flow.
+    Flush,
+
     /// Finish an extended query.
     ///
     /// This command is part of the extended query flow.
@@ -213,6 +218,7 @@ impl FrontendMessage {
             FrontendMessage::DescribePortal { .. } => "describe_portal",
             FrontendMessage::Bind { .. } => "bind",
             FrontendMessage::Execute { .. } => "execute",
+            FrontendMessage::Flush => "flush",
             FrontendMessage::Sync => "sync",
             FrontendMessage::CloseStatement { .. } => "close_statement",
             FrontendMessage::ClosePortal { .. } => "close_portal",
@@ -258,6 +264,7 @@ pub enum BackendMessage {
         code: &'static str,
         message: String,
         detail: Option<String>,
+        hint: Option<String>,
     },
     ErrorResponse {
         severity: ErrorSeverity,

@@ -29,9 +29,9 @@ fn no_block() {
         num_timely_workers: 1,
         symbiosis_url: None,
         logging: logging_config.as_ref(),
-        bootstrap_sql: "".into(),
         data_directory: None,
         executor: &executor,
+        ts_channel: None,
     })
     .unwrap();
 
@@ -47,6 +47,7 @@ fn no_block() {
         process_id,
         switchboard,
         runtime.handle().clone(),
+        false,
         logging_config,
     )
     .unwrap();
@@ -56,7 +57,7 @@ fn no_block() {
         let (oneshot_tx, oneshot_rx) = oneshot::channel();
         cmd_tx.send(Command::Parse {
             name: "hang".into(),
-            sql: "CREATE SOURCE foo FROM 'kafka://localhost:9092/foo' USING SCHEMA REGISTRY 'http://localhost:9999'".into(),
+            sql: "CREATE SOURCE foo FROM 'kafka://localhost:9092/foo' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:9999'".into(),
             session,
             tx: oneshot_tx,
         }).await.unwrap();

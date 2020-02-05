@@ -17,7 +17,7 @@ INSERT INTO l VALUES (1, 'l1'), (2, 'l2'), (3, 'l3')
 statement ok
 INSERT INTO r VALUES (1, 'r1'), (3, 'r3'), (4, 'r4')
 
-query ITIT
+query ITIT rowsort
 SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 ----
 1  l1  1     r1
@@ -26,14 +26,14 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 
 # This test may look the same as the last, but listing out the columns
 # explicitly checks for regressions of #1314.
-query ITIT
+query ITIT rowsort
 SELECT l.la, l.lb, r.ra, r.rb FROM l LEFT JOIN r ON l.la = r.ra
 ----
 1  l1  1     r1
 2  l2  NULL  NULL
 3  l3  3     r3
 
-query ITIT
+query ITIT rowsort
 SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 ----
 NULL  NULL  4  r4
@@ -42,7 +42,7 @@ NULL  NULL  4  r4
 
 # This test may look the same as the last, but listing out the columns
 # explicitly checks for regressions of #1314.
-query ITIT
+query ITIT rowsort
 SELECT l.la, l.lb, r.ra, r.rb FROM l RIGHT JOIN r ON l.la = r.ra
 ----
 NULL  NULL  4  r4
@@ -52,7 +52,7 @@ NULL  NULL  4  r4
 
 # Test that columns detected to be equivalent retain the names that the user
 # asks for. Protects against regression of #1217.
-query II colnames rowsort
+query II colnames,rowsort
 SELECT ra, r.ra FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 ra  ra
@@ -60,7 +60,7 @@ ra  ra
 
 # Test that columns detected to be equivalent retain the names that the user
 # asks for. Protects against regression of #1217.
-query ITIT colnames rowsort
+query ITIT colnames,rowsort
 SELECT * FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 la  lb  ra  rb

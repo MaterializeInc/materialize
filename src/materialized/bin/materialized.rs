@@ -14,7 +14,7 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use std::env;
-use std::fs::{read_to_string, File};
+use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::panic;
@@ -51,6 +51,18 @@ fn run() -> Result<(), failure::Error> {
         "DURATION/\"off\"",
     );
     opts.optopt(
+        "",
+        "timestamp-frequency",
+        "timestamp advancement frequency (default off)",
+        "DURATION/\"off\"",
+    );
+    opts.optopt(
+        "",
+        "batch-size",
+        "maximum number of messages with same timestamp (default 5000) ",
+        "SIZE",
+    );
+    opts.optopt(
         "w",
         "threads",
         "number of per-process worker threads (default 1)",
@@ -72,12 +84,6 @@ fn run() -> Result<(), failure::Error> {
         "a",
         "address-file",
         "text file whose lines are process addresses",
-        "FILE",
-    );
-    opts.optopt(
-        "b",
-        "bootstrap-sql",
-        "file with SQL queries to execute when bootstrapping",
         "FILE",
     );
     opts.optopt(
@@ -111,6 +117,18 @@ fn run() -> Result<(), failure::Error> {
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
+
+    let timestamp_frequency = match popts
+        .opt_str("timestamp-frequency")
+        .as_ref()
+        .map(|x| x.as_str())
+    {
+        None => None,
+        Some("off") => None,
+        Some(d) => Some(parse_duration::parse(&d)?),
+    };
+
+    let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
     let threads = popts.opt_get_default("threads", 1)?;
     let process = popts.opt_get_default("process", 0)?;
     let processes = popts.opt_get_default("processes", 1)?;
@@ -128,20 +146,16 @@ fn run() -> Result<(), failure::Error> {
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
-    let bootstrap_sql = match popts.opt_str("bootstrap-sql") {
-        None => "".to_string(),
-        Some(bootstrap_file) => read_to_string(&bootstrap_file)?,
-    };
-
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
     let start_time = std::time::Instant::now();
 
     let _server = materialized::serve(materialized::Config {
         logging_granularity,
+        timestamp_frequency,
+        max_increment_ts_size,
         threads,
         process,
         addresses,
-        bootstrap_sql,
         data_directory: Some(data_directory),
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,

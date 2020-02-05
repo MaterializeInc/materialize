@@ -6,10 +6,10 @@ menu:
     parent: 'sql'
 ---
 
-{{< warning >}}
-This is an advanced feature of Materialized; most users will not
-need to manually create indexes to maximize the value Materialize offers.
-{{< /warning >}}
+{{< warning >}} This is an advanced feature of Materialized; most users will not
+need to manually create indexes to maximize the value Materialize offers, as
+running `CREATE MATERIALIZED VIEW` automatically creates all required indexes to
+eagerly materialize that view. {{< /warning >}}
 
 `CREATE INDEX` creates an in-memory index on a view.
 
@@ -26,9 +26,12 @@ for each materialized view, which represents the results of the view's embedded
 `SELECT` statement. As the view's dataflow operators receive new data, the view
 maintains this index's state, ensuring it continually reflects this new data.
 
-However, views can also maintain additional indexes. Importantly, though, these
-additional indexes _are not_ like traditional secondary indexes&mdash;they store
-a copy of all rows in the result set.
+However, views can also maintain additional indexes, and are not restricted to
+maintaining zero or one indexes. Advanced users may want to create these indexes
+to speed up certain read query patterns without creating a `MATERIALIZED VIEW`
+for each query. Importantly, though, these additional indexes _are not_ like
+traditional secondary indexes&mdash;each index stores a copy of all rows in the
+result set.
 
 ### When to create indexes
 

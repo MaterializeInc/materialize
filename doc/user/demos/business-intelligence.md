@@ -111,10 +111,10 @@ Metabase](/images/demos/bi_architecture_diagram.png)
     git clone git@github.com:MaterializeInc/materialize.git
     ```
 
-2. Move to the `ex/chBench` dir:
+2. Move to the `demo/chbench` dir:
 
     ```shell
-    cd <path to materialize>/ex/chbench
+    cd <path to materialize>/demo/chbench
     ```
 
 3. Deploy and start all of the components we've listed above.
@@ -137,7 +137,7 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can get Materialize to read data from Kafka, and define the views we want
 Materialize to maintain for us.
 
-1. Launch a new terminal window and `cd <path to materialize>/ex/chbench`.
+1. Launch a new terminal window and `cd <path to materialize>/demo/chbench`.
 
 1. Launch the Materialize CLI (`mzcli`) by running:
 
@@ -178,7 +178,7 @@ Materialize to maintain for us.
 1. Create a straightforward view of the underlying data.
 
     ```sql
-    CREATE VIEW q01 as SELECT
+    CREATE MATERIALIZED VIEW q01 as SELECT
         ol_number,
         sum(ol_quantity) as sum_qty,
         sum(ol_amount) as sum_amount,
@@ -284,12 +284,14 @@ Materialize to maintain for us.
 
 1. Click **Ask a question**.
 
+1. Click **Native query**.
+
 1. From **Select a database**, select **tpcch**.
 
 1. In the query editor, enter:
 
     ```sql
-    -- CREATE VIEW q01 as SELECT
+    -- CREATE MATERIALIZED VIEW q01 as SELECT
     --     ol_number,
     --     sum(ol_quantity) as sum_qty,
     --     sum(ol_amount) as sum_amount,
@@ -337,7 +339,7 @@ At this point, Metabase will now automatically refresh this analysis for you
 every 1 minute.
 
 If you want to see more chBench queries, you can repeat these steps for the view
-`q07` or any of the queries listed in our [chBench query index]().
+`q07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/master/demo/chbench/chbench/mz-default.cfg).
 
 ## Recap
 
@@ -352,9 +354,9 @@ In this demo, we saw:
 
 ### Typical operation
 
-In this demo, you'll be "playing" the role of both infrastructure engineer and
-business analyst; that is to say, you'll be both deploying Materialize, as well
-as running queries within your BI tool, Metabase.
+In this demo, you "played" the role of both infrastructure engineer and
+business analyst; that is to say, you both deployed Materialize, as well
+as ran queries within your BI tool, Metabase.
 
 To give you a sense of what this experience would look like if you were two
 different people, let's highlight what the expected workflow is.

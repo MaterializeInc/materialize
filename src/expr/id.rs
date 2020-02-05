@@ -71,6 +71,22 @@ impl GlobalId {
     pub fn user(v: usize) -> GlobalId {
         GlobalId::User(v)
     }
+
+    /// Reports whether this ID is in the system namespace.
+    pub fn is_system(&self) -> bool {
+        match self {
+            GlobalId::System(_) => true,
+            GlobalId::User(_) => false,
+        }
+    }
+
+    /// Reports whether this ID is in the user namespace.
+    pub fn is_user(&self) -> bool {
+        match self {
+            GlobalId::System(_) => false,
+            GlobalId::User(_) => true,
+        }
+    }
 }
 
 impl fmt::Display for GlobalId {
@@ -79,6 +95,21 @@ impl fmt::Display for GlobalId {
             GlobalId::System(id) => write!(f, "s{}", id),
             GlobalId::User(id) => write!(f, "u{}", id),
         }
+    }
+}
+
+/// Unique identifier used for each *instance* of a source in a dataflow
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub struct SourceInstanceId {
+    // Global Source Id
+    pub sid: GlobalId,
+    // Id of the view with which this source is instantiated
+    pub vid: GlobalId,
+}
+
+impl fmt::Display for SourceInstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}/{}", self.sid, self.vid)
     }
 }
 

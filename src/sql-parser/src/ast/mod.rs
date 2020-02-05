@@ -60,8 +60,9 @@ pub use self::query::{
 };
 pub use self::value::{
     DateTimeField, DateTimeFieldValue, ExtractField, Interval, IntervalValue, ParsedDate,
-    ParsedDateTime, ParsedTimestamp, Value,
+    ParsedDateTime, ParsedTime, ParsedTimestamp, Value,
 };
+use std::path::PathBuf;
 
 struct DisplaySeparated<'a, T>
 where
@@ -493,6 +494,104 @@ impl fmt::Display for Stage {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Schema {
+    File(PathBuf),
+    Inline(String),
+}
+
+impl fmt::Display for Schema {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::File(path) => write!(f, "SCHEMA FILE '{}'", path.display()),
+            Self::Inline(inner) => write!(f, "SCHEMA '{}'", inner),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AvroSchema {
+    CsrUrl(String),
+    Schema(Schema),
+}
+
+impl fmt::Display for AvroSchema {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::CsrUrl(url) => write!(f, "CONFLUENT SCHEMA REGISTRY '{}'", url),
+            Self::Schema(schema) => schema.fmt(f),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Format {
+    Raw,
+    Avro(AvroSchema),
+    Protobuf {
+        message_name: String,
+        schema: Schema,
+    },
+    Regex(String),
+    Csv {
+        n_cols: usize,
+        delimiter: char,
+    },
+    Json,
+    Text,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum Envelope {
+    None,
+    Debezium,
+}
+
+impl Default for Envelope {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl fmt::Display for Envelope {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::None => "NONE", // this is unreachable as long as the default is None, but include it in case we ever change that
+                Self::Debezium => "DEBEZIUM",
+            }
+        )
+    }
+}
+
+impl fmt::Display for Format {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Raw => write!(f, "RAW"),
+            Self::Avro(inner) => write!(f, "AVRO USING {}", inner),
+            Self::Protobuf {
+                message_name,
+                schema,
+            } => write!(f, "PROTOBUF MESSAGE '{}' USING {}", message_name, schema),
+            Self::Regex(regex) => write!(f, "REGEX '{}'", regex),
+            Self::Csv { n_cols, delimiter } => write!(
+                f,
+                "CSV WITH {} COLUMNS{}",
+                n_cols,
+                if *delimiter == ',' {
+                    "".to_owned()
+                } else {
+                    format!(" DELIMITED BY '{}'", delimiter)
+                }
+            ),
+            Self::Json => write!(f, "JSON"),
+            Self::Text => write!(f, "TEXT"),
+        }
+    }
+}
+
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -546,7 +645,8 @@ pub enum Statement {
     CreateSource {
         name: ObjectName,
         url: String,
-        schema: Option<SourceSchema>,
+        format: Format,
+        envelope: Envelope,
         with_options: Vec<SqlOption>,
         if_not_exists: bool,
     },
@@ -793,7 +893,8 @@ impl fmt::Display for Statement {
             Statement::CreateSource {
                 name,
                 url,
-                schema,
+                format,
+                envelope,
                 with_options,
                 if_not_exists,
             } => {
@@ -807,22 +908,9 @@ impl fmt::Display for Statement {
                     name,
                     Value::SingleQuotedString(url.clone())
                 )?;
-                match schema {
-                    Some(schema) => {
-                        write!(f, " USING SCHEMA ")?;
-                        match schema {
-                            SourceSchema::Inline(schema) => {
-                                write!(f, "{}", Value::SingleQuotedString(schema.clone()))?;
-                            }
-                            SourceSchema::File(schema) => {
-                                write!(f, "FILE {}", Value::SingleQuotedString(schema.clone()))?;
-                            }
-                            SourceSchema::Registry(url) => {
-                                write!(f, "REGISTRY {}", Value::SingleQuotedString(url.clone()))?;
-                            }
-                        }
-                    }
-                    None => {}
+                write!(f, " FORMAT {}", format)?;
+                if *envelope != Default::default() {
+                    write!(f, " ENVELOPE {}", envelope)?;
                 }
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
@@ -1139,6 +1227,15 @@ pub enum SourceSchema {
     /// The schema is available in a Confluent-compatible schema registry that
     /// is accessible at the specified URL.
     Registry(String),
+}
+
+/// Specifies the timestamp logic associated with a given source
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SourceTimestamp {
+    /// The automatic real-time timestamp assignment
+    RealTime,
+    /// The Bring-Your-Own consistency through Kafka Topics
+    BringYourOwn(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]

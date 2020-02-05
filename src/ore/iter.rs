@@ -5,20 +5,32 @@
 
 //! Iterator utilities.
 
+use std::iter::{self, Chain, Once};
+
 pub use fallible_iterator::FallibleIterator;
 
 /// Extension methods for iterators.
-pub trait IteratorExt<T, E>
+pub trait IteratorExt
 where
-    Self: Iterator<Item = Result<T, E>> + Sized,
+    Self: Iterator + Sized,
 {
+    /// Chains a single `item` onto the end of this iterator.
+    ///
+    /// Equivalent to `self.chain(iter::once(item))`.
+    fn chain_one(self, item: Self::Item) -> Chain<Self, Once<Self::Item>> {
+        self.chain(iter::once(item))
+    }
+
     /// Converts this iterator to a [`FallibleIterator`].
-    fn fallible(self) -> fallible_iterator::Convert<Self> {
+    fn fallible<T, E>(self) -> fallible_iterator::Convert<Self>
+    where
+        Self: Iterator<Item = Result<T, E>>,
+    {
         fallible_iterator::convert(self)
     }
 }
 
-impl<I, T, E> IteratorExt<T, E> for I where I: Iterator<Item = Result<T, E>> {}
+impl<I> IteratorExt for I where I: Iterator {}
 
 /// Extension methods for fallible iterators.
 pub trait FallibleIteratorExt

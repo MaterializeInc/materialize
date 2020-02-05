@@ -131,8 +131,58 @@ SELECT DATE '2000-01-01' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
-statement error no overload for interval - timestamp
+statement error no overload for interval - date
 SELECT INTERVAL '1' YEAR - DATE '2000-01-01'
+
+query T
+SELECT DATE '2000-01-01' + TIME '01:02:03'
+----
+2000-01-01 01:02:03
+
+# Date arithmetic with self. Should behave as interval.
+query T
+SELECT DATE '2019-02-03' - DATE '2019-01-01';
+----
+33 days
+
+# Time arithmetic with intervals.
+
+query T
+SELECT TIME '01:02:03' + INTERVAL '04:05:06'
+----
+05:07:09
+
+query T
+SELECT TIME '04:05:06' - INTERVAL '01:02:03'
+----
+03:03:03
+
+query T
+SELECT TIME '01:02:03' - INTERVAL '04:05:06'
+----
+20:56:57
+
+query T
+SELECT TIME '04:05:06' + INTERVAL '-01:02:03'
+----
+03:03:03
+
+query T
+SELECT TIME '01:02:03' - INTERVAL '-04:05:06'
+----
+05:07:09
+
+# Time arithmetic with self. Should behave as interval
+
+query T
+SELECT TIME '04:05:06' - TIME '01:02:03'
+----
+03:03:03
+
+query T
+SELECT TIME '01:02:03' - TIME '04:05:06'
+----
+-03:03:03
 
 # Timestamp arithmetic with month intervals. Should behave the same as DATE.
 

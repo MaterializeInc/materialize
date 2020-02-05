@@ -97,7 +97,12 @@ impl ColumnKnowledge {
                 }
                 input_knowledge
             }
-            RelationExpr::FlatMapUnary { input, func, expr } => {
+            RelationExpr::FlatMapUnary {
+                input,
+                func,
+                expr,
+                demand: _,
+            } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, env, knowledge);
                 optimize(expr, env, &input_knowledge[..]);
                 let func_typ = func.output_type(&expr.typ(&input.typ()));
