@@ -189,21 +189,24 @@ where
                     match sql::plan(catalog, &session, stmt, &params) {
                         MaybeFuture::Immediate(Some(Ok(Plan::CreateView {
                             name: _,
-                            view,
+                            raw_sql,
+                            relation_expr,
+                            desc,
                             replace,
                             materialize,
                         }))) => {
                             assert!(replace.is_none());
                             assert!(materialize);
+                            let eval_env = EvalEnv::default();
                             let view = View {
-                                raw_sql: view.raw_sql,
+                                raw_sql,
                                 relation_expr: optimizer.optimize(
-                                    view.relation_expr,
+                                    relation_expr,
                                     &HashMap::new(),
-                                    &view.eval_env,
+                                    &eval_env,
                                 ),
-                                desc: view.desc,
-                                eval_env: view.eval_env,
+                                desc,
+                                eval_env,
                             };
                             let index = auto_generate_primary_idx(&view, log_view.id);
                             catalog.insert_item(
@@ -683,7 +686,9 @@ where
 
             Plan::CreateView {
                 name,
-                view,
+                raw_sql,
+                relation_expr,
+                desc,
                 replace,
                 materialize,
             } => {
@@ -692,7 +697,13 @@ where
                     ops.extend(self.catalog.drop_items_ops(&[id]));
                 }
                 let view_id = self.catalog.allocate_id();
-                let view = self.optimize_view(view);
+                let eval_env = EvalEnv::default();
+                let view = View {
+                    raw_sql,
+                    relation_expr: self.optimize(relation_expr, &eval_env),
+                    desc,
+                    eval_env,
+                };
                 ops.push(catalog::Op::CreateItem {
                     id: view_id,
                     name: name.clone(),
@@ -724,9 +735,17 @@ where
 
             Plan::CreateIndex {
                 name,
-                index,
+                desc,
+                raw_sql,
+                relation_type,
                 if_not_exists,
             } => {
+                let index = Index {
+                    desc,
+                    raw_sql,
+                    relation_type,
+                    eval_env: EvalEnv::default(),
+                };
                 let id = self.catalog.allocate_id();
                 let op = catalog::Op::CreateItem {
                     id,
@@ -797,12 +816,13 @@ where
                 source,
                 when,
                 finishing,
-                mut eval_env,
                 materialize,
             } => {
                 let timestamp = self.determine_timestamp(&source, when)?;
-                eval_env.wall_time = Some(chrono::Utc::now());
-                eval_env.logical_time = Some(timestamp);
+                let eval_env = EvalEnv {
+                    wall_time: Some(chrono::Utc::now()),
+                    logical_time: Some(timestamp),
+                };
                 // TODO (wangandi): Is there anything that optimizes to a
                 // constant expression that originally contains a global get? Is
                 // there anything not containing a global get that cannot be
@@ -976,8 +996,11 @@ where
 
             Plan::SendRows(rows) => Ok(send_immediate_rows(rows)),
 
-            Plan::ExplainPlan(relation_expr, mut eval_env) => {
-                eval_env.wall_time = Some(chrono::Utc::now());
+            Plan::ExplainPlan(relation_expr) => {
+                let eval_env = EvalEnv {
+                    wall_time: Some(chrono::Utc::now()),
+                    logical_time: Some(0),
+                };
                 let relation_expr = self.optimize(relation_expr, &eval_env);
                 let pretty = relation_expr.as_ref().pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
@@ -1198,15 +1221,6 @@ where
             }
         });
         self.optimizer.optimize(expr, &indexes, env)
-    }
-
-    fn optimize_view(&mut self, view: View<RelationExpr>) -> View<OptimizedRelationExpr> {
-        View {
-            raw_sql: view.raw_sql,
-            relation_expr: self.optimize(view.relation_expr, &view.eval_env),
-            desc: view.desc,
-            eval_env: view.eval_env,
-        }
     }
 
     fn build_view_collection(

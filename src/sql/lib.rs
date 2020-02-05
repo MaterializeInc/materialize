@@ -7,13 +7,13 @@
 
 #![deny(missing_debug_implementations)]
 
-use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
+use dataflow_types::{IndexDesc, PeekWhen, RowSetFinishing, Sink, Source};
 
-use ::expr::{GlobalId, RelationExpr};
+use ::expr::GlobalId;
 use catalog::names::FullName;
 use catalog::{Catalog, CatalogEntry};
 use ore::future::MaybeFuture;
-use repr::{RelationDesc, Row, ScalarType};
+use repr::{RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
 pub use session::{PreparedStatement, Session, TransactionStatus};
@@ -46,7 +46,9 @@ pub enum Plan {
     },
     CreateIndex {
         name: FullName,
-        index: Index,
+        desc: IndexDesc,
+        raw_sql: String,
+        relation_type: RelationType,
         if_not_exists: bool,
     },
     CreateSource {
@@ -67,7 +69,9 @@ pub enum Plan {
     },
     CreateView {
         name: FullName,
-        view: View<RelationExpr>,
+        raw_sql: String,
+        relation_expr: ::expr::RelationExpr,
+        desc: RelationDesc,
         /// The ID of the object that this view is replacing, if any.
         replace: Option<GlobalId>,
         /// whether we should auto-materialize the view
@@ -106,12 +110,11 @@ pub enum Plan {
         source: ::expr::RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
-        eval_env: ::expr::EvalEnv,
         materialize: bool,
     },
     Tail(CatalogEntry),
     SendRows(Vec<Row>),
-    ExplainPlan(::expr::RelationExpr, ::expr::EvalEnv),
+    ExplainPlan(::expr::RelationExpr),
     SendDiffs {
         id: GlobalId,
         updates: Vec<(Row, isize)>,

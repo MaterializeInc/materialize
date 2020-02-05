@@ -18,14 +18,14 @@ use futures::future::join_all;
 use itertools::Itertools;
 use url::Url;
 
-use ::expr::{EvalEnv, GlobalId};
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, Consistency, CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector,
-    FileSourceConnector, Index, IndexDesc, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
-    ProtobufEncoding, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
+    FileSourceConnector, IndexDesc, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
+    ProtobufEncoding, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector,
 };
+use expr::GlobalId;
 use futures::future::TryFutureExt;
 use interchange::{avro, protobuf};
 use ore::collections::CollectionExt;
@@ -707,15 +707,12 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
             schema: on_name.schema.clone(),
             item: normalize::ident(name),
         },
-        index: Index {
-            desc: IndexDesc {
-                on_id: catalog_entry.id(),
-                keys,
-            },
-            raw_sql,
-            relation_type: catalog_entry.desc()?.typ().clone(),
-            eval_env: EvalEnv::default(),
+        desc: IndexDesc {
+            on_id: catalog_entry.id(),
+            keys,
         },
+        raw_sql,
+        relation_type: catalog_entry.desc()?.typ().clone(),
         if_not_exists,
     })
 }
@@ -812,15 +809,11 @@ fn handle_create_view(
         }
     }
     let materialize = *materialized; // Normalize for `raw_sql` below.
-    let view = View {
+    Ok(Plan::CreateView {
+        name,
         raw_sql: stmt.to_string(),
         relation_expr,
         desc,
-        eval_env: EvalEnv::default(),
-    };
-    Ok(Plan::CreateView {
-        name,
-        view,
         replace,
         materialize,
     })
@@ -1250,7 +1243,6 @@ fn handle_select(
         source: relation_expr,
         when: PeekWhen::Immediately,
         finishing,
-        eval_env: EvalEnv::default(),
         materialize: true,
     })
 }
@@ -1270,7 +1262,7 @@ fn handle_explain(
             &relation_expr.pretty_humanized(scx.catalog),
         )])]))
     } else {
-        Ok(Plan::ExplainPlan(relation_expr, EvalEnv::default()))
+        Ok(Plan::ExplainPlan(relation_expr))
     }
 }
 
