@@ -44,3 +44,11 @@ itertools = "0.8.2"
 postgres = { version = "0.17", features = ["with-chrono-0_4"] }
 pretty_assertions = "0.6.1"
 tokio-postgres = { version = "0.5", features = ["with-chrono-0_4"] }
+
+[package.metadata.deb]
+depends = "$auto, systemd"
+assets = [
+    ["../../dist/materialized.service", "lib/systemd/system/", "644"],
+    ["target/release/materialized", "usr/bin/", "755"]
+]
+maintainer-scripts = "dist/deb-scripts"
