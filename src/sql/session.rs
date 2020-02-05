@@ -33,6 +33,6 @@ mod statement;
 mod transaction;
 mod var;
 
-pub use session::Session;
+pub use session::{InternalSession, PlanSession, Session};
 pub use statement::{Portal, PreparedStatement};
 pub use transaction::TransactionStatus;

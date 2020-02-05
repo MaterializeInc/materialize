@@ -182,11 +182,10 @@ where
                         datums: Row::pack(&[]),
                         types: vec![],
                     };
-                    let session = sql::Session::default();
                     let stmt = sql::parse(log_view.sql.to_owned())
                         .expect("failed to parse bootstrap sql")
                         .into_element();
-                    match sql::plan(catalog, &session, stmt, &params) {
+                    match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
                         MaybeFuture::Immediate(Some(Ok(Plan::CreateView {
                             name: _,
                             raw_sql,
@@ -228,7 +227,10 @@ where
                                 CatalogItem::Index(index),
                             );
                         }
-                        err => panic!("failed to load bootstrap view: {:?}", err),
+                        err => panic!(
+                            "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
+                            log_view.sql, err
+                        ),
                     }
                 }
             })?
@@ -534,7 +536,7 @@ where
                 let ops = vec![
                     catalog::Op::CreateDatabase { name: name.clone() },
                     catalog::Op::CreateSchema {
-                        database_name: name,
+                        database_name: DatabaseSpecifier::Name(name),
                         schema_name: "public".into(),
                     },
                 ];
@@ -791,6 +793,26 @@ where
             }
 
             Plan::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
+
+            Plan::ShowAllVariables => Ok(send_immediate_rows(
+                session
+                    .vars()
+                    .iter()
+                    .map(|v| {
+                        Row::pack(&[
+                            Datum::String(v.name()),
+                            Datum::String(&v.value()),
+                            Datum::String(v.description()),
+                        ])
+                    })
+                    .collect(),
+            )),
+
+            Plan::ShowVariable(name) => {
+                let variable = session.get(&name)?;
+                let row = Row::pack(&[Datum::String(&variable.value())]);
+                Ok(send_immediate_rows(vec![row]))
+            }
 
             Plan::SetVariable { name, value } => {
                 session.set(&name, &value)?;

@@ -12,6 +12,7 @@ path = "lib.rs"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 failure = "0.1.6"
+lazy_static = "1.4.0"
 log = "0.4.8"
 itertools = "0.8.2"
 repr = { path = "../repr" }

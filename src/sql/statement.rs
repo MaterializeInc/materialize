@@ -39,12 +39,11 @@ use sql_parser::ast::{
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
-use crate::session::Session;
-use crate::{normalize, query, Params, Plan};
+use crate::{normalize, query, Params, Plan, PlanSession};
 
 pub fn describe_statement(
     catalog: &Catalog,
-    session: &Session,
+    session: &dyn PlanSession,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
     let scx = &StatementContext { catalog, session };
@@ -266,15 +265,15 @@ fn handle_sync_statement(
 /// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
 pub fn handle_statement(
     catalog: &Catalog,
-    session: &Session,
+    session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
 ) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
     let scx = &StatementContext { catalog, session };
     match stmt {
-        Statement::CreateSource { .. } | Statement::CreateSources { .. } => MaybeFuture::Future(
-            Box::pin(handle_create_dataflow(stmt, session.database().to_owned())),
-        ),
+        Statement::CreateSource { .. } | Statement::CreateSources { .. } => {
+            MaybeFuture::Future(Box::pin(handle_create_dataflow(stmt, session.database())))
+        }
         _ => handle_sync_statement(stmt, params, &scx).into(),
     }
 }
@@ -298,26 +297,11 @@ fn handle_set_variable(
     })
 }
 
-fn handle_show_variable(scx: &StatementContext, variable: Ident) -> Result<Plan, failure::Error> {
+fn handle_show_variable(_: &StatementContext, variable: Ident) -> Result<Plan, failure::Error> {
     if variable.value == unicase::Ascii::new("ALL") {
-        Ok(Plan::SendRows(
-            scx.session
-                .vars()
-                .iter()
-                .map(|v| {
-                    Row::pack(&[
-                        Datum::String(v.name()),
-                        Datum::String(&v.value()),
-                        Datum::String(v.description()),
-                    ])
-                })
-                .collect(),
-        ))
+        Ok(Plan::ShowAllVariables)
     } else {
-        let variable = scx.session.get(&variable.value)?;
-        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            &variable.value(),
-        )])]))
+        Ok(Plan::ShowVariable(variable.value))
     }
 }
 
@@ -397,7 +381,7 @@ fn handle_show_objects(
                 .ok_or_else(|| format_err!("database '{:?}' does not exist", database_spec))?
         } else {
             scx.catalog
-                .get_schemas(&DatabaseSpecifier::Name(scx.session.database().to_owned()))
+                .get_schemas(&scx.session.database())
                 .ok_or_else(|| {
                     format_err!(
                         "session database '{}' does not exist",
@@ -437,13 +421,13 @@ fn handle_show_objects(
                 );
             }
             let schema_name = normalize::ident(from.0.pop().unwrap());
-            let database_name = from
+            let database_spec = from
                 .0
                 .pop()
-                .map(normalize::ident)
-                .unwrap_or_else(|| scx.session.database().to_owned());
+                .map(|n| DatabaseSpecifier::Name(normalize::ident(n)))
+                .unwrap_or_else(|| scx.session.database());
             &scx.catalog
-                .database_resolver(&database_name)?
+                .database_resolver(database_spec)?
                 .resolve_schema(&schema_name)
                 .ok_or_else(|| format_err!("schema '{}' does not exist", schema_name))?
                 .0
@@ -744,8 +728,8 @@ fn handle_create_schema(
     let database_name = name
         .0
         .pop()
-        .map(normalize::ident)
-        .unwrap_or_else(|| scx.session.database().to_owned());
+        .map(|n| DatabaseSpecifier::Name(normalize::ident(n)))
+        .unwrap_or_else(|| scx.session.database());
     Ok(Plan::CreateSchema {
         database_name,
         schema_name,
@@ -821,7 +805,7 @@ fn handle_create_view(
 
 async fn handle_create_dataflow(
     stmt: Statement,
-    current_database: String,
+    current_database: DatabaseSpecifier,
 ) -> Result<Plan, failure::Error> {
     match stmt {
         Statement::CreateSource {
@@ -850,8 +834,10 @@ async fn handle_create_dataflow(
                         Some(_) => bail!("consistency must be a string"),
                     };
                     if let Some(topic) = topic {
-                        let name =
-                            allocate_name(&current_database, normalize::object_name(name.clone())?);
+                        let name = allocate_name(
+                            current_database.clone(),
+                            normalize::object_name(name.clone())?,
+                        );
                         let source =
                             build_kafka_source(addr, topic, format.clone(), envelope, consistency)
                                 .await?;
@@ -971,8 +957,10 @@ async fn handle_create_dataflow(
                         },
                         desc,
                     };
-                    let name =
-                        allocate_name(&current_database, normalize::object_name(name.clone())?);
+                    let name = allocate_name(
+                        current_database.clone(),
+                        normalize::object_name(name.clone())?,
+                    );
                     Ok(Plan::CreateSource {
                         name,
                         source,
@@ -1015,7 +1003,7 @@ async fn handle_create_dataflow(
                 if parts.len() == 2 && parts[0] == "value" {
                     let topic_name = parts[1];
                     let sql_name = allocate_name(
-                        &current_database,
+                        current_database.clone(),
                         PartialName {
                             database: None,
                             schema: None,
@@ -1086,7 +1074,8 @@ fn handle_drop_database(
     if_exists: bool,
 ) -> Result<Plan, failure::Error> {
     let name = normalize::ident(name);
-    match scx.catalog.database_resolver(&name) {
+    let spec = DatabaseSpecifier::Name(name.clone());
+    match scx.catalog.database_resolver(spec) {
         Ok(_) => (),
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
@@ -1127,9 +1116,9 @@ fn handle_drop_schema(
     let database_name = name
         .0
         .pop()
-        .map(normalize::ident)
-        .unwrap_or_else(|| scx.session.database().to_owned());
-    match scx.catalog.database_resolver(&database_name) {
+        .map(|n| DatabaseSpecifier::Name(normalize::ident(n)))
+        .unwrap_or_else(|| scx.session.database());
+    match scx.catalog.database_resolver(database_name.clone()) {
         Ok(resolver) => {
             match resolver.resolve_schema(&schema_name) {
                 None if if_exists => {
@@ -1569,7 +1558,7 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 #[derive(Debug)]
 pub struct StatementContext<'a> {
     pub catalog: &'a Catalog,
-    pub session: &'a Session,
+    pub session: &'a dyn PlanSession,
 }
 
 impl<'a> StatementContext<'a> {
@@ -1580,13 +1569,16 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
         let name = normalize::object_name(name)?;
         self.catalog
-            .resolve(self.session.database(), &["mz_catalog", "public"], &name)
+            .resolve(self.session.database(), self.session.search_path(), &name)
     }
 }
 
-fn allocate_name(current_database: &str, name: PartialName) -> FullName {
+fn allocate_name(current_database: DatabaseSpecifier, name: PartialName) -> FullName {
     FullName {
-        database: DatabaseSpecifier::Name(name.database.unwrap_or_else(|| current_database.into())),
+        database: match name.database {
+            Some(name) => DatabaseSpecifier::Name(name),
+            None => current_database,
+        },
         schema: name.schema.unwrap_or_else(|| "public".into()),
         item: name.item,
     }

@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use failure::bail;
+use lazy_static::lazy_static;
 use log::{info, trace};
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +57,13 @@ pub struct Catalog {
 struct Database {
     id: i64,
     schemas: HashMap<String, Schema>,
+}
+
+lazy_static! {
+    static ref EMPTY_DATABASE: Database = Database {
+        id: 0,
+        schemas: HashMap::new(),
+    };
 }
 
 #[derive(Debug)]
@@ -251,7 +259,7 @@ impl Catalog {
     /// are searched in order.
     pub fn resolve(
         &self,
-        current_database: &str,
+        current_database: DatabaseSpecifier,
         search_path: &[&str],
         name: &PartialName,
     ) -> Result<FullName, failure::Error> {
@@ -266,7 +274,11 @@ impl Catalog {
 
         // Find the specified database, or `current_database` if no database was
         // specified.
-        let database_name = name.database.as_deref().unwrap_or(current_database);
+        let database_name = name
+            .database
+            .as_ref()
+            .map(|n| DatabaseSpecifier::Name(n.clone()))
+            .unwrap_or(current_database);
         let resolver = self.database_resolver(database_name)?;
 
         if let Some(schema_name) = &name.schema {
@@ -315,17 +327,24 @@ impl Catalog {
         self.by_name.keys().map(String::as_str)
     }
 
-    pub fn database_resolver<'a, 'b>(
+    pub fn database_resolver<'a>(
         &'a self,
-        database_name: &'b str,
-    ) -> Result<DatabaseResolver<'a, 'b>, failure::Error> {
-        match self.by_name.get(database_name) {
-            Some(database) => Ok(DatabaseResolver {
-                database_name,
-                database,
+        database_spec: DatabaseSpecifier,
+    ) -> Result<DatabaseResolver<'a>, failure::Error> {
+        match &database_spec {
+            DatabaseSpecifier::Ambient => Ok(DatabaseResolver {
+                database_spec,
+                database: &EMPTY_DATABASE,
                 ambient_schemas: &self.ambient_schemas,
             }),
-            None => bail!("unknown database '{}'", database_name),
+            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
+                Some(database) => Ok(DatabaseResolver {
+                    database_spec,
+                    database,
+                    ambient_schemas: &self.ambient_schemas,
+                }),
+                None => bail!("unknown database '{}'", name),
+            },
         }
     }
 
@@ -385,7 +404,7 @@ impl Catalog {
             for (schema_name, schema) in &database.schemas {
                 Self::drop_schema_items(schema, &self.by_id, &mut ops);
                 ops.push(Op::DropSchema {
-                    database_name: name.clone(),
+                    database_name: DatabaseSpecifier::Name(name.clone()),
                     schema_name: schema_name.clone(),
                 });
             }
@@ -394,15 +413,21 @@ impl Catalog {
         ops
     }
 
-    pub fn drop_schema_ops(&mut self, database_name: String, schema_name: String) -> Vec<Op> {
+    pub fn drop_schema_ops(
+        &mut self,
+        database_spec: DatabaseSpecifier,
+        schema_name: String,
+    ) -> Vec<Op> {
         let mut ops = vec![];
-        if let Some(database) = self.by_name.get(&database_name) {
-            if let Some(schema) = database.schemas.get(&schema_name) {
-                Self::drop_schema_items(schema, &self.by_id, &mut ops);
-                ops.push(Op::DropSchema {
-                    database_name,
-                    schema_name,
-                })
+        if let DatabaseSpecifier::Name(database_name) = database_spec {
+            if let Some(database) = self.by_name.get(&database_name) {
+                if let Some(schema) = database.schemas.get(&schema_name) {
+                    Self::drop_schema_items(schema, &self.by_id, &mut ops);
+                    ops.push(Op::DropSchema {
+                        database_name: DatabaseSpecifier::Name(database_name),
+                        schema_name,
+                    })
+                }
             }
         }
         ops
@@ -483,10 +508,15 @@ impl Catalog {
                     database_name,
                     schema_name,
                 } => {
-                    if schema_name.starts_with("mz_") || schema_name.starts_with("pg") {
+                    if schema_name.starts_with("mz_") || schema_name.starts_with("pg_") {
                         bail!("unacceptable schema name '{}'", schema_name);
                     }
-                    let database_id = tx.load_database_id(&database_name)?;
+                    let (database_id, database_name) = match database_name {
+                        DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
+                        DatabaseSpecifier::Ambient => {
+                            bail!("writing to {} is not allowed", schema_name)
+                        }
+                    };
                     Action::CreateSchema {
                         id: tx.insert_schema(database_id, &schema_name)?,
                         database_name,
@@ -512,7 +542,12 @@ impl Catalog {
                     database_name,
                     schema_name,
                 } => {
-                    let database_id = tx.load_database_id(&database_name)?;
+                    let (database_id, database_name) = match database_name {
+                        DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
+                        DatabaseSpecifier::Ambient => {
+                            bail!("dropping {} is not allowed", schema_name)
+                        }
+                    };
                     tx.remove_schema(database_id, &schema_name)?;
                     Action::DropSchema {
                         database_name,
@@ -631,7 +666,7 @@ pub enum Op {
         name: String,
     },
     CreateSchema {
-        database_name: String,
+        database_name: DatabaseSpecifier,
         schema_name: String,
     },
     CreateItem {
@@ -643,7 +678,7 @@ pub enum Op {
         name: String,
     },
     DropSchema {
-        database_name: String,
+        database_name: DatabaseSpecifier,
         schema_name: String,
     },
     /// Unconditionally removes the identified items. It is required that the
@@ -663,13 +698,13 @@ pub enum OpStatus {
 }
 
 /// A helper for resolving schema and item names within one database.
-pub struct DatabaseResolver<'a, 'b> {
-    database_name: &'b str,
+pub struct DatabaseResolver<'a> {
+    database_spec: DatabaseSpecifier,
     database: &'a Database,
     ambient_schemas: &'a HashMap<String, Schema>,
 }
 
-impl<'a, 'b> DatabaseResolver<'a, 'b> {
+impl<'a> DatabaseResolver<'a> {
     /// Attempts to resolve the item specified by `schema_name` and `item_name`
     /// in the database that this resolver is attached to, or in the set of
     /// ambient schemas.
@@ -677,7 +712,7 @@ impl<'a, 'b> DatabaseResolver<'a, 'b> {
         if let Some(schema) = self.database.schemas.get(schema_name) {
             if schema.items.contains_key(item_name) {
                 return Some(FullName {
-                    database: DatabaseSpecifier::Name(self.database_name.to_owned()),
+                    database: self.database_spec.clone(),
                     schema: schema_name.to_owned(),
                     item: item_name.to_owned(),
                 });

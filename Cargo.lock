@@ -309,6 +309,7 @@ dependencies = [
  "expr",
  "failure",
  "itertools",
+ "lazy_static 1.4.0",
  "log",
  "repr",
  "rusqlite",

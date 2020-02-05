@@ -365,7 +365,7 @@ const VIEW_ADDRESSES_WITH_UNIT_LENGTH: LogView = LogView {
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker
 FROM
-    mz_dataflow_operator_addresses
+    mz_catalog.mz_dataflow_operator_addresses
 GROUP BY
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker
@@ -384,9 +384,9 @@ const VIEW_DATAFLOW_NAMES: LogView = LogView {
     mz_dataflow_operator_addresses.value as local_id,
     mz_dataflow_operators.name
 FROM
-    mz_dataflow_operator_addresses,
-    mz_dataflow_operators,
-    mz_addresses_with_unit_length
+    mz_catalog.mz_dataflow_operator_addresses,
+    mz_catalog.mz_dataflow_operators,
+    mz_catalog.mz_addresses_with_unit_length
 WHERE
     mz_dataflow_operator_addresses.id = mz_dataflow_operators.id AND
     mz_dataflow_operator_addresses.worker = mz_dataflow_operators.worker AND
@@ -408,9 +408,9 @@ const VIEW_DATAFLOW_OPERATOR_DATAFLOWS: LogView = LogView {
     mz_dataflow_names.id as dataflow_id,
     mz_dataflow_names.name as dataflow_name
 FROM
-    mz_dataflow_operators,
-    mz_dataflow_operator_addresses,
-    mz_dataflow_names
+    mz_catalog.mz_dataflow_operators,
+    mz_catalog.mz_dataflow_operator_addresses,
+    mz_catalog.mz_dataflow_names
 WHERE
     mz_dataflow_operators.id = mz_dataflow_operator_addresses.id AND
     mz_dataflow_operators.worker = mz_dataflow_operator_addresses.worker AND
@@ -432,8 +432,8 @@ const VIEW_RECORDS_PER_DATAFLOW_OPERATOR: LogView = LogView {
     mz_dataflow_operator_dataflows.dataflow_id,
     mz_arrangement_sizes.records
 FROM
-    mz_arrangement_sizes,
-    mz_dataflow_operator_dataflows
+    mz_catalog.mz_arrangement_sizes,
+    mz_catalog.mz_dataflow_operator_dataflows
 WHERE
     mz_dataflow_operator_dataflows.id = mz_arrangement_sizes.operator AND
     mz_dataflow_operator_dataflows.worker = mz_arrangement_sizes.worker",
@@ -450,8 +450,8 @@ const VIEW_RECORDS_PER_DATAFLOW: LogView = LogView {
     mz_records_per_dataflow_operator.worker,
     SUM(mz_records_per_dataflow_operator.records) as records
 FROM
-    mz_records_per_dataflow_operator,
-    mz_dataflow_names
+    mz_catalog.mz_records_per_dataflow_operator,
+    mz_catalog.mz_dataflow_names
 WHERE
     mz_records_per_dataflow_operator.dataflow_id = mz_dataflow_names.id AND
     mz_records_per_dataflow_operator.worker = mz_dataflow_names.worker
@@ -467,14 +467,14 @@ GROUP BY
 const VIEW_RECORDS_PER_DATAFLOW_GLOBAL: LogView = LogView {
     name: "mz_records_per_dataflow_global",
     sql: "CREATE MATERIALIZED VIEW mz_records_per_dataflow_global AS SELECT
-        mz_records_per_dataflow.id,
-        mz_records_per_dataflow.name,
-        SUM(mz_records_per_dataflow.records) as records
-    FROM
-        mz_records_per_dataflow
-    GROUP BY
-        mz_records_per_dataflow.id,
-        mz_records_per_dataflow.name",
+    mz_records_per_dataflow.id,
+    mz_records_per_dataflow.name,
+    SUM(mz_records_per_dataflow.records) as records
+FROM
+    mz_catalog.mz_records_per_dataflow
+GROUP BY
+    mz_records_per_dataflow.id,
+    mz_records_per_dataflow.name",
     id: GlobalId::System(43),
     index_id: GlobalId::System(44),
 };
@@ -486,11 +486,11 @@ const VIEW_PERF_DEPENDENCY_FRONTIERS: LogView = LogView {
         coalesce(mcn_source.name, frontier_source.global_id) as source,
         frontier_source.time - frontier_df.time as lag_ms
 FROM
-        mz_materialization_dependencies index_deps
-JOIN mz_materialization_frontiers frontier_source ON index_deps.source = frontier_source.global_id
-JOIN mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
-LEFT JOIN mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
-LEFT JOIN mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id",
+        mz_catalog.mz_materialization_dependencies index_deps
+JOIN mz_catalog.mz_materialization_frontiers frontier_source ON index_deps.source = frontier_source.global_id
+JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
+LEFT JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
+LEFT JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id",
     id: GlobalId::System(45),
     index_id: GlobalId::System(46),
 };
@@ -498,8 +498,8 @@ LEFT JOIN mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.
 const VIEW_PERF_ARRANGEMENT_RECORDS: LogView = LogView {
     name: "mz_perf_arrangement_records",
     sql: "CREATE MATERIALIZED VIEW mz_perf_arrangement_records AS SELECT mas.worker, name, records, operator
-FROM mz_arrangement_sizes mas
-JOIN mz_dataflow_operators mdo ON mdo.id = mas.operator",
+FROM mz_catalog.mz_arrangement_sizes mas
+JOIN mz_catalog.mz_dataflow_operators mdo ON mdo.id = mas.operator",
     id: GlobalId::System(47),
     index_id: GlobalId::System(48),
 };
@@ -511,8 +511,8 @@ const VIEW_PERF_PEEK_DURATIONS_CORE: LogView = LogView {
     CAST(d_upper.duration_ns AS TEXT) AS le,
     sum(d_summed.count) AS count
 FROM
-    mz_peek_durations AS d_upper,
-    mz_peek_durations AS d_summed
+    mz_catalog.mz_peek_durations AS d_upper,
+    mz_catalog.mz_peek_durations AS d_summed
 WHERE
     d_upper.worker = d_summed.worker AND
     d_upper.duration_ns >= d_summed.duration_ns
@@ -525,9 +525,9 @@ const VIEW_PERF_PEEK_DURATIONS_BUCKET: LogView = LogView {
     name: "mz_perf_peek_durations_bucket",
     sql: "CREATE MATERIALIZED VIEW mz_perf_peek_durations_bucket AS
 (
-    SELECT * FROM mz_perf_peek_durations_core
+    SELECT * FROM mz_catalog.mz_perf_peek_durations_core
 ) UNION (
-    SELECT worker, '+Inf', max(count) AS count FROM mz_perf_peek_durations_core
+    SELECT worker, '+Inf', max(count) AS count FROM mz_catalog.mz_perf_peek_durations_core
     GROUP BY worker
 )",
     id: GlobalId::System(51),
@@ -537,7 +537,7 @@ const VIEW_PERF_PEEK_DURATIONS_BUCKET: LogView = LogView {
 const VIEW_PERF_PEEK_DURATIONS_AGGREGATES: LogView = LogView {
     name: "mz_perf_peek_durations_aggregates",
     sql: "CREATE MATERIALIZED VIEW mz_perf_peek_durations_aggregates AS SELECT worker, sum(duration_ns * count) AS sum, sum(count) AS count
-FROM mz_peek_durations lpd
+FROM mz_catalog.mz_peek_durations lpd
 GROUP BY worker",
     id: GlobalId::System(53),
     index_id: GlobalId::System(55),

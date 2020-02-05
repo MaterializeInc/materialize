@@ -31,6 +31,15 @@ pub enum DatabaseSpecifier {
     Name(String),
 }
 
+impl fmt::Display for DatabaseSpecifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DatabaseSpecifier::Ambient => f.write_str("<none>"),
+            DatabaseSpecifier::Name(name) => f.write_str(name),
+        }
+    }
+}
+
 impl From<Option<String>> for DatabaseSpecifier {
     fn from(s: Option<String>) -> DatabaseSpecifier {
         match s {

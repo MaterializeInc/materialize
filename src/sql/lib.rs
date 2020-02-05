@@ -7,16 +7,15 @@
 
 #![deny(missing_debug_implementations)]
 
-use dataflow_types::{IndexDesc, PeekWhen, RowSetFinishing, Sink, Source};
-
 use ::expr::GlobalId;
-use catalog::names::FullName;
+use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::{Catalog, CatalogEntry};
+use dataflow_types::{IndexDesc, PeekWhen, RowSetFinishing, Sink, Source};
 use ore::future::MaybeFuture;
 use repr::{RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
-pub use session::{PreparedStatement, Session, TransactionStatus};
+pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ObjectType, Statement};
 pub use statement::StatementContext;
 
@@ -40,7 +39,7 @@ pub enum Plan {
         if_not_exists: bool,
     },
     CreateSchema {
-        database_name: String,
+        database_name: DatabaseSpecifier,
         schema_name: String,
         if_not_exists: bool,
     },
@@ -81,7 +80,7 @@ pub enum Plan {
         name: String,
     },
     DropSchema {
-        database_name: String,
+        database_name: DatabaseSpecifier,
         schema_name: String,
     },
     DropItems {
@@ -89,6 +88,8 @@ pub enum Plan {
         ty: ObjectType,
     },
     EmptyQuery,
+    ShowAllVariables,
+    ShowVariable(String),
     SetVariable {
         /// The name of the variable
         name: String,
@@ -150,7 +151,7 @@ pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
 /// Produces a [`Plan`] from a [`Statement`].
 pub fn plan(
     catalog: &Catalog,
-    session: &Session,
+    session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
 ) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
