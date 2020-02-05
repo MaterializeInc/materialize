@@ -4,4 +4,4 @@ format_spec ::=
   'REGEX' regex |
   'CSV WITH' n 'COLUMNS' ('DELIMITED BY' char)? |
   'TEXT' |
-  'RAW'
+  'BYTES'
