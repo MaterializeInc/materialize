@@ -1,5 +1,5 @@
 ---
-title: "Architecture"
+title: "Architecture Overview"
 description: "Understand Materialize's architecture."
 menu:
   main:
