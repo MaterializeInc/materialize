@@ -29,7 +29,7 @@ use interchange::{avro, protobuf};
 use ore::collections::CollectionExt;
 use ore::future::MaybeFuture;
 use repr::strconv;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
     AvroSchema, Connector, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
     ShowStatementFilter, Stage, Statement, Value,
@@ -501,23 +501,25 @@ fn handle_show_indexes(
                 };
                 let mut row_subset = Vec::new();
                 for (i, (key_expr, key_sql)) in keys.iter().zip_eq(key_sqls).enumerate() {
+                    let desc = scx.catalog.get_by_id(&on).desc().unwrap();
                     let key_sql = key_sql.to_string();
-                    let is_column_name = match key_expr {
-                        expr::ScalarExpr::Column(_) => true,
-                        _ => false,
+                    let arena = RowArena::new();
+                    let (col_name, func) = match key_expr {
+                        expr::ScalarExpr::Column(i) => {
+                            let col_name = match desc.get_name(i) {
+                                Some(col_name) => col_name.to_string(),
+                                None => format!("@{}", i + 1),
+                            };
+                            (Datum::String(arena.push_string(col_name)), Datum::Null)
+                        }
+                        _ => (Datum::Null, Datum::String(arena.push_string(key_sql))),
                     };
-                    let (col_name, func) = if is_column_name {
-                        (Datum::String(&key_sql), Datum::Null)
-                    } else {
-                        (Datum::Null, Datum::String(&key_sql))
-                    };
-                    let typ = scx.catalog.get_by_id(&on).desc().unwrap().typ();
                     row_subset.push(Row::pack(&vec![
                         Datum::String(&from_entry.name().to_string()),
                         Datum::String(&entry.name().to_string()),
                         col_name,
                         func,
-                        Datum::from(key_expr.typ(typ).nullable),
+                        Datum::from(key_expr.typ(desc.typ()).nullable),
                         Datum::from((i + 1) as i64),
                     ]));
                 }

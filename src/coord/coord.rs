@@ -23,7 +23,6 @@ use futures::future::FutureExt;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use itertools::Itertools;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
@@ -131,13 +130,15 @@ where
         let catalog = if let Some(logging_config) = config.logging {
             Catalog::open::<catalog::BincodeSerializer, _>(catalog_path, |catalog| {
                 for log_src in logging_config.active_logs() {
+                    let view_name = FullName {
+                        database: DatabaseSpecifier::Ambient,
+                        schema: "mz_catalog".into(),
+                        item: log_src.name().into(),
+                    };
+                    let index_name = format!("{}_primary_idx", log_src.name());
                     catalog.insert_item(
                         log_src.id(),
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: "mz_catalog".into(),
-                            item: log_src.name().into(),
-                        },
+                        view_name.clone(),
                         CatalogItem::View(catalog::View {
                             create_sql: "<system log>".to_string(),
                             // Dummy placeholder
@@ -154,7 +155,7 @@ where
                         FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: "mz_catalog".into(),
-                            item: format!("{}_primary_idx", log_src.name()),
+                            item: index_name.clone(),
                         },
                         CatalogItem::Index(catalog::Index {
                             on: log_src.id(),
@@ -163,7 +164,12 @@ where
                                 .into_iter()
                                 .map(ScalarExpr::Column)
                                 .collect(),
-                            create_sql: index_sql(&log_src.schema(), &log_src.index_by()),
+                            create_sql: index_sql(
+                                index_name,
+                                view_name,
+                                &log_src.schema(),
+                                &log_src.index_by(),
+                            ),
                             eval_env: EvalEnv::default(),
                         }),
                     );
@@ -193,22 +199,25 @@ where
                                 eval_env,
                                 desc: view.desc,
                             };
-                            let index = auto_generate_primary_idx(&view, log_view.id);
-                            catalog.insert_item(
+                            let view_name = FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "mz_catalog".into(),
+                                item: log_view.name.into(),
+                            };
+                            let index_name = format!("{}_primary_idx", log_view.name);
+                            let index = auto_generate_primary_idx(
+                                index_name.clone(),
+                                view_name.clone(),
+                                &view,
                                 log_view.id,
-                                FullName {
-                                    database: DatabaseSpecifier::Ambient,
-                                    schema: "mz_catalog".into(),
-                                    item: log_view.name.into(),
-                                },
-                                CatalogItem::View(view),
                             );
+                            catalog.insert_item(log_view.id, view_name, CatalogItem::View(view));
                             catalog.insert_item(
                                 log_view.index_id,
                                 FullName {
                                     database: DatabaseSpecifier::Ambient,
                                     schema: "mz_catalog".into(),
-                                    item: format!("{}_primary_idx", log_view.name),
+                                    item: index_name,
                                 },
                                 CatalogItem::Index(index),
                             );
@@ -570,7 +579,12 @@ where
                 let index_id = self.catalog.allocate_id();
                 let mut index_name = name.clone();
                 index_name.item += "_primary_idx";
-                let index = auto_generate_primary_idx(&view, view_id);
+                let index = auto_generate_primary_idx(
+                    index_name.item.clone(),
+                    name.clone(),
+                    &view,
+                    view_id,
+                );
                 match self.catalog_transact(vec![
                     catalog::Op::CreateItem {
                         id: view_id,
@@ -680,7 +694,12 @@ where
                 });
                 let (index_id, index) = if materialize {
                     let mut index_name = name.clone();
-                    let index = auto_generate_primary_idx(&view, view_id);
+                    let index = auto_generate_primary_idx(
+                        index_name.item.clone(),
+                        name.clone(),
+                        &view,
+                        view_id,
+                    );
                     index_name.item += "_primary_idx";
                     let index_id = self.catalog.allocate_id();
                     ops.push(catalog::Op::CreateItem {
@@ -890,14 +909,13 @@ where
                             iter::repeat::<Option<ColumnName>>(None).take(ncols),
                         );
                         let view_id = self.catalog.allocate_id();
-                        let mut dataflow = DataflowDesc::new(
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: "temp".into(),
-                                item: format!("temp-view-{}", view_id),
-                            }
-                            .to_string(),
-                        );
+                        let view_name = FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: "temp".into(),
+                            item: format!("temp-view-{}", view_id),
+                        };
+                        let index_name = format!("temp-index-on-{}", view_id);
+                        let mut dataflow = DataflowDesc::new(view_name.to_string());
                         dataflow.as_of(Some(vec![timestamp.clone()]));
                         let view = catalog::View {
                             create_sql: "<none>".into(),
@@ -906,7 +924,8 @@ where
                             eval_env: eval_env.clone(),
                         };
                         self.build_view_collection(&view_id, &view, &mut dataflow);
-                        let index = auto_generate_primary_idx(&view, view_id);
+                        let index =
+                            auto_generate_primary_idx(index_name, view_name, &view, view_id);
                         self.build_arrangement(&index_id, index.clone(), typ, dataflow);
                         Some(index)
                     } else {
@@ -1890,7 +1909,12 @@ impl ViewState {
     }
 }
 
-pub fn auto_generate_primary_idx(view: &catalog::View, view_id: GlobalId) -> catalog::Index {
+pub fn auto_generate_primary_idx(
+    index_name: String,
+    view_name: FullName,
+    view: &catalog::View,
+    view_id: GlobalId,
+) -> catalog::Index {
     let keys = view.expr.as_ref().typ().keys;
     let keys = if let Some(keys) = keys.first() {
         keys.clone()
@@ -1898,24 +1922,45 @@ pub fn auto_generate_primary_idx(view: &catalog::View, view_id: GlobalId) -> cat
         (0..view.desc.typ().column_types.len()).collect()
     };
     catalog::Index {
-        create_sql: index_sql(&view.desc, &keys),
+        create_sql: index_sql(index_name, view_name, &view.desc, &keys),
         on: view_id,
         keys: keys.into_iter().map(ScalarExpr::Column).collect(),
         eval_env: EvalEnv::default(),
     }
 }
 
-fn index_sql(desc: &RelationDesc, keys: &[usize]) -> String {
-    // TODO(benesch): this is morally wrong, but not in a way that is visible
-    // to the user.
-    format!(
-        "CREATE INDEX todo ON todo ({})",
-        keys.iter()
-            .map(|i| desc
-                .get_name(i)
-                .as_ref()
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| i.to_string()))
-            .join(", "),
-    )
+// TODO(benesch): constructing the canonical CREATE INDEX statement should be
+// the responsibility of the SQL package.
+fn index_sql(
+    index_name: String,
+    view_name: FullName,
+    view_desc: &RelationDesc,
+    keys: &[usize],
+) -> String {
+    use sql_parser::ast::{Expr, Ident, Statement, Value};
+
+    Statement::CreateIndex {
+        name: Ident {
+            value: index_name,
+            quote_style: Some('"'),
+        },
+        on_name: sql::normalize::unresolve(view_name),
+        key_parts: keys
+            .iter()
+            .map(|i| {
+                view_desc
+                    .get_name(i)
+                    .as_ref()
+                    .map(|n| {
+                        Expr::Identifier(Ident {
+                            value: n.to_string(),
+                            quote_style: Some('"'),
+                        })
+                    })
+                    .unwrap_or_else(|| Expr::Value(Value::Number(i.to_string())))
+            })
+            .collect(),
+        if_not_exists: false,
+    }
+    .to_string()
 }

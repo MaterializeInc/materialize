@@ -202,21 +202,30 @@ catalog item 'v4a' does not exist
 catalog item 'i3' does not exist
 
 > SHOW INDEX in v4;
-View                  Key_name                              Column_name Expression Null  Seq_in_index
+View                     Key_name                              Column_name Expression Null  Seq_in_index
 -----------------------------------------------------------------------------------------------------
-materialize.public.v4   materialize.public.i4                   x           <null>     false 1
-materialize.public.v4   materialize.public.v4_primary_idx       x           <null>     false 1
-materialize.public.v4   materialize.public.v4_primary_idx       y           <null>     false 2
+materialize.public.v4   materialize.public.i4                  x           <null>     false 1
+materialize.public.v4   materialize.public.v4_primary_idx      x           <null>     false 1
+materialize.public.v4   materialize.public.v4_primary_idx      y           <null>     false 2
 
 > CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from v4;
 
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEX in v5;
-View                  Key_name                              Column_name Expression Null  Seq_in_index
-----------------------------------------------------------------------------------------------------
-materialize.public.v5   materialize.public.i5                   substr      <null>     true 1
-materialize.public.v5   materialize.public.v5_primary_idx       substr      <null>     true 1
+View                    Key_name                            Column_name Expression Null  Seq_in_index
+-----------------------------------------------------------------------------------------------------
+materialize.public.v5   materialize.public.i5               substr      <null>     true  1
+materialize.public.v5   materialize.public.v5_primary_idx   substr      <null>     true  1
+
+> CREATE VIEW multicol AS SELECT 'a' AS a, 'b', 'c', 'd' AS d
+> CREATE INDEX i6 ON multicol (2, a, 4)
+> SHOW INDEX IN multicol
+View                         Key_name               Column_name  Expression   Null    Seq_in_index
+-----------------------------------------------------------------------------------------------------
+materialize.public.multicol  materialize.public.i6  a            <null>       false   2
+materialize.public.multicol  materialize.public.i6  @2           <null>       false   1
+materialize.public.multicol  materialize.public.i6  d            <null>       false   3
 
 # Test cascade deletes all indexes associated with cascaded views
 > DROP VIEW v4 CASCADE;
