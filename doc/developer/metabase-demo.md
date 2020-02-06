@@ -57,11 +57,11 @@ mysql_tpcch_stock
 mysql_tpcch_supplier
 mysql_tpcch_warehouse
 
-$ CREATE MATERIALIZED VIEW mysql_tpcch_customer_view AS SELECT * FROM mysql_tpcch_customer; 
+$ CREATE MATERIALIZED VIEW mysql_tpcch_customer_view AS SELECT * FROM mysql_tpcch_customer;
 CREATE MATERIALIZED VIEW mysql_tpcch_district_view AS SELECT * FROM mysql_tpcch_district;
-CREATE MATERIALIZED VIEW mysql_tpcch_history_view AS SELECT * FROM mysql_tpcch_history; 
-CREATE MATERIALIZED VIEW mysql_tpcch_item_view AS SELECT * FROM mysql_tpcch_item; 
-CREATE MATERIALIZED VIEW mysql_tpcch_nation_view AS SELECT * FROM mysql_tpcch_nation; 
+CREATE MATERIALIZED VIEW mysql_tpcch_history_view AS SELECT * FROM mysql_tpcch_history;
+CREATE MATERIALIZED VIEW mysql_tpcch_item_view AS SELECT * FROM mysql_tpcch_item;
+CREATE MATERIALIZED VIEW mysql_tpcch_nation_view AS SELECT * FROM mysql_tpcch_nation;
 CREATE MATERIALIZED VIEW mysql_tpcch_neworder_view AS SELECT * FROM mysql_tpcch_neworder;
 CREATE MATERIALIZED VIEW mysql_tpcch_order_view AS SELECT * FROM mysql_tpcch_order;
 CREATE MATERIALIZED VIEW mysql_tpcch_orderline_view AS SELECT * FROM mysql_tpcch_orderline;

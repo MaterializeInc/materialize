@@ -152,7 +152,7 @@ services:
     image: metabase/metabase:v0.34.2
     depends_on: [materialized]
     volumes:
-      - ./metabase/materialize-driver.jar:/plugins/materialize-driver.jar
+      - ./metabase/materialize-driver-0.0.4.jar:/plugins/materialize-driver.jar
     ports:
       - *metabase
 
