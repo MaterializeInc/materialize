@@ -9,6 +9,11 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+// Temporarily disable jemalloc on macOS as we have observed latency issues
+// when we run load tests with jemalloc, but not the macOS system allocator
+// todo(rkhaitan) figure out which allocator we want to use for all supported
+// platforms
+#[cfg(not(target_os = "macos"))]
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
