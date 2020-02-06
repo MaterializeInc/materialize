@@ -32,43 +32,85 @@ Now that the data is loaded into Materialize, we want to create sources
 with it. Enter a psql shell connected to Materialize:
 
 ```console
-psql -h localhost -p 6875
+psql -h localhost -p 6875 materialize
 ```
 
 Next, you will need to set the database, create the sources,
 and materialize all of the sources into views:
 
 ```console
-$ set database to "materialize";
-SET
+CREATE SOURCE src_customer
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.customer'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
 
-$ CREATE SOURCES LIKE 'mysql.tpcch.%'
-  FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-mysql_tpcch_customer
-mysql_tpcch_district
-mysql_tpcch_history
-mysql_tpcch_item
-mysql_tpcch_nation
-mysql_tpcch_neworder
-mysql_tpcch_order
-mysql_tpcch_orderline
-mysql_tpcch_region
-mysql_tpcch_stock
-mysql_tpcch_supplier
-mysql_tpcch_warehouse
+CREATE SOURCE src_district
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.district'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
 
-$ CREATE MATERIALIZED VIEW tpcch_customer AS SELECT * FROM mysql_tpcch_customer;
-CREATE MATERIALIZED VIEW tpcch_district AS SELECT * FROM mysql_tpcch_district;
-CREATE MATERIALIZED VIEW tpcch_history AS SELECT * FROM mysql_tpcch_history;
-CREATE MATERIALIZED VIEW tpcch_item AS SELECT * FROM mysql_tpcch_item;
-CREATE MATERIALIZED VIEW tpcch_nation AS SELECT * FROM mysql_tpcch_nation;
-CREATE MATERIALIZED VIEW tpcch_neworder AS SELECT * FROM mysql_tpcch_neworder;
-CREATE MATERIALIZED VIEW tpcch_order AS SELECT * FROM mysql_tpcch_order;
-CREATE MATERIALIZED VIEW tpcch_orderline AS SELECT * FROM mysql_tpcch_orderline;
-CREATE MATERIALIZED VIEW tpcch_region AS SELECT * FROM mysql_tpcch_region;
-CREATE MATERIALIZED VIEW tpcch_stock AS SELECT * FROM mysql_tpcch_stock;
-CREATE MATERIALIZED VIEW tpcch_supplier AS SELECT * FROM mysql_tpcch_supplier;
-CREATE MATERIALIZED VIEW tpcch_warehouse AS SELECT * FROM mysql_tpcch_warehouse;
+CREATE SOURCE src_history
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.history'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_item
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.item'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_nation
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.nation'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_neworder
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.neworder'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_order
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.order'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_orderline
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_region
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.region'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_stock
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.stock'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_supplier
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.supplier'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE SOURCE src_warehouse
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.warehouse'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+ENVELOPE DEBEZIUM;
+
+CREATE MATERIALIZED VIEW tpcch_customer AS SELECT * FROM src_customer;
+CREATE MATERIALIZED VIEW tpcch_district AS SELECT * FROM src_district;
+CREATE MATERIALIZED VIEW tpcch_history AS SELECT * FROM src_history;
+CREATE MATERIALIZED VIEW tpcch_item AS SELECT * FROM src_item;
+CREATE MATERIALIZED VIEW tpcch_nation AS SELECT * FROM src_nation;
+CREATE MATERIALIZED VIEW tpcch_neworder AS SELECT * FROM src_neworder;
+CREATE MATERIALIZED VIEW tpcch_order AS SELECT * FROM src_order;
+CREATE MATERIALIZED VIEW tpcch_orderline AS SELECT * FROM src_orderline;
+CREATE MATERIALIZED VIEW tpcch_region AS SELECT * FROM src_region;
+CREATE MATERIALIZED VIEW tpcch_stock AS SELECT * FROM src_stock;
+CREATE MATERIALIZED VIEW tpcch_supplier AS SELECT * FROM src_supplier;
+CREATE MATERIALIZED VIEW tpcch_warehouse AS SELECT * FROM src_warehouse;
 ```
 
 ### Connecting Metabase to Materialize
@@ -155,7 +197,7 @@ the Metabase interactive SQL editor.
     - Create the view:
       ```sql
       CREATE MATERIALIZED VIEW orderline_count AS
-      SELECT count(*) FROM mysql_tpcch_orderline;
+      SELECT count(*) FROM src_orderline;
       ```
     - Use the view:
       ```sql
@@ -178,7 +220,7 @@ the Metabase interactive SQL editor.
             avg(ol_quantity) AS avg_qty,
             avg(ol_amount) AS avg_amount,
             count(*) AS count_order
-        FROM mysql_tpcch_orderline
+        FROM src_orderline
         WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
         GROUP BY ol_number
         ORDER BY ol_number;
@@ -247,20 +289,20 @@ points:
     CREATE MATERIALIZED VIEW q02 AS
     SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
     FROM
-        mysql_tpcch_item,
-        mysql_tpcch_supplier,
-        mysql_tpcch_stock,
-        mysql_tpcch_nation,
-        mysql_tpcch_region,
+        src_item,
+        src_supplier,
+        src_stock,
+        src_nation,
+        src_region,
         (
             SELECT
                 s_i_id AS m_i_id,
                 min(s_quantity) AS m_s_quantity
             FROM
-                mysql_tpcch_stock,
-                mysql_tpcch_supplier,
-                mysql_tpcch_nation,
-                mysql_tpcch_region
+                src_stock,
+                src_supplier,
+                src_nation,
+                src_region
             WHERE s_su_suppkey = su_suppkey
             AND su_nationkey = n_nationkey
             AND n_regionkey = r_regionkey
@@ -282,10 +324,10 @@ points:
     CREATE MATERIALIZED VIEW q03 AS
     SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d
     FROM
-        mysql_tpcch_customer,
-        mysql_tpcch_neworder,
-        mysql_tpcch_order,
-        mysql_tpcch_orderline
+        src_customer,
+        src_neworder,
+        src_order,
+        src_orderline
     WHERE
         c_state LIKE 'A%'
         AND c_id = o_c_id
