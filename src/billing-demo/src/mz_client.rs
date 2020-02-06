@@ -63,9 +63,8 @@ impl MzClient {
         let encoded = hex::encode(descriptor);
 
         let query = format!(
-            "CREATE SOURCE {source} FROM 'kafka://{kafka_url}/{topic}' \
-             FORMAT PROTOBUF MESSAGE '{message}' \
-             USING SCHEMA '\\x{descriptor}'",
+            "CREATE SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
+             FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}'",
             descriptor = encoded,
             kafka_url = kafka_url,
             topic = kafka_topic_name,
@@ -98,8 +97,7 @@ impl MzClient {
 
         writer.flush()?;
         let query = format!(
-            "CREATE SOURCE {source} FROM 'file://{file}' \
-             FORMAT CSV WITH 3 COLUMNS",
+            "CREATE SOURCE {source} FROM FILE '{file}' FORMAT CSV WITH 3 COLUMNS",
             source = source_name,
             file = file_name,
         );

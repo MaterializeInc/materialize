@@ -92,7 +92,7 @@ fn test_regex_sources() -> Result<(), Box<dyn Error>> {
     );
 
     client.batch_execute(&*format!(
-        "CREATE SOURCE regex_source FROM 'file://{}' FORMAT REGEX '{}'",
+        "CREATE SOURCE regex_source FROM FILE '{}' FORMAT REGEX '{}'",
         regex_path.display(),
         // Regex explained here: https://www.debuggex.com/r/k48kBEt-lTMUZbaw
         r#"(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -"#
@@ -183,7 +183,7 @@ New York,NY,10004
     let line3 = ("bad,place\"".into(), "CA".into(), "92679".into(), 3);
 
     client.batch_execute(&*format!(
-        "CREATE SOURCE static_csv_source FROM 'file://{}' FORMAT CSV WITH 3 COLUMNS",
+        "CREATE SOURCE static_csv_source FROM FILE '{}' FORMAT CSV WITH 3 COLUMNS",
         static_path.display(),
     ))?;
     client
@@ -197,7 +197,7 @@ New York,NY,10004
     append(&dynamic_path, b"")?;
 
     client.batch_execute(&*format!(
-        "CREATE SOURCE dynamic_csv_source FROM 'file://{}' FORMAT CSV WITH 3 COLUMNS WITH (tail = true)",
+        "CREATE SOURCE dynamic_csv_source FROM FILE '{}' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS",
         dynamic_path.display()
     ))?;
     client.batch_execute(
@@ -267,7 +267,7 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     let path = Path::join(temp_dir.path(), "file");
     fs::write(&path, "")?;
     client.batch_execute(&*format!(
-        "CREATE SOURCE s FROM 'file://{}' FORMAT BYTES WITH (tail = true)",
+        "CREATE SOURCE s FROM FILE '{}' WITH (tail = true) FORMAT BYTES",
         path.display()
     ))?;
     client.batch_execute("CREATE MATERIALIZED VIEW v AS SELECT * FROM s")?;

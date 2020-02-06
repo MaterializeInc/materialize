@@ -592,6 +592,49 @@ impl fmt::Display for Format {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Connector {
+    File {
+        path: String,
+        with_options: Vec<SqlOption>,
+    },
+    Kafka {
+        broker: String,
+        topic: String,
+        with_options: Vec<SqlOption>,
+    },
+}
+
+impl fmt::Display for Connector {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Connector::File { path, with_options } => {
+                write!(f, "FILE '{}'", value::escape_single_quote_string(path))?;
+                if !with_options.is_empty() {
+                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                }
+                Ok(())
+            }
+            Connector::Kafka {
+                broker,
+                topic,
+                with_options,
+            } => {
+                write!(
+                    f,
+                    "KAFKA BROKER '{}' TOPIC '{}'",
+                    value::escape_single_quote_string(broker),
+                    value::escape_single_quote_string(topic),
+                )?;
+                if !with_options.is_empty() {
+                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -644,25 +687,17 @@ pub enum Statement {
     /// `CREATE SOURCE`
     CreateSource {
         name: ObjectName,
-        url: String,
+        connector: Connector,
         format: Format,
         envelope: Envelope,
-        with_options: Vec<SqlOption>,
         if_not_exists: bool,
-    },
-    /// `CREATE SOURCES`
-    CreateSources {
-        like: Option<String>,
-        url: String,
-        schema_registry: String,
-        with_options: Vec<SqlOption>,
     },
     /// `CREATE SINK`
     CreateSink {
         name: ObjectName,
         from: ObjectName,
-        url: String,
-        with_options: Vec<SqlOption>,
+        connector: Connector,
+        format: Format,
         if_not_exists: bool,
     },
     /// `CREATE VIEW`
@@ -892,57 +927,27 @@ impl fmt::Display for Statement {
             }
             Statement::CreateSource {
                 name,
-                url,
+                connector,
                 format,
                 envelope,
-                with_options,
                 if_not_exists,
             } => {
                 write!(f, "CREATE SOURCE ")?;
                 if *if_not_exists {
                     write!(f, "IF NOT EXISTS ")?;
                 }
-                write!(
-                    f,
-                    "{} FROM {}",
-                    name,
-                    Value::SingleQuotedString(url.clone())
-                )?;
+                write!(f, "{} FROM {}", name, connector,)?;
                 write!(f, " FORMAT {}", format)?;
                 if *envelope != Default::default() {
                     write!(f, " ENVELOPE {}", envelope)?;
-                }
-                if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
-                }
-                Ok(())
-            }
-            Statement::CreateSources {
-                like,
-                url,
-                schema_registry,
-                with_options,
-            } => {
-                write!(f, "CREATE SOURCES ")?;
-                if let Some(like) = like {
-                    write!(f, "LIKE '{}' ", value::escape_single_quote_string(like),)?;
-                }
-                write!(
-                    f,
-                    "FROM {} USING SCHEMA REGISTRY {}",
-                    Value::SingleQuotedString(url.clone()).to_string(),
-                    Value::SingleQuotedString(schema_registry.clone()).to_string(),
-                )?;
-                if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }
                 Ok(())
             }
             Statement::CreateSink {
                 name,
                 from,
-                url,
-                with_options,
+                connector,
+                format,
                 if_not_exists,
             } => {
                 write!(f, "CREATE SINK ")?;
@@ -951,14 +956,9 @@ impl fmt::Display for Statement {
                 }
                 write!(
                     f,
-                    "{} FROM {} INTO {}",
-                    name,
-                    from,
-                    Value::SingleQuotedString(url.clone())
+                    "{} FROM {} INTO {} FORMAT {}",
+                    name, from, connector, format
                 )?;
-                if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
-                }
                 Ok(())
             }
             Statement::CreateView {
@@ -1215,27 +1215,6 @@ impl fmt::Display for Function {
         }
         Ok(())
     }
-}
-
-/// Specifies the schema associated with a given source.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SourceSchema {
-    /// The schema is specified directly in the contained string.
-    Inline(String),
-    /// The schema is stored in the file at the specified path.
-    File(String),
-    /// The schema is available in a Confluent-compatible schema registry that
-    /// is accessible at the specified URL.
-    Registry(String),
-}
-
-/// Specifies the timestamp logic associated with a given source
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SourceTimestamp {
-    /// The automatic real-time timestamp assignment
-    RealTime,
-    /// The Bring-Your-Own consistency through Kafka Topics
-    BringYourOwn(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]

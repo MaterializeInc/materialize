@@ -10,11 +10,9 @@
 use itertools::join;
 use std::collections::HashMap;
 use std::iter;
-use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::net::{SocketAddr, ToSocketAddrs};
 
 use failure::{bail, format_err, ResultExt};
-use futures::future::join_all;
 use itertools::Itertools;
 use url::Url;
 
@@ -33,7 +31,7 @@ use ore::future::MaybeFuture;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
+    AvroSchema, Connector, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
     ShowStatementFilter, Stage, Statement, Value,
 };
 
@@ -60,11 +58,6 @@ pub fn describe_statement(
         | Statement::StartTransaction { .. }
         | Statement::Rollback { .. }
         | Statement::Commit { .. } => (None, vec![]),
-
-        Statement::CreateSources { .. } => (
-            Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
-            vec![],
-        ),
 
         Statement::Explain { stage, .. } => (
             Some(RelationDesc::empty().add_column(
@@ -204,7 +197,7 @@ fn handle_sync_statement(
     scx: &StatementContext,
 ) -> Result<Plan, failure::Error> {
     match stmt {
-        Statement::CreateSource { .. } | Statement::CreateSources { .. } => unreachable!(),
+        Statement::CreateSource { .. } => unreachable!(),
         Statement::Tail { name } => handle_tail(scx, name),
         Statement::StartTransaction { .. } => handle_start_transaction(),
         Statement::Commit { .. } => handle_commit_transaction(),
@@ -271,7 +264,7 @@ pub fn handle_statement(
 ) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
     let scx = &StatementContext { catalog, session };
     match stmt {
-        Statement::CreateSource { .. } | Statement::CreateSources { .. } => {
+        Statement::CreateSource { .. } => {
             MaybeFuture::Future(Box::pin(handle_create_dataflow(stmt, session.database())))
         }
         _ => handle_sync_statement(stmt, params, &scx).into(),
@@ -614,41 +607,56 @@ fn handle_show_create_source(
 }
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let (name, from, url, with_options, if_not_exists) = match stmt {
+    let (name, from, connector, format, if_not_exists) = match stmt {
         Statement::CreateSink {
             name,
             from,
-            url,
-            with_options,
+            connector,
+            format,
             if_not_exists,
-        } => (name, from, url, with_options, if_not_exists),
+        } => (name, from, connector, format, if_not_exists),
         _ => unreachable!(),
     };
-    if with_options.is_empty() {
-        bail!("Sink requires a `schema_registry_url` WITH option.")
-    } else if with_options.len() > 1 {
-        bail!("WITH options other than `schema_registry_url` are not yet supported")
-    }
 
-    let with_op = &with_options[0];
-    let schema_registry_url = match with_op.name.value.as_str() {
-        "schema_registry_url" => match &with_op.value {
-            Value::SingleQuotedString(s) => s,
-            _ => bail!("Schema registry URL must be a string, e.g. 'kafka://localhost/{schema}'."),
-        },
-        _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
+    let (mut broker, topic) = match connector {
+        Connector::File { .. } => bail!("file sinks are not yet supported"),
+        Connector::Kafka {
+            broker,
+            topic,
+            with_options,
+        } => {
+            if !with_options.is_empty() {
+                bail!(
+                    "Unexpected WITH options: {}",
+                    join(with_options.into_iter().map(|o| o.name.value), ",")
+                )
+            }
+            (broker, topic)
+        }
+    };
+
+    let schema_registry_url = match format {
+        Format::Avro(AvroSchema::CsrUrl(url)) => url,
+        _ => bail!("only confluent schema registry avro sinks are supported"),
+    };
+
+    if !broker.contains(':') {
+        broker += ":9092";
+    }
+    let addr = match broker.to_socket_addrs()?.next() {
+        Some(addr) => addr,
+        None => bail!("unable to resolve kafka broker to any addresses"),
     };
 
     let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.resolve_name(from)?;
     let catalog_entry = scx.catalog.get(&from)?;
-    let (addr, topic) = parse_kafka_topic_url(&url)?;
 
     let relation_desc = catalog_entry.desc()?.clone();
     let schema = interchange::avro::encode_schema(&relation_desc)?;
 
     // Send new schema to registry, get back the schema id for the sink
-    let url: Url = schema_registry_url.clone().parse().unwrap();
+    let url: Url = schema_registry_url.parse().unwrap();
     let ccsr_client = ccsr::Client::new(url);
     let schema_id = ccsr_client.publish_schema(&topic, &schema.to_string())?;
 
@@ -810,52 +818,73 @@ async fn handle_create_dataflow(
     match stmt {
         Statement::CreateSource {
             name,
-            url,
+            connector,
             format,
             envelope,
-            with_options,
             if_not_exists,
         } => {
-            let mut with_options: HashMap<_, _> = with_options
-                .into_iter()
-                .map(|op| (op.name.value.to_ascii_lowercase(), op.value))
-                .collect();
-            let source_url = parse_source_url(&url)?;
             let envelope = match envelope {
                 sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
                 sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
             };
 
-            let result = match source_url {
-                SourceUrl::Kafka(KafkaUrl { addr, topic }) => {
+            let result = match connector {
+                Connector::Kafka {
+                    mut broker,
+                    topic,
+                    with_options,
+                } => {
+                    let mut with_options: HashMap<_, _> = with_options
+                        .into_iter()
+                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value))
+                        .collect();
                     let consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
                         Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
-                    if let Some(topic) = topic {
-                        let name = allocate_name(
-                            current_database.clone(),
-                            normalize::object_name(name.clone())?,
-                        );
-                        let source =
-                            build_kafka_source(addr, topic, format.clone(), envelope, consistency)
-                                .await?;
-                        Ok(Plan::CreateSource {
-                            name,
-                            source,
-                            if_not_exists,
-                        })
-                    } else {
-                        bail!("source URL missing topic path: {}", url);
+                    if !with_options.is_empty() {
+                        bail!(
+                            "Unexpected WITH options: {}",
+                            join(with_options.keys(), ",")
+                        )
                     }
+                    let name = allocate_name(
+                        current_database.clone(),
+                        normalize::object_name(name.clone())?,
+                    );
+                    if !broker.contains(':') {
+                        broker += ":9092";
+                    }
+                    let addr = match broker.to_socket_addrs()?.next() {
+                        Some(addr) => addr,
+                        None => bail!("unable to resolve kafka broker to any addresses"),
+                    };
+                    let source =
+                        build_kafka_source(addr, topic, format.clone(), envelope, consistency)
+                            .await?;
+                    Ok(Plan::CreateSource {
+                        name,
+                        source,
+                        if_not_exists,
+                    })
                 }
-                SourceUrl::Path(path) => {
+                Connector::File { path, with_options } => {
+                    let mut with_options: HashMap<_, _> = with_options
+                        .into_iter()
+                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value))
+                        .collect();
                     let tail = match with_options.remove("tail") {
                         None => false,
                         Some(Value::Boolean(b)) => b,
                         Some(_) => bail!("tail must be a boolean"),
                     };
+                    if !with_options.is_empty() {
+                        bail!(
+                            "Unexpected WITH options: {}",
+                            join(with_options.keys(), ",")
+                        )
+                    }
                     let (encoding, desc) = match format {
                         Format::Bytes => (
                             DataEncoding::Bytes,
@@ -948,7 +977,7 @@ async fn handle_create_dataflow(
                     let source = Source {
                         connector: SourceConnector {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
-                                path,
+                                path: path.into(),
                                 tail,
                             }),
                             encoding,
@@ -968,101 +997,7 @@ async fn handle_create_dataflow(
                     })
                 }
             };
-            if !with_options.is_empty() {
-                bail!(
-                    "Unexpected WITH options: {}",
-                    join(with_options.keys(), ",")
-                )
-            }
             result
-        }
-        Statement::CreateSources {
-            like,
-            url,
-            schema_registry,
-            with_options,
-        } => {
-            let mut with_options: HashMap<_, _> = with_options
-                .into_iter()
-                .map(|op| (op.name.value.to_ascii_lowercase(), op.value))
-                .collect();
-            let schema_registry_url: Url = schema_registry.parse()?;
-            let ccsr_client = ccsr::AsyncClient::new(schema_registry_url);
-            let mut subjects = ccsr_client.list_subjects().await?;
-            if let Some(value) = like {
-                let like_regex = build_like_regex_from_string(&value)?;
-                subjects.retain(|a| like_regex.is_match(a))
-            }
-            let consistency = match with_options.remove("consistency") {
-                None => Consistency::RealTime,
-                Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
-                Some(_) => bail!("consistency must be a string"),
-            };
-            let names = subjects.iter().filter_map(|s| {
-                let parts: Vec<&str> = s.rsplitn(2, '-').collect();
-                if parts.len() == 2 && parts[0] == "value" {
-                    let topic_name = parts[1];
-                    let sql_name = allocate_name(
-                        current_database.clone(),
-                        PartialName {
-                            database: None,
-                            schema: None,
-                            item: sanitize_kafka_topic_name(parts[1]),
-                        },
-                    );
-                    Some((topic_name, sql_name))
-                } else {
-                    None
-                }
-            });
-            let url: Url = url.parse()?;
-            let (addr, topic) = parse_kafka_url(&url)?;
-            if let Some(s) = topic {
-                bail!(
-                    "CREATE SOURCES statement should not take a topic path: {}",
-                    s
-                );
-            }
-
-            if !with_options.is_empty() {
-                bail!(
-                    "Unexpected WITH options: {}",
-                    join(with_options.keys(), ",")
-                )
-            }
-
-            async fn make_source(
-                topic_name: &str,
-                sql_name: FullName,
-                addr: SocketAddr,
-                schema_registry: &str,
-                consistency: Consistency,
-            ) -> Result<(FullName, Source), failure::Error> {
-                Ok((
-                    sql_name,
-                    build_kafka_avro_source(
-                        AvroSchema::CsrUrl(schema_registry.to_owned()),
-                        addr,
-                        topic_name.to_owned(),
-                        consistency,
-                    )
-                    .await?,
-                ))
-            }
-            let sources = join_all(names.map(|(topic_name, sql_name)| {
-                make_source(
-                    topic_name,
-                    sql_name,
-                    addr,
-                    &*schema_registry,
-                    consistency.clone(),
-                )
-            }))
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>();
-            let sources = sources?;
-            Ok(Plan::CreateSources(sources))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
@@ -1439,91 +1374,6 @@ fn build_kafka_protobuf_source(
             })
         })
     })
-}
-
-struct KafkaUrl {
-    addr: SocketAddr,
-    topic: Option<String>,
-}
-
-enum SourceUrl {
-    Kafka(KafkaUrl),
-    Path(PathBuf),
-}
-
-fn parse_source_url(url: &str) -> Result<SourceUrl, failure::Error> {
-    let url: Url = url.parse()?;
-    let url = match url.scheme().to_lowercase().as_str() {
-        "kafka" => {
-            let (addr, topic) = parse_kafka_url(&url)?;
-            SourceUrl::Kafka(KafkaUrl { addr, topic })
-        }
-        "file" => {
-            if url.has_host() {
-                bail!(
-                    "No hostname allowed in file URL: {}. Found: {}",
-                    url,
-                    url.host_str().unwrap()
-                );
-            }
-            let path: PathBuf = url.path().parse()?;
-            SourceUrl::Path(path)
-        }
-        bad => bail!("Unrecognized source URL schema: {}", bad),
-    };
-    Ok(url)
-}
-
-fn parse_kafka_url(url: &Url) -> Result<(SocketAddr, Option<String>), failure::Error> {
-    if url.scheme() != "kafka" {
-        bail!("only kafka:// sources are supported: {}", url);
-    } else if !url.has_host() {
-        bail!("source URL missing hostname: {}", url)
-    }
-    let topic = match url.path_segments() {
-        None => None,
-        Some(segments) => {
-            let segments: Vec<_> = segments.collect();
-            if segments.is_empty() {
-                None
-            } else if segments.len() != 1 {
-                bail!("source URL should have at most one path segment: {}", url);
-            } else if segments[0].is_empty() {
-                None
-            } else {
-                Some(segments[0].to_owned())
-            }
-        }
-    };
-    // We already checked for kafka scheme above, so it's safe to assume port
-    // 9092.
-    let addr = url.socket_addrs(|| Some(9092))?[0];
-    Ok((addr, topic))
-}
-
-fn parse_kafka_topic_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
-    let url: Url = url.parse()?;
-    let (addr, topic) = parse_kafka_url(&url)?;
-    if let Some(topic) = topic {
-        Ok((addr, topic))
-    } else {
-        bail!("source URL missing topic path: {}", url)
-    }
-}
-
-fn sanitize_kafka_topic_name(topic_name: &str) -> String {
-    // Kafka topics can contain alphanumerics, dots (.), underscores (_), and
-    // hyphens (-), and most Kafka topics contain at least one of these special
-    // characters for namespacing, as in "mysql.tbl". Since non-quoted SQL
-    // identifiers cannot contain dots or hyphens, if we were to use the topic
-    // name directly as the name of the source, it would be impossible to refer
-    // to in SQL without quoting. So we replace hyphens and dots with
-    // underscores to make a valid SQL identifier.
-    //
-    // This scheme has the potential for collisions, but if you're creating
-    // Kafka topics like "a.b", "a_b", and "a-b", well... that's why we let you
-    // manually create sources with custom names using CREATE SOURCE.
-    topic_name.replace("-", "_").replace(".", "_")
 }
 
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.

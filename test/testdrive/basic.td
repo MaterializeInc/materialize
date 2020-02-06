@@ -34,17 +34,24 @@ $ set schema={
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": null}
 
-> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
 
-! CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
-  USING SCHEMA FILE 'data-schema.json' ENVELOPE DEBEZIUM
+! CREATE SOURCE data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA FILE 'data-schema.json'
+  ENVELOPE DEBEZIUM
 No such file or directory
 
 $ file-write path=data-schema.json
 \${schema}
 
-> CREATE SOURCE data2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
-  USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json' ENVELOPE DEBEZIUM
+> CREATE SOURCE data2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
+  ENVELOPE DEBEZIUM
 
 > SHOW CREATE SOURCE data
 Source   Create Source
@@ -203,7 +210,9 @@ b  max
 Cannot construct query out of existing materialized views
 
 # can create sink from unmaterialized view
-> CREATE SINK not_mat_sink2 FROM data_view INTO 'kafka://${testdrive.kafka-addr}/data-view2-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+> CREATE SINK not_mat_sink2 FROM data_view
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-view2-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # can create materialized view from unmaterialized view
 > CREATE MATERIALIZED VIEW test5 AS
@@ -296,10 +305,14 @@ b  c
 # that depend on views, as the code paths are different.
 
 # Depends on source.
-> CREATE SINK source_sink FROM data INTO 'kafka://${testdrive.kafka-addr}/data-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+> CREATE SINK source_sink FROM data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # Depends on view.
-> CREATE SINK view_sink FROM test5 INTO 'kafka://${testdrive.kafka-addr}/test1-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+> CREATE SINK view_sink FROM test5
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'test1-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > DROP SINK source_sink
 

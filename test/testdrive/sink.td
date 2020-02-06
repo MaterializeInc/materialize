@@ -34,7 +34,10 @@ $ set schema={
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": null}
 
-> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE data FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 {"before": null, "after": {"a": 1, "b": 1}}
@@ -45,7 +48,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> CREATE SINK data_sink FROM data INTO 'kafka://${testdrive.kafka-addr}/data-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
+> CREATE SINK data_sink FROM data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro topic=data-sink schema=${schema}
 {"before": null, "after": {"a": 1, "b": 1}}

@@ -1436,8 +1436,6 @@ impl Parser {
             self.parse_create_view()
         } else if self.parse_keyword("SOURCE") {
             self.parse_create_source()
-        } else if self.parse_keyword("SOURCES") {
-            self.parse_create_sources()
         } else if self.parse_keyword("SINK") {
             self.parse_create_sink()
         } else if self.parse_keyword("INDEX") {
@@ -1556,47 +1554,21 @@ impl Parser {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
-        let url = self.parse_literal_string()?;
+        let connector = self.parse_connector()?;
         let format = self.parse_format()?;
         let envelope = if self.parse_keyword("ENVELOPE") {
             self.parse_envelope()?
         } else {
             Default::default()
         };
-        let with_options = self.parse_with_options()?;
 
         Ok(Statement::CreateSource {
             name,
-            url,
+            connector,
             format,
             envelope,
-            with_options,
             if_not_exists,
         })
-    }
-
-    pub fn parse_create_sources(&mut self) -> Result<Statement, ParserError> {
-        // Need to get the LIKE if it exists, otherwise keep moving.
-        let like = self.parse_like_filter()?;
-        self.expect_keyword("FROM")?;
-        let url = self.parse_literal_string()?;
-        self.expect_keywords(&["USING", "SCHEMA", "REGISTRY"])?;
-        let schema_registry = self.parse_literal_string()?;
-        let with_options = self.parse_with_options()?;
-        Ok(Statement::CreateSources {
-            like,
-            url,
-            schema_registry,
-            with_options,
-        })
-    }
-
-    fn parse_like_filter(&mut self) -> Result<Option<String>, ParserError> {
-        if self.parse_keyword("LIKE") {
-            Ok(Some(self.parse_literal_string()?))
-        } else {
-            Ok(None)
-        }
     }
 
     pub fn parse_create_sink(&mut self) -> Result<Statement, ParserError> {
@@ -1605,15 +1577,38 @@ impl Parser {
         self.expect_keyword("FROM")?;
         let from = self.parse_object_name()?;
         self.expect_keyword("INTO")?;
-        let url = self.parse_literal_string()?;
-        let with_options = self.parse_with_options()?;
+        let connector = self.parse_connector()?;
+        let format = self.parse_format()?;
         Ok(Statement::CreateSink {
             name,
             from,
-            url,
-            with_options,
+            connector,
+            format,
             if_not_exists,
         })
+    }
+
+    pub fn parse_connector(&mut self) -> Result<Connector, ParserError> {
+        match self.expect_one_of_keywords(&["FILE", "KAFKA"])? {
+            "FILE" => {
+                let path = self.parse_literal_string()?;
+                let with_options = self.parse_with_options()?;
+                Ok(Connector::File { path, with_options })
+            }
+            "KAFKA" => {
+                self.expect_keyword("BROKER")?;
+                let broker = self.parse_literal_string()?;
+                self.expect_keyword("TOPIC")?;
+                let topic = self.parse_literal_string()?;
+                let with_options = self.parse_with_options()?;
+                Ok(Connector::Kafka {
+                    broker,
+                    topic,
+                    with_options,
+                })
+            }
+            _ => unreachable!(),
+        }
     }
 
     pub fn parse_create_view(&mut self) -> Result<Statement, ParserError> {

@@ -98,9 +98,11 @@ materialize shell.
 
 ```shell session
 $ docker-compose run cli
-CREATE SOURCES LIKE 'mysql.tpcch.%' FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';
+CREATE SOURCE orderline
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
 
-CREATE VIEW q01 as SELECT
+CREATE MATERIALIZED VIEW q01 as SELECT
         ol_number,
         sum(ol_quantity) as sum_qty,
         sum(ol_amount) as sum_amount,
@@ -108,7 +110,7 @@ CREATE VIEW q01 as SELECT
         avg(ol_amount) as avg_amount,
         count(*) as count_order
 FROM
-        mysql_tpcch_orderline
+        orderline
 WHERE
         ol_delivery_d > date '1998-12-01'
 GROUP BY

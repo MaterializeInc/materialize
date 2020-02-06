@@ -162,7 +162,9 @@ have Materialize ingest the TPCH `lineitem` table.
     ```
 
     ```sql
-    CREATE SOURCE lineitem FROM 'kafka://localhost:9092/tpch.tpch.lineitem' USING SCHEMA REGISTRY 'http://localhost:8081';
+    CREATE SOURCE lineitem
+    FROM KAFKA BROKER 'localhost:9092' TOPIC 'tpch.tpch.lineitem'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
     CREATE MATERIALIZED VIEW count AS SELECT COUNT(*) FROM lineitem;
     SELECT * FROM count;
     SELECT * FROM count;

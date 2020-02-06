@@ -1,5 +1,5 @@
 create_source ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name 'FROM' source_url
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'FROM' connector_spec
   'FORMAT' format_spec
   ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?

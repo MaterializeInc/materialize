@@ -74,5 +74,5 @@ For something slightly more involved, check out `materialize/demo/chbench`.
 
 - [What is Materialize?](../overview/what-is-materialize)
 - [Architecture documentation](../overview/architecture)
-- [`CREATE SOURCES`](../sql/create-sources)
-- [`CREATE VIEWS`](../sql/create-views)
+- [`CREATE SOURCE`](../sql/create-source)
+- [`CREATE VIEW`](../sql/create-view)

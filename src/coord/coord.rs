@@ -641,31 +641,6 @@ where
                 }
             }
 
-            Plan::CreateSources(mut sources) => {
-                sources.retain(|(name, _)| self.catalog.get(name).is_err());
-                let mut source_ids = vec![];
-                let mut ops = vec![];
-                for (name, source) in &sources {
-                    let id = self.catalog.allocate_id();
-                    source_ids.push(id);
-                    ops.push(catalog::Op::CreateItem {
-                        id,
-                        name: name.clone(),
-                        item: CatalogItem::Source(source.clone()),
-                    });
-                }
-                self.catalog_transact(ops)?;
-                for (source_id, (_, source)) in source_ids.into_iter().zip_eq(&sources) {
-                    self.sources.insert(source_id, source.clone());
-                }
-                Ok(send_immediate_rows(
-                    sources
-                        .iter()
-                        .map(|s| Row::pack(&[Datum::String(&s.0.to_string())]))
-                        .collect(),
-                ))
-            }
-
             Plan::CreateSink {
                 name,
                 sink,

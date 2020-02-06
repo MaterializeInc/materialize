@@ -66,7 +66,7 @@ of queries that obey the spacing rules
 
 ```sql
 CREATE TABLE t (a varchar(40));
-CREATE SOURCE test FROM 'file:///test.csv' WITH (format = 'csv', columns = 5);
+CREATE SOURCE test FROM FILE 'test.csv' WITH (tail = true) FORMAT BYTES;
 SELECT coalesce(1, NULL, 2);
 SELECT CAST (1 AS text); -- note the space after CAST
 SELECT (1 + 2) - (7 * 4);
@@ -76,7 +76,7 @@ and several queries that don't:
 
 ```sql
 CREATE TABLE t (a varchar (40));
-CREATE SOURCE test FROM 'file:///test.csv' WITH(format='csv', columns=5);
+CREATE SOURCE test FROM FILE 'test.csv' WITH(tail=true);
 SELECT coalesce (1, NULL,2);
 SELECT CAST(1 AS text);
 SELECT 1+2;

@@ -69,14 +69,20 @@ $ set plurals-schema={
     ]
   }
 
-> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}' FORMAT AVRO
-  USING SCHEMA '${names-schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE names FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-names-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${names-schema}'
+  ENVELOPE DEBEZIUM
 
-> CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/testdrive-mods-${testdrive.seed}' FORMAT AVRO
-  USING SCHEMA '${mods-schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE mods FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mods-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${mods-schema}'
+  ENVELOPE DEBEZIUM
 
-> CREATE SOURCE plurals FROM 'kafka://${testdrive.kafka-addr}/testdrive-plurals-${testdrive.seed}' FORMAT AVRO
-  USING SCHEMA '${plurals-schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE plurals FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-plurals-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${plurals-schema}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW names_view as SELECT * from names;
 

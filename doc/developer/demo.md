@@ -86,7 +86,9 @@ Open another terminal session and start the Materialize shell:
 ```sql
 $ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
-> CREATE SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA REGISTRY 'http://localhost:8081';
+> CREATE SOURCE quotes
+  FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 > SHOW COLUMNS FROM quotes;
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
 > SELECT * FROM business_insights;
@@ -141,7 +143,9 @@ Then, in another session, open the Materialize shell:
 ```sql
 $ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
-> CREATE SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA REGISTRY 'http://localhost:8081';
+> CREATE SOURCE aggdata
+  FROM KAFKA BROKER 'localhost' TOPIC 'aggdata'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
 > SELECT * FROM aggtest;
 ```
@@ -235,8 +239,12 @@ Then, in another session, open the Materialize shell:
 ```sql
 $ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
-> CREATE SOURCE src1 FROM 'kafka://localhost/src1' USING SCHEMA REGISTRY 'http://localhost:8081';
-> CREATE SOURCE src2 FROM 'kafka://localhost/src2' USING SCHEMA REGISTRY 'http://localhost:8081';
+> CREATE SOURCE src1 \
+  FROM KAFKA BROKER 'localhost' TOPIC 'src1'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+> CREATE SOURCE src2
+  FROM KAFKA BROKER 'localhost' TOPIC 'src2'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE MATERIALIZED VIEW jointest AS SELECT a, b, d FROM src1 JOIN src2 ON c = b;
 > SELECT * FROM jointest;
 ```

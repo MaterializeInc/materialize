@@ -6,8 +6,10 @@
 # Verify the error message is useful when a schema is not present in the
 # registry.
 
-! CREATE SOURCE noexist FROM 'kafka://${testdrive.kafka-addr}/testdrive-noexist-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+! CREATE SOURCE noexist
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-noexist-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 fetching latest schema for subject 'testdrive-noexist-${testdrive.seed}-value' from registry: subject not found
 
 $ set schema_v1={
@@ -59,8 +61,10 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp
 $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v1 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+> CREATE SOURCE data_v1
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW data_v1_view as SELECT * from data_v1
 
@@ -75,8 +79,10 @@ $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp
 $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp=4
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+> CREATE SOURCE data_v2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW data_v2_view as SELECT * from data_v2
 
@@ -91,41 +97,6 @@ a b
 ----
 1 42
 2 -1
-
-$ kafka-ingest format=avro topic=db.my_topic schema=${schema_v2} publish=true timestamp=1
-{"before": null, "after": null}
-
-# Hyphens and underscores in this topic should automatically be converted to
-# underscores so that the topic is easier to name from SQL.
-$ kafka-ingest format=avro topic=db.sp_ec-ia.lc-ch._ars schema=${schema_v2} publish=true timestamp=1
-{"before": null, "after": null}
-
-> CREATE SOURCES LIKE 'testdrive-db.%' FROM 'kafka://${testdrive.kafka-addr}/'
-  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Topic
----
-materialize.public.testdrive_db_my_topic_${testdrive.seed}
-materialize.public.testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
-
-# Verify that the sources created by CREATE SOURCES are usable from SQL without
-# quoting their names.
-> CREATE MATERIALIZED VIEW create_sources as SELECT * FROM testdrive_db_my_topic_${testdrive.seed}
-  UNION
-  SELECT * FROM testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
-
-> SELECT * FROM create_sources
-
-> CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
-  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Topic
----
-materialize.public.testdrive_data_${testdrive.seed}
-
-> CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
-  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Topic
----
-
 
 $ set key_schema_missing={
     "type": "record",
@@ -159,8 +130,10 @@ $ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${k
   publish=true timestamp=2
 {"before": null, "after": null}
 
-! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-missing-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM;
+! CREATE SOURCE data_v3
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-missing-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 Value schema missing primary key column: b
 
 $ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
@@ -171,8 +144,10 @@ $ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=
   publish=true timestamp=4
 {"before": null, "after": null}
 
-! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-mismatched-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM;
+! CREATE SOURCE data_v3
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mismatched-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 key and value column types do not match
 
 $ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
@@ -183,8 +158,10 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key
   publish=true timestamp=6
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+> CREATE SOURCE data_v3
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW data_v3_view as SELECT * from data_v3
 
