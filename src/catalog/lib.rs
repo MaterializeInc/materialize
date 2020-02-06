@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
-use failure::bail;
+use failure::{bail, ResultExt};
 use lazy_static::lazy_static;
 use log::{info, trace};
 use serde::{Deserialize, Serialize};
@@ -253,7 +253,8 @@ impl Catalog {
         f(&mut catalog);
 
         for (id, name, def) in catalog.storage.load_items()? {
-            let item = S::deserialize(&catalog, def);
+            let item = S::deserialize(&catalog, def)
+                .with_context(|e| format!("corrupt catalog: failed to deserialize item: {}", e))?;
             for use_id in item.uses() {
                 if catalog.by_id.get(&use_id).is_none() && use_id.is_system() {
                     // TODO(benesch): one day not all logging views will be
@@ -788,7 +789,7 @@ impl<'a> DatabaseResolver<'a> {
 
 pub trait CatalogItemSerializer {
     fn serialize(item: &CatalogItem) -> Vec<u8>;
-    fn deserialize(catalog: &Catalog, bytes: Vec<u8>) -> CatalogItem;
+    fn deserialize(catalog: &Catalog, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error>;
 }
 
 #[cfg(feature = "bincode")]
@@ -800,7 +801,7 @@ impl CatalogItemSerializer for BincodeSerializer {
         bincode::serialize(item).unwrap()
     }
 
-    fn deserialize(_: &Catalog, bytes: Vec<u8>) -> CatalogItem {
-        bincode::deserialize(&bytes).unwrap()
+    fn deserialize(_: &Catalog, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error> {
+        Ok(bincode::deserialize(&bytes)?)
     }
 }

@@ -27,8 +27,10 @@ use itertools::Itertools;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
+use crate::timestamp::{TimestampChannel, TimestampMessage};
+use crate::{Command, ExecuteResponse, Response, StartupMessage};
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem, CatalogItemSerializer};
+use catalog::{Catalog, CatalogItem};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -41,14 +43,11 @@ use expr::{
     EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr,
     SourceInstanceId,
 };
+use futures::Stream;
 use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
-
-use crate::timestamp::{TimestampChannel, TimestampMessage};
-use crate::{Command, ExecuteResponse, Response, StartupMessage};
-use futures::Stream;
 
 type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 
@@ -130,7 +129,7 @@ where
 
         let catalog_path = catalog_path.as_deref();
         let catalog = if let Some(logging_config) = config.logging {
-            Catalog::open::<JsonSerializer, _>(catalog_path, |catalog| {
+            Catalog::open::<catalog::BincodeSerializer, _>(catalog_path, |catalog| {
                 for log_src in logging_config.active_logs() {
                     catalog.insert_item(
                         log_src.id(),
@@ -222,7 +221,7 @@ where
                 }
             })?
         } else {
-            Catalog::open::<JsonSerializer, _>(catalog_path, |_| ())?
+            Catalog::open::<catalog::BincodeSerializer, _>(catalog_path, |_| ())?
         };
 
         let executor = config.executor;
@@ -1919,16 +1918,4 @@ fn index_sql(desc: &RelationDesc, keys: &[usize]) -> String {
                 .unwrap_or_else(|| i.to_string()))
             .join(", "),
     )
-}
-
-pub struct JsonSerializer;
-
-impl CatalogItemSerializer for JsonSerializer {
-    fn serialize(item: &CatalogItem) -> Vec<u8> {
-        serde_json::to_vec(item).unwrap()
-    }
-
-    fn deserialize(_catalog: &Catalog, bytes: Vec<u8>) -> CatalogItem {
-        serde_json::from_slice(&bytes).unwrap()
-    }
 }

@@ -454,6 +454,7 @@ dependencies = [
  "rdkafka",
  "repr",
  "rusqlite",
+ "serde",
  "serde_json",
  "sql",
  "symbiosis",

@@ -609,6 +609,7 @@ fn handle_show_create_source(
 }
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+    let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, from, connector, format, if_not_exists) = match stmt {
         Statement::CreateSink {
             name,
@@ -663,7 +664,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     let schema_id = ccsr_client.publish_schema(&topic, &schema.to_string())?;
 
     let sink = Sink {
-        create_sql: "TODO".into(),
+        create_sql,
         from: catalog_entry.id(),
         connector: SinkConnector::Kafka(KafkaSinkConnector {
             addr,
@@ -680,7 +681,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
 }
 
 fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let raw_sql = stmt.to_string();
+    let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, on_name, key_parts, if_not_exists) = match stmt {
         Statement::CreateIndex {
             name,
@@ -703,7 +704,7 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
             item: normalize::ident(name),
         },
         index: Index {
-            create_sql: raw_sql,
+            create_sql,
             on: catalog_entry.id(),
             keys,
         },
@@ -752,6 +753,7 @@ fn handle_create_view(
     mut stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
+    let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, columns, query, materialized, replace, with_options) = match &mut stmt {
         Statement::CreateView {
             name,
@@ -806,7 +808,7 @@ fn handle_create_view(
     Ok(Plan::CreateView {
         name,
         view: View {
-            create_sql: stmt.to_string(),
+            create_sql,
             expr: relation_expr,
             desc,
         },

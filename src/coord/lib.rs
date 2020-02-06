@@ -18,6 +18,7 @@
 
 mod command;
 mod coord;
+mod persistence;
 mod timestamp;
 
 pub use self::coord::{Config, Coordinator};
