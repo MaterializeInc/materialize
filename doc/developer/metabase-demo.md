@@ -35,7 +35,8 @@ with it. Enter a psql shell connected to Materialize:
 psql -h localhost -p 6875
 ```
 
-Set the database and create the sources:
+Next, you will need to set the database, create the sources,
+and materialize all of the sources into views:
 
 ```console
 $ set database to "materialize";
@@ -55,6 +56,19 @@ mysql_tpcch_region
 mysql_tpcch_stock
 mysql_tpcch_supplier
 mysql_tpcch_warehouse
+
+$ CREATE MATERIALIZED VIEW mysql_tpcch_customer_view AS SELECT * FROM mysql_tpcch_customer; 
+CREATE MATERIALIZED VIEW mysql_tpcch_district_view AS SELECT * FROM mysql_tpcch_district;
+CREATE MATERIALIZED VIEW mysql_tpcch_history_view AS SELECT * FROM mysql_tpcch_history; 
+CREATE MATERIALIZED VIEW mysql_tpcch_item_view AS SELECT * FROM mysql_tpcch_item; 
+CREATE MATERIALIZED VIEW mysql_tpcch_nation_view AS SELECT * FROM mysql_tpcch_nation; 
+CREATE MATERIALIZED VIEW mysql_tpcch_neworder_view AS SELECT * FROM mysql_tpcch_neworder;
+CREATE MATERIALIZED VIEW mysql_tpcch_order_view AS SELECT * FROM mysql_tpcch_order;
+CREATE MATERIALIZED VIEW mysql_tpcch_orderline_view AS SELECT * FROM mysql_tpcch_orderline;
+CREATE MATERIALIZED VIEW mysql_tpcch_region_view AS SELECT * FROM mysql_tpcch_region;
+CREATE MATERIALIZED VIEW mysql_tpcch_stock_view AS SELECT * FROM mysql_tpcch_stock;
+CREATE MATERIALIZED VIEW mysql_tpcch_supplier_view AS SELECT * FROM mysql_tpcch_supplier;
+CREATE MATERIALIZED VIEW mysql_tpcch_warehouse_view AS SELECT * FROM mysql_tpcch_warehouse;
 ```
 
 ### Connecting Metabase to Materialize
@@ -90,8 +104,8 @@ Metabase expects you to input data into three sets of fields:
     | ------------- | -------------:|
     | Name          | materialize   |
     | Host          | materialized  |
-    | Database      | materialize   |
     | Port          | 6875          |
+    | Database      | materialize   |
     | Database username      | default      |
     | Database password | default      |
 
@@ -147,15 +161,10 @@ the Metabase interactive SQL editor.
       ```sql
       SELECT * FROM orderline_count;
       ```
-    - For comparison, you can run the full query on a source once you
-      have materialized it. To do so:
+    - For comparison, you can run the full query on the Materialized
+      source by running::
       ```sql
-      CREATE MATERIALIZED VIEW orderline_view
-      AS SELECT * FROM mysql_tpcch_orderline;
-      ```
-      And then running the full query on the view:
-      ```sql
-      SELECT count(*) FROM orderline_view;
+      SELECT count(*) FROM mysql_tpcch_orderline_view;
       ```
 
 - Q01:
@@ -189,7 +198,7 @@ the Metabase interactive SQL editor.
             avg(ol_quantity) AS avg_qty,
             avg(ol_amount) AS avg_amount,
             count(*) AS count_order
-        FROM orderline_view
+        FROM mysql_tpcch_orderline_view
         WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
         GROUP BY ol_number
         ORDER BY ol_number;

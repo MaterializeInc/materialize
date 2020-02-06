@@ -24,7 +24,7 @@ services:
     ports:
      - *materialized
     init: true
-    command: -w1 --timestamp-frequency=10ms
+    command: -w1 --timestamp-frequency=1ms
     environment:
       # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
       - MZ_LOG=pgwire=debug,info
@@ -149,7 +149,7 @@ services:
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
   # for Metabase to automatically load Materialize as a connection option.
   metabase:
-    image: metabase/metabase:v0.34.1
+    image: metabase/metabase:v0.34.2
     depends_on: [materialized]
     volumes:
       - ./metabase/materialize-driver.jar:/plugins/materialize-driver.jar
