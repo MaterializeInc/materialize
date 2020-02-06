@@ -2,4 +2,4 @@
 
 set -euo pipefail
 
-find . -name '*.cc' -o -name '*.h' | xargs clang-format -i
+find . \( -name '*.cc' -o -name '*.h' \) -print0 | xargs -0 clang-format -i
