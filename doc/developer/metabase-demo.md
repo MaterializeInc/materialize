@@ -57,18 +57,18 @@ mysql_tpcch_stock
 mysql_tpcch_supplier
 mysql_tpcch_warehouse
 
-$ CREATE MATERIALIZED VIEW mysql_tpcch_customer_view AS SELECT * FROM mysql_tpcch_customer;
-CREATE MATERIALIZED VIEW mysql_tpcch_district_view AS SELECT * FROM mysql_tpcch_district;
-CREATE MATERIALIZED VIEW mysql_tpcch_history_view AS SELECT * FROM mysql_tpcch_history;
-CREATE MATERIALIZED VIEW mysql_tpcch_item_view AS SELECT * FROM mysql_tpcch_item;
-CREATE MATERIALIZED VIEW mysql_tpcch_nation_view AS SELECT * FROM mysql_tpcch_nation;
-CREATE MATERIALIZED VIEW mysql_tpcch_neworder_view AS SELECT * FROM mysql_tpcch_neworder;
-CREATE MATERIALIZED VIEW mysql_tpcch_order_view AS SELECT * FROM mysql_tpcch_order;
-CREATE MATERIALIZED VIEW mysql_tpcch_orderline_view AS SELECT * FROM mysql_tpcch_orderline;
-CREATE MATERIALIZED VIEW mysql_tpcch_region_view AS SELECT * FROM mysql_tpcch_region;
-CREATE MATERIALIZED VIEW mysql_tpcch_stock_view AS SELECT * FROM mysql_tpcch_stock;
-CREATE MATERIALIZED VIEW mysql_tpcch_supplier_view AS SELECT * FROM mysql_tpcch_supplier;
-CREATE MATERIALIZED VIEW mysql_tpcch_warehouse_view AS SELECT * FROM mysql_tpcch_warehouse;
+$ CREATE MATERIALIZED VIEW tpcch_customer AS SELECT * FROM mysql_tpcch_customer;
+CREATE MATERIALIZED VIEW tpcch_district AS SELECT * FROM mysql_tpcch_district;
+CREATE MATERIALIZED VIEW tpcch_history AS SELECT * FROM mysql_tpcch_history;
+CREATE MATERIALIZED VIEW tpcch_item AS SELECT * FROM mysql_tpcch_item;
+CREATE MATERIALIZED VIEW tpcch_nation AS SELECT * FROM mysql_tpcch_nation;
+CREATE MATERIALIZED VIEW tpcch_neworder AS SELECT * FROM mysql_tpcch_neworder;
+CREATE MATERIALIZED VIEW tpcch_order AS SELECT * FROM mysql_tpcch_order;
+CREATE MATERIALIZED VIEW tpcch_orderline AS SELECT * FROM mysql_tpcch_orderline;
+CREATE MATERIALIZED VIEW tpcch_region AS SELECT * FROM mysql_tpcch_region;
+CREATE MATERIALIZED VIEW tpcch_stock AS SELECT * FROM mysql_tpcch_stock;
+CREATE MATERIALIZED VIEW tpcch_supplier AS SELECT * FROM mysql_tpcch_supplier;
+CREATE MATERIALIZED VIEW tpcch_warehouse AS SELECT * FROM mysql_tpcch_warehouse;
 ```
 
 ### Connecting Metabase to Materialize
@@ -164,7 +164,7 @@ the Metabase interactive SQL editor.
     - For comparison, you can run the full query on the Materialized
       source by running::
       ```sql
-      SELECT count(*) FROM mysql_tpcch_orderline_view;
+      SELECT count(*) FROM tpcch_orderline;
       ```
 
 - Q01:
@@ -189,7 +189,7 @@ the Metabase interactive SQL editor.
       ```
     - For comparison, you can run the full query on the underlying
       source once you have materialized it. To do so, run the following
-      query on the materialized `orderline_view` view:
+      query on the materialized `tpcch_orderline` view:
       ```sql
         SELECT
             ol_number,
@@ -198,7 +198,7 @@ the Metabase interactive SQL editor.
             avg(ol_quantity) AS avg_qty,
             avg(ol_amount) AS avg_amount,
             count(*) AS count_order
-        FROM mysql_tpcch_orderline_view
+        FROM tpcch_orderline
         WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
         GROUP BY ol_number
         ORDER BY ol_number;
