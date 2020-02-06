@@ -98,41 +98,6 @@ a b
 1 42
 2 -1
 
-$ kafka-ingest format=avro topic=db.my_topic schema=${schema_v2} publish=true timestamp=1
-{"before": null, "after": null}
-
-# Hyphens and underscores in this topic should automatically be converted to
-# underscores so that the topic is easier to name from SQL.
-$ kafka-ingest format=avro topic=db.sp_ec-ia.lc-ch._ars schema=${schema_v2} publish=true timestamp=1
-{"before": null, "after": null}
-
-> CREATE SOURCES LIKE 'testdrive-db.%' FROM 'kafka://${testdrive.kafka-addr}/'
-  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Topic
----
-materialize.public.testdrive_db_my_topic_${testdrive.seed}
-materialize.public.testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
-
-# Verify that the sources created by CREATE SOURCES are usable from SQL without
-# quoting their names.
-> CREATE MATERIALIZED VIEW create_sources as SELECT * FROM testdrive_db_my_topic_${testdrive.seed}
-  UNION
-  SELECT * FROM testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
-
-> SELECT * FROM create_sources
-
-> CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
-  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Topic
----
-materialize.public.testdrive_data_${testdrive.seed}
-
-> CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
-  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Topic
----
-
-
 $ set key_schema_missing={
     "type": "record",
     "name": "Key",

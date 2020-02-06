@@ -692,13 +692,6 @@ pub enum Statement {
         envelope: Envelope,
         if_not_exists: bool,
     },
-    /// `CREATE SOURCES`
-    CreateSources {
-        like: Option<String>,
-        url: String,
-        schema_registry: String,
-        with_options: Vec<SqlOption>,
-    },
     /// `CREATE SINK`
     CreateSink {
         name: ObjectName,
@@ -947,27 +940,6 @@ impl fmt::Display for Statement {
                 write!(f, " FORMAT {}", format)?;
                 if *envelope != Default::default() {
                     write!(f, " ENVELOPE {}", envelope)?;
-                }
-                Ok(())
-            }
-            Statement::CreateSources {
-                like,
-                url,
-                schema_registry,
-                with_options,
-            } => {
-                write!(f, "CREATE SOURCES ")?;
-                if let Some(like) = like {
-                    write!(f, "LIKE '{}' ", value::escape_single_quote_string(like),)?;
-                }
-                write!(
-                    f,
-                    "FROM {} USING SCHEMA REGISTRY {}",
-                    Value::SingleQuotedString(url.clone()),
-                    Value::SingleQuotedString(schema_registry.clone()),
-                )?;
-                if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }
                 Ok(())
             }

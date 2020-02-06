@@ -1,6 +1,6 @@
 ---
-title: "CREATE SOURCES"
-description: "`CREATE SOURCES` connects Materialize to Kafka, and defines the data coming from Kafka using a schema registry."
+title: "CREATE SOURCE"
+description: "`CREATE SOURCE` connects Materialize to an external data source."
 menu:
   main:
     parent: 'sql'
@@ -8,7 +8,7 @@ aliases:
     - /docs/sql/create-source
 ---
 
-`CREATE SOURCES` connects Materialize to some data source, and lets you interact
+`CREATE SOURCE` connects Materialize to some data source, and lets you interact
 with its data as if it were in a SQL table.
 
 ## Conceptual framework
@@ -52,20 +52,7 @@ log file, in one of two ways:
 
 ## Syntax
 
-### Create multiple sources
-
-`CREATE SOURCES` can only be used to create streaming sources.
-
-{{< diagram "create-sources.html" >}}
-
-Field | Use
-------|-----
-**LIKE** _schema&lowbar;expr_ | If using a Confluent schema registry, create sources from all Kafka sources that match _schema&lowbar;expr_. If not used, Materialize creates sources for all topics published at _kafka&lowbar;src_.<br/><br/>The name for all sources is the name of the table that originated from within your database.
-**FROM** _kafka&lowbar;src_ | The Kafka source you want to use (begins with `kafka://`)
-**REGISTRY** _registry&lowbar;src_ | Use the Confluent schema registry at _registry&lowbar;src_ to define the structure of the Kafka source.
-_avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/spec.html) for the topic.
-
-### Create single source
+### Create source
 
 `CREATE SOURCE` can be used to create streaming or file sources.
 
@@ -218,16 +205,15 @@ processing unstructured log files.
 ### Using a Confluent schema registry
 
 ```sql
-CREATE SOURCES
-LIKE 'mysql.simple.%'
-FROM 'kafka://kafka:9092'
-USING SCHEMA REGISTRY 'http://schema-registry:8081';
+CREATE SOURCE ccsr_topic
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'topic'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
 ```
 
 ### Manually defining Avro schema
 
 ```sql
-CREATE SOURCE 'mysql.simple.user'
+CREATE SOURCE user
 FROM KAFKA BROKER 'kafka:9092' TOPIC 'user'
 FORMAT AVRO
 USING SCHEMA '{

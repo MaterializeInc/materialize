@@ -1436,8 +1436,6 @@ impl Parser {
             self.parse_create_view()
         } else if self.parse_keyword("SOURCE") {
             self.parse_create_source()
-        } else if self.parse_keyword("SOURCES") {
-            self.parse_create_sources()
         } else if self.parse_keyword("SINK") {
             self.parse_create_sink()
         } else if self.parse_keyword("INDEX") {
@@ -1571,30 +1569,6 @@ impl Parser {
             envelope,
             if_not_exists,
         })
-    }
-
-    pub fn parse_create_sources(&mut self) -> Result<Statement, ParserError> {
-        // Need to get the LIKE if it exists, otherwise keep moving.
-        let like = self.parse_like_filter()?;
-        self.expect_keyword("FROM")?;
-        let url = self.parse_literal_string()?;
-        self.expect_keywords(&["USING", "SCHEMA", "REGISTRY"])?;
-        let schema_registry = self.parse_literal_string()?;
-        let with_options = self.parse_with_options()?;
-        Ok(Statement::CreateSources {
-            like,
-            url,
-            schema_registry,
-            with_options,
-        })
-    }
-
-    fn parse_like_filter(&mut self) -> Result<Option<String>, ParserError> {
-        if self.parse_keyword("LIKE") {
-            Ok(Some(self.parse_literal_string()?))
-        } else {
-            Ok(None)
-        }
     }
 
     pub fn parse_create_sink(&mut self) -> Result<Statement, ParserError> {

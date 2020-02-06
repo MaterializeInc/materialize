@@ -55,7 +55,6 @@ pub enum Plan {
         source: Source,
         if_not_exists: bool,
     },
-    CreateSources(Vec<(FullName, Source)>),
     CreateSink {
         name: FullName,
         sink: Sink,

@@ -93,4 +93,4 @@ and then increment the `region_sum` field with those results.
 ## Related pages
 
 - [`SELECT`](../select)
-- [`CREATE SOURCES`](../create-sources)
+- [`CREATE SOURCE`](../create-source)

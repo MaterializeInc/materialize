@@ -47,7 +47,7 @@ Broadly, there are three classes of statements in Materialize:
 
 ### Creating sources
 
-When Materialize receives a `CREATE SOURCES...` statement, it connects to some
+When Materialize receives a `CREATE SOURCE...` statement, it connects to some
 destination to read data. In the case of streaming sources, it attempts to
 connect to a Kafka stream, which it plumbs into its local instance of
 Differential. You can find more information about how that works in the
@@ -145,7 +145,7 @@ Implicit in this design are a few key points:
 Check out:
 
 - [Get started](../../get-started)
-- [`CREATE SOURCES`](../../sql/create-sources)
+- [`CREATE SOURCE`](../../sql/create-source)
 
 [1]:
 https://paper.dropbox.com/doc/Materialize-Product--AbHSqqXlN5YNKHiYEXm3EKyNAg-eMbfh2QTOCPrU7drExDCm

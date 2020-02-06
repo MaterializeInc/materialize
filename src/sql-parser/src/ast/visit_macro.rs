@@ -396,16 +396,6 @@ macro_rules! make_visitor {
                 visit_schema(self, schema)
             }
 
-            fn visit_create_sources(
-                &mut self,
-                like: Option<&'ast $($mut)* String>,
-                url: &'ast $($mut)* String,
-                schema_registry: &'ast $($mut)* String,
-                with_options: &'ast $($mut)* Vec<SqlOption>,
-            ) {
-                visit_create_sources(self, like, url, schema_registry, with_options)
-            }
-
             fn visit_create_sink(
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
@@ -670,12 +660,6 @@ macro_rules! make_visitor {
                     envelope,
                     if_not_exists,
                 } => visitor.visit_create_source(name, connector, format, envelope, *if_not_exists),
-                Statement::CreateSources {
-                    like,
-                    url,
-                    schema_registry,
-                    with_options,
-                } => visitor.visit_create_sources(like.as_auto_ref(), url, schema_registry, with_options),
                 Statement::CreateSink {
                     name,
                     from,
@@ -1390,23 +1374,6 @@ macro_rules! make_visitor {
             match schema {
                 Schema::File(pb) => visitor.visit_path(pb),
                 Schema::Inline(inner) => visitor.visit_literal_string(inner),
-            }
-        }
-
-        pub fn visit_create_sources<'ast, V: $name<'ast> + ?Sized>(
-            visitor: &mut V,
-            like: Option<&'ast $($mut)* String>,
-            url: &'ast $($mut)* String,
-            schema_registry: &'ast $($mut)* String,
-            with_options: &'ast $($mut)* Vec<SqlOption>,
-        ) {
-            if let Some(like) = like {
-                visitor.visit_literal_string(like);
-            }
-            visitor.visit_literal_string(url);
-            visitor.visit_literal_string(schema_registry);
-            for option in with_options {
-                visitor.visit_option(option);
             }
         }
 
