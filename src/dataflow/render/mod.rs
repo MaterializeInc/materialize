@@ -130,12 +130,19 @@ pub(crate) fn build_dataflow<A: Allocate>(
             for (source_number, (src_id, src)) in
                 dataflow.source_imports.clone().into_iter().enumerate()
             {
+                if let SourceConnector::External {
+                    connector,
+                    encoding,
+                    envelope,
+                    consistency,
+                } = src.connector
+                {
                 // This uid must be unique across all different instantiations of a source
                 let uid = SourceInstanceId {
                     sid: src_id.sid,
                     vid: first_export_id,
                 };
-                let (source, capability) = match src.connector.connector {
+                let (source, capability) = match connector {
                     ExternalSourceConnector::Kafka(c) => {
                         // Distribute read responsibility among workers.
                         use differential_dataflow::hashable::Hashable;
@@ -149,7 +156,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             advance_timestamp,
                             timestamp_histories.clone(),
                             timestamp_channel.clone(),
-                            src.connector.consistency,
+                            consistency,
                             read_from_kafka,
                         )
                     }
@@ -172,34 +179,35 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     }
                 };
 
-                // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
-                // a hypothetical future avro_extract, protobuf_extract, etc.
-                let stream = decode(&source, src.connector.encoding, &dataflow.debug_name);
+                    // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
+                    // a hypothetical future avro_extract, protobuf_extract, etc.
+                    let stream = decode(&source, encoding, &dataflow.debug_name);
 
-                let collection = match src.connector.envelope {
-                    Envelope::None => stream.as_collection(),
-                    Envelope::Debezium => {
-                        // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
-                        stream.as_collection().explode(|row| {
-                            let mut datums = row.unpack();
-                            let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                            Some((Row::pack(datums.into_iter()), diff))
-                        })
-                    }
-                };
+                    let collection = match envelope {
+                        Envelope::None => stream.as_collection(),
+                        Envelope::Debezium => {
+                            // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+                            stream.as_collection().explode(|row| {
+                                let mut datums = row.unpack();
+                                let diff = datums.pop().unwrap().unwrap_int64() as isize;
+                                Some((Row::pack(datums.into_iter()), diff))
+                            })
+                        }
+                    };
 
-                // Introduce the stream by name, as an unarranged collection.
-                context.collections.insert(
-                    RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
-                    collection,
-                );
-                let token = Rc::new(capability);
-                source_tokens.insert(src_id.sid, token.clone());
+                    // Introduce the stream by name, as an unarranged collection.
+                    context.collections.insert(
+                        RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
+                        collection,
+                    );
+                    let token = Rc::new(capability);
+                    source_tokens.insert(src_id.sid, token.clone());
 
                 // We also need to keep track of this mapping globally to activate Kakfa sources
                 // on timestamp advancement queries
                 let prev = global_source_mappings.insert(uid, Rc::downgrade(&token));
                 assert!(prev.is_none());
+                }
             }
 
             let as_of = dataflow

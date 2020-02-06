@@ -148,13 +148,13 @@ catalog item 'materialize.public.i1' is an index and so cannot be depended upon
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEX in v2a;
-View                     Key_name                             Column_name Expression     Null   Seq_in_index
+Source_or_view           Key_name                             Column_name Expression     Null   Seq_in_index
 ------------------------------------------------------------------------------------------------------------
 materialize.public.v2a   materialize.public.i2                <null>      "\"x\" * 2"    false  1
 materialize.public.v2a   materialize.public.v2a_primary_idx   x           <null>         false  1
 
 > SHOW INDEX in v2;
-View                   Key_name                              Column_name Expression Null   Seq_in_index
+Source_or_view         Key_name                              Column_name Expression Null   Seq_in_index
 -------------------------------------------------------------------------------------------------------
 materialize.public.v2  materialize.public.i1                 x           <null>     false  1
 materialize.public.v2  materialize.public.v2_primary_idx     x           <null>     false  1
@@ -167,10 +167,10 @@ materialize.public.v2  materialize.public.v2_primary_idx     x           <null> 
 catalog item 'v2a' does not exist
 
 > SHOW INDEX in v2;
-View                   Key_name                              Column_name Expression Null  Seq_in_index
+Source_or_view           Key_name                              Column_name Expression Null  Seq_in_index
 ------------------------------------------------------------------------------------------------------
-materialize.public.v2    materialize.public.i1                   x           <null>     false 1
-materialize.public.v2    materialize.public.v2_primary_idx       x           <null>     false 1
+materialize.public.v2    materialize.public.i1                 x           <null>     false 1
+materialize.public.v2    materialize.public.v2_primary_idx     x           <null>     false 1
 
 ! DROP INDEX i2;
 catalog item 'i2' does not exist
@@ -182,15 +182,15 @@ catalog item 'i2' does not exist
 > CREATE INDEX i3 ON v4a(y);
 
 > SHOW INDEX in v4a;
-View                   Key_name                               Column_name Expression Null  Seq_in_index
+Source_or_view           Key_name                               Column_name Expression Null  Seq_in_index
 -------------------------------------------------------------------------------------------------------
-materialize.public.v4a   materialize.public.i3                    y           <null>     false 1
-materialize.public.v4a   materialize.public.v4a_primary_idx       y           <null>     false 1
+materialize.public.v4a   materialize.public.i3                  y           <null>     false 1
+materialize.public.v4a   materialize.public.v4a_primary_idx     y           <null>     false 1
 
 > CREATE INDEX i4 ON v4(x);
 
 > SHOW INDEX in v4;
-View                  Key_name                         Column_name Expression Null  Seq_in_index
+Source_or_view          Key_name                           Column_name Expression Null  Seq_in_index
 ------------------------------------------------------------------------------------------------
 materialize.public.v4   materialize.public.i4              x           <null>     false 1
 materialize.public.v4   materialize.public.v4_primary_idx  x           <null>     false 1
@@ -206,7 +206,7 @@ catalog item 'v4a' does not exist
 catalog item 'i3' does not exist
 
 > SHOW INDEX in v4;
-View                     Key_name                              Column_name Expression Null  Seq_in_index
+Source_or_view          Key_name                              Column_name Expression Null  Seq_in_index
 -----------------------------------------------------------------------------------------------------
 materialize.public.v4   materialize.public.i4                  x           <null>     false 1
 materialize.public.v4   materialize.public.v4_primary_idx      x           <null>     false 1
@@ -217,7 +217,7 @@ materialize.public.v4   materialize.public.v4_primary_idx      y           <null
 > CREATE INDEX i5 ON v5(substr);
 
 > SHOW INDEX in v5;
-View                    Key_name                            Column_name Expression Null  Seq_in_index
+Source_or_view               Key_name                            Column_name Expression Null  Seq_in_index
 -----------------------------------------------------------------------------------------------------
 materialize.public.v5   materialize.public.i5               substr      <null>     true  1
 materialize.public.v5   materialize.public.v5_primary_idx   substr      <null>     true  1
@@ -225,7 +225,7 @@ materialize.public.v5   materialize.public.v5_primary_idx   substr      <null>  
 > CREATE VIEW multicol AS SELECT 'a' AS a, 'b', 'c', 'd' AS d
 > CREATE INDEX i6 ON multicol (2, a, 4)
 > SHOW INDEX IN multicol
-View                         Key_name               Column_name  Expression   Null    Seq_in_index
+Source_or_view               Key_name               Column_name  Expression   Null    Seq_in_index
 -----------------------------------------------------------------------------------------------------
 materialize.public.multicol  materialize.public.i6  a            <null>       false   2
 materialize.public.multicol  materialize.public.i6  @2           <null>       false   1
@@ -246,12 +246,88 @@ catalog item 'v5' does not exist
 ! DROP INDEX i4;
 catalog item 'i4' does not exist
 
-# Test that dropping indexies even with cascade does not cause the underlying view to be dropped
+# Test that dropping indexes even with cascade does not cause the underlying view to be dropped
+
 > DROP INDEX i1 CASCADE;
 
-#cleanup
 > DROP VIEW v2;
 
+# Materialized source tests
+
+> CREATE MATERIALIZED SOURCE s3
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+# Test that dependent indexes do not prevent source deletion when restrict is specified
+> CREATE INDEX j1 on s3(ascii(y))
+
+> SHOW INDEX in s3;
+Source_or_view          Key_name                              Column_name Expression     Null  Seq_in_index
+----------------------------------------------------------------------------------------------------
+materialize.public.s3   materialize.public.j1                 <null>      "ascii(\"y\")" false 1
+materialize.public.s3   materialize.public.s3_primary_idx     x           <null>         false 1
+materialize.public.s3   materialize.public.s3_primary_idx     y           <null>         false 2
+
+> DROP SOURCE s3;
+
+! DROP SOURCE s3;
+catalog item 's3' does not exist
+
+! DROP INDEX j1;
+catalog item 'j1' does not exist
+
+# Test cascade deletes all indexes associated with cascaded sources and views
+
+> CREATE MATERIALIZED SOURCE s4
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+> CREATE INDEX j2 on s4(x+2);
+
+> CREATE VIEW w as SELECT y, x + 2 as z from s4;
+
+> CREATE INDEX j3 on w(z);
+
+> SHOW INDEX in s4;
+Source_or_view          Key_name                              Column_name Expression  Null  Seq_in_index
+----------------------------------------------------------------------------------------------------
+materialize.public.s4   materialize.public.j2                 <null>      "\"x\" + 2" false 1
+materialize.public.s4   materialize.public.s4_primary_idx     x           <null>      false 1
+materialize.public.s4   materialize.public.s4_primary_idx     y           <null>      false 2
+
+> SHOW INDEX in w;
+Source_or_view         Key_name                            Column_name Expression Null  Seq_in_index
+----------------------------------------------------------------------------------------------------
+materialize.public.w   materialize.public.j3               z           <null>     false 1
+
+> DROP SOURCE s4 CASCADE;
+
+! DROP VIEW w;
+catalog item 'w' does not exist
+
+! DROP INDEX j3;
+catalog item 'j3' does not exist
+
+! DROP SOURCE s4;
+catalog item 's4' does not exist
+
+! DROP INDEX j2;
+catalog item 'j2' does not exist
+
+# Test that dropping indexes even with cascade does not cause the underlying source to be dropped
+
+> CREATE MATERIALIZED SOURCE s5
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+> DROP INDEX s5_primary_idx CASCADE;
+
+> DROP SOURCE s5;
+
+#cleanup
 > DROP SINK s1;
 
 > DROP SOURCE s;

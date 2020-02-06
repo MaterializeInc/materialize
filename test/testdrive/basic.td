@@ -13,6 +13,13 @@
 > VALUES (1)
 1
 
+> CREATE VIEW select_constant as SELECT true
+
+> SELECT * from select_constant;
+true
+
+> DROP VIEW select_constant;
+
 $ set schema={
     "type": "record",
     "name": "envelope",
@@ -63,12 +70,12 @@ Source   Create Source
 materialize.public.data  "kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}"
 
 ! SELECT * FROM data
-Cannot construct query out of existing materialized views
+Cannot construct query out of existing materialized sources or views
 
 > CREATE VIEW data_view as SELECT * from data
 
 ! SELECT * FROM data_view
-Cannot construct query out of existing materialized views
+Cannot construct query out of existing materialized sources or views
 
 #TODO (materialize#1725) This test consistently in fails on buildkite but not locally
 #> CREATE SINK not_mat_sink FROM data_view INTO 'kafka://${testdrive.kafka-addr}/data-view-sink' WITH (schema_registry_url = '${testdrive.schema-registry-url}')
@@ -99,7 +106,7 @@ test1       USER     true        true
 > SHOW MATERIALIZED VIEWS
 test1
 
-> SHOW VIEWS FROM mz_catalog
+> SHOW SOURCES FROM mz_catalog
 mz_arrangement_sharing
 mz_arrangement_sizes
 mz_catalog_names
@@ -116,6 +123,8 @@ mz_scheduling_histogram
 mz_scheduling_parks
 mz_view_foreign_keys
 mz_view_keys
+
+> SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
 mz_dataflow_names
 mz_dataflow_operator_dataflows
@@ -140,9 +149,11 @@ Field Nullable Type
 b     NO       int8
 sum   YES      int8
 
-> SHOW VIEWS FROM mz_catalog LIKE '%peek%';
+> SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active
 mz_peek_durations
+
+> SHOW VIEWS FROM mz_catalog LIKE '%peek%';
 mz_perf_peek_durations_aggregates
 mz_perf_peek_durations_bucket
 mz_perf_peek_durations_core
@@ -211,7 +222,7 @@ b  max
 
 # cannot select from unmaterialized view
 ! SELECT * from data_view
-Cannot construct query out of existing materialized views
+Cannot construct query out of existing materialized sources or views
 
 # can create sink from unmaterialized view
 > CREATE SINK not_mat_sink2 FROM data_view
@@ -261,7 +272,7 @@ c-b
 > DROP INDEX idx1;
 
 ! SELECT * from test5
-Cannot construct query out of existing materialized views
+Cannot construct query out of existing materialized sources or views
 
 # test that materialized views can be even if it requires multiple layers of recursing through the AST
 # to find a source
@@ -275,10 +286,10 @@ d
 
 # dependencies have not re-materialized as a result of creating a dependent materialized view
 ! SELECT * from test5
-Cannot construct query out of existing materialized views
+Cannot construct query out of existing materialized sources or views
 
 ! SELECT * from data_view
-Cannot construct query out of existing materialized views
+Cannot construct query out of existing materialized sources or views
 
 # rematerialize data_view creating an index on it
 > CREATE INDEX data_view_idx on data_view(a)
@@ -351,10 +362,152 @@ b  c
 1  3
 2  1
 
+# Materialized sources tests
+
+$ set mat={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] }
+    ]
+  }
+
+$ kafka-ingest format=avro topic=mat schema=${mat} timestamp=1
+{"before": null, "after": null}
+
+> CREATE MATERIALIZED SOURCE mat_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mat-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${mat}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * from mat_data;
+
+$ kafka-ingest format=avro topic=mat schema=${schema} timestamp=42
+{"before": null, "after": {"a": -1, "b": 0}}
+{"before": null, "after": {"a": -1, "b": 1}}
+{"before": null, "after": {"a": 3, "b": 4}}
+{"before": null, "after": {"a": 1, "b": 2}}
+
+$ kafka-ingest format=avro topic=mat schema=${schema} timestamp=43
+{"before": null, "after": null}
+
+> SELECT * from mat_data;
+a  b
+----
+-1 0
+-1 1
+3  4
+1  2
+
+# if there exists another index, dropping the primary index will not unmaterialize the source
+
+> CREATE INDEX mat_data_idx2 ON mat_data(a);
+
+> DROP INDEX mat_data_primary_idx;
+
+> SELECT a+b from mat_data;
+a+b
+----
+-1
+0
+7
+3
+
+# Can create both materialized and unmaterialized views from materialized source
+> CREATE MATERIALIZED VIEW test7 as SELECT count(*) from mat_data;
+
+> SELECT * from test7;
+count
+-----
+4
+
+> CREATE VIEW test8 as SELECT -b as c, -a as d from mat_data;
+
+> SELECT * from test8;
+c  d
+-----
+0  1
+-1 1
+-4 -3
+-2 -1
+
+# unmaterialize source
+> DROP INDEX mat_data_idx2;
+
+! SELECT * from mat_data;
+Cannot construct query out of existing materialized sources or views
+
+> SELECT * from test7;
+count
+-----
+4
+
+! SELECT * from test8;
+Cannot construct query out of existing materialized sources or views
+
+$ kafka-ingest format=avro topic=mat schema=${schema} timestamp=44
+{"before": null, "after": {"a": -3, "b": 0}}
+{"before": null, "after": {"a": -1, "b": 0}}
+{"before": null, "after": {"a": 0, "b": 4}}
+{"before": null, "after": {"a": 1, "b": 2}}
+
+$ kafka-ingest format=avro topic=mat schema=${schema} timestamp=45
+{"before": null, "after": null}
+
+# rematerialize source
+> CREATE INDEX mat_data_idx3 on mat_data(b);
+
+> SELECT * from mat_data;
+a  b
+----
+-1 0
+-1 1
+3  4
+1  2
+-3 0
+-1 0
+0  4
+1  2
+
+> SELECT * from test7;
+count
+-----
+8
+
+> SELECT * from test8;
+a  b
+----
+0  1
+-1 1
+-4 -3
+-2 -1
+0  3
+0  1
+-4 0
+-2 -1
+
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 
 # Depends on source.
+> CREATE SINK mat_source_sink FROM mat_data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'mat-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
 > CREATE SINK source_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -367,3 +520,5 @@ b  c
 > DROP SINK source_sink
 
 > DROP SINK view_sink
+
+> DROP SINK mat_source_sink

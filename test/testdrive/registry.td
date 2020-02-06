@@ -162,14 +162,12 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key
   publish=true timestamp=6
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v3
+> CREATE MATERIALIZED SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 
-> CREATE MATERIALIZED VIEW data_v3_view as SELECT * from data_v3
-
-> SELECT * FROM data_v3_view
+> SELECT * FROM data_v3
 a
 ---
 1 42

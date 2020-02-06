@@ -363,8 +363,9 @@ macro_rules! make_visitor {
                 format: &'ast $($mut)* Format,
                 envelope: &'ast $($mut)* Envelope,
                 if_not_exists: bool,
+                materialized: bool,
             ) {
-                visit_create_source(self, name, connector, format, envelope, if_not_exists)
+                visit_create_source(self, name, connector, format, envelope, if_not_exists, materialized)
             }
 
             fn visit_connector(
@@ -670,7 +671,8 @@ macro_rules! make_visitor {
                     format,
                     envelope,
                     if_not_exists,
-                } => visitor.visit_create_source(name, connector, format, envelope, *if_not_exists),
+                    materialized,
+                } => visitor.visit_create_source(name, connector, format, envelope, *if_not_exists, *materialized),
                 Statement::CreateSink {
                     name,
                     from,
@@ -1324,6 +1326,7 @@ macro_rules! make_visitor {
             format: &'ast $($mut)* Format,
             envelope: &'ast $($mut)* Envelope,
             _if_not_exists: bool,
+            _materialized: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_connector(connector);
