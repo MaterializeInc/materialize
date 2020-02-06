@@ -23,6 +23,7 @@ limitations under the License.
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <assert.h>
 
@@ -285,11 +286,9 @@ int DataSource::permute(int value, int low, int high) {
 }
 
 void DataSource::getCurrentTimestamp(SQL_TIMESTAMP_STRUCT& ret, int64_t offset) {
-    time_t rawtime;
-    time(&rawtime);
+    time_t rawtime = 0;
     rawtime += offset;
     tm* timeinfo = localtime(&rawtime);
-
     ret.year = timeinfo->tm_year + 1900;
     ret.month = timeinfo->tm_mon + 1;
     ret.day = timeinfo->tm_mday;
@@ -455,10 +454,9 @@ void DataSource::addSuPhone(int& suId, std::ofstream& stream, bool delimiter) {
 }
 
 std::string DataSource::getCurrentTimeString(int64_t offset) {
-    time_t rawtime;
+    time_t rawtime = 0;
     struct tm* timeinfo;
     char buffer[24];
-    time(&rawtime);
     rawtime += offset;
     timeinfo = localtime(&rawtime);
     strftime(buffer, 80, "%F %X", timeinfo);

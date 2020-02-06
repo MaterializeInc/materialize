@@ -272,7 +272,7 @@ bool Transactions::executeNewOrder(Dialect* dialect, SQLHDBC& hDBC, mz::Config& 
     }
     // 2.4.1.6
     SQL_TIMESTAMP_STRUCT oEntryD;
-    DataSource::getCurrentTimestamp(oEntryD, cfg.order_entry_date_offset_millis(chRandom::rng) / 1000);
+    DataSource::getCurrentTimestamp(oEntryD, cfg.order_entry_date_offset_millis(chRandom::rng));
 
     SQLLEN nIdicator = 0;
     SQLCHAR buf[1024] = {0};
@@ -474,7 +474,7 @@ bool Transactions::executePayment(Dialect* dialect, SQLHDBC& hDBC, mz::Config& c
 
     // 2.5.1.4
     SQL_TIMESTAMP_STRUCT hDate;
-    DataSource::getCurrentTimestamp(hDate);
+    DataSource::getCurrentTimestamp(hDate,cfg.orderline_delivery_date_offset_millis(chRandom::rng));
 
     SQLLEN nIdicator = 0;
     SQLCHAR buf[1024] = {0};

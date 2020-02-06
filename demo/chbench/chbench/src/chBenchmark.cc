@@ -34,6 +34,7 @@ limitations under the License.
 
 #include <atomic>
 #include <err.h>
+#include <iostream>
 #include <getopt.h>
 #include <pthread.h>
 #include <sql.h>
@@ -794,7 +795,7 @@ static int gen(int argc, char* argv[]) {
             for (int cId = 1; cId <= 3000; cId++) {
                 // Customer
                 if (customerTime.empty())
-                    customerTime = DataSource::getCurrentTimeString();
+                    customerTime = DataSource::getCurrentTimeString(mzCfg.order_entry_date_offset_millis(chRandom::rng));
                 TupleGen::genCustomer(cId, dId, wId, customerTime);
 
                 // History
@@ -810,7 +811,9 @@ static int gen(int argc, char* argv[]) {
                     olCount = nextOlCount;
                     nextOlCount = -1;
                 }
-                orderTime = DataSource::getCurrentTimeString(mzCfg.order_entry_date_offset_millis(chRandom::rng) / 1000);
+
+                orderTime = DataSource::getCurrentTimeString(mzCfg.order_entry_date_offset_millis(chRandom::rng));
+
                 TupleGen::genOrder(oId, dId, wId, cId, olCount, orderTime);
 
                 for (int olNumber = 1; olNumber <= olCount; olNumber++) {

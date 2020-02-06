@@ -146,7 +146,7 @@ void TupleGen::genHistory(int& cId, int& dId, int& wId, mz::Config& cfg) {
     historyStream << wId << csvDelim; // H_C_W_ID
     historyStream << dId << csvDelim; // H_D_ID
     historyStream << wId << csvDelim; // H_W_ID
-    historyStream << DataSource::getCurrentTimeString(cfg.hist_date_offset_millis(chRandom::rng) / 1000)
+    historyStream << DataSource::getCurrentTimeString(cfg.hist_date_offset_millis(chRandom::rng) * 1000)
                   << csvDelim;            // H_DATE - current date and time
     historyStream << "10.00" << csvDelim; // H_AMOUNT
     DataSource::addAlphanumeric64(12, 24, historyStream, false); // H_DATA
