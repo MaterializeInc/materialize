@@ -20,8 +20,8 @@ use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, Consistency, CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector,
-    FileSourceConnector, IndexDesc, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
-    ProtobufEncoding, RowSetFinishing, Sink, SinkConnector, Source, SourceConnector,
+    FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding,
+    RowSetFinishing, SinkConnector, SourceConnector,
 };
 use expr::GlobalId;
 use futures::future::TryFutureExt;
@@ -37,7 +37,7 @@ use sql_parser::ast::{
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
-use crate::{normalize, query, Params, Plan, PlanSession};
+use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, View};
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -486,21 +486,21 @@ fn handle_show_indexes(
                 && entry.uses() == vec![from_entry.id()]
         })
         .flat_map(|entry| match entry.item() {
-            CatalogItem::Index(dataflow_types::Index {
-                desc,
-                relation_type,
-                raw_sql,
-                ..
+            CatalogItem::Index(catalog::Index {
+                create_sql,
+                keys,
+                on,
+                eval_env: _,
             }) => {
-                let key_sqls = match crate::parse(raw_sql.to_owned())
-                    .expect("raw_sql cannot be invalid")
+                let key_sqls = match crate::parse(create_sql.to_owned())
+                    .expect("create_sql cannot be invalid")
                     .into_element()
                 {
                     Statement::CreateIndex { key_parts, .. } => key_parts,
                     _ => unreachable!(),
                 };
                 let mut row_subset = Vec::new();
-                for (i, (key_expr, key_sql)) in desc.keys.iter().zip_eq(key_sqls).enumerate() {
+                for (i, (key_expr, key_sql)) in keys.iter().zip_eq(key_sqls).enumerate() {
                     let key_sql = key_sql.to_string();
                     let is_column_name = match key_expr {
                         expr::ScalarExpr::Column(_) => true,
@@ -511,12 +511,13 @@ fn handle_show_indexes(
                     } else {
                         (Datum::Null, Datum::String(&key_sql))
                     };
+                    let typ = scx.catalog.get_by_id(&on).desc().unwrap().typ();
                     row_subset.push(Row::pack(&vec![
                         Datum::String(&from_entry.name().to_string()),
                         Datum::String(&entry.name().to_string()),
                         col_name,
                         func,
-                        Datum::from(key_expr.typ(relation_type).nullable),
+                        Datum::from(key_expr.typ(typ).nullable),
                         Datum::from((i + 1) as i64),
                     ]));
                 }
@@ -570,14 +571,14 @@ fn handle_show_create_view(
     view_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let view_name = scx.resolve_name(view_name)?;
-    let raw_sql = if let CatalogItem::View(view) = scx.catalog.get(&view_name)?.item() {
-        &view.raw_sql
+    let create_sql = if let CatalogItem::View(view) = scx.catalog.get(&view_name)?.item() {
+        &view.create_sql
     } else {
         bail!("'{}' is not a view", view_name);
     };
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&view_name.to_string()),
-        Datum::String(raw_sql),
+        Datum::String(create_sql),
     ])]))
 }
 
@@ -586,20 +587,21 @@ fn handle_show_create_source(
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = scx.resolve_name(object_name)?;
-    let source_url =
-        if let CatalogItem::Source(Source { connector, .. }) = scx.catalog.get(&name)?.item() {
-            match &connector.connector {
-                ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
-                    format!("kafka://{}/{}", addr, topic)
-                }
-                ExternalSourceConnector::File(c) => {
-                    // TODO https://github.com/MaterializeInc/materialize/issues/1093
-                    format!("file://{}", c.path.to_string_lossy())
-                }
+    let source_url = if let CatalogItem::Source(catalog::Source { connector, .. }) =
+        scx.catalog.get(&name)?.item()
+    {
+        match &connector.connector {
+            ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
+                format!("kafka://{}/{}", addr, topic)
             }
-        } else {
-            bail!("{} is not a source", name);
-        };
+            ExternalSourceConnector::File(c) => {
+                // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                format!("file://{}", c.path.to_string_lossy())
+            }
+        }
+    } else {
+        bail!("{} is not a source", name);
+    };
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name.to_string()),
         Datum::String(&source_url),
@@ -607,6 +609,7 @@ fn handle_show_create_source(
 }
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+    let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, from, connector, format, if_not_exists) = match stmt {
         Statement::CreateSink {
             name,
@@ -661,7 +664,8 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     let schema_id = ccsr_client.publish_schema(&topic, &schema.to_string())?;
 
     let sink = Sink {
-        from: (catalog_entry.id(), relation_desc),
+        create_sql,
+        from: catalog_entry.id(),
         connector: SinkConnector::Kafka(KafkaSinkConnector {
             addr,
             topic,
@@ -677,7 +681,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
 }
 
 fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let raw_sql = stmt.to_string();
+    let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, on_name, key_parts, if_not_exists) = match stmt {
         Statement::CreateIndex {
             name,
@@ -699,12 +703,11 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
             schema: on_name.schema.clone(),
             item: normalize::ident(name),
         },
-        desc: IndexDesc {
-            on_id: catalog_entry.id(),
+        index: Index {
+            create_sql,
+            on: catalog_entry.id(),
             keys,
         },
-        raw_sql,
-        relation_type: catalog_entry.desc()?.typ().clone(),
         if_not_exists,
     })
 }
@@ -750,6 +753,7 @@ fn handle_create_view(
     mut stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
+    let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, columns, query, materialized, replace, with_options) = match &mut stmt {
         Statement::CreateView {
             name,
@@ -803,9 +807,11 @@ fn handle_create_view(
     let materialize = *materialized; // Normalize for `raw_sql` below.
     Ok(Plan::CreateView {
         name,
-        raw_sql: stmt.to_string(),
-        relation_expr,
-        desc,
+        view: View {
+            create_sql,
+            expr: relation_expr,
+            desc,
+        },
         replace,
         materialize,
     })
@@ -975,6 +981,7 @@ async fn handle_create_dataflow(
                         }
                     }
                     let source = Source {
+                        create_sql: "TODO".into(),
                         connector: SourceConnector {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
                                 path: path.into(),
@@ -1317,6 +1324,7 @@ fn build_kafka_avro_source(
             }
 
             Ok(Source {
+                create_sql: "TODO".into(),
                 connector: SourceConnector {
                     connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         addr: kafka_addr,
@@ -1358,6 +1366,7 @@ fn build_kafka_protobuf_source(
                 &protobuf::decode_descriptors(&descriptors)?,
             )?;
             Ok(Source {
+                create_sql: "TODO".into(),
                 connector: SourceConnector {
                     connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         addr: kafka_addr,

@@ -5,15 +5,16 @@
 
 use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
 use std::path::Path;
 
-use failure::bail;
+use failure::{bail, ResultExt};
 use lazy_static::lazy_static;
 use log::{info, trace};
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::{Index, Sink, Source, View};
-use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr};
+use dataflow_types::{SinkConnector, SourceConnector};
+use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -44,13 +45,13 @@ pub mod sql;
 /// The catalog also maintains special "ambient schemas": virtual schemas,
 /// implicitly present in all databases, that house various system views.
 /// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
-#[derive(Debug)]
 pub struct Catalog {
     id: usize,
     by_name: HashMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     ambient_schemas: HashMap<String, Schema>,
     storage: sql::Connection,
+    serialize_item: fn(&CatalogItem) -> Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -89,9 +90,39 @@ pub struct CatalogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CatalogItem {
     Source(Source),
-    View(View<OptimizedRelationExpr>),
+    View(View),
     Sink(Sink),
     Index(Index),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Source {
+    pub create_sql: String,
+    pub connector: SourceConnector,
+    pub desc: RelationDesc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Sink {
+    pub create_sql: String,
+    pub from: GlobalId,
+    pub connector: SinkConnector,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct View {
+    pub create_sql: String,
+    pub expr: OptimizedRelationExpr,
+    pub eval_env: EvalEnv,
+    pub desc: RelationDesc,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Index {
+    pub create_sql: String,
+    pub on: GlobalId,
+    pub keys: Vec<ScalarExpr>,
+    pub eval_env: EvalEnv,
 }
 
 impl CatalogItem {
@@ -109,18 +140,14 @@ impl CatalogItem {
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
         match self {
-            CatalogItem::Source(_src) => Vec::new(),
-            CatalogItem::Sink(sink) => vec![sink.from.0],
+            CatalogItem::Source(_) => vec![],
+            CatalogItem::Sink(sink) => vec![sink.from],
             CatalogItem::View(view) => {
                 let mut out = Vec::new();
-                view.relation_expr.as_ref().global_uses(&mut out);
+                view.expr.as_ref().global_uses(&mut out);
                 out
             }
-            CatalogItem::Index(idx) => {
-                let mut out = Vec::new();
-                out.push(idx.desc.on_id);
-                out
-            }
+            CatalogItem::Index(idx) => vec![idx.on],
         }
     }
 }
@@ -173,8 +200,9 @@ impl Catalog {
     /// Opens or creates a `Catalog` that stores data at `path`. The
     /// `initialize` callback will be invoked after database and schemas are
     /// loaded but before any persisted user items are loaded.
-    pub fn open<F>(path: Option<&Path>, f: F) -> Result<Catalog, failure::Error>
+    pub fn open<S, F>(path: Option<&Path>, f: F) -> Result<Catalog, failure::Error>
     where
+        S: CatalogItemSerializer,
         F: FnOnce(&mut Self),
     {
         let storage = sql::Connection::open(path)?;
@@ -185,6 +213,7 @@ impl Catalog {
             by_id: BTreeMap::new(),
             ambient_schemas: HashMap::new(),
             storage,
+            serialize_item: S::serialize,
         };
 
         for (id, name) in catalog.storage.load_databases()? {
@@ -224,7 +253,9 @@ impl Catalog {
         f(&mut catalog);
 
         for (id, name, def) in catalog.storage.load_items()? {
-            for use_id in def.uses() {
+            let item = S::deserialize(&catalog, def)
+                .with_context(|e| format!("corrupt catalog: failed to deserialize item: {}", e))?;
+            for use_id in item.uses() {
                 if catalog.by_id.get(&use_id).is_none() && use_id.is_system() {
                     // TODO(benesch): one day not all logging views will be
                     // system views. Producing the error message here also
@@ -236,7 +267,7 @@ impl Catalog {
                     );
                 }
             }
-            catalog.insert_item(id, name, def);
+            catalog.insert_item(id, name, item);
             if let GlobalId::User(id) = id {
                 catalog.id = cmp::max(catalog.id, id);
             }
@@ -244,9 +275,7 @@ impl Catalog {
 
         Ok(catalog)
     }
-}
 
-impl Catalog {
     pub fn allocate_id(&mut self) -> GlobalId {
         self.id += 1;
         GlobalId::user(self.id)
@@ -531,7 +560,8 @@ impl Catalog {
                         }
                     };
                     let schema_id = tx.load_schema_id(database_id, &name.schema)?;
-                    tx.insert_item(id, schema_id, &name.item, &item)?;
+                    let serialized_item = (self.serialize_item)(&item);
+                    tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
                     Action::CreateItem { id, name, item }
                 }
                 Op::DropDatabase { name } => {
@@ -651,6 +681,18 @@ impl Catalog {
     }
 }
 
+impl fmt::Debug for Catalog {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("Catalog")
+            .field("id", &self.id)
+            .field("by_name", &self.by_name)
+            .field("by_id", &self.by_id)
+            .field("ambient_schemas", &self.ambient_schemas)
+            .field("storage", &self.storage)
+            .finish()
+    }
+}
+
 impl IdHumanizer for Catalog {
     fn humanize_id(&self, id: Id) -> Option<String> {
         match id {
@@ -742,5 +784,24 @@ impl<'a> DatabaseResolver<'a> {
                     .get(schema_name)
                     .map(|s| (s, SchemaType::Ambient))
             })
+    }
+}
+
+pub trait CatalogItemSerializer {
+    fn serialize(item: &CatalogItem) -> Vec<u8>;
+    fn deserialize(catalog: &Catalog, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error>;
+}
+
+#[cfg(feature = "bincode")]
+pub struct BincodeSerializer;
+
+#[cfg(feature = "bincode")]
+impl CatalogItemSerializer for BincodeSerializer {
+    fn serialize(item: &CatalogItem) -> Vec<u8> {
+        bincode::serialize(item).unwrap()
+    }
+
+    fn deserialize(_: &Catalog, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error> {
+        Ok(bincode::deserialize(&bytes)?)
     }
 }

@@ -158,13 +158,13 @@ pub struct BuildDesc {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
-    pub source_imports: HashMap<SourceInstanceId, Source>,
+    pub source_imports: HashMap<SourceInstanceId, SourceDesc>,
     pub index_imports: HashMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
     pub objects_to_build: Vec<BuildDesc>,
     pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
-    pub sink_exports: Vec<(GlobalId, Sink)>,
+    pub sink_exports: Vec<(GlobalId, SinkDesc)>,
     /// Maps views to views + indexes needed to generate that view
     pub dependent_objects: HashMap<GlobalId, Vec<GlobalId>>,
     /// An optional frontier to which inputs should be advanced.
@@ -201,40 +201,75 @@ impl DataflowDesc {
             .push(dependent_id);
     }
 
-    pub fn add_source_import(&mut self, id: SourceInstanceId, source: Source) {
-        self.source_imports.insert(id, source);
+    pub fn add_source_import(
+        &mut self,
+        id: SourceInstanceId,
+        connector: SourceConnector,
+        desc: RelationDesc,
+    ) {
+        self.source_imports
+            .insert(id, SourceDesc { connector, desc });
     }
 
-    pub fn add_view_to_build(&mut self, id: GlobalId, view: View<OptimizedRelationExpr>) {
+    pub fn add_view_to_build(
+        &mut self,
+        id: GlobalId,
+        expr: OptimizedRelationExpr,
+        eval_env: EvalEnv,
+        typ: RelationType,
+    ) {
         self.objects_to_build.push(BuildDesc {
             id,
-            relation_expr: view.relation_expr,
-            eval_env: view.eval_env,
-            typ: Some(view.desc.typ().clone()),
+            relation_expr: expr,
+            eval_env,
+            typ: Some(typ),
         });
     }
 
-    pub fn add_index_to_build(&mut self, id: GlobalId, index: Index) {
+    pub fn add_index_to_build(
+        &mut self,
+        id: GlobalId,
+        on_id: GlobalId,
+        on_type: RelationType,
+        keys: Vec<ScalarExpr>,
+        eval_env: EvalEnv,
+    ) {
         self.objects_to_build.push(BuildDesc {
             id,
             relation_expr: OptimizedRelationExpr::declare_optimized(RelationExpr::ArrangeBy {
-                input: Box::new(RelationExpr::global_get(
-                    index.desc.on_id,
-                    index.relation_type,
-                )),
-                keys: vec![index.desc.keys],
+                input: Box::new(RelationExpr::global_get(on_id, on_type)),
+                keys: vec![keys],
             }),
-            eval_env: index.eval_env,
+            eval_env,
             typ: None,
         });
     }
 
-    pub fn add_index_export(&mut self, id: GlobalId, index: IndexDesc, typ: RelationType) {
-        self.index_exports.push((id, index, typ));
+    pub fn add_index_export(
+        &mut self,
+        id: GlobalId,
+        on_id: GlobalId,
+        on_type: RelationType,
+        keys: Vec<ScalarExpr>,
+    ) {
+        self.index_exports
+            .push((id, IndexDesc { on_id, keys }, on_type));
     }
 
-    pub fn add_sink_export(&mut self, id: GlobalId, sink: Sink) {
-        self.sink_exports.push((id, sink));
+    pub fn add_sink_export(
+        &mut self,
+        id: GlobalId,
+        from_id: GlobalId,
+        from_desc: RelationDesc,
+        connector: SinkConnector,
+    ) {
+        self.sink_exports.push((
+            id,
+            SinkDesc {
+                from: (from_id, from_desc),
+                connector,
+            },
+        ));
     }
 
     pub fn as_of(&mut self, as_of: Option<Vec<Timestamp>>) {
@@ -321,7 +356,7 @@ pub struct ProtobufEncoding {
 /// of the collection.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Source {
+pub struct SourceDesc {
     pub connector: SourceConnector,
     pub desc: RelationDesc,
 }
@@ -329,19 +364,9 @@ pub struct Source {
 /// A sink for updates to a relational collection.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Sink {
+pub struct SinkDesc {
     pub from: (GlobalId, RelationDesc),
     pub connector: SinkConnector,
-}
-
-/// A description of a relational collection in terms of input collections.
-#[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct View<Expr> {
-    pub raw_sql: String,
-    pub relation_expr: Expr,
-    pub eval_env: EvalEnv,
-    pub desc: RelationDesc,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -407,16 +432,4 @@ pub struct IndexDesc {
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
     pub keys: Vec<ScalarExpr>,
-}
-
-/// An index is an arrangement of a dataflow
-#[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Index {
-    pub desc: IndexDesc,
-    pub raw_sql: String,
-    /// Types of the columns of the `on_id` collection.
-    pub relation_type: RelationType,
-    /// The evaluation environment for the expressions in `funcs`.
-    pub eval_env: EvalEnv,
 }

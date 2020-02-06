@@ -5,14 +5,14 @@
 
 use std::error::Error;
 
-use catalog::Catalog;
+use catalog::{BincodeSerializer, Catalog};
 use ore::collections::CollectionExt;
 use pgrepr::Type;
 use sql::Session;
 
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
-    let catalog = Catalog::open(None, |_| ())?;
+    let catalog = Catalog::open::<BincodeSerializer, _>(None, |_| ())?;
     let session = Session::default();
     let test_cases = vec![
         (

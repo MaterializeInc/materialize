@@ -148,8 +148,8 @@ data_view
 
 > SHOW CREATE VIEW test1
 View                      Create View
----------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE MATERIALIZED VIEW test1 AS SELECT b, sum(a) FROM data GROUP BY b"
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT \"b\", sum(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
 # materialized view can be built on a not-materialized view
 > CREATE MATERIALIZED VIEW test2 AS

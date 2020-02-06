@@ -10,9 +10,9 @@
 use ::expr::GlobalId;
 use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::{Catalog, CatalogEntry};
-use dataflow_types::{IndexDesc, PeekWhen, RowSetFinishing, Sink, Source};
+use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnector, SourceConnector};
 use ore::future::MaybeFuture;
-use repr::{RelationDesc, RelationType, Row, ScalarType};
+use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
@@ -43,13 +43,6 @@ pub enum Plan {
         schema_name: String,
         if_not_exists: bool,
     },
-    CreateIndex {
-        name: FullName,
-        desc: IndexDesc,
-        raw_sql: String,
-        relation_type: RelationType,
-        if_not_exists: bool,
-    },
     CreateSource {
         name: FullName,
         source: Source,
@@ -67,13 +60,16 @@ pub enum Plan {
     },
     CreateView {
         name: FullName,
-        raw_sql: String,
-        relation_expr: ::expr::RelationExpr,
-        desc: RelationDesc,
+        view: View,
         /// The ID of the object that this view is replacing, if any.
         replace: Option<GlobalId>,
         /// whether we should auto-materialize the view
         materialize: bool,
+    },
+    CreateIndex {
+        name: FullName,
+        index: Index,
+        if_not_exists: bool,
     },
     DropDatabase {
         name: String,
@@ -126,6 +122,34 @@ pub enum Plan {
         full: bool,
         materialized: bool,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct Source {
+    pub create_sql: String,
+    pub connector: SourceConnector,
+    pub desc: RelationDesc,
+}
+
+#[derive(Clone, Debug)]
+pub struct Sink {
+    pub create_sql: String,
+    pub from: GlobalId,
+    pub connector: SinkConnector,
+}
+
+#[derive(Clone, Debug)]
+pub struct View {
+    pub create_sql: String,
+    pub expr: ::expr::RelationExpr,
+    pub desc: RelationDesc,
+}
+
+#[derive(Clone, Debug)]
+pub struct Index {
+    pub create_sql: String,
+    pub on: GlobalId,
+    pub keys: Vec<::expr::ScalarExpr>,
 }
 
 #[derive(Debug)]
