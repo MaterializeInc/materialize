@@ -17,7 +17,7 @@ use log::{error, info, warn};
 use postgres::Client;
 use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, Encoder, HistogramVec};
 
-static MAX_BACKOFF: Duration = Duration::from_secs(60);
+static MAX_BACKOFF: Duration = Duration::from_secs(2);
 static METRICS_PORT: u16 = 16875;
 
 lazy_static! {
@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
         materialized_url: popts.opt_get_default(
             "materialized-url",
-            "postgres://ignoreuser@materialized:6875/tpcch".to_owned(),
+            "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
         )?,
     };
 
@@ -114,7 +114,7 @@ fn measure_peek_times(config: &Config) {
 }
 
 fn get_baseline_backoff() -> Duration {
-    Duration::from_secs(1)
+    Duration::from_millis(250)
 }
 
 fn create_postgres_client(config: &Config) -> Client {
@@ -128,46 +128,39 @@ fn create_postgres_client(config: &Config) -> Client {
 }
 
 fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
-    let current_backoff = min(*backoff, MAX_BACKOFF);
-    warn!(
-        "{}. Sleeping for {:#?} seconds",
-        error_message, current_backoff
-    );
-    thread::sleep(current_backoff);
-    *backoff = Duration::from_secs(backoff.as_secs() * 2);
+    warn!("{}. Sleeping for {:#?} seconds", error_message, *backoff);
+    thread::sleep(*backoff);
+    *backoff = min(*backoff * 2, MAX_BACKOFF);
 }
 
 /// Try to build the views and sources that are needed for this script
 ///
 /// This ignores errors (just logging them), and can just be run multiple times.
 fn try_initialize(client: &mut Client) {
-    match client.execute(
-        "CREATE SOURCES LIKE 'mysql.tpcch.%' \
-         FROM 'kafka://kafka:9092' \
-         USING SCHEMA REGISTRY 'http://schema-registry:8081'",
-        &[],
+    match client.batch_execute(
+        "CREATE SOURCE IF NOT EXISTS orderline \
+        FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline' \
+        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+        ENVELOPE DEBEZIUM",
     ) {
-        Ok(_) => info!("Created sources"),
-        Err(err) => warn!("trying to create sources: {}", err),
+        Ok(_) => info!("source is installed"),
+        Err(err) => warn!("error trying to create sources: {}", err),
     }
-    match client.execute(
-        "CREATE VIEW q01 as SELECT
-                 ol_number,
-                 sum(ol_quantity) as sum_qty,
-                 sum(ol_amount) as sum_amount,
-                 avg(ol_quantity) as avg_qty,
-                 avg(ol_amount) as avg_amount,
-                 count(*) as count_order
-         FROM
-                 mysql_tpcch_orderline
-         WHERE
-                 ol_delivery_d > date '1998-12-01'
-         GROUP BY
-                 ol_number;",
-        &[],
+    match client.batch_execute(
+        "CREATE OR REPLACE MATERIALIZED VIEW q01 AS
+         SELECT
+            ol_number,
+            sum(ol_quantity) as sum_qty,
+            sum(ol_amount) as sum_amount,
+            avg(ol_quantity) as avg_qty,
+            avg(ol_amount) as avg_amount,
+            count(*) as count_order
+         FROM orderline
+         WHERE ol_delivery_d > date '1998-12-01'
+         GROUP BY ol_number",
     ) {
-        Ok(_) => info!("created view q01"),
-        Err(err) => warn!("trying to create view: {}", err),
+        Ok(_) => info!("view q01 is installed"),
+        Err(err) => warn!("error trying to create view: {}", err),
     }
 }
 
