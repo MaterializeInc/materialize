@@ -98,6 +98,17 @@ steps:
           run: sqllogictest
     if: $CHANGED_RUST || $CHANGED_SLT
 
+  - id: streaming-demo
+    label: ":shower: streaming-demo"
+    depends_on: build
+    timeout_in_minutes: 30
+    plugins:
+      - MaterializeInc/uid#master: ~
+      - docker-compose#v3.0.3:
+          config: ci/test/streaming-demo.compose.yml
+          run: billing-demo
+    if: $CHANGED_RUST
+
   - id: full-sqllogictest
     label: ":bulb: :bulb: Full SQL logic tests"
     depends_on: build
@@ -111,7 +122,7 @@ steps:
 
   - id: deploy
     label: ":rocket: Deploy"
-    depends_on: [lint-fast, lint-slow, cargo-test, testdrive, short-sqllogictest]
+    depends_on: [lint-fast, lint-slow, cargo-test, testdrive, streaming-demo, short-sqllogictest]
     trigger: deploy
     async: true
     branches: master

@@ -6,6 +6,7 @@
 FROM ubuntu:bionic
 
 RUN apt-get update && apt-get install -qy postgresql-client
+RUN apt-get install -qy wait-for-it
 
 COPY billing-demo /usr/local/bin
 
