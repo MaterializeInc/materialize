@@ -26,116 +26,11 @@ want to increase memory available to Docker Engine using the following steps:
    4. Click "Apply and Restart".
    5. Continue with the `docker-compose` steps listed above.
 
-To get started, bring up the Docker Compose containers in the background. To do
-this, open up a new shell, and from the Materialize repository, change to the
-`demo/chbench` directory and type the following three commands after each other:
+## Getting started
 
-```shell session
-$ docker-compose up -d --build
-Creating network "chbench_default" with the default driver
-Creating chbench_inspect_1      ... done
-Creating chbench_chbench_1      ... done
-Creating chbench_cli_1          ... done
-Creating chbench_mysql_1        ... done
-Creating chbench_materialized_1 ... done
-Creating chbench_connector_1    ... done
-Creating chbench_zookeeper_1    ... done
-Creating chbench_kafka_1        ... done
-Creating chbench_connect_1         ... done
-Creating chbench_schema-registry_1 ... done
-```
+Follow the [Metabase demo instructions][demo], which uses this chbench harness.
 
-If all goes well, you'll have MySQL, ZooKeeper, Kafka, Kafka Connect, and
-Materialize running, each in their own container, with Debezium configured to
-ship changes from MySQL into Kafka. You won't really be able to tell if things
-fail to start up, which seems to happen from time to time, as the output from
-Docker Compose only tells you if the *container* successfully booted, not if the
-service inside the container actually booted. Your best bet is to assume that
-the services came up and proceed with the demo—the logs are too spammy to be
-useful in quickly determining whether the service came up successfully.
-
-Now, generate some CH-benCHmark data. You'll only need to do this step once, as
-the generated data is stored on a Docker volume that persists until you manually
-remove it with `docker volume rm`, so if this is your second time through the
-demo, you can skip this step.
-
-```shell session
-$ docker-compose run chbench-init
-$ docker-compose run chbench gen --warehouses=1
-```
-
-You can generate bigger datasets by using more warehouses. Once the data is
-generated, it's time to fire up some load! Type the follow command, which will
-take control of your session and run for the specified number of seconds.
-
-```shell session
-$ docker-compose run chbench run \
-    --dsn=mysql --gen-dir=/var/lib/mysql-files \
-    --analytic-threads=0 --transactional-threads=5 --run-seconds=300
-Databasesystem:
--initializing
-Schema creation:
--succeeded
-CSV import:
--succeeded
--check with 1 warehouses succeeded
-Additional Preparation:
--succeeded
-Wait for threads to initialize:
--all threads initialized
-Workload:
--start warmup
--start test
-```
-
-Once you see that the CSV import has succeeded, the initial data set has been
-loaded into MySQL. The load generator will continue to run for the specified
-duration.
-
-It's time to connect to `materialized` and install some materialized views! In
-a new shell, in the same directory, type the following which will bring up a
-materialize shell.
-
-```shell session
-$ docker-compose run cli
-CREATE SOURCE orderline
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
-
-CREATE MATERIALIZED VIEW q01 as SELECT
-        ol_number,
-        sum(ol_quantity) as sum_qty,
-        sum(ol_amount) as sum_amount,
-        avg(ol_quantity) as avg_qty,
-        avg(ol_amount) as avg_amount,
-        count(*) as count_order
-FROM
-        orderline
-WHERE
-        ol_delivery_d > date '1998-12-01'
-GROUP BY
-        ol_number;
-
-SELECT * FROM q01;
-SELECT * FROM q01;
-SELECT * FROM q01;
-```
-
-For maximum style points, use `watch-sql` for some live query monitoring:
-
-```bash session
-$ docker-compose run cli watch-sql "SELECT * FROM q01"
-```
-
-To ensure that `materialized` reflects all changes to the source data, you can
-run:
-
-```bash session
-$ docker-compose run schema-registry flush-tables
-```
-
-[CH-benCHmark]: https://db.in.tum.de/research/projects/CHbenCHmark/index.shtml?lang=en
-[docker-compose]: https://docs.docker.com/compose/
+[demo]: ../../doc/developer/metabase-demo.md
 
 ## Using the MySQL CLI
 
