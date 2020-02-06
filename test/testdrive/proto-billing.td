@@ -3,9 +3,10 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-> CREATE SOURCE billing_source FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Batch'
-  USING SCHEMA '${testdrive.protobuf-descriptors}'
+> CREATE SOURCE billing_source FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Batch' USING SCHEMA '${testdrive.protobuf-descriptors}'
+
 > CREATE MATERIALIZED VIEW billing AS SELECT * FROM billing_source
 
 $ kafka-ingest format=protobuf topic=messages message=.Batch timestamp=1

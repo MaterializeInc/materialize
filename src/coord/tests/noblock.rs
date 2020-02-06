@@ -55,12 +55,18 @@ fn no_block() {
     let fut = async move {
         let session = Session::default();
         let (oneshot_tx, oneshot_rx) = oneshot::channel();
-        cmd_tx.send(Command::Parse {
-            name: "hang".into(),
-            sql: "CREATE SOURCE foo FROM 'kafka://localhost:9092/foo' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:9999'".into(),
-            session,
-            tx: oneshot_tx,
-        }).await.unwrap();
+        cmd_tx
+            .send(Command::Parse {
+                name: "hang".into(),
+                sql: "CREATE SOURCE foo \
+                      FROM KAFKA BROKER 'localhost:9092' TOPIC 'foo' \
+                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:9999'"
+                    .into(),
+                session,
+                tx: oneshot_tx,
+            })
+            .await
+            .unwrap();
 
         let Response {
             result,

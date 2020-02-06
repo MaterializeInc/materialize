@@ -3,15 +3,15 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-> CREATE SOURCE protomessages FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Struct'
-  USING SCHEMA '${testdrive.protobuf-descriptors}'
+> CREATE SOURCE protomessages FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA '${testdrive.protobuf-descriptors}'
 
 > CREATE MATERIALIZED VIEW pm AS SELECT * FROM protomessages
 
-> CREATE SOURCE protomessages2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-messages-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Struct'
-  USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+> CREATE SOURCE protomessages2 FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
 
 > CREATE VIEW pm2 AS SELECT * FROM protomessages
 

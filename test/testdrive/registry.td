@@ -6,8 +6,10 @@
 # Verify the error message is useful when a schema is not present in the
 # registry.
 
-! CREATE SOURCE noexist FROM 'kafka://${testdrive.kafka-addr}/testdrive-noexist-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+! CREATE SOURCE noexist
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-noexist-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 fetching latest schema for subject 'testdrive-noexist-${testdrive.seed}-value' from registry: subject not found
 
 $ set schema_v1={
@@ -59,8 +61,10 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp
 $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v1 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+> CREATE SOURCE data_v1
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW data_v1_view as SELECT * from data_v1
 
@@ -75,8 +79,10 @@ $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp
 $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp=4
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+> CREATE SOURCE data_v2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW data_v2_view as SELECT * from data_v2
 
@@ -159,8 +165,10 @@ $ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${k
   publish=true timestamp=2
 {"before": null, "after": null}
 
-! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-missing-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM;
+! CREATE SOURCE data_v3
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-missing-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 Value schema missing primary key column: b
 
 $ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
@@ -171,8 +179,10 @@ $ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=
   publish=true timestamp=4
 {"before": null, "after": null}
 
-! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-mismatched-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM;
+! CREATE SOURCE data_v3
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mismatched-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 key and value column types do not match
 
 $ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
@@ -183,8 +193,10 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key
   publish=true timestamp=6
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
+> CREATE SOURCE data_v3
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW data_v3_view as SELECT * from data_v3
 

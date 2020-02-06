@@ -355,20 +355,26 @@ macro_rules! make_visitor {
             fn visit_create_source(
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
-                url: &'ast $($mut)* String,
+                connector: &'ast $($mut)* Connector,
                 format: &'ast $($mut)* Format,
                 envelope: &'ast $($mut)* Envelope,
-                with_options: &'ast $($mut)* Vec<SqlOption>,
                 if_not_exists: bool,
             ) {
-                visit_create_source(self, name, url, format, envelope, with_options, if_not_exists)
+                visit_create_source(self, name, connector, format, envelope, if_not_exists)
             }
 
-            fn visit_source_format(
+            fn visit_connector(
+                &mut self,
+                connector: &'ast $($mut)* Connector,
+            ) {
+                visit_connector(self, connector)
+            }
+
+            fn visit_format(
                 &mut self,
                 format: &'ast $($mut)* Format,
             ) {
-                visit_source_format(self, format)
+                visit_format(self, format)
             }
 
             fn visit_source_envelope(
@@ -400,19 +406,15 @@ macro_rules! make_visitor {
                 visit_create_sources(self, like, url, schema_registry, with_options)
             }
 
-            fn visit_source_schema(&mut self, source_schema: &'ast $($mut)* SourceSchema) {
-                visit_source_schema(self, source_schema)
-            }
-
             fn visit_create_sink(
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
                 from: &'ast $($mut)* ObjectName,
-                url: &'ast $($mut)* String,
-                with_options: &'ast $($mut)* Vec<SqlOption>,
+                connector: &'ast $($mut)* Connector,
+                format: &'ast $($mut)* Format,
                 if_not_exists: bool,
             ) {
-                visit_create_sink(self, name, from, url, with_options, if_not_exists)
+                visit_create_sink(self, name, from, connector, format, if_not_exists)
             }
 
             fn visit_create_view(
@@ -663,12 +665,11 @@ macro_rules! make_visitor {
                 }
                 Statement::CreateSource {
                     name,
-                    url,
+                    connector,
                     format,
                     envelope,
-                    with_options,
                     if_not_exists,
-                } => visitor.visit_create_source(name, url, format, envelope, with_options, *if_not_exists),
+                } => visitor.visit_create_source(name, connector, format, envelope, *if_not_exists),
                 Statement::CreateSources {
                     like,
                     url,
@@ -678,10 +679,10 @@ macro_rules! make_visitor {
                 Statement::CreateSink {
                     name,
                     from,
-                    url,
-                    with_options,
+                    connector,
+                    format,
                     if_not_exists,
-                } => visitor.visit_create_sink(name, from, url, with_options, *if_not_exists),
+                } => visitor.visit_create_sink(name, from, connector, format, *if_not_exists),
                 Statement::CreateView {
                     name,
                     columns,
@@ -1324,22 +1325,39 @@ macro_rules! make_visitor {
         pub fn visit_create_source<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             name: &'ast $($mut)* ObjectName,
-            url: &'ast $($mut)* String,
+            connector: &'ast $($mut)* Connector,
             format: &'ast $($mut)* Format,
             envelope: &'ast $($mut)* Envelope,
-            with_options: &'ast $($mut)* Vec<SqlOption>,
             _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
-            visitor.visit_literal_string(url);
-            visitor.visit_source_format(format);
+            visitor.visit_connector(connector);
+            visitor.visit_format(format);
             visitor.visit_source_envelope(envelope);
-            for option in with_options {
-                visitor.visit_option(option);
+        }
+
+        pub fn visit_connector<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            connector: &'ast $($mut)* Connector,
+        ) {
+            match connector {
+                Connector::File { path, with_options } => {
+                    visitor.visit_literal_string(path);
+                    for option in with_options {
+                        visitor.visit_option(option);
+                    }
+                }
+                Connector::Kafka { broker, topic, with_options } => {
+                    visitor.visit_literal_string(broker);
+                    visitor.visit_literal_string(topic);
+                    for option in with_options {
+                        visitor.visit_option(option);
+                    }
+                }
             }
         }
 
-        pub fn visit_source_format<'ast, V: $name<'ast> + ?Sized>(
+        pub fn visit_format<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             format: &'ast $($mut)* Format,
         ) {
@@ -1392,31 +1410,18 @@ macro_rules! make_visitor {
             }
         }
 
-        fn visit_source_schema<'ast, V: $name<'ast> + ?Sized>(
-            visitor: &mut V,
-            source_schema: &'ast $($mut)* SourceSchema,
-        ) {
-            match source_schema {
-                SourceSchema::Inline(schema) => visitor.visit_literal_string(schema),
-                SourceSchema::File(schema) => visitor.visit_literal_string(schema),
-                SourceSchema::Registry(url) => visitor.visit_literal_string(url),
-            }
-        }
-
         pub fn visit_create_sink<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             name: &'ast $($mut)* ObjectName,
             from: &'ast $($mut)* ObjectName,
-            url: &'ast $($mut)* String,
-            with_options: &'ast $($mut)* Vec<SqlOption>,
+            connector: &'ast $($mut)* Connector,
+            format: &'ast $($mut)* Format,
             _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_object_name(from);
-            visitor.visit_literal_string(url);
-            for option in with_options {
-                visitor.visit_option(option);
-            }
+            visitor.visit_connector(connector);
+            visitor.visit_format(format);
         }
 
         pub fn visit_drop_database<'ast, V: $name<'ast> + ?Sized>(

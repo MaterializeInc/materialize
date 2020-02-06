@@ -28,12 +28,21 @@ $ set schema={
     ]
   }
 
-> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE s
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
 
-! CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+! CREATE SOURCE s
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-blah-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
 catalog item 's' already exists
 
-> CREATE SOURCE IF NOT EXISTS s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-blah-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE IF NOT EXISTS s
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-blah-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW test1 AS SELECT 1;
 
@@ -99,14 +108,23 @@ catalog item 'test2' does not exist
 ! DROP VIEW test4;
 catalog item 'test4' does not exist
 
-> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE s
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
 
-> CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
+> CREATE SINK s1 FROM s
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-! CREATE SINK s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v2' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
+! CREATE SINK s1 FROM s
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 catalog item 's1' already exists
 
-> CREATE SINK IF NOT EXISTS s1 FROM s INTO 'kafka://${testdrive.kafka-addr}/v2' WITH (schema_registry_url = '${testdrive.schema-registry-url}');
+> CREATE SINK IF NOT EXISTS s1 FROM s
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v2'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 # Test that sinks cannot be depended upon.
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;

@@ -74,20 +74,20 @@ _avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/sp
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
-**FROM** _source&lowbar;url_ | The Kafka URL or absolute file path of the source you want to use (begins with `kafka://` or `file://`).
+**FROM** _format&lowbar;spec_ | A specification of how to connect to the external resource providing the data. For more detail, see [Connector specifications](#connector-spec).
 **FORMAT** _format&lowbar;spec_ | A description of the format of data in the source. For more detail, see [Format specifications](#format-spec).
 **ENVELOPE** _envelope_ | The envelope type, either **NONE** or **DEBEZIUM**. **NONE** implies that each record appends to the source. **DEBEZIUM** requires records to have `before` and `after` fields, allowing deletes, inserts, and updates. It is currently only supported for Avro-format Kafka sources.
 **WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
 
-#### `WITH` options
+### Connector specifications
+
+{{< diagram "connector-spec.html" >}}
 
 The following options are valid within the `WITH` clause.
 
 Field | Value
 ------|-----
 `tail` | Continually check the file for new content; as new content arrives, process it using other `WITH` options. (Only valid for file sources).
-
-All field names are case-sensitive.
 
 ### Format specifications
 
@@ -141,18 +141,17 @@ the data published to the Kafka topic.
 
 ### Source requirements
 
-Materialize requires that the data it receives from Kafka have a structure that
-contains both the old and new values for any fields within a record (a "diff
-envelope"), which lets Differential dataflow process arbitrary changes to the
-underlying data, e.g. expressing a record's deletion.
+Materialize optionally allows the data it receives from Kafka to have a
+structure that contains both the old and new values for any fields within a
+record (a "diff envelope"), which lets Differential dataflow process arbitrary
+changes to the underlying data, e.g. expressing a record's deletion.
 
 The only tool that we're aware of that provide data to Kafka in this form is
 Debezium through its envelope structure that contains a `before` and `after`
 field (although CockroachDB's change data capture feature is close to
 operational, as well).
 
-Ultimately, this means that the only sources that you can create must originate
-from Debezium, which must be published through Kafka.
+You can opt in to this behavior with the `ENVELOPE DEBEZIUM` option.
 
 ### Source schema
 
@@ -184,7 +183,7 @@ from their sources that are available from the arrangements within Differential.
 File sources have the following caveats, in addition to any details of the
 specific file type you're using:
 
-- File path must be prefixed with `file://`, and be the file's absolute path.
+- The specified path must be an absolute path to the file.
 - All data in file sources are treated as [`string`](./data-types/string).
 
 ### CSV sources
@@ -229,7 +228,7 @@ USING SCHEMA REGISTRY 'http://schema-registry:8081';
 
 ```sql
 CREATE SOURCE 'mysql.simple.user'
-FROM 'kafka://kafka:9092'
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'user'
 FORMAT AVRO
 USING SCHEMA '{
   "type": "record",
@@ -259,12 +258,9 @@ ENVELOPE DEBEZIUM;
 
 ```sql
 CREATE SOURCE test
-FROM 'file:///test.csv'
+FROM FILE '/test.csv'
 FORMAT CSV WITH 5 COLUMNS;
 ```
-
-- The prefix for the file is `file://`, which is followed by the absolute path
-  to the file (`/test.csv` in this example), resulting in `file:///test.csv`.
 
 ### Creating a source from a dynamic, unstructured file
 
@@ -280,7 +276,7 @@ We'll create a source that takes in these entire lines and extracts the file off
 
 ```sql
 CREATE SOURCE hex
-FROM  'file:///xxd.log'
+FROM FILE '/xxd.log'
 FORMAT REGEX '(?P<offset>[0-9a-f]{8}): (?:[0-9a-f]{4} ){8} (?P<decoded>.*)$'
 WITH (
     tail=true

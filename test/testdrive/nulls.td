@@ -32,8 +32,9 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
 $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE foo FROM 'kafka://${testdrive.kafka-addr}/testdrive-foo-${testdrive.seed}' FORMAT AVRO
-  USING SCHEMA '${foo-schema}' ENVELOPE DEBEZIUM
+> CREATE SOURCE foo
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${foo-schema}' ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM foo JOIN foo as foo2 USING (a);
