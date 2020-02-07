@@ -385,6 +385,7 @@ define_keywords!(
     SEARCH,
     SECOND,
     SECONDS,
+    SEED,
     SELECT,
     SENSITIVE,
     SERIALIZABLE,

@@ -1515,7 +1515,24 @@ impl Parser {
 
     pub fn parse_avro_schema(&mut self) -> Result<AvroSchema, ParserError> {
         let avro_schema = if self.parse_keywords(vec!["CONFLUENT", "SCHEMA", "REGISTRY"]) {
-            AvroSchema::CsrUrl(self.parse_literal_string()?)
+            let url = self.parse_literal_string()?;
+            let seed = if self.parse_keyword("SEED") {
+                let key_schema = if self.parse_keyword("KEY") {
+                    self.expect_keyword("SCHEMA")?;
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+                self.expect_keywords(&["VALUE", "SCHEMA"])?;
+                let value_schema = self.parse_literal_string()?;
+                Some(CsrSeed {
+                    key_schema,
+                    value_schema,
+                })
+            } else {
+                None
+            };
+            AvroSchema::CsrUrl { url, seed }
         } else if self.parse_keyword("SCHEMA") {
             self.prev_token();
             AvroSchema::Schema(self.parse_schema()?)

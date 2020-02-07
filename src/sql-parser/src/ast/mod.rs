@@ -503,24 +503,64 @@ pub enum Schema {
 impl fmt::Display for Schema {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::File(path) => write!(f, "SCHEMA FILE '{}'", path.display()),
-            Self::Inline(inner) => write!(f, "SCHEMA '{}'", inner),
+            Self::File(path) => write!(
+                f,
+                "SCHEMA FILE '{}'",
+                value::escape_single_quote_string(&path.display().to_string())
+            ),
+            Self::Inline(inner) => {
+                write!(f, "SCHEMA '{}'", value::escape_single_quote_string(inner))
+            }
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema {
-    CsrUrl(String),
+    CsrUrl { url: String, seed: Option<CsrSeed> },
     Schema(Schema),
 }
 
 impl fmt::Display for AvroSchema {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::CsrUrl(url) => write!(f, "CONFLUENT SCHEMA REGISTRY '{}'", url),
+            Self::CsrUrl { url, seed } => {
+                write!(
+                    f,
+                    "CONFLUENT SCHEMA REGISTRY '{}'",
+                    value::escape_single_quote_string(url)
+                )?;
+                if let Some(seed) = seed {
+                    write!(f, " {}", seed)?;
+                }
+                Ok(())
+            }
             Self::Schema(schema) => schema.fmt(f),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrSeed {
+    pub key_schema: Option<String>,
+    pub value_schema: String,
+}
+
+impl fmt::Display for CsrSeed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("SEED")?;
+        if let Some(key_schema) = &self.key_schema {
+            write!(
+                f,
+                " KEY SCHEMA '{}'",
+                value::escape_single_quote_string(key_schema)
+            )?;
+        }
+        write!(
+            f,
+            " VALUE SCHEMA '{}'",
+            value::escape_single_quote_string(&self.value_schema)
+        )
     }
 }
 
@@ -574,8 +614,13 @@ impl fmt::Display for Format {
             Self::Protobuf {
                 message_name,
                 schema,
-            } => write!(f, "PROTOBUF MESSAGE '{}' USING {}", message_name, schema),
-            Self::Regex(regex) => write!(f, "REGEX '{}'", regex),
+            } => write!(
+                f,
+                "PROTOBUF MESSAGE '{}' USING {}",
+                value::escape_single_quote_string(message_name),
+                schema
+            ),
+            Self::Regex(regex) => write!(f, "REGEX '{}'", value::escape_single_quote_string(regex)),
             Self::Csv { n_cols, delimiter } => write!(
                 f,
                 "CSV WITH {} COLUMNS{}",
@@ -583,7 +628,10 @@ impl fmt::Display for Format {
                 if *delimiter == ',' {
                     "".to_owned()
                 } else {
-                    format!(" DELIMITED BY '{}'", delimiter)
+                    format!(
+                        " DELIMITED BY '{}'",
+                        value::escape_single_quote_string(&delimiter.to_string())
+                    )
                 }
             ),
             Self::Json => write!(f, "JSON"),
