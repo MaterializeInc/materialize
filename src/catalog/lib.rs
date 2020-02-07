@@ -8,9 +8,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
-use failure::{bail, ResultExt};
+use failure::bail;
 use lazy_static::lazy_static;
 use log::{info, trace};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use dataflow_types::{SinkConnector, SourceConnector};
@@ -255,20 +256,22 @@ impl Catalog {
         f(&mut catalog);
 
         for (id, name, def) in catalog.storage.load_items()? {
-            let item = S::deserialize(&catalog, def)
-                .with_context(|e| format!("corrupt catalog: failed to deserialize item: {}", e))?;
-            for use_id in item.uses() {
-                if catalog.by_id.get(&use_id).is_none() && use_id.is_system() {
-                    // TODO(benesch): one day not all logging views will be
-                    // system views. Producing the error message here also
-                    // violates module boundaries; the catalog shouldn't really
-                    // know about logging views vs other system views.
-                    bail!(
-                        "catalog item '{}' depends on system logging, but logging is disabled",
-                        name
-                    );
-                }
+            // TODO(benesch): a better way of detecting when a view has depended
+            // upon a non-existent logging view. This is fine for now because
+            // the only goal is to produce a nicer error message; we'll bail out
+            // safely even if the error message we're sniffing out changes.
+            lazy_static! {
+                static ref LOGGING_ERROR: Regex =
+                    Regex::new("catalog item 'mz_catalog.[^']*' does not exist").unwrap();
             }
+            let item = match S::deserialize(&catalog, def) {
+                Ok(item) => item,
+                Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => bail!(
+                    "catalog item '{}' depends on system logging, but logging is disabled",
+                    name
+                ),
+                Err(e) => bail!("corrupt catalog: failed to deserialize item: {}", e),
+            };
             catalog.insert_item(id, name, item);
             if let GlobalId::User(id) = id {
                 catalog.id = cmp::max(catalog.id, id);

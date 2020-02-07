@@ -51,7 +51,6 @@ impl From<expr::EvalEnv> for EvalEnv {
     }
 }
 
-#[allow(dead_code)]
 pub struct SqlSerializer;
 
 impl CatalogItemSerializer for SqlSerializer {

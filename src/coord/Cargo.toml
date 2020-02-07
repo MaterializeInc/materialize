@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-catalog = { path = "../catalog", features = ["bincode"] }
+catalog = { path = "../catalog" }
 chrono = "0.4"
 comm = { path = "../comm" }
 dataflow = { path = "../dataflow" }
