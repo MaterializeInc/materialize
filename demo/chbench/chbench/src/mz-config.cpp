@@ -39,7 +39,7 @@ const mz::Config& mz::defaultConfig() {
         },
         .viewPattern = "mysql.tpcch.%",
         .materializedUrl = "postgresql://materialized:6875/materialize?sslmode=disable",
-        .kafkaUrl = "kafka://kafka:9092",
+        .kafkaUrl = "kafka:9092",
         .schemaRegistryUrl = "http://schema-registry:8081",
         .hQueries = {},
         .dialect = new MySqlDialect(),

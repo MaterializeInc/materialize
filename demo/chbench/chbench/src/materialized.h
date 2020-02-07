@@ -1,6 +1,5 @@
 /*
 Copyright 2019 Materialize, Inc.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -47,15 +46,10 @@ struct PeekResults {
     pqxx::result inner;
 };
 
-std::vector<std::string> createAllSources(
-        pqxx::connection& c,
-        std::string from,
-        std::string registry,
-        std::optional<std::string> like);
-
 std::vector<std::string> showAllSources(pqxx::connection &c);
 
 void createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query);
+bool createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::string& registry, const std::string& source);
 
 PeekResults peekView(pqxx::connection& c, const std::string& name, const std::optional<std::string>& order,
                      std::optional<unsigned> limit);
