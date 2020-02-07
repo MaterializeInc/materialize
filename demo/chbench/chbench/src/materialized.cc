@@ -53,8 +53,7 @@ mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::st
 
 void mz::createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query) {
     pqxx::nontransaction w(c);
-    w.exec0("DROP VIEW IF EXISTS " + name);
-    w.exec0("CREATE MATERIALIZED VIEW " + name + " AS " + query);
+    w.exec0("CREATE OR REPLACE MATERIALIZED VIEW " + name + " AS " + query);
 }
 
 mz::PeekResults mz::peekView(pqxx::connection &c, const std::string &name, const std::optional<std::string> &order,
