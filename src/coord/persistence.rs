@@ -8,8 +8,6 @@
 //! These structures must only be evolved backwards-compatibly, or loading
 //! catalogs created by previous versions of Materialize will fail.
 
-use std::collections::HashMap;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -114,9 +112,7 @@ impl CatalogItemSerializer for SqlSerializer {
                 };
                 catalog::CatalogItem::View(View {
                     create_sql: view.create_sql,
-                    // XXX BEFORE MERGE: plumb index information into the
-                    // optimizer.
-                    expr: optimizer.optimize(view.expr, &HashMap::new(), &eval_env),
+                    expr: optimizer.optimize(view.expr, catalog.indexes(), &eval_env),
                     eval_env,
                     desc: view.desc,
                 })
