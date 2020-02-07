@@ -138,7 +138,7 @@ fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
 /// This ignores errors (just logging them), and can just be run multiple times.
 fn try_initialize(client: &mut Client) {
     match client.batch_execute(
-        "CREATE SOURCE IF NOT EXISTS orderline \
+        "CREATE SOURCE IF NOT EXISTS mysql_tpcch_orderline \
         FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline' \
         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
         ENVELOPE DEBEZIUM",
@@ -147,7 +147,7 @@ fn try_initialize(client: &mut Client) {
         Err(err) => warn!("error trying to create sources: {}", err),
     }
     match client.batch_execute(
-        "CREATE OR REPLACE MATERIALIZED VIEW q01 AS
+        "CREATE MATERIALIZED VIEW q01 AS
          SELECT
             ol_number,
             sum(ol_quantity) as sum_qty,
