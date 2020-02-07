@@ -21,4 +21,6 @@ ore = { path = "../ore" }
 postgres = "0.17"
 prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
 regex = "1.3.4"
+serde = { version = "1.0.104", features = ["derive"] }
 tokio = { version = "0.2.11", features = ["rt-threaded"] }
+toml = "0.5.6"
