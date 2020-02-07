@@ -189,7 +189,7 @@ where
                             let eval_env = EvalEnv::default();
                             let view = catalog::View {
                                 create_sql: view.create_sql,
-                                expr: optimizer.optimize(view.expr, &HashMap::new(), &eval_env),
+                                expr: optimizer.optimize(view.expr, catalog.indexes(), &eval_env),
                                 eval_env,
                                 desc: view.desc,
                             };
@@ -669,7 +669,9 @@ where
                 let eval_env = EvalEnv::default();
                 let view = catalog::View {
                     create_sql: view.create_sql,
-                    expr: self.optimize(view.expr, &eval_env),
+                    expr: self
+                        .optimizer
+                        .optimize(view.expr, self.catalog.indexes(), &eval_env),
                     desc: view.desc,
                     eval_env,
                 };
@@ -819,7 +821,9 @@ where
                 // constant expression that originally contains a global get? Is
                 // there anything not containing a global get that cannot be
                 // optimized to a constant expression?
-                let mut source = self.optimize(source, &eval_env);
+                let mut source = self
+                    .optimizer
+                    .optimize(source, self.catalog.indexes(), &eval_env);
 
                 // If this optimizes to a constant expression, we can immediately return the result.
                 if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
@@ -997,7 +1001,9 @@ where
                     wall_time: Some(chrono::Utc::now()),
                     logical_time: Some(0),
                 };
-                let relation_expr = self.optimize(relation_expr, &eval_env);
+                let relation_expr =
+                    self.optimizer
+                        .optimize(relation_expr, self.catalog.indexes(), &eval_env);
                 let pretty = relation_expr.as_ref().pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
                 Ok(send_immediate_rows(rows))
@@ -1194,29 +1200,6 @@ where
 
             _ => unreachable!(),
         }
-    }
-
-    fn optimize(&mut self, expr: RelationExpr, env: &EvalEnv) -> OptimizedRelationExpr {
-        let mut indexes = HashMap::new();
-        expr.visit(&mut |e| {
-            if let RelationExpr::Get {
-                id: Id::Global(id),
-                typ: _,
-            } = e
-            {
-                if let Some(view) = self.views.get(id) {
-                    let keys = view
-                        .primary_idxes
-                        .keys()
-                        .map(|k| k.to_owned())
-                        .collect::<Vec<_>>();
-                    if !keys.is_empty() {
-                        indexes.insert(*id, keys);
-                    }
-                }
-            }
-        });
-        self.optimizer.optimize(expr, &indexes, env)
     }
 
     fn build_view_collection(

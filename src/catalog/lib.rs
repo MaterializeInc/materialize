@@ -49,6 +49,7 @@ pub struct Catalog {
     id: usize,
     by_name: HashMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
+    indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ambient_schemas: HashMap<String, Schema>,
     storage: sql::Connection,
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
@@ -211,6 +212,7 @@ impl Catalog {
             id: 0,
             by_name: HashMap::new(),
             by_id: BTreeMap::new(),
+            indexes: HashMap::new(),
             ambient_schemas: HashMap::new(),
             storage,
             serialize_item: S::serialize,
@@ -417,6 +419,12 @@ impl Catalog {
                     u, entry.name
                 ),
             }
+        }
+        if let CatalogItem::Index(index) = entry.item() {
+            self.indexes
+                .entry(index.on)
+                .or_insert_with(|| Vec::new())
+                .push(index.keys.clone());
         }
         self.get_schemas_mut(&entry.name.database)
             .expect("catalog out of sync")
@@ -669,6 +677,17 @@ impl Catalog {
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
+                    if let CatalogItem::Index(index) = &metadata.inner {
+                        let indexes = self
+                            .indexes
+                            .get_mut(&index.on)
+                            .expect("catalog out of sync");
+                        let i = indexes
+                            .iter()
+                            .position(|keys| keys == &index.keys)
+                            .expect("catalog out of sync");
+                        indexes.remove(i);
+                    }
                     OpStatus::DroppedItem(metadata)
                 }
             })
@@ -678,6 +697,12 @@ impl Catalog {
     /// Iterates over the items in the catalog in order of increasing ID.
     pub fn iter(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.by_id.iter().map(|(_id, entry)| entry)
+    }
+
+    /// Returns a mapping that indicates all indices that are available for
+    /// each item in the catalog.
+    pub fn indexes(&self) -> &HashMap<GlobalId, Vec<Vec<ScalarExpr>>> {
+        &self.indexes
     }
 }
 
