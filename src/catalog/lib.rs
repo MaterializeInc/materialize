@@ -276,6 +276,16 @@ impl Catalog {
         Ok(catalog)
     }
 
+    /// Constructs a dummy catalog.
+    ///
+    /// This is a temporary measure for the SQL package.
+    ///
+    /// TODO(benesch): remove.
+    #[cfg(feature = "bincode")]
+    pub fn dummy() -> Catalog {
+        Catalog::open::<BincodeSerializer, _>(None, |_| ()).unwrap()
+    }
+
     pub fn allocate_id(&mut self) -> GlobalId {
         self.id += 1;
         GlobalId::user(self.id)
