@@ -53,7 +53,7 @@ fn run() -> Result<(), failure::Error> {
     opts.optopt(
         "",
         "timestamp-frequency",
-        "timestamp advancement frequency (default off)",
+        "timestamp advancement frequency (default 10ms)",
         "DURATION/\"off\"",
     );
     opts.optopt(
@@ -123,7 +123,7 @@ fn run() -> Result<(), failure::Error> {
         .as_ref()
         .map(|x| x.as_str())
     {
-        None => None,
+        None => Some(parse_duration::parse("10ms")?),
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
