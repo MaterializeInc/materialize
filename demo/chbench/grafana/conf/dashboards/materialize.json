@@ -42,7 +42,7 @@
         "colorScheme": "interpolateGreens",
         "exponent": 0.9,
         "min": null,
-        "mode": "opacity"
+        "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
       "gridPos": {
@@ -234,7 +234,7 @@
         "colorScheme": "interpolateGreens",
         "exponent": 0.9,
         "min": null,
-        "mode": "opacity"
+        "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
       "description": "from mz_peek_durations",
@@ -608,7 +608,7 @@
         "colorScheme": "interpolateGreens",
         "exponent": 0.9,
         "min": null,
-        "mode": "opacity"
+        "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
       "gridPos": {
