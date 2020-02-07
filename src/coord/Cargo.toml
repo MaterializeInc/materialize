@@ -18,7 +18,6 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.3"
-itertools = "0.8"
 log = "0.4"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
@@ -28,6 +27,7 @@ rdkafka = { version = "0.23.1", features = ["cmake-build"] }
 serde = "1"
 serde_json = "1.0.41"
 sql = { path = "../sql" }
+sql-parser = { path = "../sql-parser" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.2"

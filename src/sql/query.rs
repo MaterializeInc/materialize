@@ -100,7 +100,9 @@ pub fn plan_index_exprs<'a>(
     };
     let mut out = vec![];
     for expr in exprs {
-        out.push(plan_expr(ecx, expr, Some(ScalarType::String))?.lower_uncorrelated());
+        let (expr, _) =
+            plan_expr_or_col_index(ecx, expr, Some(ScalarType::String), "CREATE INDEX")?;
+        out.push(expr.lower_uncorrelated());
     }
     Ok(out)
 }

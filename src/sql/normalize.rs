@@ -53,6 +53,16 @@ pub fn object_name(mut name: ObjectName) -> Result<PartialName, failure::Error> 
     Ok(out)
 }
 
+pub fn unresolve(name: FullName) -> ObjectName {
+    let mut out = vec![];
+    if let DatabaseSpecifier::Name(n) = name.database {
+        out.push(Ident::with_quote('"', n));
+    }
+    out.push(Ident::with_quote('"', name.schema));
+    out.push(Ident::with_quote('"', name.item));
+    ObjectName(out)
+}
+
 /// Normalizes a `CREATE { SOURCE | VIEW | INDEX | SINK }` statement so that the
 /// statement does not depend upon any session parameters, nor specify any
 /// non-default options (like `MATERIALIZED`, `IF NOT EXISTS`, etc).
@@ -64,22 +74,12 @@ pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement,
 ) -> Result<String, failure::Error> {
-    fn sql_name(name: FullName) -> ObjectName {
-        let mut out = vec![];
-        if let DatabaseSpecifier::Name(n) = name.database {
-            out.push(Ident::with_quote('"', n));
-        }
-        out.push(Ident::with_quote('"', name.schema));
-        out.push(Ident::with_quote('"', name.item));
-        ObjectName(out)
-    }
-
     let allocate_name = |name: &ObjectName| -> Result<_, failure::Error> {
-        Ok(sql_name(scx.allocate_name(object_name(name.clone())?)))
+        Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
     };
 
     let resolve_name = |name: &ObjectName| -> Result<_, failure::Error> {
-        Ok(sql_name(scx.resolve_name(name.clone())?))
+        Ok(unresolve(scx.resolve_name(name.clone())?))
     };
 
     struct QueryNormalizer<'a> {
@@ -124,7 +124,7 @@ pub fn create_statement(
 
         fn visit_object_name(&mut self, object_name: &'ast mut ObjectName) {
             match self.scx.resolve_name(object_name.clone()) {
-                Ok(full_name) => *object_name = sql_name(full_name),
+                Ok(full_name) => *object_name = unresolve(full_name),
                 Err(e) => self.err = Some(e),
             };
         }
