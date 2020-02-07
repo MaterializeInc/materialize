@@ -42,7 +42,6 @@ class DataSource {
     static const std::vector<const char*> tpchPrepositions;
     static const std::vector<const char*> tpchTerminators;
     static const std::vector<const char*> tpchAuxiliaries;
-    static const Nation nations[];
     static const char* regions[];
     static int warehouseCount;
 
@@ -89,6 +88,7 @@ class DataSource {
     static const char* getRegion(int i);
 
     static std::string randomState();
+    static Nation randomNation();
 };
 
 #endif

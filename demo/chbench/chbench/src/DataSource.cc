@@ -27,7 +27,7 @@ limitations under the License.
 #include <sstream>
 #include <assert.h>
 
-const Nation DataSource::nations[] = {
+static const std::vector<Nation> nations = {
     {48, "ALGERIA", 0},     {49, "ARGENTINA", 1},      {50, "BRAZIL", 1},
     {51, "CANADA", 1},      {52, "EGYPT", 4},          {53, "ETHIOPIA", 0},
     {54, "FRANCE", 3},      {55, "GERMANY", 3},        {56, "INDIA", 2},
@@ -469,7 +469,7 @@ std::string DataSource::strLeadingZero(int i, int zeros) {
     return ss.str();
 }
 
-Nation DataSource::getNation(int i) { return nations[i]; }
+Nation DataSource::getNation(int i) { return nations.at(i); }
 
 const char* DataSource::getRegion(int i) { return regions[i]; }
 
@@ -477,3 +477,9 @@ std::string DataSource::randomState() {
     assert(states.size() > 0);
     return states.at(chRandom::uniformInt(0, states.size() - 1));
 }
+
+Nation DataSource::randomNation() {
+    assert(nations.size() > 0);
+    return nations.at(chRandom::uniformInt(0, nations.size() - 1));
+}
+
