@@ -265,7 +265,8 @@ pub fn handle_statement(
     let scx = &StatementContext { catalog, session };
     match stmt {
         Statement::CreateSource { .. } => {
-            MaybeFuture::Future(Box::pin(handle_create_dataflow(stmt, session.database())))
+            let session = session.to_owned();
+            MaybeFuture::Future(Box::pin(handle_create_dataflow(stmt, session)))
         }
         _ => handle_sync_statement(stmt, params, &scx).into(),
     }
@@ -821,8 +822,9 @@ fn handle_create_view(
 
 async fn handle_create_dataflow(
     stmt: Statement,
-    current_database: DatabaseSpecifier,
+    session: Box<dyn PlanSession + Send>,
 ) -> Result<Plan, failure::Error> {
+    let orig_stmt = stmt.clone();
     match stmt {
         Statement::CreateSource {
             name,
@@ -836,7 +838,7 @@ async fn handle_create_dataflow(
                 sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
             };
 
-            let result = match connector {
+            let mut source = match connector {
                 Connector::Kafka {
                     mut broker,
                     topic,
@@ -857,10 +859,6 @@ async fn handle_create_dataflow(
                             join(with_options.keys(), ",")
                         )
                     }
-                    let name = allocate_name(
-                        current_database.clone(),
-                        normalize::object_name(name.clone())?,
-                    );
                     if !broker.contains(':') {
                         broker += ":9092";
                     }
@@ -868,14 +866,7 @@ async fn handle_create_dataflow(
                         Some(addr) => addr,
                         None => bail!("unable to resolve kafka broker to any addresses"),
                     };
-                    let source =
-                        build_kafka_source(addr, topic, format.clone(), envelope, consistency)
-                            .await?;
-                    Ok(Plan::CreateSource {
-                        name,
-                        source,
-                        if_not_exists,
-                    })
+                    build_kafka_source(addr, topic, format.clone(), envelope, consistency).await?
                 }
                 Connector::File { path, with_options } => {
                     let mut with_options: HashMap<_, _> = with_options
@@ -982,8 +973,8 @@ async fn handle_create_dataflow(
                             bail!("Debezium-envelope file sources are not supported")
                         }
                     }
-                    let source = Source {
-                        create_sql: "TODO".into(),
+                    Source {
+                        create_sql: "<filled in below>".into(),
                         connector: SourceConnector {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
                                 path: path.into(),
@@ -994,19 +985,25 @@ async fn handle_create_dataflow(
                             consistency: Consistency::RealTime,
                         },
                         desc,
-                    };
-                    let name = allocate_name(
-                        current_database.clone(),
-                        normalize::object_name(name.clone())?,
-                    );
-                    Ok(Plan::CreateSource {
-                        name,
-                        source,
-                        if_not_exists,
-                    })
+                    }
                 }
             };
-            result
+
+            // TODO(benesch): figure out how to get the actual catalog in here.
+            // Likely need to return a non-async func that takes the session and
+            // catalog.
+            let catalog = Catalog::dummy();
+            let scx = StatementContext {
+                catalog: &catalog,
+                session: &*session,
+            };
+            let name = scx.allocate_name(normalize::object_name(name.clone())?);
+            source.create_sql = normalize::create_statement(&scx, orig_stmt)?;
+            Ok(Plan::CreateSource {
+                name,
+                source,
+                if_not_exists,
+            })
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
@@ -1326,7 +1323,7 @@ fn build_kafka_avro_source(
             }
 
             Ok(Source {
-                create_sql: "TODO".into(),
+                create_sql: "<filled in later>".into(),
                 connector: SourceConnector {
                     connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         addr: kafka_addr,
@@ -1424,23 +1421,19 @@ pub struct StatementContext<'a> {
 
 impl<'a> StatementContext<'a> {
     pub fn allocate_name(&self, name: PartialName) -> FullName {
-        allocate_name(self.session.database(), name)
+        FullName {
+            database: match name.database {
+                Some(name) => DatabaseSpecifier::Name(name),
+                None => self.session.database(),
+            },
+            schema: name.schema.unwrap_or_else(|| "public".into()),
+            item: name.item,
+        }
     }
 
     pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
         let name = normalize::object_name(name)?;
         self.catalog
             .resolve(self.session.database(), self.session.search_path(), &name)
-    }
-}
-
-fn allocate_name(current_database: DatabaseSpecifier, name: PartialName) -> FullName {
-    FullName {
-        database: match name.database {
-            Some(name) => DatabaseSpecifier::Name(name),
-            None => current_database,
-        },
-        schema: name.schema.unwrap_or_else(|| "public".into()),
-        item: name.item,
     }
 }

@@ -379,6 +379,9 @@ pub trait PlanSession: fmt::Debug {
 
     /// Returns the value of the `search_path` configuration parameter.
     fn search_path(&self) -> &[&str];
+
+    /// Constructs an owned version of this `PlanSession`.
+    fn to_owned(&self) -> Box<dyn PlanSession + Send>;
 }
 
 impl PlanSession for Session {
@@ -388,6 +391,33 @@ impl PlanSession for Session {
 
     fn search_path(&self) -> &[&str] {
         self.search_path()
+    }
+
+    fn to_owned(&self) -> Box<dyn PlanSession + Send> {
+        Box::new(OwnedPlanSession {
+            database: self.database(),
+            search_path: self.search_path.value,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct OwnedPlanSession {
+    database: DatabaseSpecifier,
+    search_path: &'static [&'static str],
+}
+
+impl PlanSession for OwnedPlanSession {
+    fn database(&self) -> DatabaseSpecifier {
+        self.database.clone()
+    }
+
+    fn search_path(&self) -> &[&str] {
+        self.search_path
+    }
+
+    fn to_owned(&self) -> Box<dyn PlanSession + Send> {
+        Box::new(self.clone())
     }
 }
 
@@ -404,5 +434,9 @@ impl PlanSession for InternalSession {
 
     fn search_path(&self) -> &[&str] {
         &[]
+    }
+
+    fn to_owned(&self) -> Box<dyn PlanSession + Send> {
+        Box::new(self.clone())
     }
 }
