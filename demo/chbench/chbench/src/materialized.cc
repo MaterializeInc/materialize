@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 #include "materialized.h"
+#include <algorithm>
 #include <chrono>
 #include "timing.h"
 
@@ -36,24 +37,18 @@ mz::showAllSources(pqxx::connection &c) {
     return results;
 }
 
-std::vector<std::string>
-mz::createAllSources(pqxx::connection &c, std::string from, std::string registry, std::optional<std::string> like) {
-    std::vector<std::string> results;
+bool
+mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::string& registry, const std::string& source) {
     pqxx::nontransaction w(c);
-    from = c.quote(from);
-    registry = c.quote(registry);
-    auto realLike = c.quote(like ? like.value() : std::string("%"));
-    auto pqResult = w.exec("CREATE SOURCES LIKE " + realLike + " FROM " + from + " USING SCHEMA REGISTRY " + registry);
-    auto cols = pqResult.columns();
-    if (cols != 1) {
-        throw UnexpectedCreateSourcesResult {"Wrong number of columns: " + std::to_string(cols)};
+    auto topic = source;
+    std::replace(topic.begin(), topic.end(), '_', '.'); // Kafka topics are delimited by periods
+    try {
+        w.exec0("CREATE SOURCE " + source + " FROM KAFKA BROKER '" + kafkaUrl + "' TOPIC '" + topic + "' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '" + registry + "' ENVELOPE DEBEZIUM");
+    } catch (const pqxx::sql_error &e) {
+        fprintf(stderr, "Possibly temporary error creating source %s: %s\n", source.c_str(), e.what());
+        return false;
     }
-    // TODO -- assert that the column is a string.
-    results.reserve(pqResult.size());
-    for (const auto& row: pqResult) {
-        results.push_back(row[0].as<std::string>());
-    }
-    return results;
+    return true;
 }
 
 void mz::createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query) {

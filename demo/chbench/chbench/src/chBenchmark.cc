@@ -170,15 +170,20 @@ static void materializeThread(mz::Config config, std::promise<std::vector<Histog
     pqxx::connection c(connUrl);
 
     while (!expected.empty()) {
-        auto created = mz::createAllSources(c, kafkaUrl, schemaRegistryUrl, pattern);
-        for (const auto& source: created) {
-            std::cout << "Created source: " << source << std::endl;
+        std::unordered_set<std::string> nextExpected;
+        for (const auto& source: expected) {
+            bool created = mz::createSource(c, kafkaUrl, schemaRegistryUrl, source);
+            if (created) {
+                std::cout << "Created source: " << source << std::endl;
+            } else {
+                nextExpected.insert(source);
+            }
         }
-        auto allSources = mz::showAllSources(c);
-        for (const auto& source: allSources) {
-            expected.erase(source);
+        expected = std::move(nextExpected);
+        if (!expected.empty()) {
+            fprintf(stderr, "Not all sources created; sleeping for 1s and trying again.\n");
+            sleep(1);
         }
-        sleep(1);
     }
     std::cout << "Done creating expected sources" << std::endl;
     for (const auto& vp: config.hQueries) {
