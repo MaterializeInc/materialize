@@ -16,6 +16,7 @@ failure = "0.1.6"
 lazy_static = "1.4.0"
 log = "0.4.8"
 itertools = "0.8.2"
+regex = "1"
 repr = { path = "../repr" }
 rusqlite = { version = "0.20", features = ["bundled"] }
 serde = "1.0"

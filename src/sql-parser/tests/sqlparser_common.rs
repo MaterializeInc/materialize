@@ -3677,11 +3677,52 @@ fn parse_create_source_registry() {
                 connector
             );
             assert_eq!(
-                Format::Avro(AvroSchema::CsrUrl("http://localhost:8081".into())),
+                Format::Avro(AvroSchema::CsrUrl {
+                    url: "http://localhost:8081".into(),
+                    seed: None,
+                }),
                 format
             );
             assert!(!if_not_exists);
             assert_eq!(Envelope::Debezium, envelope);
+        }
+        _ => unreachable!(),
+    }
+
+    let sql = "CREATE SOURCE foo FROM FILE 'bar' \
+               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' \
+               SEED VALUE SCHEMA 'blah'";
+    match verified_stmt(sql) {
+        Statement::CreateSource { format, .. } => {
+            assert_eq!(
+                Format::Avro(AvroSchema::CsrUrl {
+                    url: "http://localhost:8081".into(),
+                    seed: Some(CsrSeed {
+                        key_schema: None,
+                        value_schema: "blah".into(),
+                    }),
+                }),
+                format
+            );
+        }
+        _ => unreachable!(),
+    }
+
+    let sql = "CREATE SOURCE foo FROM FILE 'bar' \
+               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' \
+               SEED KEY SCHEMA 'a' VALUE SCHEMA 'b'";
+    match verified_stmt(sql) {
+        Statement::CreateSource { format, .. } => {
+            assert_eq!(
+                Format::Avro(AvroSchema::CsrUrl {
+                    url: "http://localhost:8081".into(),
+                    seed: Some(CsrSeed {
+                        key_schema: Some("a".into()),
+                        value_schema: "b".into(),
+                    }),
+                }),
+                format
+            );
         }
         _ => unreachable!(),
     }

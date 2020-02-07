@@ -51,7 +51,6 @@ impl From<expr::EvalEnv> for EvalEnv {
     }
 }
 
-#[allow(dead_code)]
 pub struct SqlSerializer;
 
 impl CatalogItemSerializer for SqlSerializer {
@@ -94,9 +93,21 @@ impl CatalogItemSerializer for SqlSerializer {
             MaybeFuture::Immediate(Some(Ok(plan))) => plan,
             MaybeFuture::Immediate(Some(Err(e))) => return Err(e),
             MaybeFuture::Immediate(None) => unreachable!(),
-            MaybeFuture::Future(_) => {
-                bail!("catalog entry inappropriately depends on external state")
-            }
+            MaybeFuture::Future(f) => futures::executor::block_on(async {
+                // TODO(benesch): the whole point of MaybeFuture is to indicate
+                // when a maybe-asynchronous task is ready immediately, and yet
+                // here we find ourselves polling the future variant because we
+                // humans know statically that it is ready immediately, even
+                // though Rust does not. Rework so that the type system can
+                // enforce this invariant.
+                use std::task::Poll;
+                match futures::poll!(f) {
+                    Poll::Ready(res) => res,
+                    Poll::Pending => {
+                        bail!("catalog entry inappropriately depends on external state")
+                    }
+                }
+            })?,
         };
         Ok(match plan {
             Plan::CreateSource { source, .. } => catalog::CatalogItem::Source(Source {

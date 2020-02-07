@@ -3,18 +3,18 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use log::error;
+use rdkafka::config::ClientConfig;
+use rdkafka::producer::FutureProducer;
+use rdkafka::producer::FutureRecord;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
-use repr::{RelationDesc, Row};
-
 use interchange::avro::Encoder;
-use rdkafka::config::ClientConfig;
-use rdkafka::producer::FutureProducer;
-use rdkafka::producer::FutureRecord;
+use repr::{RelationDesc, Row};
 
 // TODO@jldlaughlin: What guarantess does this sink support? #1728
 
@@ -51,21 +51,29 @@ pub fn kafka<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let schema = interchange::avro::encode_schema(&relation_desc).unwrap();
+    let schema = interchange::avro::encode_schema(&relation_desc).expect("");
 
-    let mut config = ClientConfig::new();
-    config.set("bootstrap.servers", &connector.addr.to_string());
-    let producer: FutureProducer = config.create().unwrap();
+    // Send new schema to registry, get back the schema id for the sink.
+    // TODO(benesch): don't block the worker thread here.
+    let ccsr_client = ccsr::Client::new(connector.schema_registry_url.clone());
+    match ccsr_client.publish_schema(&connector.topic, &schema.to_string()) {
+        Ok(schema_id) => {
+            let mut config = ClientConfig::new();
+            config.set("bootstrap.servers", &connector.addr.to_string());
+            let producer: FutureProducer = config.create().unwrap();
 
-    stream.sink(Pipeline, &format!("kafka-{}", id), move |input| {
-        let encoder = Encoder::new(&schema.to_string());
-        input.for_each(|_, rows| {
-            for (row, _time, _diff) in rows.iter() {
-                let buf = encoder.encode(connector.schema_id, row);
-                let record: FutureRecord<&Vec<u8>, _> =
-                    FutureRecord::to(&connector.topic).payload(&buf);
-                producer.send(record, 1000 /* block_ms */);
-            }
-        })
-    })
+            stream.sink(Pipeline, &format!("kafka-{}", id), move |input| {
+                let encoder = Encoder::new(&schema.to_string());
+                input.for_each(|_, rows| {
+                    for (row, _time, _diff) in rows.iter() {
+                        let buf = encoder.encode(schema_id, row);
+                        let record: FutureRecord<&Vec<u8>, _> =
+                            FutureRecord::to(&connector.topic).payload(&buf);
+                        producer.send(record, 1000 /* block_ms */);
+                    }
+                })
+            })
+        }
+        Err(e) => error!("unable to publish schema to registry in kafka sink: {}", e),
+    }
 }

@@ -144,16 +144,16 @@ catalog item 'materialize.public.i1' is an index and so cannot be depended upon
 > CREATE INDEX i2 ON v2a(x*2);
 
 > SHOW INDEX in v2a;
-View                   Key_name                           Column_name Expression Null  Seq_in_index
----------------------------------------------------------------------------------------------------
-materialize.public.v2a   materialize.public.i2                <null>      "x * 2"    false 1
-materialize.public.v2a   materialize.public.v2a_primary_idx   x           <null>     false 1
+View                     Key_name                             Column_name Expression     Null   Seq_in_index
+------------------------------------------------------------------------------------------------------------
+materialize.public.v2a   materialize.public.i2                <null>      "\"x\" * 2"    false  1
+materialize.public.v2a   materialize.public.v2a_primary_idx   x           <null>         false  1
 
 > SHOW INDEX in v2;
-View                   Key_name                              Column_name Expression Null  Seq_in_index
-------------------------------------------------------------------------------------------------------
-materialize.public.v2    materialize.public.i1                   x           <null>     false 1
-materialize.public.v2    materialize.public.v2_primary_idx       x           <null>     false 1
+View                   Key_name                              Column_name Expression Null   Seq_in_index
+-------------------------------------------------------------------------------------------------------
+materialize.public.v2  materialize.public.i1                 x           <null>     false  1
+materialize.public.v2  materialize.public.v2_primary_idx     x           <null>     false  1
 
 # Test that dependent indexes do not prevent view deletion when restrict is specified
 # but do not cause deletion of dependent views

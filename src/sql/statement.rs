@@ -24,14 +24,13 @@ use dataflow_types::{
     RowSetFinishing, SinkConnector, SourceConnector,
 };
 use expr::GlobalId;
-use futures::future::TryFutureExt;
 use interchange::{avro, protobuf};
 use ore::collections::CollectionExt;
 use ore::future::MaybeFuture;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
+    AvroSchema, Connector, CsrSeed, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
     ShowStatementFilter, Stage, Statement, Value,
 };
 
@@ -642,7 +641,12 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     };
 
     let schema_registry_url = match format {
-        Format::Avro(AvroSchema::CsrUrl(url)) => url,
+        Format::Avro(AvroSchema::CsrUrl { url, seed }) => {
+            if seed.is_some() {
+                bail!("SEED option does not make sense with sinks");
+            }
+            url
+        }
         _ => bail!("only confluent schema registry avro sinks are supported"),
     };
 
@@ -658,13 +662,9 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     let from = scx.resolve_name(from)?;
     let catalog_entry = scx.catalog.get(&from)?;
 
+    // Validate that we can actually encode this stream as Avro.
     let relation_desc = catalog_entry.desc()?.clone();
-    let schema = interchange::avro::encode_schema(&relation_desc)?;
-
-    // Send new schema to registry, get back the schema id for the sink
-    let url: Url = schema_registry_url.parse().unwrap();
-    let ccsr_client = ccsr::Client::new(url);
-    let schema_id = ccsr_client.publish_schema(&topic, &schema.to_string())?;
+    let _ = interchange::avro::encode_schema(&relation_desc)?;
 
     let sink = Sink {
         create_sql,
@@ -672,7 +672,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         connector: SinkConnector::Kafka(KafkaSinkConnector {
             addr,
             topic,
-            schema_id,
+            schema_registry_url: schema_registry_url.parse()?,
         }),
     };
 
@@ -821,11 +821,16 @@ fn handle_create_view(
 }
 
 async fn handle_create_dataflow(
-    stmt: Statement,
+    mut stmt: Statement,
     session: Box<dyn PlanSession + Send>,
 ) -> Result<Plan, failure::Error> {
-    let orig_stmt = stmt.clone();
-    match stmt {
+    // TODO(benesch): as we walk the statement we remove dependencies on
+    // external state. Schemas in files are inlined, schemas from registries are
+    // fetched, and so on, so that we can generate a fully-specified
+    // `create_sql` to persist in the catalog. This should be refactored out
+    // into its own step ASAP so it is more obvious. It is far too subtle at the
+    // moment.
+    match &mut stmt {
         Statement::CreateSource {
             name,
             connector,
@@ -840,13 +845,13 @@ async fn handle_create_dataflow(
 
             let mut source = match connector {
                 Connector::Kafka {
-                    mut broker,
+                    broker,
                     topic,
                     with_options,
                 } => {
                     let mut with_options: HashMap<_, _> = with_options
-                        .into_iter()
-                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value))
+                        .iter()
+                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
                         .collect();
                     let consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
@@ -860,18 +865,18 @@ async fn handle_create_dataflow(
                         )
                     }
                     if !broker.contains(':') {
-                        broker += ":9092";
+                        *broker += ":9092";
                     }
                     let addr = match broker.to_socket_addrs()?.next() {
                         Some(addr) => addr,
                         None => bail!("unable to resolve kafka broker to any addresses"),
                     };
-                    build_kafka_source(addr, topic, format.clone(), envelope, consistency).await?
+                    build_kafka_source(addr, topic.clone(), format, envelope, consistency).await?
                 }
                 Connector::File { path, with_options } => {
                     let mut with_options: HashMap<_, _> = with_options
-                        .into_iter()
-                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value))
+                        .iter()
+                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
                         .collect();
                     let tail = match with_options.remove("tail") {
                         None => false,
@@ -936,21 +941,24 @@ async fn handle_create_dataflow(
                             )
                         }
                         Format::Csv { n_cols, delimiter } => {
-                            let delimiter = match delimiter as u32 {
-                                0..=127 => delimiter as u8,
+                            let delimiter = match *delimiter as u32 {
+                                0..=127 => *delimiter as u8,
                                 _ => bail!("CSV delimiter must be an ASCII character"),
                             };
                             let cols = iter::repeat(ColumnType::new(ScalarType::String))
-                                .take(n_cols)
+                                .take(*n_cols)
                                 .chain(iter::once(
                                     ColumnType::new(ScalarType::Int64).nullable(true),
                                 ))
                                 .collect();
-                            let names = (1..=n_cols)
+                            let names = (1..=*n_cols)
                                 .map(|i| Some(format!("column{}", i)))
                                 .chain(iter::once(Some(String::from("mz_line_no"))));
                             (
-                                DataEncoding::Csv(CsvEncoding { n_cols, delimiter }),
+                                DataEncoding::Csv(CsvEncoding {
+                                    n_cols: *n_cols,
+                                    delimiter,
+                                }),
                                 RelationDesc::new(RelationType::new(cols), names),
                             )
                         }
@@ -977,7 +985,7 @@ async fn handle_create_dataflow(
                         create_sql: "<filled in below>".into(),
                         connector: SourceConnector {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
-                                path: path.into(),
+                                path: path.clone().into(),
                                 tail,
                             }),
                             encoding,
@@ -997,8 +1005,9 @@ async fn handle_create_dataflow(
                 catalog: &catalog,
                 session: &*session,
             };
+            let if_not_exists = *if_not_exists;
             let name = scx.allocate_name(normalize::object_name(name.clone())?);
-            source.create_sql = normalize::create_statement(&scx, orig_stmt)?;
+            source.create_sql = normalize::create_statement(&scx, stmt)?;
             Ok(Plan::CreateSource {
                 name,
                 source,
@@ -1209,22 +1218,20 @@ fn handle_query(
     Ok((expr.decorrelate()?, desc, finishing))
 }
 
-fn build_kafka_source(
+async fn build_kafka_source(
     kafka_addr: SocketAddr,
     topic: String,
-    format: Format,
+    format: &mut Format,
     envelope: Envelope,
     consistency: Consistency,
-) -> MaybeFuture<'static, Result<Source, failure::Error>> {
+) -> Result<Source, failure::Error> {
     match (format, envelope) {
         (Format::Avro(schema), Envelope::Debezium) => {
-            build_kafka_avro_source(schema, kafka_addr, topic, consistency)
+            build_kafka_avro_source(schema, kafka_addr, topic, consistency).await
         }
         (Format::Avro(_), _) => {
-            Err(format_err!(
-                "Currently, only Avro in Debezium-envelope format is supported"
-            ))
-            .into() // TODO(brennan) -- there's no reason not to support this
+            // TODO(brennan) -- there's no reason not to support this
+            bail!("Currently, only Avro in Debezium-envelope format is supported")
         }
         (
             Format::Protobuf {
@@ -1232,15 +1239,13 @@ fn build_kafka_source(
                 schema,
             },
             Envelope::None,
-        ) => build_kafka_protobuf_source(schema, kafka_addr, topic, message_name, consistency),
-        (Format::Protobuf { .. }, Envelope::Debezium) => Err(format_err!(
-            "Currently, Debezium-style envelopes are not supported for protobuf messages."
-        ))
-        .into(),
-        _ => Err(format_err!(
-            "Currently, Kafka sources only support Avro and Protobuf formats."
-        ))
-        .into(), // TODO(brennan)
+        ) => {
+            build_kafka_protobuf_source(schema, kafka_addr, topic, message_name, consistency).await
+        }
+        (Format::Protobuf { .. }, Envelope::Debezium) => {
+            bail!("Currently, Debezium-style envelopes are not supported for protobuf messages.")
+        }
+        _ => bail!("Currently, Kafka sources only support Avro and Protobuf formats."), // TODO(brennan)
     }
 }
 
@@ -1273,114 +1278,112 @@ async fn get_remote_avro_schema(url: Url, topic: String) -> Result<Schema, failu
     })
 }
 
-fn build_kafka_avro_source(
-    schema: AvroSchema,
+async fn build_kafka_avro_source(
+    schema: &mut AvroSchema,
     kafka_addr: SocketAddr,
     topic: String,
     consistency: Consistency,
-) -> MaybeFuture<'static, Result<Source, failure::Error>> {
-    let schema = match schema {
+) -> Result<Source, failure::Error> {
+    let Schema {
+        key_schema,
+        value_schema,
+        schema_registry_url,
+    } = match schema {
         // TODO(jldlaughlin): we need a way to pass in primary key information
         // when building a source from a string or file.
-        AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Ok(Schema {
+        AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Schema {
             key_schema: None,
-            value_schema: schema,
+            value_schema: schema.clone(),
             schema_registry_url: None,
-        })
-        .into(),
+        },
         AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
-            MaybeFuture::Future(Box::pin(async move {
-                Ok(Schema {
-                    key_schema: None,
-                    value_schema: tokio::fs::read_to_string(path).await?,
-                    schema_registry_url: None,
-                })
-            }))
+            let value_schema = tokio::fs::read_to_string(path).await?;
+            *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema.clone()));
+            Schema {
+                key_schema: None,
+                value_schema,
+                schema_registry_url: None,
+            }
         }
-        AvroSchema::CsrUrl(url) => {
-            let url: Result<Url, _> = url.parse();
-            match url {
-                Err(err) => Err(err.into()).into(),
-                Ok(url) => {
-                    MaybeFuture::Future(Box::pin(get_remote_avro_schema(url, topic.clone())))
+        AvroSchema::CsrUrl { url, seed } => {
+            let url: Url = url.parse()?;
+            if let Some(seed) = seed {
+                Schema {
+                    key_schema: seed.key_schema.clone(),
+                    value_schema: seed.value_schema.clone(),
+                    schema_registry_url: Some(url),
                 }
+            } else {
+                let schema = get_remote_avro_schema(url, topic.clone()).await?;
+                *seed = Some(CsrSeed {
+                    key_schema: schema.key_schema.clone(),
+                    value_schema: schema.value_schema.clone(),
+                });
+                schema
             }
         }
     };
 
-    schema.map(move |schema| {
-        schema.and_then(|schema| {
-            let Schema {
-                key_schema,
-                value_schema,
+    let mut desc = avro::validate_value_schema(&value_schema)?;
+    if let Some(key_schema) = key_schema {
+        let keys = avro::validate_key_schema(&key_schema, &desc)?;
+        desc = desc.add_keys(keys);
+    }
+
+    Ok(Source {
+        create_sql: "<filled in later>".into(),
+        connector: SourceConnector {
+            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                addr: kafka_addr,
+                topic,
+            }),
+            encoding: DataEncoding::Avro(AvroEncoding {
+                raw_schema: value_schema,
                 schema_registry_url,
-            } = schema;
-
-            let mut desc = avro::validate_value_schema(&value_schema)?;
-            if let Some(key_schema) = key_schema {
-                let keys = avro::validate_key_schema(&key_schema, &desc)?;
-                desc = desc.add_keys(keys);
-            }
-
-            Ok(Source {
-                create_sql: "<filled in later>".into(),
-                connector: SourceConnector {
-                    connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                        addr: kafka_addr,
-                        topic,
-                    }),
-                    encoding: DataEncoding::Avro(AvroEncoding {
-                        raw_schema: value_schema,
-                        schema_registry_url,
-                    }),
-                    envelope: Envelope::Debezium,
-                    consistency,
-                },
-                desc,
-            })
-        })
+            }),
+            envelope: Envelope::Debezium,
+            consistency,
+        },
+        desc,
     })
 }
 
-fn build_kafka_protobuf_source(
-    schema: sql_parser::ast::Schema,
+async fn build_kafka_protobuf_source(
+    schema: &mut sql_parser::ast::Schema,
     kafka_addr: SocketAddr,
     topic: String,
-    message_name: String,
+    message_name: &str,
     consistency: Consistency,
-) -> MaybeFuture<'static, Result<Source, failure::Error>> {
-    let descriptors: MaybeFuture<Result<_, failure::Error>> = match schema {
-        sql_parser::ast::Schema::Inline(bytes) => {
-            strconv::parse_bytes(&bytes).map_err(Into::into).into()
-        }
+) -> Result<Source, failure::Error> {
+    let descriptors = match schema {
+        sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
         sql_parser::ast::Schema::File(path) => {
-            MaybeFuture::Future(Box::pin(tokio::fs::read(path).map_err(Into::into)))
+            let descriptors = tokio::fs::read(path).await?;
+            let mut buf = String::new();
+            strconv::format_bytes(&mut buf, &descriptors);
+            *schema = sql_parser::ast::Schema::Inline(buf);
+            descriptors
         }
     };
-
-    descriptors.map(move |descriptors| {
-        descriptors.and_then(move |descriptors| {
-            let desc = protobuf::validate_descriptors(
-                &message_name,
-                &protobuf::decode_descriptors(&descriptors)?,
-            )?;
-            Ok(Source {
-                create_sql: "TODO".into(),
-                connector: SourceConnector {
-                    connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                        addr: kafka_addr,
-                        topic,
-                    }),
-                    encoding: DataEncoding::Protobuf(ProtobufEncoding {
-                        descriptors,
-                        message_name,
-                    }),
-                    envelope: Envelope::None,
-                    consistency,
-                },
-                desc,
-            })
-        })
+    let desc = protobuf::validate_descriptors(
+        &message_name,
+        &protobuf::decode_descriptors(&descriptors)?,
+    )?;
+    Ok(Source {
+        create_sql: "<filled in later>".into(),
+        connector: SourceConnector {
+            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                addr: kafka_addr,
+                topic,
+            }),
+            encoding: DataEncoding::Protobuf(ProtobufEncoding {
+                descriptors,
+                message_name: message_name.to_owned(),
+            }),
+            envelope: Envelope::None,
+            consistency,
+        },
+        desc,
     })
 }
 

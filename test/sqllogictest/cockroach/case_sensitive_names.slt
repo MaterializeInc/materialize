@@ -218,7 +218,7 @@ query TT
 SHOW CREATE VIEW xv
 ----
 materialize.public.xv
-CREATE VIEW "materialize"."public"."xv" AS SELECT "X", "Y" FROM "materialize"."public"."foo"
+CREATE VIEW "materialize"."public"."xv" AS SELECT "x", "Y" FROM "materialize"."public"."foo"
 
 query error pgcode 42P01 relation "XV" does not exist
 SHOW CREATE VIEW "XV"
@@ -230,7 +230,7 @@ query TT
 SHOW CREATE VIEW "YV"
 ----
 materialize.public.YV
-CREATE VIEW "materialize"."public"."YV" AS SELECT "X", "Y" FROM "materialize"."public"."foo"
+CREATE VIEW "materialize"."public"."YV" AS SELECT "x", "Y" FROM "materialize"."public"."foo"
 
 query error pgcode 42P01 relation "yv" does not exist
 SHOW CREATE VIEW YV

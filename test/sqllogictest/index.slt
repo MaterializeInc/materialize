@@ -33,9 +33,9 @@ CREATE INDEX bar_idx ON bar (substr(z, 3))
 query TTTTBI colnames
 SHOW INDEX IN bar
 ----
-View                     Key_name                            Column_name  Expression   Null  Seq_in_index
-materialize.public.bar   materialize.public.bar_primary_idx  z            NULL         false 1
-materialize.public.bar   materialize.public.bar_idx          NULL         substr(z,␠3) true  1
+View                     Key_name                            Column_name  Expression     Null  Seq_in_index
+materialize.public.bar   materialize.public.bar_primary_idx  z            NULL           false 1
+materialize.public.bar   materialize.public.bar_idx          NULL         substr("z",␠3) true  1
 
 query TTTTBI colnames
 SHOW INDEX FROM foo
@@ -44,9 +44,9 @@ View                     Key_name                            Column_name  Expres
 materialize.public.foo   materialize.public.foo_primary_idx  a            NULL        false  1
 materialize.public.foo   materialize.public.foo_primary_idx  b            NULL        true   2
 materialize.public.foo   materialize.public.foo_primary_idx  c            NULL        true   3
-materialize.public.foo   materialize.public.foo_idx          NULL         a␠+␠c       true   1
+materialize.public.foo   materialize.public.foo_idx          NULL         "a"␠+␠"c"   true   1
 materialize.public.foo   materialize.public.edge_columns     a            NULL        false  1
-materialize.public.foo   materialize.public.edge_columns     NULL         floor(c)    true   2
+materialize.public.foo   materialize.public.edge_columns     NULL         floor("c")  true   2
 
 statement ok
 DROP INDEX foo_idx
@@ -59,7 +59,7 @@ materialize.public.foo  materialize.public.foo_primary_idx  a            NULL   
 materialize.public.foo  materialize.public.foo_primary_idx  b            NULL        true   2
 materialize.public.foo  materialize.public.foo_primary_idx  c            NULL        true   3
 materialize.public.foo  materialize.public.edge_columns     a            NULL        false  1
-materialize.public.foo  materialize.public.edge_columns     NULL         floor(c)    true   2
+materialize.public.foo  materialize.public.edge_columns     NULL         floor("c")  true   2
 
 statement ok
 DROP INDEX edge_columns

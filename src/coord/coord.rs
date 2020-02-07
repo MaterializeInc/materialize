@@ -26,8 +26,6 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
-use crate::timestamp::{TimestampChannel, TimestampMessage};
-use crate::{Command, ExecuteResponse, Response, StartupMessage};
 use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::{Catalog, CatalogItem};
 use dataflow::logging::materialized::MaterializedEvent;
@@ -47,6 +45,10 @@ use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
+
+use crate::persistence::SqlSerializer;
+use crate::timestamp::{TimestampChannel, TimestampMessage};
+use crate::{Command, ExecuteResponse, Response, StartupMessage};
 
 type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 
@@ -128,7 +130,7 @@ where
 
         let catalog_path = catalog_path.as_deref();
         let catalog = if let Some(logging_config) = config.logging {
-            Catalog::open::<catalog::BincodeSerializer, _>(catalog_path, |catalog| {
+            Catalog::open::<SqlSerializer, _>(catalog_path, |catalog| {
                 for log_src in logging_config.active_logs() {
                     let view_name = FullName {
                         database: DatabaseSpecifier::Ambient,
@@ -230,7 +232,7 @@ where
                 }
             })?
         } else {
-            Catalog::open::<catalog::BincodeSerializer, _>(catalog_path, |_| ())?
+            Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
         };
 
         let executor = config.executor;
@@ -696,13 +698,13 @@ where
                 });
                 let (index_id, index) = if materialize {
                     let mut index_name = name.clone();
+                    index_name.item += "_primary_idx";
                     let index = auto_generate_primary_idx(
                         index_name.item.clone(),
                         name.clone(),
                         &view,
                         view_id,
                     );
-                    index_name.item += "_primary_idx";
                     let index_id = self.catalog.allocate_id();
                     ops.push(catalog::Op::CreateItem {
                         id: index_id,

@@ -74,6 +74,13 @@ pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement,
 ) -> Result<String, failure::Error> {
+    fn norm_ident(ident: &mut Ident) {
+        if ident.quote_style.is_none() {
+            ident.value = ident.value.to_lowercase();
+        }
+        ident.quote_style = Some('"');
+    };
+
     let allocate_name = |name: &ObjectName| -> Result<_, failure::Error> {
         Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
     };
@@ -130,7 +137,7 @@ pub fn create_statement(
         }
 
         fn visit_ident(&mut self, ident: &'ast mut Ident) {
-            ident.quote_style = Some('"');
+            norm_ident(ident);
         }
     }
 
@@ -178,7 +185,7 @@ pub fn create_statement(
         } => {
             *name = allocate_name(name)?;
             for c in columns {
-                c.quote_style = Some('"');
+                norm_ident(c);
             }
             {
                 let mut normalizer = QueryNormalizer { scx, err: None };
@@ -194,11 +201,18 @@ pub fn create_statement(
         Statement::CreateIndex {
             name,
             on_name,
-            key_parts: _,
+            key_parts,
             if_not_exists,
         } => {
-            name.quote_style = Some('"');
+            norm_ident(name);
             *on_name = resolve_name(on_name)?;
+            let mut normalizer = QueryNormalizer { scx, err: None };
+            for key_part in key_parts {
+                normalizer.visit_expr(key_part);
+                if let Some(err) = normalizer.err {
+                    return Err(err);
+                }
+            }
             *if_not_exists = false;
         }
 

@@ -389,6 +389,13 @@ macro_rules! make_visitor {
                 visit_avro_schema(self, avro_schema)
             }
 
+            fn visit_csr_seed(
+                &mut self,
+                csr_seed: &'ast $($mut)* CsrSeed,
+            ) {
+                visit_csr_seed(self, csr_seed)
+            }
+
             fn visit_schema(
                 &mut self,
                 schema: &'ast $($mut)* Schema,
@@ -1362,9 +1369,24 @@ macro_rules! make_visitor {
             avro_schema: &'ast $($mut)* AvroSchema,
         ) {
             match avro_schema {
-                AvroSchema::CsrUrl(url) => visitor.visit_literal_string(url),
+                AvroSchema::CsrUrl { url, seed } => {
+                    visitor.visit_literal_string(url);
+                    if let Some(seed) = seed {
+                        visitor.visit_csr_seed(seed);
+                    }
+                }
                 AvroSchema::Schema(schema) => visitor.visit_schema(schema),
             }
+        }
+
+        pub fn visit_csr_seed<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            csr_seed: &'ast $($mut)* CsrSeed,
+        ) {
+            if let Some(key_schema) = &$($mut)* csr_seed.key_schema {
+                visitor.visit_literal_string(key_schema);
+            }
+            visitor.visit_literal_string(&$($mut)* csr_seed.value_schema);
         }
 
         pub fn visit_schema<'ast, V: $name<'ast> + ?Sized>(
