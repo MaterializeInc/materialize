@@ -194,11 +194,18 @@ pub fn create_statement(
         Statement::CreateIndex {
             name,
             on_name,
-            key_parts: _,
+            key_parts,
             if_not_exists,
         } => {
             name.quote_style = Some('"');
             *on_name = resolve_name(on_name)?;
+            let mut normalizer = QueryNormalizer { scx, err: None };
+            for key_part in key_parts {
+                normalizer.visit_expr(key_part);
+                if let Some(err) = normalizer.err {
+                    return Err(err);
+                }
+            }
             *if_not_exists = false;
         }
 
