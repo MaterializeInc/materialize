@@ -662,13 +662,9 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     let from = scx.resolve_name(from)?;
     let catalog_entry = scx.catalog.get(&from)?;
 
+    // Validate that we can actually encode this stream as Avro.
     let relation_desc = catalog_entry.desc()?.clone();
-    let schema = interchange::avro::encode_schema(&relation_desc)?;
-
-    // Send new schema to registry, get back the schema id for the sink
-    let url: Url = schema_registry_url.parse().unwrap();
-    let ccsr_client = ccsr::Client::new(url);
-    let schema_id = ccsr_client.publish_schema(&topic, &schema.to_string())?;
+    let _ = interchange::avro::encode_schema(&relation_desc)?;
 
     let sink = Sink {
         create_sql,
@@ -676,7 +672,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         connector: SinkConnector::Kafka(KafkaSinkConnector {
             addr,
             topic,
-            schema_id,
+            schema_registry_url: schema_registry_url.parse()?,
         }),
     };
 
