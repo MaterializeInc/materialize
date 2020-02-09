@@ -506,7 +506,7 @@ fn handle_show_indexes(
                     let arena = RowArena::new();
                     let (col_name, func) = match key_expr {
                         expr::ScalarExpr::Column(i) => {
-                            let col_name = match desc.get_name(i) {
+                            let col_name = match desc.get_unambiguous_name(*i) {
                                 Some(col_name) => col_name.to_string(),
                                 None => format!("@{}", i + 1),
                             };
