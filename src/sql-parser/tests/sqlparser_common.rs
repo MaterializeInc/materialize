@@ -1337,190 +1337,49 @@ fn parse_literal_string() {
     one_statement_parses_to("SELECT x'deadBEEF'", "SELECT X'deadBEEF'");
 }
 
+// Covers all of the timelike types besides interval. Note that parsing does not
+// validate the contents of timelike types; that functionality is covered by
+// strconv.
 #[test]
-fn parse_literal_date() {
+fn parse_literal_timelike() {
     let sql = "SELECT DATE '1999-01-01'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Date(
-            "1999-01-01".into(),
-            ParsedDate {
-                year: 1999,
-                month: 1,
-                day: 1,
-            }
-        )),
+        &Expr::Value(Value::Date("1999-01-01".into())),
         expr_from_projection(only(&select.projection)),
     );
-
-    let sql = "SELECT DATE '1-1-1 2'";
+    let sql = "SELECT DATE 'invalid date'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Date(
-            "1-1-1 2".into(),
-            ParsedDate {
-                year: 1,
-                month: 1,
-                day: 1,
-            }
-        )),
+        &Expr::Value(Value::Date("invalid date".into())),
         expr_from_projection(only(&select.projection)),
     );
-
-    assert_eq!(
-        "\
-Parse error:
-SELECT DATE '0-00-00'
-            ^^^^^^^^^
-Invalid DATE \'0-00-00\': YEAR cannot be zero."
-            .to_string(),
-        parse_sql_statements("SELECT DATE '0-00-00'")
-            .unwrap_err()
-            .to_string(),
-    );
-
-    assert_eq!(
-        ("\
-Parse error:
-SELECT DATE '1-00-00'
-            ^^^^^^^^^
-Invalid DATE \'1-00-00\': MONTH must be (1, 12), got 0"
-            .to_string()),
-        parse_sql_statements("SELECT DATE '1-00-00'")
-            .unwrap_err()
-            .to_string(),
-    );
-    assert_eq!(
-        ("\
-Parse error:
-SELECT DATE '1-01-00'
-            ^^^^^^^^^
-Invalid DATE \'1-01-00\': DAY cannot be zero."
-            .to_string()),
-        parse_sql_statements("SELECT DATE '1-01-00'")
-            .unwrap_err()
-            .to_string(),
-    );
-
-    assert_eq!(
-        ("\
-Parse error:
-SELECT DATE '-1-01-01'
-            ^^^^^^^^^^
-Invalid DATE/TIME \'-1-01-01\'; Invalid syntax at offset 5: provided Dash but expected None"
-            .to_string()),
-        parse_sql_statements("SELECT DATE '-1-01-01'")
-            .unwrap_err()
-            .to_string(),
-    );
-}
-
-#[test]
-fn parse_literal_time() {
     let sql = "SELECT TIME '01:23:34'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Time(
-            "01:23:34".into(),
-            ParsedTime {
-                hour: 1,
-                minute: 23,
-                second: 34,
-                nano: 0,
-            }
-        )),
+        &Expr::Value(Value::Time("01:23:34".into(),)),
         expr_from_projection(only(&select.projection)),
     );
-
-    let sql = "SELECT TIME '01:23'";
+    let sql = "SELECT TIME 'invalid time'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Time(
-            "01:23".into(),
-            ParsedTime {
-                hour: 1,
-                minute: 23,
-                second: 0,
-                nano: 0,
-            }
-        )),
-        expr_from_projection(only(&select.projection)),
-    );
-
-    let sql = "SELECT TIME '01:23.45'";
-    let select = verified_only_select(sql);
-    assert_eq!(
-        &Expr::Value(Value::Time(
-            "01:23.45".into(),
-            ParsedTime {
-                hour: 0,
-                minute: 1,
-                second: 23,
-                nano: 450_000_000,
-            }
-        )),
-        expr_from_projection(only(&select.projection)),
-    );
-
-    let sql = "SELECT TIME '01:23:34.56'";
-    let select = verified_only_select(sql);
-    assert_eq!(
-        &Expr::Value(Value::Time(
-            "01:23:34.56".into(),
-            ParsedTime {
-                hour: 1,
-                minute: 23,
-                second: 34,
-                nano: 560_000_000,
-            }
-        )),
-        expr_from_projection(only(&select.projection)),
-    );
-}
-
-#[test]
-fn parse_literal_timestamp() {
-    let sql = "SELECT TIMESTAMP '1999-01-01 01:23:34'";
-    let select = verified_only_select(sql);
-    assert_eq!(
-        &Expr::Value(Value::Timestamp(
-            "1999-01-01 01:23:34".into(),
-            ParsedTimestamp {
-                year: 1999,
-                month: 1,
-                day: 1,
-                hour: 1,
-                minute: 23,
-                second: 34,
-                nano: 0,
-                timezone_offset_second: 0,
-            }
-        )),
+        &Expr::Value(Value::Time("invalid time".into(),)),
         expr_from_projection(only(&select.projection)),
     );
 
     let sql = "SELECT TIMESTAMP '1999-01-01 01:23:34.555'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Timestamp(
-            "1999-01-01 01:23:34.555".into(),
-            ParsedTimestamp {
-                year: 1999,
-                month: 1,
-                day: 1,
-                hour: 1,
-                minute: 23,
-                second: 34,
-                nano: 555_000_000,
-                timezone_offset_second: 0,
-            }
-        )),
+        &Expr::Value(Value::Timestamp("1999-01-01 01:23:34.555".into(),)),
         expr_from_projection(only(&select.projection)),
     );
-}
 
-#[test]
-fn parse_literal_timestamptz() {
+    let sql = "SELECT TIMESTAMP 'invalid timestamp'";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Value(Value::Timestamp("invalid timestamp".into(),)),
+        expr_from_projection(only(&select.projection)),
+    );
     let time_formats = [
         "TIMESTAMP",
         "TIMESTAMPTZ",
@@ -1529,57 +1388,25 @@ fn parse_literal_timestamptz() {
     ];
 
     #[rustfmt::skip]
-    let test_cases = [("1999-01-01 01:23:34.555", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
-        ("1999-01-01 01:23:34.555+0:00", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
-        ("1999-01-01 01:23:34.555+0", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
-        ("1999-01-01 01:23:34.555z", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
-        ("1999-01-01 01:23:34.555Z", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
-        ("1999-01-01 01:23:34.555 z", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
-        ("1999-01-01 01:23:34.555 Z", 1999, 1, 1, 1, 23, 34, 555_000_000, 0),
-        ("1999-01-01 01:23:34.555+4:00", 1999, 1, 1, 1, 23, 34, 555_000_000, 14400),
-        ("1999-01-01 01:23:34.555-4:00", 1999, 1, 1, 1, 23, 34, 555_000_000, -14400),
-        ("1999-01-01 01:23:34.555+400", 1999, 1, 1, 1, 23, 34, 555_000_000, 14400),
-        ("1999-01-01 01:23:34.555+4", 1999, 1, 1, 1, 23, 34, 555_000_000, 14400),
-        ("1999-01-01 01:23:34.555+4:30", 1999, 1, 1, 1, 23, 34, 555_000_000, 16200),
-        ("1999-01-01 01:23:34.555+430", 1999, 1, 1, 1, 23, 34, 555_000_000, 16200),
-        ("1999-01-01 01:23:34.555+4:45", 1999, 1, 1, 1, 23, 34, 555_000_000, 17100),
-        ("1999-01-01 01:23:34.555+445", 1999, 1, 1, 1, 23, 34, 555_000_000, 17100),
-        ("1999-01-01 01:23:34.555+14:45", 1999, 1, 1, 1, 23, 34, 555_000_000, 53100),
-        ("1999-01-01 01:23:34.555-14:45", 1999, 1, 1, 1, 23, 34, 555_000_000, -53100),
-        ("1999-01-01 01:23:34.555+1445", 1999, 1, 1, 1, 23, 34, 555_000_000, 53100),
-        ("1999-01-01 01:23:34.555-1445", 1999, 1, 1, 1, 23, 34, 555_000_000, -53100),
-        ("1999-01-01 01:23:34.555 +14:45", 1999, 1, 1, 1, 23, 34, 555_000_000, 53100),
-        ("1999-01-01 01:23:34.555 -14:45", 1999, 1, 1, 1, 23, 34, 555_000_000, -53100),
-        ("1999-01-01 01:23:34.555 +1445", 1999, 1, 1, 1, 23, 34, 555_000_000, 53100),
-        ("1999-01-01 01:23:34.555 -1445", 1999, 1, 1, 1, 23, 34, 555_000_000, -53100),
-    ];
+    let test_cases = vec!(
+        "1999-01-01 01:23:34.555",
+        "invalid timestamptx"
+    );
 
     for test in test_cases.iter() {
         for format in time_formats.iter() {
-            let sql = format!("SELECT {} '{}'", format, test.0);
+            let sql = format!("SELECT {} '{}'", format, test);
             println!("{}", sql);
             let select = unverified_only_select(&sql);
 
-            let mut pts = ParsedTimestamp {
-                year: test.1,
-                month: test.2,
-                day: test.3,
-                hour: test.4,
-                minute: test.5,
-                second: test.6,
-                nano: test.7,
-                timezone_offset_second: 0 as i64,
-            };
-
             if *format == "TIMESTAMPTZ" || *format == "TIMESTAMP WITH TIME ZONE" {
-                pts.timezone_offset_second = test.8;
-                let value = Value::TimestampTz(test.0.into(), pts);
+                let value = Value::TimestampTz((*test).to_string());
                 assert_eq!(
                     &Expr::Value(value),
                     expr_from_projection(only(&select.projection))
                 );
             } else {
-                let value = Value::Timestamp(test.0.into(), pts);
+                let value = Value::Timestamp((*test).to_string());
                 assert_eq!(
                     &Expr::Value(value),
                     expr_from_projection(only(&select.projection))
@@ -1595,98 +1422,40 @@ fn parse_literal_interval_monthlike() {
     // which sets fractional parts to 0.
     let mut iv = IntervalValue::default();
     iv.value = "1".into();
-    iv.parsed.year = Some(DateTimeFieldValue::new(1, 0));
     iv.precision_low = DateTimeField::Year;
-    verify_interval(
-        "SELECT INTERVAL '1' YEAR",
-        iv.clone(),
-        Interval {
-            months: 12,
-            ..Default::default()
-        },
-        None,
-    );
+    verify_interval("SELECT INTERVAL '1' YEAR", iv.clone(), None);
+
+    iv.value = "invalid interval".into();
+    verify_interval("SELECT INTERVAL 'invalid interval' YEAR", iv.clone(), None);
 
     iv.value = "1 year".into();
     iv.precision_low = DateTimeField::Second;
-    verify_interval(
-        "SELECT INTERVAL '1 year'",
-        iv,
-        Interval {
-            months: 12,
-            ..Default::default()
-        },
-        None,
-    );
+    verify_interval("SELECT INTERVAL '1 year'", iv, None);
 
     let mut iv = IntervalValue::default();
     iv.value = "1".into();
-    iv.parsed.month = Some(DateTimeFieldValue::new(1, 0));
     iv.precision_low = DateTimeField::Month;
-    verify_interval(
-        "SELECT INTERVAL '1' MONTH",
-        iv.clone(),
-        Interval {
-            months: 1,
-            ..Default::default()
-        },
-        None,
-    );
+    verify_interval("SELECT INTERVAL '1' MONTH", iv.clone(), None);
 
     iv.value = "1 month".into();
     iv.precision_low = DateTimeField::Second;
-    verify_interval(
-        "SELECT INTERVAL '1 month'",
-        iv,
-        Interval {
-            months: 1,
-            ..Default::default()
-        },
-        None,
-    );
+    verify_interval("SELECT INTERVAL '1 month'", iv, None);
     let mut iv = IntervalValue::default();
     iv.value = "1-1".into();
-    iv.parsed.year = Some(DateTimeFieldValue::new(1, 0));
-    iv.parsed.month = Some(DateTimeFieldValue::new(1, 0));
-    verify_interval(
-        "SELECT INTERVAL '1-1'",
-        iv.clone(),
-        Interval {
-            months: 13,
-            ..Default::default()
-        },
-        None,
-    );
+    verify_interval("SELECT INTERVAL '1-1'", iv.clone(), None);
     iv.value = "1 year 1 month".into();
-    verify_interval(
-        "SELECT INTERVAL '1 year 1 month'",
-        iv,
-        Interval {
-            months: 13,
-            ..Default::default()
-        },
-        None,
-    );
+    verify_interval("SELECT INTERVAL '1 year 1 month'", iv, None);
 }
 
 #[test]
 fn parse_literal_interval_durationlike() {
-    use std::time::Duration;
     use DateTimeField::*;
 
     verify_interval(
         "SELECT INTERVAL '10' DAY",
         IntervalValue {
             value: "10".into(),
-            parsed: ParsedDateTime {
-                day: Some(DateTimeFieldValue::new(10, 0)),
-                ..dflt()
-            },
             precision_low: Day,
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::from_secs(10 * 24 * 60 * 60),
             ..Default::default()
         },
         None,
@@ -1696,15 +1465,7 @@ fn parse_literal_interval_durationlike() {
         "SELECT INTERVAL '10' HOUR",
         IntervalValue {
             value: "10".into(),
-            parsed: ParsedDateTime {
-                hour: Some(DateTimeFieldValue::new(10, 0)),
-                ..dflt()
-            },
             precision_low: Hour,
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::from_secs(10 * 60 * 60),
             ..Default::default()
         },
         None,
@@ -1714,15 +1475,7 @@ fn parse_literal_interval_durationlike() {
         "SELECT INTERVAL '10' MINUTE",
         IntervalValue {
             value: "10".into(),
-            parsed: ParsedDateTime {
-                minute: Some(DateTimeFieldValue::new(10, 0)),
-                ..dflt()
-            },
             precision_low: Minute,
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::from_secs(10 * 60),
             ..Default::default()
         },
         None,
@@ -1732,14 +1485,6 @@ fn parse_literal_interval_durationlike() {
         "SELECT INTERVAL '10'",
         IntervalValue {
             value: "10".into(),
-            parsed: ParsedDateTime {
-                second: Some(DateTimeFieldValue::new(10, 0)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::from_secs(10),
             ..Default::default()
         },
         None,
@@ -1749,14 +1494,6 @@ fn parse_literal_interval_durationlike() {
         "SELECT INTERVAL '0.01'",
         IntervalValue {
             value: "0.01".into(),
-            parsed: ParsedDateTime {
-                second: Some(DateTimeFieldValue::new(0, 10_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::new(0, 10_000_000),
             ..Default::default()
         },
         None,
@@ -1766,81 +1503,6 @@ fn parse_literal_interval_durationlike() {
         "SELECT INTERVAL '1 1:1:1.1'",
         IntervalValue {
             value: "1 1:1:1.1".to_string(),
-            parsed: ParsedDateTime {
-                day: Some(DateTimeFieldValue::new(1, 0)),
-                hour: Some(DateTimeFieldValue::new(1, 0)),
-                minute: Some(DateTimeFieldValue::new(1, 0)),
-                second: Some(DateTimeFieldValue::new(1, 100_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::new(24 * 3600 + 3600 + 60 + 1, 100_000_000),
-            ..Default::default()
-        },
-        None,
-    );
-
-    verify_interval(
-        "SELECT INTERVAL '-1 1:1:1.1'",
-        IntervalValue {
-            value: "-1 1:1:1.1".to_string(),
-            parsed: ParsedDateTime {
-                day: Some(DateTimeFieldValue::new(-1, 0)),
-                hour: Some(DateTimeFieldValue::new(1, 0)),
-                minute: Some(DateTimeFieldValue::new(1, 0)),
-                second: Some(DateTimeFieldValue::new(1, 100_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            is_positive_dur: false,
-            duration: Duration::new(22 * 3600 + 58 * 60 + 58, 900_000_000),
-            ..Default::default()
-        },
-        None,
-    );
-
-    // Positive day,
-    verify_interval(
-        "SELECT INTERVAL '1 -1:1:1.1'",
-        IntervalValue {
-            value: "1 -1:1:1.1".to_string(),
-            parsed: ParsedDateTime {
-                day: Some(DateTimeFieldValue::new(1, 0)),
-                hour: Some(DateTimeFieldValue::new(-1, 0)),
-                minute: Some(DateTimeFieldValue::new(-1, 0)),
-                second: Some(DateTimeFieldValue::new(-1, -100_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::new(22 * 3600 + 58 * 60 + 58, 900_000_000),
-            ..Default::default()
-        },
-        None,
-    );
-
-    // Truncate Y-M.
-    verify_interval(
-        "SELECT INTERVAL '1 2:3' DAY TO SECOND",
-        IntervalValue {
-            value: "1 2:3".into(),
-            parsed: ParsedDateTime {
-                day: Some(DateTimeFieldValue::new(1, 0)),
-                hour: Some(DateTimeFieldValue::new(2, 0)),
-                minute: Some(DateTimeFieldValue::new(3, 0)),
-                second: Some(DateTimeFieldValue::new(0, 0)),
-                ..dflt()
-            },
-            precision_high: Day,
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::from_secs(24 * 3600 + 2 * 3600 + 3 * 60),
             ..Default::default()
         },
         None,
@@ -1851,39 +1513,30 @@ fn parse_literal_interval_durationlike() {
         "SELECT INTERVAL '1 4:5' DAY TO HOUR",
         IntervalValue {
             value: "1 4:5".into(),
-            parsed: ParsedDateTime {
-                day: Some(DateTimeFieldValue::new(1, 0)),
-                hour: Some(DateTimeFieldValue::new(4, 0)),
-                minute: Some(DateTimeFieldValue::new(5, 0)),
-                second: Some(DateTimeFieldValue::new(0, 0)),
-                ..dflt()
-            },
             precision_high: Day,
             precision_low: Hour,
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::from_secs(24 * 3600 + 4 * 3600),
             ..Default::default()
         },
         None,
     );
 
-    // Disambiguate interval string using precision_low.
+    // Truncate Y-M + M:S.NS.
     verify_interval(
-        "SELECT INTERVAL '1' DAY TO HOUR",
+        "SELECT INTERVAL 'invalid interval' DAY TO HOUR",
         IntervalValue {
-            value: "1".into(),
-            parsed: ParsedDateTime {
-                hour: Some(DateTimeFieldValue::new(1, 0)),
-                ..dflt()
-            },
+            value: "invalid interval".into(),
             precision_high: Day,
             precision_low: Hour,
             ..Default::default()
         },
-        Interval {
-            duration: Duration::from_secs(3600),
+        None,
+    );
+
+    verify_interval(
+        "SELECT INTERVAL '01:01:01.111111111' SECOND (5)",
+        IntervalValue {
+            value: "01:01:01.111111111".to_string(),
+            fsec_max_precision: Some(5),
             ..Default::default()
         },
         None,
@@ -1891,58 +1544,11 @@ fn parse_literal_interval_durationlike() {
 }
 
 #[test]
-fn parse_literal_interval_with_fsec_max_precision() {
-    use std::time::Duration;
-
-    // Properly truncates nanoseconds.
-    verify_interval(
-        "SELECT INTERVAL '01:01:01.111111111' SECOND (5)",
-        IntervalValue {
-            value: "01:01:01.111111111".to_string(),
-            parsed: ParsedDateTime {
-                hour: Some(DateTimeFieldValue::new(1, 0)),
-                minute: Some(DateTimeFieldValue::new(1, 0)),
-                second: Some(DateTimeFieldValue::new(1, 111_111_111)),
-                ..Default::default()
-            },
-            fsec_max_precision: Some(5),
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::new(3600 + 60 + 1, 111_110_000),
-            ..Default::default()
-        },
-        None,
-    );
-
-    // Properly rounds truncated nanoseconds.
-    verify_interval(
-        "SELECT INTERVAL '01:01:01.1115' SECOND (3)",
-        IntervalValue {
-            value: "01:01:01.1115".to_string(),
-            parsed: ParsedDateTime {
-                hour: Some(DateTimeFieldValue::new(1, 0)),
-                minute: Some(DateTimeFieldValue::new(1, 0)),
-                second: Some(DateTimeFieldValue::new(1, 111_500_000)),
-                ..Default::default()
-            },
-            fsec_max_precision: Some(3),
-            ..Default::default()
-        },
-        Interval {
-            duration: Duration::new(3600 + 60 + 1, 112_000_000),
-            ..Default::default()
-        },
-        None,
-    );
-
+fn parse_literal_interval_with_fsec_max_precision_errors() {
     // Cannot apply precision to non-second element.
     verify_interval(
         "SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)",
         IntervalValue {
-            ..Default::default()
-        },
-        Interval {
             ..Default::default()
         },
         Some(
@@ -1960,9 +1566,6 @@ Expected end of statement, found: (",
         IntervalValue {
             ..Default::default()
         },
-        Interval {
-            ..Default::default()
-        },
         Some(
             "\
 Parse error:
@@ -1978,9 +1581,6 @@ Expected ), found: ,",
         IntervalValue {
             ..Default::default()
         },
-        Interval {
-            ..Default::default()
-        },
         Some(
             "\
 Parse error:
@@ -1988,247 +1588,6 @@ SELECT INTERVAL '10' SECOND (1) TO SECOND
                                    ^^^^^^
 Expected end of statement, found: SECOND",
         ),
-    );
-}
-
-#[test]
-fn parse_literal_interval_full() {
-    use std::time::Duration;
-    use DateTimeField::*;
-
-    verify_interval(
-        "SELECT INTERVAL '1-2 3 4:5:6.7'",
-        IntervalValue {
-            value: "1-2 3 4:5:6.7".into(),
-            parsed: ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(1, 0)),
-                month: Some(DateTimeFieldValue::new(2, 0)),
-                day: Some(DateTimeFieldValue::new(3, 0)),
-                hour: Some(DateTimeFieldValue::new(4, 0)),
-                minute: Some(DateTimeFieldValue::new(5, 0)),
-                second: Some(DateTimeFieldValue::new(6, 700_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            months: 14,
-            is_positive_dur: true,
-            duration: Duration::new(273_906, 700_000_000),
-        },
-        None,
-    );
-
-    verify_interval(
-        "SELECT INTERVAL '-1-2 3 4:5:6.7'",
-        IntervalValue {
-            value: "-1-2 3 4:5:6.7".into(),
-            parsed: ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(-1, 0)),
-                month: Some(DateTimeFieldValue::new(-2, 0)),
-                day: Some(DateTimeFieldValue::new(3, 0)),
-                hour: Some(DateTimeFieldValue::new(4, 0)),
-                minute: Some(DateTimeFieldValue::new(5, 0)),
-                second: Some(DateTimeFieldValue::new(6, 700_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            months: -14,
-            is_positive_dur: true,
-            duration: Duration::new(273_906, 700_000_000),
-        },
-        None,
-    );
-
-    verify_interval(
-        "SELECT INTERVAL '1-2 -3 -4:5:6.7'",
-        IntervalValue {
-            value: "1-2 -3 -4:5:6.7".into(),
-            parsed: ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(1, 0)),
-                month: Some(DateTimeFieldValue::new(2, 0)),
-                day: Some(DateTimeFieldValue::new(-3, 0)),
-                hour: Some(DateTimeFieldValue::new(-4, 0)),
-                minute: Some(DateTimeFieldValue::new(-5, 0)),
-                second: Some(DateTimeFieldValue::new(-6, -700_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            months: 14,
-            is_positive_dur: false,
-            duration: Duration::new(273_906, 700_000_000),
-        },
-        None,
-    );
-
-    verify_interval(
-        "SELECT INTERVAL '-1-2 -3 -4:5:6.7'",
-        IntervalValue {
-            value: "-1-2 -3 -4:5:6.7".into(),
-            parsed: ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(-1, 0)),
-                month: Some(DateTimeFieldValue::new(-2, 0)),
-                day: Some(DateTimeFieldValue::new(-3, 0)),
-                hour: Some(DateTimeFieldValue::new(-4, 0)),
-                minute: Some(DateTimeFieldValue::new(-5, 0)),
-                second: Some(DateTimeFieldValue::new(-6, -700_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            months: -14,
-            is_positive_dur: false,
-            duration: Duration::new(273_906, 700_000_000),
-        },
-        None,
-    );
-
-    verify_interval(
-        "SELECT INTERVAL '-1-2 3 -4:5:6.7'",
-        IntervalValue {
-            value: "-1-2 3 -4:5:6.7".into(),
-            parsed: ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(-1, 0)),
-                month: Some(DateTimeFieldValue::new(-2, 0)),
-                day: Some(DateTimeFieldValue::new(3, 0)),
-                hour: Some(DateTimeFieldValue::new(-4, 0)),
-                minute: Some(DateTimeFieldValue::new(-5, 0)),
-                second: Some(DateTimeFieldValue::new(-6, -700_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            months: -14,
-            is_positive_dur: true,
-            duration: Duration::new(244_493, 300_000_000),
-        },
-        None,
-    );
-
-    verify_interval(
-        "SELECT INTERVAL '-1-2 -3 4:5:6.7'",
-        IntervalValue {
-            value: "-1-2 -3 4:5:6.7".into(),
-            parsed: ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(-1, 0)),
-                month: Some(DateTimeFieldValue::new(-2, 0)),
-                day: Some(DateTimeFieldValue::new(-3, 0)),
-                hour: Some(DateTimeFieldValue::new(4, 0)),
-                minute: Some(DateTimeFieldValue::new(5, 0)),
-                second: Some(DateTimeFieldValue::new(6, 700_000_000)),
-                ..dflt()
-            },
-            ..Default::default()
-        },
-        Interval {
-            months: -14,
-            is_positive_dur: false,
-            duration: Duration::new(244_493, 300_000_000),
-        },
-        None,
-    );
-
-    verify_interval(
-        "SELECT INTERVAL '1-2 3 4:5:6.7' MONTH TO MINUTE",
-        IntervalValue {
-            value: "1-2 3 4:5:6.7".into(),
-            parsed: ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(1, 0)),
-                month: Some(DateTimeFieldValue::new(2, 0)),
-                day: Some(DateTimeFieldValue::new(3, 0)),
-                hour: Some(DateTimeFieldValue::new(4, 0)),
-                minute: Some(DateTimeFieldValue::new(5, 0)),
-                second: Some(DateTimeFieldValue::new(6, 700_000_000)),
-                ..dflt()
-            },
-            precision_high: Month,
-            precision_low: Minute,
-            ..Default::default()
-        },
-        Interval {
-            months: 2,
-            is_positive_dur: true,
-            duration: Duration::new(273_900, 0),
-        },
-        None,
-    );
-
-    verify_interval(
-        "SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO HOUR",
-        IntervalValue {
-            value: "1-2 3 4:5:6.7".into(),
-            parsed: ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(1, 0)),
-                month: Some(DateTimeFieldValue::new(2, 0)),
-                day: Some(DateTimeFieldValue::new(3, 0)),
-                hour: Some(DateTimeFieldValue::new(4, 0)),
-                minute: Some(DateTimeFieldValue::new(5, 0)),
-                second: Some(DateTimeFieldValue::new(6, 700_000_000)),
-                ..dflt()
-            },
-            precision_high: Day,
-            precision_low: Hour,
-            ..Default::default()
-        },
-        Interval {
-            months: 0,
-            is_positive_dur: true,
-            duration: Duration::new(273_600, 0),
-        },
-        None,
-    );
-}
-
-#[test]
-fn parse_literal_interval_error_messages() {
-    let result = parse_sql_statements("SELECT INTERVAL '1' SECOND TO SECOND");
-    assert_eq!(
-        ("\
-Parse error:
-SELECT INTERVAL '1' SECOND TO SECOND
-                    ^^^^^^^^^^^^^^^^
-Invalid field range in INTERVAL '1' SECOND TO SECOND; the value in the position \
-          of SECOND should be more significant than SECOND."
-            .to_string()),
-        format!("{}", result.unwrap_err()),
-    );
-    let result = parse_sql_statements("SELECT INTERVAL '1' MINUTE TO DAY");
-    assert_eq!(
-        ("\
-Parse error:
-SELECT INTERVAL '1' MINUTE TO DAY
-                    ^^^^^^^^^^^^^
-Invalid field range in INTERVAL '1' MINUTE TO DAY; the value in the position of \
-          MINUTE should be more significant than DAY."
-            .to_string()),
-        format!("{}", result.unwrap_err()),
-    );
-    let result = parse_sql_statements("SELECT INTERVAL '10' HOUR (1) TO HOUR (2)");
-    assert_eq!(
-        ("\
-Parse error:
-SELECT INTERVAL '10' HOUR (1) TO HOUR (2)
-                          ^
-Expected end of statement, found: ("
-            .to_string()),
-        format!("{}", result.unwrap_err()),
-    );
-    let result = parse_sql_statements("SELECT INTERVAL '1 1-1' DAY");
-    assert_eq!(
-        ("\
-Parse error:
-SELECT INTERVAL '1 1-1' DAY
-                ^^^^^^^
-Invalid INTERVAL '1 1-1': cannot determine format of all parts. Add explicit time \
-          components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY"
-            .to_string()),
-        format!("{}", result.unwrap_err())
     );
 }
 
@@ -5218,18 +4577,7 @@ pub fn number(n: &'static str) -> Value {
     Value::Number(n.parse().unwrap())
 }
 
-// interval test helpers
-
-fn dflt<T: Default>() -> T {
-    <T as Default>::default()
-}
-
-fn verify_interval(
-    sql: &str,
-    value: IntervalValue,
-    expected_computed: Interval,
-    expected_error_str: Option<&str>,
-) {
+fn verify_interval(sql: &str, value: IntervalValue, expected_error_str: Option<&str>) {
     // If there's a failure this shows every statement verified in this
     // test, pointing out which one failed
     println!("testing: {}", sql);
@@ -5239,8 +4587,6 @@ fn verify_interval(
             match expr_from_projection(only(&select.projection)) {
                 Expr::Value(Value::Interval(iv)) => {
                     assert_eq!(&value, iv);
-                    let actually_computed = iv.compute_interval().unwrap();
-                    assert_eq!(expected_computed, actually_computed);
                 }
                 v => panic!("invalid value, expected interval for {}: {:?}", sql, v),
             }

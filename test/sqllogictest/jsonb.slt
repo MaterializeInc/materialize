@@ -1796,23 +1796,20 @@ SELECT ('[1]'::jsonb)::int;
 ----
 NULL
 
-# TODO https://github.com/MaterializeInc/materialize/issues/1378
 query T
 SELECT ('"2019-12-31"'::jsonb)::date;
 ----
-NULL
+2019-12-31
 
-# TODO https://github.com/MaterializeInc/materialize/issues/1378
 query T
 SELECT ('"1969-06-01 10:10:10.410"'::jsonb)::timestamp;
 ----
-NULL
+1969-06-01 10:10:10.410
 
-# TODO https://github.com/MaterializeInc/materialize/issues/1378
 query T
-SELECT ('"some interval"'::jsonb)::interval;
+SELECT ('"1-2 3 4:5:6.7"'::jsonb)::interval;
 ----
-NULL
+1 year 2 months 3 days 04:05:06.7
 
 query T
 SELECT ('["2019-12-31"]'::jsonb)::date;

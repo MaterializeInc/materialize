@@ -58,10 +58,7 @@ pub use self::query::{
     Cte, Fetch, Join, JoinConstraint, JoinOperator, OrderByExpr, Query, Select, SelectItem,
     SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, Values,
 };
-pub use self::value::{
-    DateTimeField, DateTimeFieldValue, ExtractField, Interval, IntervalValue, ParsedDate,
-    ParsedDateTime, ParsedTime, ParsedTimestamp, Value,
-};
+pub use self::value::{DateTimeField, ExtractField, IntervalValue, Value};
 use std::path::PathBuf;
 
 struct DisplaySeparated<'a, T>

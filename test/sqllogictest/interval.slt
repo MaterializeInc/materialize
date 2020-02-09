@@ -220,13 +220,13 @@ SELECT INTERVAL '0-0 0 0:0:0.0';
 00:00:00
 
 # Oversized components in SQL standard-style variables
-statement error Invalid INTERVAL '100-13': MONTH field out range; must be < 12, have 13
+statement error Invalid INTERVAL '100-13': MONTH must be \(-12, 12\), got 13
 SELECT INTERVAL '100-13';
 
-statement error Invalid INTERVAL '100-11 366 250:61': MINUTE field out range; must be < 60, have 61
+statement error Invalid INTERVAL '100-11 366 250:61': MINUTE must be \(-59, 59\), got 61
 SELECT INTERVAL '100-11 366 250:61';
 
-statement error Invalid INTERVAL '100-11 366 250:59:61': SECOND field out range; must be < 60, have 61
+statement error Invalid INTERVAL '100-11 366 250:59:61': SECOND must be \(-60, 60\), got 61
 SELECT INTERVAL '100-11 366 250:59:61';
 
 # Invalid syntax
@@ -549,14 +549,14 @@ SELECT INTERVAL '-9223372036854775807 months -9223372036854775807 seconds';
 query T
 SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.999999999 minutes 0.999999999 seconds';
 ----
-31 days 01:00:56.702350704
+31 days 01:00:56.702351
 
 ## Overflows
 
-statement error INTERVAL '768614336404564651 year' overflows maximum months; cannot exceed 9223372036854775807 months
+statement error INTERVAL '768614336404564651 year': Overflows maximum months; cannot exceed 9223372036854775807 months
 SELECT INTERVAL '768614336404564651 year';
 
-statement error INTERVAL '768614336404564650.7 year' overflows maximum months; cannot exceed 9223372036854775807 months
+statement error INTERVAL '768614336404564650.7 year': Overflows maximum months; cannot exceed 9223372036854775807 months
 SELECT INTERVAL '768614336404564650.7 year';
 
 statement error Unable to parse value as a number at index 0: number too large to fit in target type
@@ -565,25 +565,25 @@ SELECT INTERVAL '9223372036854775808 months';
 statement error Unable to parse value as a number at index 0: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 months';
 
-statement error INTERVAL '106751991167300 days .1 month' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error INTERVAL '106751991167300 days .1 month': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167300 days .1 month';
 
-statement error INTERVAL '106751991167301 days' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error INTERVAL '106751991167301 days': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167301 days';
 
-statement error INTERVAL '106751991167300.9 days' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error INTERVAL '106751991167300.9 days': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167300.9 days';
 
-statement error INTERVAL '9223372036854775807 seconds 1 hour' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error INTERVAL '9223372036854775807 seconds 1 hour': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775807 seconds 1 hour';
 
-statement error INTERVAL '9223372036854771807 seconds 1.9 hour' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error INTERVAL '9223372036854771807 seconds 1.9 hour': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854771807 seconds 1.9 hour';
 
-statement error INTERVAL '9223372036854775807 seconds 1 minute' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error INTERVAL '9223372036854775807 seconds 1 minute': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775807 seconds 1 minute';
 
-statement error INTERVAL '9223372036854775707 seconds 1.9 minute' overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error INTERVAL '9223372036854775707 seconds 1.9 minute': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
 
 statement error Unable to parse value as a number at index 0: number too large to fit in target type
