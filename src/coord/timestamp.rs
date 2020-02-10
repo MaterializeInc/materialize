@@ -182,23 +182,22 @@ impl Timestamper {
         };
 
         sqlite
-            .prepare(
-                "CREATE TABLE IF NOT EXISTS timestamp (
-            sid blob NOT NULL,
-            vid blob NOT NULL,
-            timestamp unsigned bigint NOT NULL,
-            offset blob NOT NULL,
-            PRIMARY KEY (sid,vid,timestamp));",
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS timestamps (
+    sid blob NOT NULL,
+    vid blob NOT NULL,
+    timestamp integer NOT NULL,
+    offset blob NOT NULL,
+    PRIMARY KEY (sid, vid, timestamp)
+)",
             )
-            .expect("Failed to prepare CREATE statement")
-            .execute(params![])
             .expect("Failed to CREATE timestamp table");
 
         // Recover existing data by running max on the timestamp count. This will ensure that
         // there will never be two duplicate entries and that there is a continuous stream
         // of timestamp updates across reboots
         let max_ts = sqlite
-            .prepare("SELECT MAX(timestamp) from timestamp ")
+            .prepare("SELECT MAX(timestamp) FROM timestamps")
             .expect("Failed to prepare statement")
             .query_row(NO_PARAMS, |row| {
                 let res: Result<SqlVal<u64>, _> = row.get(2);
@@ -281,7 +280,7 @@ impl Timestamper {
                 TimestampMessage::DropInstance(id) => {
                     info!("Dropping Timestamping for Source {}", id);
                     self.sqllite
-                        .prepare_cached("DELETE from timestamp where sid = ? and vid = ? ")
+                        .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND vid = ?")
                         .expect("Failed to prepare delete statement")
                         .execute(params![SqlVal(&id.sid), SqlVal(&id.vid)])
                         .expect("Failed to execute delete statement");
@@ -380,7 +379,7 @@ impl Timestamper {
     fn rt_recover_source(&mut self, id: SourceInstanceId) -> i64 {
         let ts_updates: Vec<_> = self
             .sqllite
-            .prepare("SELECT timestamp, offset FROM timestamp where sid = ? and vid = ? ORDER BY timestamp")
+            .prepare("SELECT timestamp, offset FROM timestamps WHERE sid = ? AND vid = ? ORDER BY timestamp")
             .expect("Failed to execute select statement")
             .query_and_then(params![SqlVal(&id.sid), SqlVal(&id.vid)], |row| -> Result<_, failure::Error> {
                 let timestamp: SqlVal<u64> = row.get(0)?;
@@ -443,7 +442,7 @@ impl Timestamper {
             let mut stmt = self
                 .sqllite
                 .prepare_cached(
-                    "INSERT INTO timestamp (sid, vid, timestamp, offset) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO timestamps (sid, vid, timestamp, offset) VALUES (?, ?, ?, ?)",
                 )
                 .expect("Failed to prepare insert statement into persistent store");
             stmt.execute(params![
