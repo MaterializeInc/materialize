@@ -448,14 +448,23 @@ impl Timestamper {
                 .prepare_cached(
                     "INSERT INTO timestamps (sid, vid, timestamp, offset) VALUES (?, ?, ?, ?)",
                 )
-                .expect("Failed to prepare insert statement into persistent store");
-            stmt.execute(params![
+                .expect(
+                    "Failed to prepare insert statement into persistent store. \
+                     Hint: increase the system file descriptor limit.",
+                );
+            while let Err(e) = stmt.execute(params![
                 SqlVal(&id.sid),
                 SqlVal(&id.vid),
                 SqlVal(&self.current_timestamp),
                 SqlVal(&offset)
-            ])
-            .expect("Failed to insert statement into persistent store");
+            ]) {
+                error!(
+                    "Failed to insert statement into persistent store: {}. \
+                     Hint: increase the system file descriptor limit.",
+                    e
+                );
+                std::thread::sleep(Duration::from_secs(1));
+            }
         }
     }
 
