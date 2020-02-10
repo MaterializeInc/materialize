@@ -47,6 +47,8 @@ tokio-postgres = { version = "0.5", features = ["with-chrono-0_4"] }
 
 [package.metadata.deb]
 depends = "$auto, systemd"
+name = "materialized-unstable"
+conflicts = "materialized"
 assets = [
     ["../../dist/materialized.service", "lib/systemd/system/", "644"],
     ["target/release/materialized", "usr/bin/", "755"]
