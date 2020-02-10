@@ -1932,17 +1932,12 @@ fn index_sql(
         on_name: sql::normalize::unresolve(view_name),
         key_parts: keys
             .iter()
-            .map(|i| {
-                view_desc
-                    .get_name(i)
-                    .as_ref()
-                    .map(|n| {
-                        Expr::Identifier(Ident {
-                            value: n.to_string(),
-                            quote_style: Some('"'),
-                        })
-                    })
-                    .unwrap_or_else(|| Expr::Value(Value::Number(i.to_string())))
+            .map(|i| match view_desc.get_unambiguous_name(*i) {
+                Some(n) => Expr::Identifier(Ident {
+                    value: n.to_string(),
+                    quote_style: Some('"'),
+                }),
+                _ => Expr::Value(Value::Number((i + 1).to_string())),
             })
             .collect(),
         if_not_exists: false,

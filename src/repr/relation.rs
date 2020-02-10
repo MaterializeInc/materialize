@@ -209,8 +209,17 @@ impl RelationDesc {
             .map(|i| (i, &self.typ.column_types[i]))
     }
 
-    pub fn get_name(&self, i: &usize) -> &Option<ColumnName> {
-        &self.names[*i]
+    pub fn get_unambiguous_name(&self, i: usize) -> Option<&ColumnName> {
+        let name = self.get_name(i);
+        if self.iter_names().filter(|n| n == &name).count() == 1 {
+            name
+        } else {
+            None
+        }
+    }
+
+    pub fn get_name(&self, i: usize) -> Option<&ColumnName> {
+        self.names[i].as_ref()
     }
 
     pub fn set_name(&mut self, i: usize, name: Option<ColumnName>) {
