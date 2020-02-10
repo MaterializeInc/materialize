@@ -234,7 +234,7 @@ $ cargo run --bin materialized --release
 In the second terminal, run testdrive:
 
 ```shell
-$ cargo run --bin testdrive --release -- test/TESTFILE.td
+$ cargo run --bin testdrive --release -- test/testdrive/TESTFILE.td
 ```
 
 Testdrive scripts live in [test/](/test) with a `.td` suffix. Again, please add
