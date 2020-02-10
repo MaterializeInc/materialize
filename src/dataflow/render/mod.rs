@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::rc::Weak;
@@ -34,7 +33,7 @@ use crate::arrangement::manager::{TraceManager, WithDrop};
 use crate::decode::decode;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
-use crate::server::TimestampHistories;
+use crate::server::{TimestampChanges, TimestampHistories};
 
 mod context;
 mod delta_join;
@@ -94,7 +93,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
     advance_timestamp: bool,
     global_source_mappings: &mut HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
     timestamp_histories: TimestampHistories,
-    timestamp_drops: Rc<RefCell<Vec<SourceInstanceId>>>,
+    timestamp_channel: TimestampChanges,
     logger: &mut Option<Logger>,
     executor: &tokio::runtime::Handle,
 ) {
@@ -127,6 +126,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
             for (source_number, (src_id, src)) in
                 dataflow.source_imports.clone().into_iter().enumerate()
             {
+                // This uid must be unique across all different instantiations of a source
+                let uid = SourceInstanceId {
+                    sid: src_id.sid,
+                    vid: first_export_id,
+                };
                 let (source, capability) = match src.connector.connector {
                     ExternalSourceConnector::Kafka(c) => {
                         // Distribute read responsibility among workers.
@@ -137,10 +141,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             region,
                             format!("kafka-{}-{}", first_export_id, source_number),
                             c,
-                            src_id,
+                            uid,
                             advance_timestamp,
                             timestamp_histories.clone(),
-                            timestamp_drops.clone(),
+                            timestamp_channel.clone(),
+                            src.connector.consistency,
                             read_from_kafka,
                         )
                     }
@@ -189,7 +194,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                 // We also need to keep track of this mapping globally to activate Kakfa sources
                 // on timestamp advancement queries
-                global_source_mappings.insert(src_id, Rc::downgrade(&token));
+                let prev = global_source_mappings.insert(uid, Rc::downgrade(&token));
+                assert!(prev.is_none());
             }
 
             let as_of = dataflow

@@ -32,8 +32,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PeekWhen, SinkConnector,
-    TailSinkConnector, Timestamp, Update,
+    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, SinkConnector, TailSinkConnector, Timestamp,
+    Update,
 };
 use expr::transform::Optimizer;
 use expr::{
@@ -475,7 +475,15 @@ where
                             message: WorkerFeedback::DroppedSource(source_id)}) => {
                             // Notify timestamping thread that source has been dropped
                             if let Some(channel) = &mut self.source_updates{
-                                channel.sender.send(TimestampMessage::DropInstance(source_id)).expect("Failed to send Drop Instance notice to Worker");
+                                channel.sender.send(TimestampMessage::DropInstance(source_id)).expect("Failed to send Drop Instance notice to Coordinator");
+                            }
+                        },
+                        Message::Worker(WorkerFeedbackWithMeta {
+                                            worker_id: _,
+                                            message: WorkerFeedback::CreateSource(source_id,ksc,consistency)}) => {
+                            // Notify timestamping thread that source has been created
+                            if let Some(channel) = &mut self.source_updates{
+                                channel.sender.send(TimestampMessage::Add(source_id, ksc.addr, ksc.topic,consistency)).expect("Failed to send CREATE Instance notice to Coordinator");
                             }
                         }
                     }
@@ -1180,26 +1188,10 @@ where
         }
         match self.catalog.get_by_id(id).item() {
             CatalogItem::Source(source) => {
-                // A source is being imported as part of a new view. We have to notify the timestamping
-                // thread that a source instance is being created for this view
                 let instance_id = SourceInstanceId {
                     sid: *id,
                     vid: *orig_id,
                 };
-                // Notify timestamping thread that we should start computing timestamps for that thread
-                if let ExternalSourceConnector::Kafka(ksc) = &source.connector.connector {
-                    if let Some(source_updates) = &self.source_updates {
-                        source_updates
-                            .sender
-                            .send(TimestampMessage::Add(
-                                instance_id,
-                                ksc.addr.clone(),
-                                ksc.topic.clone(),
-                                source.connector.consistency.clone(),
-                            ))
-                            .expect("Failed to send source update");
-                    }
-                }
                 dataflow.add_source_import(
                     instance_id,
                     source.connector.clone(),

@@ -111,6 +111,8 @@ void TupleGen::genCustomer(int& cId, int& dId, int& wId,
         DataSource::randomCLast(cLast);
 
     std::string cState = DataSource::randomState();
+    Nation cNation = DataSource::randomNation();
+
 
     customerStream << cId << csvDelim;                        // C_ID
     customerStream << dId << csvDelim;                        // C_D_ID
@@ -136,7 +138,7 @@ void TupleGen::genCustomer(int& cId, int& dId, int& wId,
     customerStream << "1" << csvDelim;                     // C_PAYMENT_CNT
     customerStream << "0" << csvDelim;                     // C_DELIVERY_CNT
     DataSource::addAlphanumeric64(300, 500, customerStream, true); // C_DATA
-    customerStream << (int) (cState.c_str())[0];                // C_N_NATIONKEY
+    customerStream << cNation.id ;                // C_N_NATIONKEY
     customerStream << std::endl;
 }
 
@@ -146,7 +148,7 @@ void TupleGen::genHistory(int& cId, int& dId, int& wId, mz::Config& cfg) {
     historyStream << wId << csvDelim; // H_C_W_ID
     historyStream << dId << csvDelim; // H_D_ID
     historyStream << wId << csvDelim; // H_W_ID
-    historyStream << DataSource::getCurrentTimeString(cfg.hist_date_offset_millis(chRandom::rng) / 1000)
+    historyStream << DataSource::getCurrentTimeString(cfg.hist_date_offset_millis(chRandom::rng) * 1000)
                   << csvDelim;            // H_DATE - current date and time
     historyStream << "10.00" << csvDelim; // H_AMOUNT
     DataSource::addAlphanumeric64(12, 24, historyStream, false); // H_DATA
@@ -233,8 +235,7 @@ void TupleGen::genStock(int& iId, int& wId) {
         DataSource::addAlphanumeric64Original(26, 50, stockStream, true);
     else
         DataSource::addAlphanumeric64(26, 50, stockStream, true);
-    stockStream << ((iId * wId) %
-                    10000); // S_SU_SUPPKEY - no TPC-C/CH-benCHmark spec
+    stockStream << chRandom::uniformInt(0, 10000); // S_SU_SUPPKEY - must be uniform for q08
     stockStream << std::endl;
 }
 

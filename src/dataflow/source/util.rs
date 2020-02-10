@@ -15,6 +15,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
+use crate::server::TimestampChanges;
 use dataflow_types::Timestamp;
 
 use super::{SourceStatus, SourceToken};
@@ -46,7 +47,7 @@ use super::{SourceStatus, SourceToken};
 /// be dropped.
 pub fn source<G, D, B, L>(
     id: SourceInstanceId,
-    timestamp: Option<Rc<RefCell<Vec<SourceInstanceId>>>>,
+    timestamp: Option<TimestampChanges>,
     scope: &G,
     name: &str,
     construct: B,

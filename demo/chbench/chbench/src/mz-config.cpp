@@ -21,7 +21,6 @@ limitations under the License.
 const mz::Config& mz::defaultConfig() {
     using inner_type = chRandom::int_distribution::inner_type;
     using chRandom::int_distribution;
-    int_distribution zero_const {static_cast<inner_type>(std::uniform_int_distribution<int64_t>(0, 0))};
     static Config singleton {
         .expectedSources = {
             "mysql_tpcch_customer",
@@ -43,9 +42,9 @@ const mz::Config& mz::defaultConfig() {
         .schemaRegistryUrl = "http://schema-registry:8081",
         .hQueries = {},
         .dialect = new MySqlDialect(),
-        .hist_date_offset_millis = zero_const,
-        .order_entry_date_offset_millis = zero_const,
-        .orderline_delivery_date_offset_millis = zero_const,
+        .hist_date_offset_millis =  static_cast<inner_type>(std::uniform_int_distribution<int64_t>(946684800,1704067200)), //  2010-2024
+        .order_entry_date_offset_millis =  static_cast<inner_type>(std::uniform_int_distribution<int64_t>(946684800,1704067200)), // 2010-2024
+        .orderline_delivery_date_offset_millis = static_cast<inner_type>(std::uniform_int_distribution<int64_t>(946684800,1704067200)), // 2010-2024
         .payment_amount_cents = static_cast<inner_type>(std::uniform_int_distribution<int64_t>(100, 500000)),
         .item_price_cents = static_cast<inner_type>(std::uniform_int_distribution<int64_t>(100, 10000)),
     };

@@ -23,10 +23,11 @@ limitations under the License.
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <assert.h>
 
-const Nation DataSource::nations[] = {
+static const std::vector<Nation> nations = {
     {48, "ALGERIA", 0},     {49, "ARGENTINA", 1},      {50, "BRAZIL", 1},
     {51, "CANADA", 1},      {52, "EGYPT", 4},          {53, "ETHIOPIA", 0},
     {54, "FRANCE", 3},      {55, "GERMANY", 3},        {56, "INDIA", 2},
@@ -285,11 +286,9 @@ int DataSource::permute(int value, int low, int high) {
 }
 
 void DataSource::getCurrentTimestamp(SQL_TIMESTAMP_STRUCT& ret, int64_t offset) {
-    time_t rawtime;
-    time(&rawtime);
+    time_t rawtime = 0;
     rawtime += offset;
     tm* timeinfo = localtime(&rawtime);
-
     ret.year = timeinfo->tm_year + 1900;
     ret.month = timeinfo->tm_mon + 1;
     ret.day = timeinfo->tm_mday;
@@ -455,10 +454,9 @@ void DataSource::addSuPhone(int& suId, std::ofstream& stream, bool delimiter) {
 }
 
 std::string DataSource::getCurrentTimeString(int64_t offset) {
-    time_t rawtime;
+    time_t rawtime = 0;
     struct tm* timeinfo;
     char buffer[24];
-    time(&rawtime);
     rawtime += offset;
     timeinfo = localtime(&rawtime);
     strftime(buffer, 80, "%F %X", timeinfo);
@@ -471,11 +469,16 @@ std::string DataSource::strLeadingZero(int i, int zeros) {
     return ss.str();
 }
 
-Nation DataSource::getNation(int i) { return nations[i]; }
+Nation DataSource::getNation(int i) { return nations.at(i); }
 
 const char* DataSource::getRegion(int i) { return regions[i]; }
 
 std::string DataSource::randomState() {
     assert(states.size() > 0);
     return states.at(chRandom::uniformInt(0, states.size() - 1));
+}
+
+Nation DataSource::randomNation() {
+    assert(nations.size() > 0);
+    return nations.at(chRandom::uniformInt(0, nations.size() - 1));
 }
