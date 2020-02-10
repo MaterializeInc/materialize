@@ -35,20 +35,20 @@ use futures::sink::{Sink, SinkExt};
 use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{
-    compare_columns, DataflowDesc, Diff, IndexDesc, PeekResponse, RowSetFinishing, Timestamp,
-    Update,
-};
-use expr::{EvalEnv, GlobalId, SourceInstanceId};
-use ore::future::channel::mpsc::ReceiverExt;
-use repr::{Datum, RelationType, Row, RowArena};
-
 use super::render;
 use crate::arrangement::{
     manager::{KeysValsHandle, WithDrop},
     TraceManager,
 };
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{
+    compare_columns, Consistency, DataflowDesc, Diff, IndexDesc, KafkaSourceConnector,
+    PeekResponse, RowSetFinishing, Timestamp, Update,
+};
+use expr::{EvalEnv, GlobalId, SourceInstanceId};
+use ore::future::channel::mpsc::ReceiverExt;
+use repr::{Datum, RelationType, Row, RowArena};
+
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 
@@ -138,8 +138,6 @@ pub enum SequencedCommand {
         timestamp: Timestamp,
         offset: i64,
     },
-    /// Drop timestamping information for a given source instantiation
-    DropTimestampInformation { id: SourceInstanceId },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
@@ -159,6 +157,8 @@ pub enum WorkerFeedback {
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
     /// The id of a source whose source connector has been dropped
     DroppedSource(SourceInstanceId),
+    /// The id of a source whose source connector has been created
+    CreateSource(SourceInstanceId, KafkaSourceConnector, Consistency),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -233,6 +233,14 @@ where
 }
 
 pub type TimestampHistories = Rc<RefCell<HashMap<SourceInstanceId, Vec<(Timestamp, i64)>>>>;
+pub type TimestampChanges = Rc<
+    RefCell<
+        Vec<(
+            SourceInstanceId,
+            Option<(KafkaSourceConnector, Consistency)>,
+        )>,
+    >,
+>;
 
 struct Worker<'w, A>
 where
@@ -250,7 +258,7 @@ where
     advance_timestamp: bool,
     ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
     ts_histories: TimestampHistories,
-    ts_source_drops: Rc<RefCell<Vec<SourceInstanceId>>>,
+    ts_source_drops: TimestampChanges,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     executor: tokio::runtime::Handle,
     metrics: Metrics,
@@ -391,7 +399,6 @@ where
             // Report frontier information back the coordinator.
             self.report_frontiers();
 
-            // Report whether any sources have been dropped to the coordinator
             self.report_source_drops();
 
             // Handle any received commands.
@@ -415,15 +422,30 @@ where
     /// Send source drop notifications to the coordinator
     fn report_source_drops(&mut self) {
         let mut updates = self.ts_source_drops.borrow_mut();
-        for id in updates.iter() {
-            self.ts_histories.borrow_mut().remove(id);
-            self.ts_source_mapping.remove(id);
-            let connector = self.feedback_tx.as_mut().unwrap();
-            block_on(connector.send(WorkerFeedbackWithMeta {
-                worker_id: self.inner.index(),
-                message: WorkerFeedback::DroppedSource(*id),
-            }))
-            .unwrap();
+        for (id, ksc) in updates.iter() {
+            if ksc.is_none() {
+                // A source was deleted
+                self.ts_histories.borrow_mut().remove(id);
+                self.ts_source_mapping.remove(id);
+                let connector = self.feedback_tx.as_mut().unwrap();
+                block_on(connector.send(WorkerFeedbackWithMeta {
+                    worker_id: self.inner.index(),
+                    message: WorkerFeedback::DroppedSource(*id),
+                }))
+                .unwrap();
+            } else {
+                // A source was created
+                let connector = self.feedback_tx.as_mut().unwrap();
+                block_on(connector.send(WorkerFeedbackWithMeta {
+                    worker_id: self.inner.index(),
+                    message: WorkerFeedback::CreateSource(
+                        *id,
+                        ksc.as_ref().unwrap().0.clone(),
+                        ksc.as_ref().unwrap().1.clone(),
+                    ),
+                }))
+                .unwrap();
+            }
         }
         updates.clear();
     }
@@ -643,10 +665,6 @@ where
                 // this should lead timely to wind down eventually
                 self.traces.del_all_traces();
                 self.shutdown_logging();
-            }
-            SequencedCommand::DropTimestampInformation { id } => {
-                self.ts_histories.borrow_mut().remove(&id);
-                self.ts_source_mapping.remove(&id);
             }
             SequencedCommand::AdvanceSourceTimestamp {
                 id,

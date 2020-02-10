@@ -17,8 +17,6 @@ use std::fs;
 use std::iter;
 use std::path::Path;
 
-use log::{error, info, warn};
-
 use failure::bail;
 use futures::executor::block_on;
 use futures::future::FutureExt;
@@ -34,8 +32,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, SinkConnector,
-    TailSinkConnector, Timestamp, Update,
+    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, SinkConnector, TailSinkConnector, Timestamp,
+    Update,
 };
 use expr::transform::Optimizer;
 use expr::{
@@ -728,7 +726,6 @@ where
                 self.catalog_transact(ops)?;
                 self.insert_view(view_id, &view);
                 if materialize {
-                    info!("InsertView amterialize {}", view_id);
                     let mut dataflow = DataflowDesc::new(name.to_string());
                     self.build_view_collection(&view_id, &view, &mut dataflow);
                     self.build_arrangement(
@@ -1282,9 +1279,6 @@ where
         on_type: RelationType,
         mut dataflow: DataflowDesc,
     ) {
-
-        info!("Build Arrangement");
-
         self.import_source_or_view(id, &index.on, &mut dataflow);
         dataflow.add_index_to_build(
             *id,
@@ -1304,7 +1298,6 @@ where
     }
 
     fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
-        info!("Create_Index_Dataflow {} ", id);
         let dataflow = DataflowDesc::new(name);
         let on_type = self
             .catalog

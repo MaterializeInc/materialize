@@ -8,8 +8,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::rc::Weak;
 
-use log::{error, info, warn};
-
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
@@ -99,7 +97,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
     logger: &mut Option<Logger>,
     executor: &tokio::runtime::Handle,
 ) {
-    info!(" Build dataflow ");
     let worker_index = worker.index();
     let worker_peers = worker.peers();
     let worker_logging = worker.log_register().get("timely");
@@ -129,6 +126,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
             for (source_number, (src_id, src)) in
                 dataflow.source_imports.clone().into_iter().enumerate()
             {
+                // This uid must be unique across all different instantiations of a source
+                let uid = SourceInstanceId {
+                    sid: GlobalId::User(source_number),
+                    vid: first_export_id,
+                };
                 let (source, capability) = match src.connector.connector {
                     ExternalSourceConnector::Kafka(c) => {
                         // Distribute read responsibility among workers.
@@ -139,7 +141,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             region,
                             format!("kafka-{}-{}", first_export_id, source_number),
                             c,
-                            src_id,
+                            uid,
                             advance_timestamp,
                             timestamp_histories.clone(),
                             timestamp_channel.clone(),
@@ -192,7 +194,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                 // We also need to keep track of this mapping globally to activate Kakfa sources
                 // on timestamp advancement queries
-                global_source_mappings.insert(src_id, Rc::downgrade(&token));
+                let prev = global_source_mappings.insert(uid, Rc::downgrade(&token));
+                assert!(prev.is_none());
             }
 
             let as_of = dataflow

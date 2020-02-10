@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::server::{TimestampChanges, TimestampHistories};
 use dataflow_types::{Consistency, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
-use log::{error, info, warn};
+use log::{error, warn};
 use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{ClientConfig, ClientContext};
@@ -46,8 +46,6 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    info!("Creating SOURCE {} {} {} {} \n", id, connector.topic, connector.addr, name);
-
     let KafkaSourceConnector { addr, topic } = connector.clone();
 
     let ts = if read_kafka {
