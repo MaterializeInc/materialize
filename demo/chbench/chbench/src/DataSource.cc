@@ -482,4 +482,3 @@ Nation DataSource::randomNation() {
     assert(nations.size() > 0);
     return nations.at(chRandom::uniformInt(0, nations.size() - 1));
 }
-
