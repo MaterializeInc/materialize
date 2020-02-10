@@ -1443,7 +1443,7 @@ impl Parser {
         } else {
             self.expected(
                 self.peek_range(),
-                "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, or INDEX after CREATE",
+                "DATABASE, SCHEMA, [MATERIALIZED] VIEW, SOURCE, SINK, or INDEX after CREATE",
                 self.peek_token(),
             )
         }
