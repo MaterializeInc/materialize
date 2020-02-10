@@ -87,7 +87,7 @@ $ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE quotes
   FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM;
 > SHOW COLUMNS FROM quotes;
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
 > SELECT * FROM business_insights;
@@ -143,7 +143,7 @@ $ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE aggdata
   FROM KAFKA BROKER 'localhost' TOPIC 'aggdata'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM;
 > CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
 > SELECT * FROM aggtest;
 ```
@@ -231,10 +231,10 @@ $ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE src1 \
   FROM KAFKA BROKER 'localhost' TOPIC 'src1'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM;
 > CREATE SOURCE src2
   FROM KAFKA BROKER 'localhost' TOPIC 'src2'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM;
 > CREATE MATERIALIZED VIEW jointest AS SELECT a, b, d FROM src1 JOIN src2 ON c = b;
 > SELECT * FROM jointest;
 ```
