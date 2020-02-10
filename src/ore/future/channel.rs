@@ -1,5 +1,5 @@
 // Copyright 2016 Alex Crichton
-// Copyright 2019 Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.

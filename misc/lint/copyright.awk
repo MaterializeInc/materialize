@@ -1,4 +1,4 @@
-# Copyright 2019 Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
@@ -14,7 +14,7 @@ function done()
     if (!copyright) {
         print "lint: copyright: " FILENAME " is missing copyright header" > "/dev/stderr"
         exit 1
-    } else if (copyright !~ /Copyright 20(19|2[0-9]) Materialize, Inc./) {
+    } else if (copyright !~ /Copyright Materialize, Inc./) {
         print "lint: copyright: " FILENAME " has malformatted copyright header" > "/dev/stderr"
         exit 1
     }

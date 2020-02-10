@@ -1,4 +1,4 @@
-# Copyright 2020 Materialize, Inc. All rights reserved.
+# Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
 # included in the LICENSE file at the root of this repository.
