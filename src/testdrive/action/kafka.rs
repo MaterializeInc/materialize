@@ -1,8 +1,12 @@
 // Copyright 2018 Flavien Raynaud
-// Copyright 2019 Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. All rights reserved.
 //
-// This file is part of Materialize. Materialize may not be used or
-// distributed without the express permission of Materialize, Inc.
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
 //
 // Portions of this file are derived from the ToAvro implementation for
 // serde_json::Value that is shipped with the avro_rs project. The original

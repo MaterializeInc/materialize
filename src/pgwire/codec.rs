@@ -1,7 +1,11 @@
-// Copyright 2019 Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. All rights reserved.
 //
-// This file is part of Materialize. Materialize may not be used or
-// distributed without the express permission of Materialize, Inc.
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
 
 //! Encoding/decoding of messages in pgwire. See "[Frontend/Backend Protocol:
 //! Message Formats][1]" in the PostgreSQL reference for the specification.

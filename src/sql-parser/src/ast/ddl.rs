@@ -1,5 +1,5 @@
 // Copyright 2018 sqlparser-rs contributors. All rights reserved.
-// Copyright 2019 Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. All rights reserved.
 //
 // This file is derived from the sqlparser-rs project, available at
 // https://github.com/andygrove/sqlparser-rs. It was incorporated
