@@ -1443,7 +1443,7 @@ impl Parser {
         } else {
             self.expected(
                 self.peek_range(),
-                "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, or INDEX after CREATE",
+                "DATABASE, SCHEMA, [MATERIALIZED] VIEW, SOURCE, SINK, or INDEX after CREATE",
                 self.peek_token(),
             )
         }
@@ -1469,9 +1469,11 @@ impl Parser {
 
     pub fn parse_format(&mut self) -> Result<Format, ParserError> {
         self.expect_keyword("FORMAT")?;
-        let format = if self.parse_keywords(vec!["AVRO", "USING"]) {
+        let format = if self.parse_keyword("AVRO") {
+            self.expect_keyword("USING")?;
             Format::Avro(self.parse_avro_schema()?)
-        } else if self.parse_keywords(vec!["PROTOBUF", "MESSAGE"]) {
+        } else if self.parse_keyword("PROTOBUF") {
+            self.expect_keyword("MESSAGE")?;
             let message_name = self.parse_literal_string()?;
             self.expect_keyword("USING")?;
             let schema = self.parse_schema()?;
@@ -1482,7 +1484,8 @@ impl Parser {
         } else if self.parse_keyword("REGEX") {
             let regex = self.parse_literal_string()?;
             Format::Regex(regex)
-        } else if self.parse_keywords(vec!["CSV", "WITH"]) {
+        } else if self.parse_keyword("CSV") {
+            self.expect_keyword("WITH")?;
             let n_cols = self.parse_literal_uint()? as usize;
             self.expect_keyword("COLUMNS")?;
             let delimiter = if self.parse_keywords(vec!["DELIMITED", "BY"]) {
