@@ -576,7 +576,7 @@ where
                 desc,
                 if_not_exists,
             } => {
-                let view_id = self.catalog.allocate_id();
+                let view_id = self.catalog.allocate_id()?;
                 let view = catalog::View {
                     create_sql: "<created by CREATE TABLE>".to_string(),
                     expr: OptimizedRelationExpr::declare_optimized(
@@ -590,7 +590,7 @@ where
                     eval_env: EvalEnv::default(),
                     desc,
                 };
-                let index_id = self.catalog.allocate_id();
+                let index_id = self.catalog.allocate_id()?;
                 let mut index_name = name.clone();
                 index_name.item += "_primary_idx";
                 let index = auto_generate_primary_idx(
@@ -644,7 +644,7 @@ where
                     connector: source.connector,
                     desc: source.desc,
                 };
-                let source_id = self.catalog.allocate_id();
+                let source_id = self.catalog.allocate_id()?;
                 let op = catalog::Op::CreateItem {
                     id: source_id,
                     name,
@@ -667,7 +667,7 @@ where
                     from: sink.from,
                     connector: sink.connector,
                 };
-                let id = self.catalog.allocate_id();
+                let id = self.catalog.allocate_id()?;
                 let op = catalog::Op::CreateItem {
                     id,
                     name: name.clone(),
@@ -693,7 +693,7 @@ where
                 if let Some(id) = replace {
                     ops.extend(self.catalog.drop_items_ops(&[id]));
                 }
-                let view_id = self.catalog.allocate_id();
+                let view_id = self.catalog.allocate_id()?;
                 let eval_env = EvalEnv::default();
                 let view = catalog::View {
                     create_sql: view.create_sql,
@@ -717,7 +717,7 @@ where
                         &view,
                         view_id,
                     );
-                    let index_id = self.catalog.allocate_id();
+                    let index_id = self.catalog.allocate_id()?;
                     ops.push(catalog::Op::CreateItem {
                         id: index_id,
                         name: index_name,
@@ -753,7 +753,7 @@ where
                     on: index.on,
                     eval_env: EvalEnv::default(),
                 };
-                let id = self.catalog.allocate_id();
+                let id = self.catalog.allocate_id()?;
                 let op = catalog::Op::CreateItem {
                     id,
                     name: name.clone(),
@@ -897,7 +897,7 @@ where
                         {
                             (true, *index_id)
                         } else if materialize {
-                            (false, self.catalog.allocate_id())
+                            (false, self.catalog.allocate_id()?)
                         } else {
                             bail!(
                                 "{} is not materialized",
@@ -905,7 +905,7 @@ where
                             )
                         }
                     } else {
-                        (false, self.catalog.allocate_id())
+                        (false, self.catalog.allocate_id()?)
                     };
 
                     let index = if !fast_path {
@@ -926,7 +926,7 @@ where
                             typ.clone(),
                             iter::repeat::<Option<ColumnName>>(None).take(ncols),
                         );
-                        let view_id = self.catalog.allocate_id();
+                        let view_id = self.catalog.allocate_id()?;
                         let view_name = FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: "temp".into(),
@@ -1009,7 +1009,7 @@ where
                         .humanize_id(Id::Global(source_id))
                         .expect("Source id is known to exist in catalog")
                 );
-                let sink_id = self.catalog.allocate_id();
+                let sink_id = self.catalog.allocate_id()?;
                 self.active_tails.insert(conn_id, sink_id);
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 let since = self

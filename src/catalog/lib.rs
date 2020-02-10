@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
@@ -51,7 +50,6 @@ pub mod sql;
 /// implicitly present in all databases, that house various system views.
 /// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
 pub struct Catalog {
-    id: usize,
     by_name: HashMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
@@ -214,7 +212,6 @@ impl Catalog {
         let storage = sql::Connection::open(path)?;
 
         let mut catalog = Catalog {
-            id: 0,
             by_name: HashMap::new(),
             by_id: BTreeMap::new(),
             indexes: HashMap::new(),
@@ -277,9 +274,6 @@ impl Catalog {
                 Err(e) => bail!("corrupt catalog: failed to deserialize item: {}", e),
             };
             catalog.insert_item(id, name, item);
-            if let GlobalId::User(id) = id {
-                catalog.id = cmp::max(catalog.id, id);
-            }
         }
 
         Ok(catalog)
@@ -295,9 +289,8 @@ impl Catalog {
         Catalog::open::<BincodeSerializer, _>(None, |_| ()).unwrap()
     }
 
-    pub fn allocate_id(&mut self) -> GlobalId {
-        self.id += 1;
-        GlobalId::user(self.id)
+    pub fn allocate_id(&mut self) -> Result<GlobalId, failure::Error> {
+        self.storage.allocate_id()
     }
 
     /// Resolves [`PartialName`] into a [`FullName`].
@@ -726,7 +719,6 @@ impl Catalog {
 impl fmt::Debug for Catalog {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("Catalog")
-            .field("id", &self.id)
             .field("by_name", &self.by_name)
             .field("by_id", &self.by_id)
             .field("ambient_schemas", &self.ambient_schemas)
