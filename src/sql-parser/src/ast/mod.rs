@@ -651,6 +651,13 @@ pub enum Connector {
         topic: String,
         with_options: Vec<SqlOption>,
     },
+    Kinesis {
+        arn: String,
+        access_key: String,
+        secret_access_key: String,
+        region: String,
+        with_options: Vec<SqlOption>,
+    },
 }
 
 impl fmt::Display for Connector {
@@ -673,6 +680,26 @@ impl fmt::Display for Connector {
                     "KAFKA BROKER '{}' TOPIC '{}'",
                     value::escape_single_quote_string(broker),
                     value::escape_single_quote_string(topic),
+                )?;
+                if !with_options.is_empty() {
+                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                }
+                Ok(())
+            }
+            Connector::Kinesis {
+                arn,
+                access_key,
+                secret_access_key,
+                region,
+                with_options,
+            } => {
+                write!(
+                    f,
+                    "KINESIS ARN '{}' ACCESS_KEY '{}' SECRET_ACCESS_KEY '{}' REGION '{}'",
+                    value::escape_single_quote_string(arn),
+                    value::escape_single_quote_string(access_key),
+                    value::escape_single_quote_string(secret_access_key),
+                    value::escape_single_quote_string(region),
                 )?;
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;

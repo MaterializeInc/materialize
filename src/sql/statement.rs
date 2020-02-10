@@ -24,8 +24,8 @@ use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, Consistency, CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding,
-    RowSetFinishing, SinkConnector, SourceConnector,
+    FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, KinesisSourceConnector,
+    PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnector, SourceConnector,
 };
 use expr::GlobalId;
 use interchange::{avro, protobuf};
@@ -600,6 +600,15 @@ fn handle_show_create_source(
             ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
                 format!("kafka://{}/{}", addr, topic)
             }
+            ExternalSourceConnector::Kinesis(KinesisSourceConnector {
+                arn,
+                access_key,
+                secret_access_key,
+                region,
+            }) => format!(
+                "kinesis -> arn: '{}' access_key: {}, secret_access_key: {}, region: {}",
+                arn, access_key, secret_access_key, region
+            ),
             ExternalSourceConnector::File(c) => {
                 // TODO https://github.com/MaterializeInc/materialize/issues/1093
                 format!("file://{}", c.path.to_string_lossy())
@@ -642,6 +651,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             }
             (broker, topic)
         }
+        Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
     };
 
     let schema_registry_url = match format {
@@ -876,6 +886,63 @@ async fn handle_create_dataflow(
                         None => bail!("unable to resolve kafka broker to any addresses"),
                     };
                     build_kafka_source(addr, topic.clone(), format, envelope, consistency).await?
+                }
+                Connector::Kinesis {
+                    arn,
+                    access_key,
+                    secret_access_key,
+                    region,
+                    with_options,
+                } => {
+                    let with_options: HashMap<_, _> = with_options
+                        .iter()
+                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
+                        .collect();
+                    if !with_options.is_empty() {
+                        bail!(
+                            "Kinesis does not currently support WITH options: {}",
+                            join(with_options.keys(), ",")
+                        )
+                    }
+
+                    match envelope {
+                        dataflow_types::Envelope::None => {}
+                        dataflow_types::Envelope::Debezium => {
+                            bail!("Debezium-envelope Kinesis sources are not supported")
+                        }
+                    }
+
+                    let (encoding, desc) = match format {
+                        Format::Bytes => (
+                            DataEncoding::Bytes,
+                            RelationDesc::new(
+                                RelationType::new(vec![ColumnType::new(ScalarType::Bytes)]),
+                                vec![Some(String::from("record"))],
+                            ),
+                        ),
+                        _ => bail!("Kinesis sources only support data as bytes"),
+                    };
+
+                    let _source = Source {
+                        create_sql: "<filled in later>".into(),
+                        connector: SourceConnector {
+                            connector: ExternalSourceConnector::Kinesis(KinesisSourceConnector {
+                                arn: arn.clone(),
+                                access_key: access_key.clone(),
+                                secret_access_key: secret_access_key.clone(),
+                                region: region.clone(),
+                            }),
+                            encoding,
+                            envelope: Envelope::None,
+                            consistency: Consistency::RealTime,
+                        },
+                        desc,
+                    };
+
+                    // todo@jldlaughlin: Actually return the source when implemented!
+                    // We can bail gracefully in the planning stage (here),
+                    // but can't once we actually try to build a dataflow.
+                    bail!("Kinesis sources are not yet implemented")
                 }
                 Connector::File { path, with_options } => {
                     let mut with_options: HashMap<_, _> = with_options

@@ -390,6 +390,7 @@ pub struct SourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExternalSourceConnector {
     Kafka(KafkaSourceConnector),
+    Kinesis(KinesisSourceConnector),
     File(FileSourceConnector),
 }
 
@@ -403,6 +404,14 @@ pub enum Consistency {
 pub struct KafkaSourceConnector {
     pub addr: std::net::SocketAddr,
     pub topic: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KinesisSourceConnector {
+    pub arn: String,
+    pub access_key: String,
+    pub secret_access_key: String,
+    pub region: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
