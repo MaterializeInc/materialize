@@ -1188,8 +1188,6 @@ where
         }
         match self.catalog.get_by_id(id).item() {
             CatalogItem::Source(source) => {
-                // A source is being imported as part of a new view. We have to notify the timestamping
-                // thread that a source instance is being created for this view
                 let instance_id = SourceInstanceId {
                     sid: *id,
                     vid: *orig_id,

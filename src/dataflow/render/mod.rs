@@ -128,7 +128,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
             {
                 // This uid must be unique across all different instantiations of a source
                 let uid = SourceInstanceId {
-                    sid: GlobalId::User(source_number),
+                    sid: src_id.sid,
                     vid: first_export_id,
                 };
                 let (source, capability) = match src.connector.connector {
