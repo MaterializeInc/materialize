@@ -445,14 +445,20 @@ impl Timestamper {
                 .prepare_cached(
                     "INSERT INTO timestamp (sid, vid, timestamp, offset) VALUES (?, ?, ?, ?)",
                 )
-                .expect("Failed to prepare insert statement into persistent store");
+                .expect(
+                    "Failed to prepare insert statement into persistent store. \
+                     Hint: increase the system file descriptor limit.",
+                );
             stmt.execute(params![
                 SqlVal(&id.sid),
                 SqlVal(&id.vid),
                 SqlVal(&self.current_timestamp),
                 SqlVal(&offset)
             ])
-            .expect("Failed to insert statement into persistent store");
+            .expect(
+                "Failed to insert statement into persistent store. \
+                 Hint: increase the system file descriptor limit.",
+            );
         }
     }
 
