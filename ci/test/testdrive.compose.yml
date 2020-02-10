@@ -30,6 +30,10 @@ services:
     command: --logging-granularity=10ms
     volumes:
     - tmpshare:/tmpshare
+    ulimits:
+      nofile:
+        soft: "65536"
+        hard: "65536"
   zookeeper:
     image: zookeeper:3.4.13
   kafka:
