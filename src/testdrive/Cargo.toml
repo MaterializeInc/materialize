@@ -36,7 +36,7 @@ repr = { path = "../repr" }
 reqwest = { version = "0.10.1", features = ["native-tls-vendored"] }
 serde = "1.0.104"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
-serde_json = { version = "1.0.45", features = ["preserve_order"] }
+serde_json = { version = "1.0.47", features = ["preserve_order"] }
 sql-parser = { path = "../sql-parser" }
 tempfile = "3.1"
 termcolor = "1.1.0"
