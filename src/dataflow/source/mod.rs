@@ -9,6 +9,8 @@ use std::rc::Rc;
 use timely::dataflow::operators::Capability;
 use timely::scheduling::Activator;
 
+use crate::server::TimestampChanges;
+
 mod file;
 mod kafka;
 mod util;
@@ -23,7 +25,7 @@ pub struct SourceToken {
     id: SourceInstanceId,
     capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
     activator: Activator,
-    timestamp_drop: Option<Rc<RefCell<Vec<SourceInstanceId>>>>,
+    timestamp_drop: Option<TimestampChanges>,
 }
 
 impl SourceToken {
@@ -41,7 +43,7 @@ impl Drop for SourceToken {
                 .as_ref()
                 .unwrap()
                 .borrow_mut()
-                .push(self.id);
+                .push((self.id, None));
         }
     }
 }

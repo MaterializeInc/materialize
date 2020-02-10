@@ -17,6 +17,8 @@ use std::fs;
 use std::iter;
 use std::path::Path;
 
+use log::{error, info, warn};
+
 use failure::bail;
 use futures::executor::block_on;
 use futures::future::FutureExt;
@@ -32,7 +34,7 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PeekWhen, SinkConnector,
+    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, SinkConnector,
     TailSinkConnector, Timestamp, Update,
 };
 use expr::transform::Optimizer;
@@ -475,7 +477,15 @@ where
                             message: WorkerFeedback::DroppedSource(source_id)}) => {
                             // Notify timestamping thread that source has been dropped
                             if let Some(channel) = &mut self.source_updates{
-                                channel.sender.send(TimestampMessage::DropInstance(source_id)).expect("Failed to send Drop Instance notice to Worker");
+                                channel.sender.send(TimestampMessage::DropInstance(source_id)).expect("Failed to send Drop Instance notice to Coordinator");
+                            }
+                        },
+                        Message::Worker(WorkerFeedbackWithMeta {
+                                            worker_id: _,
+                                            message: WorkerFeedback::CreateSource(source_id,ksc,consistency)}) => {
+                            // Notify timestamping thread that source has been created
+                            if let Some(channel) = &mut self.source_updates{
+                                channel.sender.send(TimestampMessage::Add(source_id, ksc.addr, ksc.topic,consistency)).expect("Failed to send CREATE Instance notice to Coordinator");
                             }
                         }
                     }
@@ -718,6 +728,7 @@ where
                 self.catalog_transact(ops)?;
                 self.insert_view(view_id, &view);
                 if materialize {
+                    info!("InsertView amterialize {}", view_id);
                     let mut dataflow = DataflowDesc::new(name.to_string());
                     self.build_view_collection(&view_id, &view, &mut dataflow);
                     self.build_arrangement(
@@ -1186,20 +1197,6 @@ where
                     sid: *id,
                     vid: *orig_id,
                 };
-                // Notify timestamping thread that we should start computing timestamps for that thread
-                if let ExternalSourceConnector::Kafka(ksc) = &source.connector.connector {
-                    if let Some(source_updates) = &self.source_updates {
-                        source_updates
-                            .sender
-                            .send(TimestampMessage::Add(
-                                instance_id,
-                                ksc.addr.clone(),
-                                ksc.topic.clone(),
-                                source.connector.consistency.clone(),
-                            ))
-                            .expect("Failed to send source update");
-                    }
-                }
                 dataflow.add_source_import(
                     instance_id,
                     source.connector.clone(),
@@ -1285,6 +1282,9 @@ where
         on_type: RelationType,
         mut dataflow: DataflowDesc,
     ) {
+
+        info!("Build Arrangement");
+
         self.import_source_or_view(id, &index.on, &mut dataflow);
         dataflow.add_index_to_build(
             *id,
@@ -1304,6 +1304,7 @@ where
     }
 
     fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
+        info!("Create_Index_Dataflow {} ", id);
         let dataflow = DataflowDesc::new(name);
         let on_type = self
             .catalog

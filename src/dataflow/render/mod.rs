@@ -4,10 +4,11 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::rc::Weak;
+
+use log::{error, info, warn};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
@@ -34,7 +35,7 @@ use crate::arrangement::manager::{TraceManager, WithDrop};
 use crate::decode::decode;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
-use crate::server::TimestampHistories;
+use crate::server::{TimestampChanges, TimestampHistories};
 
 mod context;
 mod delta_join;
@@ -94,10 +95,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
     advance_timestamp: bool,
     global_source_mappings: &mut HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
     timestamp_histories: TimestampHistories,
-    timestamp_drops: Rc<RefCell<Vec<SourceInstanceId>>>,
+    timestamp_channel: TimestampChanges,
     logger: &mut Option<Logger>,
     executor: &tokio::runtime::Handle,
 ) {
+    info!(" Build dataflow ");
     let worker_index = worker.index();
     let worker_peers = worker.peers();
     let worker_logging = worker.log_register().get("timely");
@@ -140,7 +142,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             src_id,
                             advance_timestamp,
                             timestamp_histories.clone(),
-                            timestamp_drops.clone(),
+                            timestamp_channel.clone(),
+                            src.connector.consistency,
                             read_from_kafka,
                         )
                     }
