@@ -3476,7 +3476,7 @@ fn parse_create_source_inline_schema() {
 #[test]
 fn parse_create_source_kafka() {
     let sql = "CREATE SOURCE foo \
-               FROM KAFKA BROKER 'bar' TOPIC 'baz' WITH (consistency = 'lug') \
+               FROM KAFKA BROKER 'bar' TOPIC 'baz' WITH (consistency = 'lug', ssl_certificate_file = '/Path/to/file') \
                FORMAT BYTES";
     match verified_stmt(sql) {
         Statement::CreateSource {
@@ -3491,10 +3491,16 @@ fn parse_create_source_kafka() {
                 Connector::Kafka {
                     broker: "bar".into(),
                     topic: "baz".into(),
-                    with_options: vec![SqlOption {
-                        name: "consistency".into(),
-                        value: Value::SingleQuotedString("lug".into()),
-                    }],
+                    with_options: vec![
+                        SqlOption {
+                            name: "consistency".into(),
+                            value: Value::SingleQuotedString("lug".into()),
+                        },
+                        SqlOption {
+                            name: "ssl_certificate_file".into(),
+                            value: Value::SingleQuotedString("/Path/to/file".into()),
+                        },
+                    ],
                 },
                 connector
             );

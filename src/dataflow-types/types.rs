@@ -403,6 +403,7 @@ pub enum Consistency {
 pub struct KafkaSourceConnector {
     pub addr: std::net::SocketAddr,
     pub topic: String,
+    pub ssl_certificate_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -12,7 +12,7 @@ use rusqlite::{params, NO_PARAMS};
 use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,7 +30,13 @@ use log::{error, info};
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, SocketAddr, String, Consistency),
+    Add(
+        SourceInstanceId,
+        SocketAddr,
+        String,
+        Option<PathBuf>,
+        Consistency,
+    ),
     DropInstance(SourceInstanceId),
     BatchedUpdate(u64, Vec<(SourceInstanceId, i64)>),
     Update(SourceInstanceId, u64, i64),
@@ -261,21 +267,31 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.coord_channel.receiver.try_recv() {
             match update {
-                TimestampMessage::Add(id, addr, topic, consistency) => {
+                TimestampMessage::Add(id, addr, topic, ssl_certificate_file, consistency) => {
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
                         // Did not know about source, must update
                         match consistency {
                             Consistency::RealTime => {
                                 info!("Timestamping Source {} with Real Time Consistency", id);
                                 let last_offset = self.rt_recover_source(id);
-                                let connector =
-                                    self.create_rt_connector(id, addr, topic, last_offset);
+                                let connector = self.create_rt_connector(
+                                    id,
+                                    addr,
+                                    topic,
+                                    ssl_certificate_file,
+                                    last_offset,
+                                );
                                 self.rt_sources.insert(id, connector);
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
                                 info!("Timestamping Source {} with BYO Consistency. Topic: {}, Consistency Topic: {}", id, topic, consistency_topic);
-                                let consumer =
-                                    self.create_byo_connector(addr, topic, id, consistency_topic);
+                                let consumer = self.create_byo_connector(
+                                    addr,
+                                    topic,
+                                    id,
+                                    ssl_certificate_file,
+                                    consistency_topic,
+                                );
                                 self.byo_sources.insert(id, consumer);
                             }
                         }
@@ -318,6 +334,7 @@ impl Timestamper {
         id: SourceInstanceId,
         addr: SocketAddr,
         topic: String,
+        ssl_certificate_file: Option<PathBuf>,
         last_offset: i64,
     ) -> RtTimestampConsumer {
         let mut config = ClientConfig::new();
@@ -333,6 +350,15 @@ impl Timestamper {
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &addr.to_string());
 
+        if let Some(path) = ssl_certificate_file {
+            config.set("security.protocol", "ssl");
+            config.set(
+                "ssl.ca.location",
+                path.to_str()
+                    .expect("Converting ssl certificate file path failed"),
+            );
+        }
+
         let k_consumer: BaseConsumer = config.create().expect("Failed to create Kakfa consumer");
         RtTimestampConsumer {
             consumer: k_consumer,
@@ -347,6 +373,7 @@ impl Timestamper {
         addr: SocketAddr,
         topic: String,
         id: SourceInstanceId,
+        ssl_certificate_file: Option<PathBuf>,
         timestamp_topic: String,
     ) -> ByoTimestampConsumer {
         let mut config = ClientConfig::new();
@@ -364,6 +391,15 @@ impl Timestamper {
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &addr.to_string());
+
+        if let Some(path) = ssl_certificate_file {
+            config.set("security.protocol", "ssl");
+            config.set(
+                "ssl.ca.location",
+                path.to_str()
+                    .expect("Converting ssl certificate file path failed"),
+            );
+        }
 
         let k_consumer: BaseConsumer = config.create().expect("Failed to create Kakfa consumer");
         let consumer = ByoTimestampConsumer {

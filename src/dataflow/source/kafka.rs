@@ -50,7 +50,11 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let KafkaSourceConnector { addr, topic } = connector.clone();
+    let KafkaSourceConnector {
+        addr,
+        topic,
+        ssl_certificate_file,
+    } = connector.clone();
 
     let ts = if read_kafka {
         let prev = timestamp_histories.borrow_mut().insert(id.clone(), vec![]);
@@ -79,6 +83,17 @@ where
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &addr.to_string());
+
+        if let Some(path) = ssl_certificate_file {
+            // See https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka
+            // for more details on this librdkafka option
+            config.set("security.protocol", "ssl");
+            config.set(
+                "ssl.ca.location",
+                path.to_str()
+                    .expect("Converting ssl certificate file path failed"),
+            );
+        }
 
         let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if read_kafka {
             let cx = GlueConsumerContext(Mutex::new(scope.sync_activator_for(&info.address[..])));
