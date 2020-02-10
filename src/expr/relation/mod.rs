@@ -1170,12 +1170,12 @@ impl fmt::Display for ColumnOrder {
 /// Manages the allocation of locally unique IDs when building a [`RelationExpr`].
 #[derive(Debug, Default)]
 pub struct IdGen {
-    id: usize,
+    id: u64,
 }
 
 impl IdGen {
     /// Allocates a new identifier and advances the generator.
-    pub fn allocate_id(&mut self) -> usize {
+    pub fn allocate_id(&mut self) -> u64 {
         let id = self.id;
         self.id += 1;
         id

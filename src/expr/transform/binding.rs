@@ -120,7 +120,7 @@ impl Drop for LocalBinding<'_> {
 #[derive(Debug, Default)]
 pub struct Environment {
     bindings: IndexMap<LocalId, RelationExpr>,
-    id: usize,
+    id: u64,
 }
 
 impl Environment {
@@ -501,13 +501,13 @@ mod tests {
 
     fn r(id: char, t: RelationType) -> RelationExpr {
         RelationExpr::Get {
-            id: Id::Local(LocalId::new(id as usize)),
+            id: Id::Local(LocalId::new(id as u64)),
             typ: t,
         }
     }
 
     pub fn force_bind(id: char, value: RelationExpr, body: RelationExpr) -> RelationExpr {
-        bind_local(LocalId::new(id as usize), value, body)
+        bind_local(LocalId::new(id as u64), value, body)
     }
 
     #[test]

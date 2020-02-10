@@ -21,6 +21,10 @@ use crate::names::{DatabaseSpecifier, FullName};
 const APPLICATION_ID: i32 = 0x1854_47dc;
 
 const SCHEMA: &str = "
+CREATE TABLE gid_alloc (
+    next_gid integer NOT NULL
+);
+
 CREATE TABLE databases (
     id   integer PRIMARY KEY,
     name text NOT NULL UNIQUE
@@ -41,6 +45,7 @@ CREATE TABLE items (
     UNIQUE (schema_id, name)
 );
 
+INSERT INTO gid_alloc VALUES (1);
 INSERT INTO databases VALUES (1, 'materialize');
 INSERT INTO schemas VALUES
     (1, NULL, 'mz_catalog'),
@@ -132,6 +137,21 @@ impl Connection {
                 ))
             })?
             .collect()
+    }
+
+    pub fn allocate_id(&mut self) -> Result<GlobalId, failure::Error> {
+        let tx = self.inner.transaction()?;
+        // SQLite doesn't support u64s, so we constrain ourselves to the more
+        // limited range of positive i64s.
+        let id: i64 = tx.query_row("SELECT next_gid FROM gid_alloc", params![], |row| {
+            row.get(0)
+        })?;
+        if id == i64::max_value() {
+            bail!("catalog id exhaustion: id counter overflows an i64");
+        }
+        tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])?;
+        tx.commit()?;
+        Ok(GlobalId::User(id as u64))
     }
 
     pub fn transaction(&mut self) -> Result<Transaction, failure::Error> {
