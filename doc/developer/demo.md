@@ -76,7 +76,6 @@ Now you won't have a prompt. Just enter this manually:
 ```
 {"before": null, "after": {"row": {"quote": "Syntax highlighting is juvenile. —Rob Pike"}}}
 {"before": null, "after": {"row": {"quote": "Arrogance in computer science is measured in nano-Dijkstras. —Alan Kay"}}}
-{"before": null, "after": null}  # send an empty record to flush
 ```
 
 Now we are ready to interact with Materialize!
@@ -135,7 +134,6 @@ Now you won't have a prompt. Just enter this manually:
 {"before": null, "after": {"row": {"a": 2, "b": 1}}}
 {"before": null, "after": {"row": {"a": 3, "b": 1}}}
 {"before": null, "after": {"row": {"a": 1, "b": 2}}}
-{"before": null, "after": null}
 ```
 
 Then, in another session, open the Materialize shell:
@@ -224,14 +222,6 @@ Now you won't have a prompt. Just enter this manually:
 {"before": null, "after": {"row": {"c": 1, "d": 2}}}
 {"before": null, "after": {"row": {"c": 1, "d": 3}}}
 {"before": null, "after": {"row": {"c": 3, "d": 1}}}
-{"before": null, "after": null}
-```
-
-Go back to the `src1` terminal and flush the data:
-
-```json
-...
-{"before": null, "after": null}
 ```
 
 Then, in another session, open the Materialize shell:
