@@ -24,7 +24,7 @@ x-port-mappings:
 version: '3.7'
 services:
   materialized:
-    image: materialize/materialized:local
+    image: materialize/materialized:latest
     ports:
      - *materialized
     init: true
@@ -126,7 +126,7 @@ services:
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
   chbench:
     init: true
-    image: materialize/chbenchmark:local
+    image: materialize/chbenchmark:latest
     depends_on: [mysql]
     volumes:
       - chbench-gen:/gen
@@ -223,7 +223,7 @@ services:
       - ./prometheus-sql-exporter/mysql/sql_exporter.yml:/config/sql_exporter.yml
       - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
   peeker:
-    image: materialize/peeker:local
+    image: materialize/peeker:latest
     init: true
     depends_on:
       - materialized
