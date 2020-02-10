@@ -34,6 +34,11 @@ services:
       #
       # 1000 was chosen by fair dice roll
       - DIFFERENTIAL_EAGER_MERGE=1000
+    ulimits:
+        nofile:
+          soft: "65536"
+          hard: "65536"
+
   mysql:
     image: debezium/example-mysql:1.0
     ports:
