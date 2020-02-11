@@ -167,6 +167,7 @@ Materialize to maintain for us.
     ```
 
 1. Create a straightforward view of the underlying data.
+   <a name="define-query01"></a>
 
     ```sql
     CREATE MATERIALIZED VIEW query01 as SELECT
@@ -199,6 +200,7 @@ Materialize to maintain for us.
 
 1. Define another view for "Query 07", which involves a complex 11-way `JOIN`
    across 6 tables:
+   <a name="define-query07"></a>
 
     ```sql
     CREATE MATERIALIZED VIEW query07 AS
@@ -282,7 +284,20 @@ Materialize to maintain for us.
 1. In the query editor, enter:
 
     ```sql
-    -- CREATE MATERIALIZED VIEW q01 as SELECT
+    SELECT * FROM query01;
+    ```
+
+    Materialize relies on you already having created a view with this name,
+    which you did the Materialize CLI [a few steps back](#define-query01).
+
+    Metabase will store comments alongside queries, and it's a good practice
+    to keep a verbatim copy of the view's definition alongside places that
+    use it. However, this same information is also retrievable with `SHOW
+    CREATE VIEW <name>`. If you follow that practice, the text entry box would
+    look like:
+
+    ```sql
+    -- CREATE MATERIALIZED VIEW query01 as SELECT
     --     ol_number,
     --     sum(ol_quantity) as sum_qty,
     --     sum(ol_amount) as sum_amount,
@@ -297,13 +312,6 @@ Materialize to maintain for us.
     --         ol_number;
     SELECT * FROM query01;
     ```
-
-    Materialize relies on you already having created a view with this name,
-    which you did the Materialize CLI a few steps back.
-
-    It's also a good practice to keep a verbatim of the view's definition
-    alongside places that use it. However, this same information is also
-    retrievable with `SHOW CREATE VIEW...`.
 
 1. Click the large **>** button.
 

@@ -38,3 +38,7 @@ pygmentsStyle = "xcode"
     identifier = "demos"
     name = "Demos"
     weight = 30
+
+[markup.goldmark.renderer]
+# allow <a name="link-target">, the old syntax no longer works
+unsafe = true
