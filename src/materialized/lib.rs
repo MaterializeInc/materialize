@@ -92,8 +92,6 @@ pub struct Config {
     /// Whether to collect metrics. If enabled, metrics can be collected by
     /// e.g. Prometheus via the `/metrics` HTTP endpoint.
     pub gather_metrics: bool,
-    /// When the server came up
-    pub start_time: Instant,
 }
 
 impl Config {
@@ -152,6 +150,8 @@ async fn handle_connection(
 
 /// Start a `materialized` server.
 pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
+    let start_time = Instant::now();
+
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
     let (cmd_tx, cmd_rx) = mpsc::unbounded::<coord::Command>();
@@ -188,7 +188,6 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     runtime.spawn({
         let switchboard = switchboard.clone();
         let cmd_tx = Arc::downgrade(&cmd_tx);
-        let start_time = config.start_time.clone();
         async move {
             let mut incoming = listener.incoming();
             while let Some(conn) = incoming.next().await {
