@@ -28,8 +28,9 @@ services:
       - logfile:/log
 
   server:
+    # you can run with the local changes to ./apps using the build.sh script
+    image: "materialize/http-demo:${MZ_HTTP_DEMO_VERSION:-2020-02-05}"
     init: true
-    image: materialize/http-demo:2020-02-05
     ports:
       - *server
     volumes:
@@ -37,7 +38,8 @@ services:
     command: /bin/sh -c "./server.py 2> /log/requests"
 
   client:
-    image: materialize/http-demo:2020-02-05
+    # you can run with the local changes to ./apps using the build.sh script
+    image: "materialize/http-demo:${MZ_HTTP_DEMO_VERSION:-2020-02-05}"
     init: true
     depends_on: [server]
     command: ./loadgen.py
