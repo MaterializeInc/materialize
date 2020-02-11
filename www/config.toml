@@ -5,6 +5,7 @@ pygmentsCodeFences = true
 pygmentsStyle = "xcode"
 
 [menu]
+
     [[menu.main]]
     identifier = "overview"
     name = "Overview"
@@ -13,12 +14,12 @@ pygmentsStyle = "xcode"
     [[menu.main]]
     identifier = "connections"
     name = "Connect"
-    weight = 10
+    weight = 20
 
     [[menu.main]]
     identifier = "sql"
     name = "SQL"
-    weight = 20
+    weight = 30
 
     [[menu.main]]
     identifier = "sql-types"
