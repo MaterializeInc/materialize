@@ -236,18 +236,18 @@ message: {}
 
 /// Print to the screen information about how to contact us.
 fn beta_splash() {
-    println!(
-        r#"=======================================================================
+    eprintln!(
+        "=======================================================================
 Thank you for trying Materialize!
 
 We are interested in any and all feedback you have, which may be able
 to improve both our software and your queries! Please reach out at:
 
     Web: https://materialize.io
-    Github issues: https://github.com/MaterializeInc/materialize/issues
+    GitHub issues: https://github.com/MaterializeInc/materialize/issues
     Email: bugs@materialize.io
     Twitter: @MaterializeInc
 =======================================================================
-"#
+"
     );
 }
