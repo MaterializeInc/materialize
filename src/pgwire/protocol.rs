@@ -344,6 +344,7 @@ where
 
             // Parse.
             let (tx, rx) = futures::channel::oneshot::channel();
+            debug!("cid={} query sql: {}", self.conn_id, sql);
             let cmd = coord::Command::Parse {
                 name: stmt_name.clone(),
                 sql,
@@ -430,6 +431,7 @@ where
         name: String,
         sql: String,
     ) -> Result<State, comm::Error> {
+        debug!("cid={} parse sql: {}", self.conn_id, sql);
         let (tx, rx) = futures::channel::oneshot::channel();
 
         let cmd = coord::Command::Parse {
