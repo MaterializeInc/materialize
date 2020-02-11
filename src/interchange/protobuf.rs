@@ -48,7 +48,6 @@ fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> R
                 FieldType::String => ScalarType::String,
                 FieldType::Bytes => ScalarType::Bytes,
                 FieldType::Message(m) => {
-                    println!("{:?}", m);
                     for f in m.fields().iter() {
                         validate_proto_field_resolved(&f, descriptors)?;
                     }
