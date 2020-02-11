@@ -19,7 +19,7 @@ use env_logger::{Builder as LogBuilder, Env, Target};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Response, Server};
 use lazy_static::lazy_static;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use postgres::Client;
 use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, Encoder, HistogramVec};
 
@@ -145,7 +145,7 @@ fn create_postgres_client(mz_url: &str) -> Client {
 
 fn print_error_and_backoff(backoff: &mut Duration, context: &str, error_message: String) {
     warn!(
-        "for {}: {}. Sleeping for {:#?} seconds",
+        "for {}: {}. Sleeping for {:#?}",
         context, error_message, *backoff
     );
     thread::sleep(*backoff);
@@ -218,7 +218,18 @@ fn try_initialize(client: &mut Client, query: &Query) {
         query.name, query.query
     )) {
         Ok(_) => info!("view {} is installed", query.name),
-        Err(err) => warn!("error trying to create view {}: {}", query.name, err),
+        Err(err) => {
+            let errmsg = err.to_string();
+            if !errmsg.ends_with("already exists") {
+                warn!("error trying to create view {}: {}", query.name, err);
+            } else {
+                // this only matters for timeline issues, in general it is fine
+                debug!(
+                    "create view that already exists: {} err={}",
+                    query.name, err
+                );
+            }
+        }
     }
 }
 
