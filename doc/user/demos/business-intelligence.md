@@ -152,18 +152,18 @@ Materialize to maintain for us.
     SHOW SOURCES;
     ```
     ```nofmt
-    materialize.public.mysql_tpcch_customer
-    materialize.public.mysql_tpcch_district
-    materialize.public.mysql_tpcch_history
-    materialize.public.mysql_tpcch_item
-    materialize.public.mysql_tpcch_nation
-    materialize.public.mysql_tpcch_neworder
-    materialize.public.mysql_tpcch_order
-    materialize.public.mysql_tpcch_orderline
-    materialize.public.mysql_tpcch_region
-    materialize.public.mysql_tpcch_stock
-    materialize.public.mysql_tpcch_supplier
-    materialize.public.mysql_tpcch_warehouse
+    mysql_tpcch_customer
+    mysql_tpcch_district
+    mysql_tpcch_history
+    mysql_tpcch_item
+    mysql_tpcch_nation
+    mysql_tpcch_neworder
+    mysql_tpcch_order
+    mysql_tpcch_orderline
+    mysql_tpcch_region
+    mysql_tpcch_stock
+    mysql_tpcch_supplier
+    mysql_tpcch_warehouse
     ```
 
 1. Create a straightforward view of the underlying data.
@@ -261,7 +261,7 @@ Materialize to maintain for us.
 
     Field | Enter...
     ------|----------
-    Database | **PostgreSQL**
+    Database | **Materialize**
     Name | **tpcch**
     Host | **materialized**
     Port | **6875**
@@ -295,7 +295,7 @@ Materialize to maintain for us.
     --         ol_delivery_d > date '1998-12-01'
     -- GROUP BY
     --         ol_number;
-    SELECT * FROM q01;
+    SELECT * FROM query01;
     ```
 
     Materialize relies on you already having created a view with this name,
@@ -312,7 +312,7 @@ Materialize to maintain for us.
     repeat this process.
 
 1. Once you see the results similar to those below, click **Save**, enter
-   **q01** as the query's name, and then click **Save**.
+   **query01** as the query's name, and then click **Save**.
 
 1. When asked if you want to save this to a dashboard, click **Yes please!**.
 
@@ -320,7 +320,7 @@ Materialize to maintain for us.
 
 1. Enter **tpcch** as the **Name**, and then click **Create**.
 
-1. Modify the size of the **q01** card, and then click **Save**.
+1. Modify the size of the **query01** card, and then click **Save**.
 
 1. Click **Auto-refresh**, and then select **1 minute** (which is the fastest
    refresh rate that the tool offers; Materialize can reasonably support 1
@@ -330,7 +330,7 @@ At this point, Metabase will now automatically refresh this analysis for you
 every 1 minute.
 
 If you want to see more chBench queries, you can repeat these steps for the view
-`q07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/master/demo/chbench/chbench/mz-default.cfg).
+`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/master/demo/chbench/chbench/mz-default.cfg).
 
 ## Recap
 
