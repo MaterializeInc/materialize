@@ -99,6 +99,9 @@ fn run() -> Result<(), failure::Error> {
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
 
+    // Inform the user about what they are using, and how to contact us.
+    beta_splash();
+
     let popts = opts.parse(&args[1..])?;
     if popts.opt_present("h") {
         print!("{}", opts.usage("usage: materialized [options]"));
@@ -229,4 +232,22 @@ message: {}
     );
 
     process::exit(1);
+}
+
+/// Print to the screen information about how to contact us.
+fn beta_splash() {
+    println!(
+        r#"=======================================================================
+Thank you for trying Materialize!
+
+We are interested in any and all feedback you have, which may be able
+to improve both our software and your queries! Please reach out at:
+
+    Web: https://materialize.io
+    Github issues: https://github.com/MaterializeInc/materialize/issues
+    Email: bugs@materialize.io
+    Twitter: @MaterializeInc
+=======================================================================
+"#
+    );
 }
