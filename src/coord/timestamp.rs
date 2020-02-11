@@ -10,10 +10,10 @@
 use rusqlite::{params, NO_PARAMS};
 
 use std::collections::HashMap;
-use std::fs;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -27,6 +27,11 @@ use rdkafka::ClientConfig;
 use dataflow_types::Consistency;
 
 use log::{error, info};
+
+pub struct TimestampConfig {
+    pub frequency: Duration,
+    pub max_size: i64,
+}
 
 #[derive(Debug)]
 pub enum TimestampMessage {
@@ -159,7 +164,7 @@ pub struct Timestamper {
     byo_sources: HashMap<SourceInstanceId, ByoTimestampConsumer>,
 
     // Connection to the underlying SQL lite instance
-    sqllite: rusqlite::Connection,
+    storage: Arc<Mutex<catalog::sql::Connection>>,
 
     // Channel with coordinator
     coord_channel: TimestampChannel,
@@ -176,37 +181,16 @@ pub struct Timestamper {
 
 impl Timestamper {
     pub fn new(
-        timestamp_frequency: Duration,
-        max_ts_increment: i64,
-        path: Option<&Path>,
+        config: &TimestampConfig,
+        storage: Arc<Mutex<catalog::sql::Connection>>,
         channel: TimestampChannel,
     ) -> Self {
-        // open the underlying SQL lite connection
-        let sqlite = match path {
-            Some(path) => {
-                fs::create_dir_all(path).expect("Failed to open SQL file");
-                let full_path = path.join("catalog");
-                rusqlite::Connection::open(full_path).expect("Could not connect")
-            }
-            None => rusqlite::Connection::open_in_memory().expect("Could not connect"),
-        };
-
-        sqlite
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS timestamps (
-    sid blob NOT NULL,
-    vid blob NOT NULL,
-    timestamp integer NOT NULL,
-    offset blob NOT NULL,
-    PRIMARY KEY (sid, vid, timestamp)
-)",
-            )
-            .expect("Failed to CREATE timestamp table");
-
         // Recover existing data by running max on the timestamp count. This will ensure that
         // there will never be two duplicate entries and that there is a continuous stream
         // of timestamp updates across reboots
-        let max_ts = sqlite
+        let max_ts = storage
+            .lock()
+            .expect("lock poisoned")
             .prepare("SELECT MAX(timestamp) FROM timestamps")
             .expect("Failed to prepare statement")
             .query_row(NO_PARAMS, |row| {
@@ -220,18 +204,22 @@ impl Timestamper {
 
         info!(
             "Starting Timestamping Thread. Frequency: {} ms.",
-            timestamp_frequency.as_millis()
+            config.frequency.as_millis()
         );
 
         Self {
             rt_sources: HashMap::new(),
             byo_sources: HashMap::new(),
-            sqllite: sqlite,
+            storage,
             coord_channel: channel,
             current_timestamp: max_ts,
-            timestamp_frequency,
-            max_increment_size: max_ts_increment,
+            timestamp_frequency: config.frequency,
+            max_increment_size: config.max_size,
         }
+    }
+
+    fn storage(&self) -> MutexGuard<catalog::sql::Connection> {
+        self.storage.lock().expect("lock poisoned")
     }
 
     /// Run the update function in a loop at the specified frequency. Acquires timestamps using
@@ -299,7 +287,7 @@ impl Timestamper {
                 }
                 TimestampMessage::DropInstance(id) => {
                     info!("Dropping Timestamping for Source {}", id);
-                    self.sqllite
+                    self.storage()
                         .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND vid = ?")
                         .expect("Failed to prepare delete statement")
                         .execute(params![SqlVal(&id.sid), SqlVal(&id.vid)])
@@ -418,7 +406,7 @@ impl Timestamper {
     /// SQL database. Notifies the coordinator of these updates
     fn rt_recover_source(&mut self, id: SourceInstanceId) -> i64 {
         let ts_updates: Vec<_> = self
-            .sqllite
+            .storage()
             .prepare("SELECT timestamp, offset FROM timestamps WHERE sid = ? AND vid = ? ORDER BY timestamp")
             .expect("Failed to execute select statement")
             .query_and_then(params![SqlVal(&id.sid), SqlVal(&id.vid)], |row| -> Result<_, failure::Error> {
@@ -475,12 +463,12 @@ impl Timestamper {
         result
     }
 
-    /// Persist timestamp updates to the underlying SQLlite store when using the real-time
-    /// timestamping logic
+    /// Persist timestamp updates to the underlying storage when using the
+    /// real-time timestamping logic.
     fn rt_persist_timestamp(&self, ts_updates: &[(SourceInstanceId, i64)]) {
+        let storage = self.storage();
         for (id, offset) in ts_updates {
-            let mut stmt = self
-                .sqllite
+            let mut stmt = storage
                 .prepare_cached(
                     "INSERT INTO timestamps (sid, vid, timestamp, offset) VALUES (?, ?, ?, ?)",
                 )

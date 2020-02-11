@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use failure::bail;
 use lazy_static::lazy_static;
@@ -54,7 +55,7 @@ pub struct Catalog {
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ambient_schemas: HashMap<String, Schema>,
-    storage: sql::Connection,
+    storage: Arc<Mutex<sql::Connection>>,
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
 }
 
@@ -216,11 +217,12 @@ impl Catalog {
             by_id: BTreeMap::new(),
             indexes: HashMap::new(),
             ambient_schemas: HashMap::new(),
-            storage,
+            storage: Arc::new(Mutex::new(storage)),
             serialize_item: S::serialize,
         };
 
-        for (id, name) in catalog.storage.load_databases()? {
+        let databases = catalog.storage().load_databases()?;
+        for (id, name) in databases {
             catalog.by_name.insert(
                 name,
                 Database {
@@ -230,7 +232,8 @@ impl Catalog {
             );
         }
 
-        for (id, database_name, schema_name) in catalog.storage.load_schemas()? {
+        let schemas = catalog.storage().load_schemas()?;
+        for (id, database_name, schema_name) in schemas {
             let schemas = match database_name {
                 Some(database_name) => {
                     &mut catalog
@@ -256,7 +259,8 @@ impl Catalog {
         // depend on the system database/schema being installed.
         f(&mut catalog);
 
-        for (id, name, def) in catalog.storage.load_items()? {
+        let items = catalog.storage().load_items()?;
+        for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
@@ -289,8 +293,16 @@ impl Catalog {
         Catalog::open::<BincodeSerializer, _>(None, |_| ()).unwrap()
     }
 
+    fn storage(&self) -> MutexGuard<sql::Connection> {
+        self.storage.lock().expect("lock poisoned")
+    }
+
+    pub fn storage_handle(&self) -> Arc<Mutex<sql::Connection>> {
+        self.storage.clone()
+    }
+
     pub fn allocate_id(&mut self) -> Result<GlobalId, failure::Error> {
-        self.storage.allocate_id()
+        self.storage().allocate_id()
     }
 
     /// Resolves [`PartialName`] into a [`FullName`].
@@ -544,7 +556,8 @@ impl Catalog {
         }
 
         let mut actions = Vec::with_capacity(ops.len());
-        let mut tx = self.storage.transaction()?;
+        let mut storage = self.storage();
+        let mut tx = storage.transaction()?;
         for op in ops {
             actions.push(match op {
                 Op::CreateDatabase { name } => Action::CreateDatabase {
@@ -609,6 +622,7 @@ impl Catalog {
             })
         }
         tx.commit()?;
+        drop(storage); // release immutable borrow on `self` so we can borrow mutably below
 
         Ok(actions
             .into_iter()

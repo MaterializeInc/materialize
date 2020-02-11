@@ -35,7 +35,7 @@ fn no_block() {
         logging: logging_config.as_ref(),
         data_directory: None,
         executor: &executor,
-        ts_channel: None,
+        timestamp: None,
     })
     .unwrap();
 

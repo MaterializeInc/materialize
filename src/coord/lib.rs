@@ -26,5 +26,5 @@ mod persistence;
 mod timestamp;
 
 pub use self::coord::{Config, Coordinator};
-pub use self::timestamp::{TimestampChannel, TimestampMessage, Timestamper};
+pub use self::timestamp::TimestampConfig;
 pub use command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};

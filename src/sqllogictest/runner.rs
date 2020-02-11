@@ -34,7 +34,6 @@ use std::ops;
 use std::path::Path;
 use std::str;
 use std::thread;
-use std::time::Duration;
 
 use failure::{bail, ResultExt};
 use futures::executor::block_on;
@@ -43,9 +42,6 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use coord::ExecuteResponse;
-use coord::TimestampChannel;
-
-use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::jsonb::Jsonb;
@@ -277,7 +273,6 @@ pub(crate) struct State {
     // Drop order matters for these fields.
     cmd_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     _dataflow_workers: Box<dyn Drop>,
-    _timestamp_thread: Option<JoinOnDropHandle<()>>,
     _coord_thread: JoinOnDropHandle<()>,
     _runtime: tokio::runtime::Runtime,
     session: Session,
@@ -378,8 +373,6 @@ impl State {
         let executor = runtime.handle().clone();
 
         let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
-        let (source_tx, source_rx) = std::sync::mpsc::channel();
-        let (ts_tx, ts_rx) = std::sync::mpsc::channel();
 
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
@@ -388,24 +381,10 @@ impl State {
             logging: logging_config.as_ref(),
             data_directory: None,
             executor: &executor,
-            ts_channel: Some(TimestampChannel {
-                sender: source_tx,
-                receiver: ts_rx,
-            }),
+            timestamp: None,
         })?;
 
-        let mut tsper = coord::Timestamper::new(
-            Duration::from_millis(10),
-            1000,
-            None,
-            coord::TimestampChannel {
-                sender: ts_tx,
-                receiver: source_rx,
-            },
-        );
-
         let coord_thread = thread::spawn(move || coord.serve(cmd_rx)).join_on_drop();
-        let ts_thread = thread::spawn(move || tsper.update()).join_on_drop();
 
         let dataflow_workers = dataflow::serve(
             vec![None],
@@ -422,7 +401,6 @@ impl State {
             cmd_tx,
             _dataflow_workers: Box::new(dataflow_workers),
             _coord_thread: coord_thread,
-            _timestamp_thread: Some(ts_thread),
             _runtime: runtime,
             session: Session::default(),
             conn_id: 1,
