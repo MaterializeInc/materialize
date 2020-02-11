@@ -166,19 +166,10 @@ Materialize to maintain for us.
     materialize.public.mysql_tpcch_warehouse
     ```
 
-    If you don't have all of the sources listed above, wait a few seconds and
-    repeat this step.
-
-    ```sql
-    CREATE SOURCES LIKE 'mysql.tpcch.%'
-    FROM 'kafka://kafka:9092'
-    USING SCHEMA REGISTRY 'http://schema-registry:8081';
-    ```
-
 1. Create a straightforward view of the underlying data.
 
     ```sql
-    CREATE MATERIALIZED VIEW q01 as SELECT
+    CREATE MATERIALIZED VIEW query01 as SELECT
         ol_number,
         sum(ol_quantity) as sum_qty,
         sum(ol_amount) as sum_amount,
@@ -199,7 +190,7 @@ Materialize to maintain for us.
 1. Check the results of the view:
 
     ```sql
-    SELECT * FROM q01;
+    SELECT * FROM query01;
     ```
 
     If you run this query multiple times, you should see the results change, and
@@ -210,7 +201,7 @@ Materialize to maintain for us.
    across 6 tables:
 
     ```sql
-    CREATE MATERIALIZED VIEW q07 AS
+    CREATE MATERIALIZED VIEW query07 AS
     SELECT
         su_nationkey AS supp_nation,
         substr(c_state, 1, 1) AS cust_nation,
@@ -247,7 +238,7 @@ Materialize to maintain for us.
 1. Check the results of this query:
 
     ```sql
-    SELECT * FROM q07;
+    SELECT * FROM query07;
     ```
 
     This query can take a few minutes to begin producing answers. If you receive
@@ -274,7 +265,7 @@ Materialize to maintain for us.
     Name | **tpcch**
     Host | **materialized**
     Port | **6875**
-    Database name | **tpcch**
+    Database name | **materialize**
     Database username | **root**
     Database password | Leave empty.
 
