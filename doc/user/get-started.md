@@ -2,7 +2,7 @@
 title: "Get started"
 description: "Get started with Materialize"
 menu: "main"
-weight: 2
+weight: 3
 ---
 
 To get started with Materialize, we'll cover:
