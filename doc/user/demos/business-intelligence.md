@@ -178,11 +178,11 @@ Materialize to maintain for us.
         avg(ol_amount) as avg_amount,
         count(*) as count_order
     FROM
-            mysql_tpcch_orderline
+        mysql_tpcch_orderline
     WHERE
-            ol_delivery_d > date '1998-12-01'
+        ol_delivery_d > date '1998-12-01'
     GROUP BY
-            ol_number;
+        ol_number;
     ```
 
      This is used to repesent "Query 01" in chBench, which tracks statistics
@@ -305,11 +305,11 @@ Materialize to maintain for us.
     --     avg(ol_amount) as avg_amount,
     --     count(*) as count_order
     -- FROM
-    --         mysql_tpcch_orderline
+    --     mysql_tpcch_orderline
     -- WHERE
-    --         ol_delivery_d > date '1998-12-01'
+    --     ol_delivery_d > date '1998-12-01'
     -- GROUP BY
-    --         ol_number;
+    --     ol_number;
     SELECT * FROM query01;
     ```
 
