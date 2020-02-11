@@ -825,17 +825,72 @@ fn handle_create_view(
     })
 }
 
-async fn handle_create_dataflow(
-    mut stmt: Statement,
+/// Remove dependencies on external state: inline schemas in files,
+/// fetch schemas from registries, and so on, so that we can generate a
+/// fully-specified `create-sql` to persist in the catalog.
+///
+/// The `Statement` returned from this function should be able to be planned
+/// without any asynchronicity or non-determinism.
+async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Error> {
+    if let Statement::CreateSource {
+        connector, format, ..
+    } = &mut stmt
+    {
+        let topic = if let Connector::Kafka { broker, topic, .. } = connector {
+            if !broker.contains(':') {
+                *broker += ":9092";
+            }
+            Some(topic)
+        } else {
+            None
+        };
+
+        match format {
+            Format::Avro(schema) => match schema {
+                AvroSchema::CsrUrl { url, seed } => {
+                    let topic = if let Some(topic) = topic {
+                        topic
+                    } else {
+                        bail!("Confluent Schema Registry is only supported with Kafka sources")
+                    };
+                    if seed.is_none() {
+                        let url = url.parse()?;
+                        let Schema {
+                            key_schema,
+                            value_schema,
+                            ..
+                        } = get_remote_avro_schema(url, topic.clone()).await?;
+                        *seed = Some(CsrSeed {
+                            key_schema,
+                            value_schema,
+                        });
+                    }
+                }
+                AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
+                    let value_schema = tokio::fs::read_to_string(path).await?;
+                    *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
+                }
+                _ => {}
+            },
+            Format::Protobuf { schema, .. } => {
+                if let sql_parser::ast::Schema::File(path) = schema {
+                    let descriptors = tokio::fs::read(path).await?;
+                    let mut buf = String::new();
+                    strconv::format_bytes(&mut buf, &descriptors);
+                    *schema = sql_parser::ast::Schema::Inline(buf);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(stmt)
+}
+
+fn handle_create_dataflow_pure(
+    stmt: Statement,
     session: Box<dyn PlanSession + Send>,
 ) -> Result<Plan, failure::Error> {
-    // TODO(benesch): as we walk the statement we remove dependencies on
-    // external state. Schemas in files are inlined, schemas from registries are
-    // fetched, and so on, so that we can generate a fully-specified
-    // `create_sql` to persist in the catalog. This should be refactored out
-    // into its own step ASAP so it is more obvious. It is far too subtle at the
-    // moment.
-    match &mut stmt {
+    match &stmt {
         Statement::CreateSource {
             name,
             connector,
@@ -876,9 +931,7 @@ async fn handle_create_dataflow(
                             join(with_options.keys(), ",")
                         )
                     }
-                    if !broker.contains(':') {
-                        *broker += ":9092";
-                    }
+                    // TODO(brennan) - blocking here is unnecessary and can be moved into the Kafka source.
                     let addr = match broker.to_socket_addrs()?.next() {
                         Some(addr) => addr,
                         None => bail!("unable to resolve kafka broker to any addresses"),
@@ -890,8 +943,7 @@ async fn handle_create_dataflow(
                         envelope,
                         consistency,
                         ssl_certificate_file,
-                    )
-                    .await?
+                    )?
                 }
                 Connector::File { path, with_options } => {
                     let mut with_options: HashMap<_, _> = with_options
@@ -1036,6 +1088,14 @@ async fn handle_create_dataflow(
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
+}
+
+async fn handle_create_dataflow(
+    stmt: Statement,
+    session: Box<dyn PlanSession + Send>,
+) -> Result<Plan, failure::Error> {
+    let stmt = purify_statement(stmt).await?;
+    handle_create_dataflow_pure(stmt, session)
 }
 
 fn handle_drop_database(
@@ -1238,10 +1298,10 @@ fn handle_query(
     Ok((expr.decorrelate()?, desc, finishing))
 }
 
-async fn build_kafka_source(
+fn build_kafka_source(
     kafka_addr: SocketAddr,
     topic: String,
-    format: &mut Format,
+    format: &Format,
     envelope: Envelope,
     consistency: Consistency,
     ssl_certificate_file: Option<PathBuf>,
@@ -1249,7 +1309,6 @@ async fn build_kafka_source(
     match (format, envelope) {
         (Format::Avro(schema), Envelope::Debezium) => {
             build_kafka_avro_source(schema, kafka_addr, topic, consistency, ssl_certificate_file)
-                .await
         }
         (Format::Avro(_), _) => {
             // TODO(brennan) -- there's no reason not to support this
@@ -1270,7 +1329,6 @@ async fn build_kafka_source(
                 consistency,
                 ssl_certificate_file,
             )
-            .await
         }
         (Format::Protobuf { .. }, Envelope::Debezium) => {
             bail!("Currently, Debezium-style envelopes are not supported for protobuf messages.")
@@ -1308,8 +1366,8 @@ async fn get_remote_avro_schema(url: Url, topic: String) -> Result<Schema, failu
     })
 }
 
-async fn build_kafka_avro_source(
-    schema: &mut AvroSchema,
+fn build_kafka_avro_source(
+    schema: &AvroSchema,
     kafka_addr: SocketAddr,
     topic: String,
     consistency: Consistency,
@@ -1327,14 +1385,8 @@ async fn build_kafka_avro_source(
             value_schema: schema.clone(),
             schema_registry_url: None,
         },
-        AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
-            let value_schema = tokio::fs::read_to_string(path).await?;
-            *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema.clone()));
-            Schema {
-                key_schema: None,
-                value_schema,
-                schema_registry_url: None,
-            }
+        AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
+            unreachable!("File schema should already have been inlined")
         }
         AvroSchema::CsrUrl { url, seed } => {
             let url: Url = url.parse()?;
@@ -1345,12 +1397,7 @@ async fn build_kafka_avro_source(
                     schema_registry_url: Some(url),
                 }
             } else {
-                let schema = get_remote_avro_schema(url, topic.clone()).await?;
-                *seed = Some(CsrSeed {
-                    key_schema: schema.key_schema.clone(),
-                    value_schema: schema.value_schema.clone(),
-                });
-                schema
+                unreachable!("CSR seed resolution should already have been called")
             }
         }
     };
@@ -1380,8 +1427,8 @@ async fn build_kafka_avro_source(
     })
 }
 
-async fn build_kafka_protobuf_source(
-    schema: &mut sql_parser::ast::Schema,
+fn build_kafka_protobuf_source(
+    schema: &sql_parser::ast::Schema,
     kafka_addr: SocketAddr,
     topic: String,
     message_name: &str,
@@ -1390,12 +1437,8 @@ async fn build_kafka_protobuf_source(
 ) -> Result<Source, failure::Error> {
     let descriptors = match schema {
         sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
-        sql_parser::ast::Schema::File(path) => {
-            let descriptors = tokio::fs::read(path).await?;
-            let mut buf = String::new();
-            strconv::format_bytes(&mut buf, &descriptors);
-            *schema = sql_parser::ast::Schema::Inline(buf);
-            descriptors
+        sql_parser::ast::Schema::File(_) => {
+            unreachable!("File schema should already have been inlined")
         }
     };
     let desc = protobuf::validate_descriptors(
