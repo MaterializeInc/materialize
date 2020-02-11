@@ -11,8 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 use std::time::Instant;
 
+use futures::channel::mpsc::UnboundedSender;
 use futures::future::TryFutureExt;
-use hyper::{service, Body, Method, Request, Response};
+use futures::sink::SinkExt;
+use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
 use prometheus::{register_gauge_vec, Encoder, Gauge, GaugeVec};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -46,10 +48,12 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 
 pub async fn handle_connection<A: 'static + AsyncRead + AsyncWrite + Unpin>(
     a: A,
+    cmd_tx: UnboundedSender<coord::Command>,
     gather_metrics: bool,
     start_time: Instant,
 ) -> Result<(), failure::Error> {
     let svc = service::service_fn(move |req: Request<Body>| {
+        let cmd_tx = cmd_tx.clone();
         async move {
             match (req.method(), req.uri().path()) {
                 (&Method::GET, "/") => handle_home(req).await,
@@ -57,6 +61,7 @@ pub async fn handle_connection<A: 'static + AsyncRead + AsyncWrite + Unpin>(
                     handle_prometheus(req, gather_metrics, start_time).await
                 }
                 (&Method::GET, "/status") => handle_status(req, start_time).await,
+                (&Method::GET, "/internal/catalog") => handle_internal_catalog(req, cmd_tx).await,
                 _ => handle_unknown(req).await,
             }
         }
@@ -307,6 +312,19 @@ impl PromMetric<'_> {
             })
             .collect()
     }
+}
+
+async fn handle_internal_catalog(
+    _: Request<Body>,
+    mut cmd_tx: UnboundedSender<coord::Command>,
+) -> Result<Response<Body>, failure::Error> {
+    let (tx, rx) = futures::channel::oneshot::channel();
+    cmd_tx.send(coord::Command::DumpCatalog { tx }).await?;
+    let dump = rx.await?;
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(dump))
+        .unwrap())
 }
 
 async fn handle_unknown(_: Request<Body>) -> Result<Response<Body>, failure::Error> {

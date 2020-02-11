@@ -129,7 +129,7 @@ async fn handle_connection(
     let res = if pgwire::match_handshake(buf) {
         pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).await
     } else if http::match_handshake(buf) {
-        http::handle_connection(ss.into_sniffed(), gather_metrics, start_time).await
+        http::handle_connection(ss.into_sniffed(), cmd_tx, gather_metrics, start_time).await
     } else if comm::protocol::match_handshake(buf) {
         switchboard
             .handle_connection(ss.into_sniffed())

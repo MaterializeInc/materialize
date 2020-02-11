@@ -51,31 +51,31 @@ pub mod sql;
 /// implicitly present in all databases, that house various system views.
 /// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
 pub struct Catalog {
-    by_name: HashMap<String, Database>,
+    by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ambient_schemas: HashMap<String, Schema>,
+    ambient_schemas: BTreeMap<String, Schema>,
     storage: Arc<Mutex<sql::Connection>>,
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct Database {
     id: i64,
-    schemas: HashMap<String, Schema>,
+    schemas: BTreeMap<String, Schema>,
 }
 
 lazy_static! {
     static ref EMPTY_DATABASE: Database = Database {
         id: 0,
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Schema {
     pub id: i64,
-    pub items: HashMap<String, GlobalId>,
+    pub items: BTreeMap<String, GlobalId>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -213,10 +213,10 @@ impl Catalog {
         let storage = sql::Connection::open(path)?;
 
         let mut catalog = Catalog {
-            by_name: HashMap::new(),
+            by_name: BTreeMap::new(),
             by_id: BTreeMap::new(),
             indexes: HashMap::new(),
-            ambient_schemas: HashMap::new(),
+            ambient_schemas: BTreeMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             serialize_item: S::serialize,
         };
@@ -227,7 +227,7 @@ impl Catalog {
                 name,
                 Database {
                     id,
-                    schemas: HashMap::new(),
+                    schemas: BTreeMap::new(),
                 },
             );
         }
@@ -248,7 +248,7 @@ impl Catalog {
                 schema_name,
                 Schema {
                     id,
-                    items: HashMap::new(),
+                    items: BTreeMap::new(),
                 },
             );
         }
@@ -405,7 +405,7 @@ impl Catalog {
     pub fn get_schemas(
         &self,
         database_spec: &DatabaseSpecifier,
-    ) -> Option<&HashMap<String, Schema>> {
+    ) -> Option<&BTreeMap<String, Schema>> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
             DatabaseSpecifier::Ambient => Some(&self.ambient_schemas),
@@ -417,7 +417,7 @@ impl Catalog {
     fn get_schemas_mut(
         &mut self,
         database_spec: &DatabaseSpecifier,
-    ) -> Option<&mut HashMap<String, Schema>> {
+    ) -> Option<&mut BTreeMap<String, Schema>> {
         // Keep in sync with `get_schemas`.
         match database_spec {
             DatabaseSpecifier::Ambient => Some(&mut self.ambient_schemas),
@@ -633,7 +633,7 @@ impl Catalog {
                         name,
                         Database {
                             id,
-                            schemas: HashMap::new(),
+                            schemas: BTreeMap::new(),
                         },
                     );
                     OpStatus::CreatedDatabase
@@ -653,7 +653,7 @@ impl Catalog {
                             schema_name,
                             Schema {
                                 id,
-                                items: HashMap::new(),
+                                items: BTreeMap::new(),
                             },
                         );
                     OpStatus::CreatedSchema
@@ -728,6 +728,10 @@ impl Catalog {
     pub fn indexes(&self) -> &HashMap<GlobalId, Vec<Vec<ScalarExpr>>> {
         &self.indexes
     }
+
+    pub fn dump(&self) -> String {
+        serde_json::to_string(&self.by_name).expect("serialization cannot fail")
+    }
 }
 
 impl fmt::Debug for Catalog {
@@ -791,7 +795,7 @@ pub enum OpStatus {
 pub struct DatabaseResolver<'a> {
     database_spec: DatabaseSpecifier,
     database: &'a Database,
-    ambient_schemas: &'a HashMap<String, Schema>,
+    ambient_schemas: &'a BTreeMap<String, Schema>,
 }
 
 impl<'a> DatabaseResolver<'a> {

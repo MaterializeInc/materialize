@@ -44,6 +44,11 @@ pub enum Command {
 
     /// Cancel the query currently running on another connection.
     CancelRequest { conn_id: u32 },
+
+    /// Dump the catalog to a JSON string.
+    DumpCatalog {
+        tx: futures::channel::oneshot::Sender<String>,
+    },
 }
 
 #[derive(Debug)]
