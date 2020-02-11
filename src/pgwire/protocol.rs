@@ -294,7 +294,11 @@ where
                 result: Err(err),
                 session,
             } => {
-                return self.error(session, "99999", err.to_string()).await;
+                let mut err_msg = err.to_string();
+                for e in err.iter_causes() {
+                    err_msg.push_str(&format!(", caused by: {}", e));
+                }
+                return self.error(session, "99999", err_msg).await;
             }
         };
 
