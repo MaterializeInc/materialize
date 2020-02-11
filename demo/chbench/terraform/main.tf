@@ -13,7 +13,7 @@ provider "aws" {
 
 resource "aws_instance" "chbench" {
     # See the README for instructions on updating this AMI.
-    ami = "ami-0bae027361530dc31"
+    ami = "ami-0deb636bc0d02ee0b"
     instance_type = "r5ad.4xlarge"
     associate_public_ip_address = true
     vpc_security_group_ids = ["${aws_security_group.chbench.id}"]

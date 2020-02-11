@@ -9,4 +9,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-fetch-ssh-keys github --organization MaterializeInc > ~/.ssh/auto_authorized_keys
+temp_file=/tmp/auto_authorized_keys
+
+if fetch-ssh-keys github --organization MaterializeInc > "$temp_file"
+then
+	echo "Installing new auto_authorized_keys"
+	mv "$temp_file" ~/.ssh/auto_authorized_keys
+fi
