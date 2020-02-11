@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
-use failure::bail;
+use failure::{bail, ResultExt};
 use lazy_static::lazy_static;
 use log::{info, trace};
 use regex::Regex;
@@ -608,7 +608,7 @@ impl Catalog {
                 }
             })
         }
-        tx.commit()?;
+        tx.commit().context("committing catalog")?;
 
         Ok(actions
             .into_iter()

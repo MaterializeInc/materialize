@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use failure::bail;
+use failure::{bail, format_err, ResultExt};
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use serde::{Deserialize, Serialize};
@@ -61,37 +61,48 @@ pub struct Connection {
 impl Connection {
     pub fn open(path: Option<&Path>) -> Result<Connection, failure::Error> {
         let mut sqlite = match path {
-            Some(path) => rusqlite::Connection::open(path)?,
-            None => rusqlite::Connection::open_in_memory()?,
+            Some(path) => {
+                rusqlite::Connection::open(path).context("opening catalog database file")?
+            }
+            None => rusqlite::Connection::open_in_memory()
+                .context("opening catalog database in memory")?,
         };
-        let tx = sqlite.transaction()?;
-        let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
+        let tx = sqlite
+            .transaction()
+            .map_err(|e| format_err!("opening path={:?}: {}", path.map(|p| p.display()), e))?;
+        let app_id: i32 = tx
+            .query_row("PRAGMA application_id", params![], |row| row.get(0))
+            .context("querying application_id")?;
         if app_id == 0 {
             tx.execute(
                 &format!("PRAGMA application_id = {}", APPLICATION_ID),
                 params![],
-            )?;
+            )
+            .context("setting application_id")?;
             // Create the on-disk schema, since it doesn't already exist.
-            tx.execute_batch(&SCHEMA)?;
+            tx.execute_batch(&SCHEMA)
+                .context("executing create catalog schema")?;
             true
         } else if app_id == APPLICATION_ID {
             false
         } else {
             bail!("incorrect application_id in catalog");
         };
-        tx.commit()?;
+        tx.commit().context("commiting application_id")?;
 
         Ok(Connection { inner: sqlite })
     }
 
     pub fn load_databases(&self) -> Result<Vec<(i64, String)>, failure::Error> {
         self.inner
-            .prepare("SELECT id, name FROM databases")?
+            .prepare("SELECT id, name FROM databases")
+            .context("preparing database query")?
             .query_and_then(params![], |row| -> Result<_, failure::Error> {
                 let id: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
                 Ok((id, name))
-            })?
+            })
+            .context("extracting databases")?
             .collect()
     }
 
@@ -101,13 +112,15 @@ impl Connection {
                 "SELECT schemas.id, databases.name, schemas.name
                 FROM schemas
                 LEFT JOIN databases ON schemas.database_id = databases.id",
-            )?
+            )
+            .context("preparing schemas query")?
             .query_and_then(params![], |row| -> Result<_, failure::Error> {
                 let id: i64 = row.get(0)?;
                 let database_name: Option<String> = row.get(1)?;
                 let schema_name: String = row.get(2)?;
                 Ok((id, database_name, schema_name))
-            })?
+            })
+            .context("executing schemas query")?
             .collect()
     }
 
@@ -119,7 +132,8 @@ impl Connection {
                 JOIN schemas ON items.schema_id = schemas.id
                 JOIN databases ON schemas.database_id = databases.id
                 ORDER BY items.rowid",
-            )?
+            )
+            .context("preparing items query")?
             .query_and_then(params![], |row| -> Result<_, failure::Error> {
                 let id: SqlVal<GlobalId> = row.get(0)?;
                 let database: Option<String> = row.get(1)?;
@@ -135,28 +149,38 @@ impl Connection {
                     },
                     definition,
                 ))
-            })?
+            })
+            .context("executing items query")?
             .collect()
     }
 
     pub fn allocate_id(&mut self) -> Result<GlobalId, failure::Error> {
-        let tx = self.inner.transaction()?;
+        let tx = self
+            .inner
+            .transaction()
+            .context("starting transaction alloc_id")?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
         // limited range of positive i64s.
-        let id: i64 = tx.query_row("SELECT next_gid FROM gid_alloc", params![], |row| {
-            row.get(0)
-        })?;
+        let id: i64 = tx
+            .query_row("SELECT next_gid FROM gid_alloc", params![], |row| {
+                row.get(0)
+            })
+            .context("querying alloc_id")?;
         if id == i64::max_value() {
             bail!("catalog id exhaustion: id counter overflows an i64");
         }
-        tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])?;
-        tx.commit()?;
+        tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])
+            .context("executing alloc_id SET")?;
+        tx.commit().context("committing alloc_id transaction")?;
         Ok(GlobalId::User(id as u64))
     }
 
     pub fn transaction(&mut self) -> Result<Transaction, failure::Error> {
         Ok(Transaction {
-            inner: self.inner.transaction()?,
+            inner: self
+                .inner
+                .transaction()
+                .context("initializing public transaction")?,
         })
     }
 }
@@ -167,17 +191,12 @@ pub struct Transaction<'a> {
 
 impl Transaction<'_> {
     pub fn load_database_id(&self, database_name: &str) -> Result<i64, failure::Error> {
-        match self
-            .inner
-            .prepare_cached("SELECT id FROM databases WHERE name = ?")?
-            .query_row(params![database_name], |row| row.get(0))
-        {
-            Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                bail!("unknown database '{}'", database_name);
-            }
-            Err(err) => Err(err.into()),
-        }
+        self.load_id(
+            "database",
+            database_name,
+            "SELECT id FROM databases WHERE name = ?",
+            params![database_name],
+        )
     }
 
     pub fn load_schema_id(
@@ -185,29 +204,21 @@ impl Transaction<'_> {
         database_id: i64,
         schema_name: &str,
     ) -> Result<i64, failure::Error> {
-        match self
-            .inner
-            .prepare_cached("SELECT id FROM schemas WHERE database_id = ? AND name = ?")?
-            .query_row(params![database_id, schema_name], |row| row.get(0))
-        {
-            Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => bail!("unknown schema '{}'", schema_name),
-            Err(err) => Err(err.into()),
-        }
+        self.load_id(
+            "schema",
+            schema_name,
+            "SELECT id FROM schemas WHERE database_id = ? AND name = ?",
+            params![database_id, schema_name],
+        )
     }
 
     pub fn insert_database(&mut self, database_name: &str) -> Result<i64, failure::Error> {
-        match self
-            .inner
-            .prepare_cached("INSERT INTO databases (name) VALUES (?)")?
-            .execute(params![database_name])
-        {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
-            Err(err) if is_constraint_violation(&err) => {
-                bail!("database '{}' already exists", database_name);
-            }
-            Err(err) => Err(err.into()),
-        }
+        self.insert(
+            "database",
+            database_name,
+            "INSERT INTO databases (name) VALUES (?)",
+            params![database_name],
+        )
     }
 
     pub fn insert_schema(
@@ -215,17 +226,12 @@ impl Transaction<'_> {
         database_id: i64,
         schema_name: &str,
     ) -> Result<i64, failure::Error> {
-        match self
-            .inner
-            .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, ?)")?
-            .execute(params![database_id, schema_name])
-        {
-            Ok(_) => Ok(self.inner.last_insert_rowid()),
-            Err(err) if is_constraint_violation(&err) => {
-                bail!("schema '{}' already exists", schema_name);
-            }
-            Err(err) => Err(err.into()),
-        }
+        self.insert(
+            "schema",
+            schema_name,
+            "INSERT INTO schemas (database_id, name) VALUES (?, ?)",
+            params![database_id, schema_name],
+        )
     }
 
     pub fn insert_item(
@@ -234,20 +240,13 @@ impl Transaction<'_> {
         schema_id: i64,
         item_name: &str,
         item: &[u8],
-    ) -> Result<(), failure::Error> {
-        match self
-            .inner
-            .prepare_cached(
-                "INSERT INTO items (gid, schema_id, name, definition) VALUES (?, ?, ?, ?)",
-            )?
-            .execute(params![SqlVal(&id), schema_id, item_name, item])
-        {
-            Ok(_) => Ok(()),
-            Err(err) if is_constraint_violation(&err) => {
-                bail!("catalog item '{}' already exists", item_name);
-            }
-            Err(err) => Err(err.into()),
-        }
+    ) -> Result<i64, failure::Error> {
+        self.insert(
+            "item",
+            item_name,
+            "INSERT INTO items (gid, schema_id, name, definition) VALUES (?, ?, ?, ?)",
+            params![SqlVal(&id), schema_id, item_name, item],
+        )
     }
 
     pub fn remove_database(&self, name: &str) -> Result<(), failure::Error> {
@@ -263,15 +262,12 @@ impl Transaction<'_> {
     }
 
     pub fn remove_schema(&self, database_id: i64, schema_name: &str) -> Result<(), failure::Error> {
-        let n = self
-            .inner
-            .prepare_cached("DELETE FROM schemas WHERE database_id = ? AND name = ?")?
-            .execute(params![database_id, schema_name])?;
-        assert!(n <= 1);
-        if n != 1 {
-            bail!("schema '{}' does not exist", schema_name);
-        }
-        Ok(())
+        self.remove(
+            "schema",
+            schema_name,
+            "DELETE FROM schemas WHERE database_id = ? AND name = ?",
+            params![database_id, schema_name],
+        )
     }
 
     pub fn remove_item(&self, id: GlobalId) -> Result<(), failure::Error> {
@@ -288,6 +284,73 @@ impl Transaction<'_> {
 
     pub fn commit(self) -> Result<(), rusqlite::Error> {
         self.inner.commit()
+    }
+
+    // helpers
+
+    fn load_id(
+        &self,
+        context: &str,
+        name: &str,
+        query: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+    ) -> Result<i64, failure::Error> {
+        match self
+            .inner
+            .prepare_cached(query)
+            .map_err(|e| format_err!("preparing load_id {}: {}", context, e))?
+            .query_row(params, |row| row.get(0))
+        {
+            Ok(id) => Ok(id),
+            Err(rusqlite::Error::QueryReturnedNoRows) => bail!("unknown {} '{}'", context, name),
+            Err(err) => Err(format_err!("loading id for {} {}: {}", context, name, err)),
+        }
+    }
+
+    fn insert(
+        &self,
+        context: &str,
+        name: &str,
+        query: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+    ) -> Result<i64, failure::Error> {
+        match self
+            .inner
+            .prepare_cached(query)
+            .map_err(|e| format_err!("inserting {} {}: {}", context, name, e))?
+            .execute(params)
+        {
+            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Err(err) if is_constraint_violation(&err) => {
+                bail!("catalog {} '{}' already exists", context, name);
+            }
+            Err(err) => Err(format_err!(
+                "executing insert {} {}: {}",
+                context,
+                name,
+                err
+            )),
+        }
+    }
+
+    fn remove(
+        &self,
+        context: &str,
+        name: &str,
+        query: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+    ) -> Result<(), failure::Error> {
+        let n = self
+            .inner
+            .prepare_cached(query)
+            .context("preparing remove")?
+            .execute(params)
+            .context("executing remove")?;
+        assert!(n <= 1);
+        if n != 1 {
+            bail!("{} '{}' does not exist", context, name);
+        }
+        Ok(())
     }
 }
 

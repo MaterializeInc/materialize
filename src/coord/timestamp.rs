@@ -178,11 +178,20 @@ impl Timestamper {
         // open the underlying SQL lite connection
         let sqlite = match path {
             Some(path) => {
-                fs::create_dir_all(path).expect("Failed to open SQL file");
+                fs::create_dir_all(path).unwrap_or_else(|e| {
+                    panic!("Failed to open SQL file {}: {}", path.display(), e)
+                });
                 let full_path = path.join("catalog");
-                rusqlite::Connection::open(full_path).expect("Could not connect")
+                rusqlite::Connection::open(&full_path).unwrap_or_else(|e| {
+                    panic!(
+                        "Could not connect to catalog {}: {}",
+                        full_path.display(),
+                        e
+                    )
+                })
             }
-            None => rusqlite::Connection::open_in_memory().expect("Could not connect"),
+            None => rusqlite::Connection::open_in_memory()
+                .expect("Could not connect to in-memory sqlite"),
         };
 
         sqlite
