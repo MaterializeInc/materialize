@@ -14,7 +14,7 @@
 //! in testdrive, e.g., because they depend on the current time.
 
 use std::error::Error;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::thread;
@@ -157,11 +157,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<(String, String, String, i64)>>())
     };
 
-    let append = |path, data| -> Result<_, Box<dyn Error>> {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+    let append = |file: &mut File, data| -> Result<_, Box<dyn Error>> {
         file.write_all(data)?;
         file.sync_all()?;
         // We currently have to poll for changes on macOS every 100ms, so sleep
@@ -173,6 +169,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
 
     let static_path = Path::join(temp_dir.path(), "static.csv");
     let dynamic_path = Path::join(temp_dir.path(), "dynamic.csv");
+    let mut dynamic_file = File::create(&dynamic_path)?;
 
     fs::write(
         &static_path,
@@ -198,7 +195,7 @@ New York,NY,10004
         &[line1.clone(), line2.clone(), line3.clone()],
     );
 
-    append(&dynamic_path, b"")?;
+    append(&mut dynamic_file, b"")?;
 
     client.batch_execute(&*format!(
         "CREATE SOURCE dynamic_csv_source FROM FILE '{}' WITH (tail = true) FORMAT CSV WITH 3 COLUMNS",
@@ -208,16 +205,16 @@ New York,NY,10004
         "CREATE MATERIALIZED VIEW dynamic_csv AS SELECT * FROM dynamic_csv_source",
     )?;
 
-    append(&dynamic_path, b"Rochester,NY,14618\n")?;
+    append(&mut dynamic_file, b"Rochester,NY,14618\n")?;
     assert_eq!(fetch_rows(&mut client, "dynamic_csv")?, &[line1.clone()]);
 
-    append(&dynamic_path, b"New York,NY,10004\n")?;
+    append(&mut dynamic_file, b"New York,NY,10004\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
         &[line1.clone(), line2.clone()]
     );
 
-    append(&dynamic_path, b"\"bad,place\"\"\",CA,92679\n")?;
+    append(&mut dynamic_file, b"\"bad,place\"\"\",CA,92679\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
         &[line1, line2, line3]
@@ -229,13 +226,13 @@ New York,NY,10004
     let cancel_token = client.cancel_token();
     let mut tail_reader = client.copy_out("TAIL dynamic_csv")?.split(b'\n');
 
-    append(&dynamic_path, b"City 1,ST,00001\n")?;
+    append(&mut dynamic_file, b"City 1,ST,00001\n")?;
     assert!(tail_reader
         .next()
         .unwrap()?
         .starts_with(&b"City 1\tST\t00001\t4\tDiff: 1 at "[..]));
 
-    append(&dynamic_path, b"City 2,ST,00002\n")?;
+    append(&mut dynamic_file, b"City 2,ST,00002\n")?;
     assert!(tail_reader
         .next()
         .unwrap()?
@@ -252,7 +249,7 @@ New York,NY,10004
     client.execute("DROP VIEW dynamic_csv", &[])?;
     client.execute("DROP SOURCE dynamic_csv_source", &[])?;
     thread::sleep(Duration::from_millis(100));
-    append(&dynamic_path, b"Glendale,AZ,85310\n")?;
+    append(&mut dynamic_file, b"Glendale,AZ,85310\n")?;
     thread::sleep(Duration::from_millis(100));
     Ok(())
 }
