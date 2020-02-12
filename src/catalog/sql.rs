@@ -45,6 +45,14 @@ CREATE TABLE items (
     UNIQUE (schema_id, name)
 );
 
+CREATE TABLE timestamps (
+    sid blob NOT NULL,
+    vid blob NOT NULL,
+    timestamp integer NOT NULL,
+    offset blob NOT NULL,
+    PRIMARY KEY (sid, vid, timestamp)
+);
+
 INSERT INTO gid_alloc VALUES (1);
 INSERT INTO databases VALUES (1, 'materialize');
 INSERT INTO schemas VALUES
@@ -137,6 +145,14 @@ impl Connection {
                 ))
             })?
             .collect()
+    }
+
+    pub fn prepare(&self, sql: &str) -> rusqlite::Result<rusqlite::Statement> {
+        self.inner.prepare(sql)
+    }
+
+    pub fn prepare_cached(&self, sql: &str) -> rusqlite::Result<rusqlite::CachedStatement> {
+        self.inner.prepare_cached(sql)
     }
 
     pub fn allocate_id(&mut self) -> Result<GlobalId, failure::Error> {

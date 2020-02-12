@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::iter;
 use std::path::Path;
+use std::thread;
 
 use failure::bail;
 use futures::executor::block_on;
@@ -45,13 +46,14 @@ use expr::{
     SourceInstanceId,
 };
 use futures::Stream;
+use ore::thread::JoinHandleExt;
 use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
 
 use crate::persistence::SqlSerializer;
-use crate::timestamp::{TimestampChannel, TimestampMessage};
+use crate::timestamp::{TimestampChannel, TimestampConfig, TimestampMessage, Timestamper};
 use crate::{Command, ExecuteResponse, Response, StartupMessage};
 
 type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
@@ -73,7 +75,7 @@ where
     pub logging: Option<&'a LoggingConfig>,
     pub data_directory: Option<&'a Path>,
     pub executor: &'a tokio::runtime::Handle,
-    pub ts_channel: Option<TimestampChannel>,
+    pub timestamp: Option<TimestampConfig>,
 }
 
 /// Glues the external world to the Timely workers.
@@ -96,8 +98,7 @@ where
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
     active_tails: HashMap<u32, GlobalId>,
-    /// Channel for exchanging timestamping information. None if timestamping not activated
-    source_updates: Option<TimestampChannel>,
+    timestamp_config: Option<TimestampConfig>,
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     local_input_time: Timestamp,
@@ -258,7 +259,7 @@ where
                 local_input_time: 1,
                 log: config.logging.is_some(),
                 executor: Some(config.executor.clone()),
-                source_updates: config.ts_channel,
+                timestamp_config: config.timestamp,
                 feedback_rx: Some(rx),
             };
 
@@ -343,6 +344,22 @@ where
     }
 
     pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
+        let (source_tx, source_rx) = std::sync::mpsc::channel();
+        let (ts_tx, ts_rx) = std::sync::mpsc::channel();
+        let _timestamper_thread = if let Some(config) = &self.timestamp_config {
+            let mut timestamper = Timestamper::new(
+                config,
+                self.catalog.storage_handle(),
+                TimestampChannel {
+                    sender: source_tx,
+                    receiver: ts_rx,
+                },
+            );
+            Some(thread::spawn(move || timestamper.update()).join_on_drop())
+        } else {
+            None
+        };
+
         self.executor
             .take()
             .expect("serve called twice on coordinator")
@@ -361,22 +378,10 @@ where
 
                while let Some(msg) = block_on(messages.next()) {
                     // Check for timestamp updates
-                    if let Some(source_updates) = &self.source_updates {
-                        while let Ok(update) = source_updates.receiver.try_recv() {
-                            match update {
-                                TimestampMessage::BatchedUpdate(timestamp, updates) => {
-                                    for (id, offset) in updates {
-                                        broadcast(
-                                            &mut self.broadcast_tx,
-                                            SequencedCommand::AdvanceSourceTimestamp {
-                                                id,
-                                                timestamp,
-                                                offset,
-                                            },
-                                        );
-                                    }
-                                }
-                                TimestampMessage::Update(id, timestamp, offset) => {
+                    while let Ok(update) = source_rx.try_recv() {
+                        match update {
+                            TimestampMessage::BatchedUpdate(timestamp, updates) => {
+                                for (id, offset) in updates {
                                     broadcast(
                                         &mut self.broadcast_tx,
                                         SequencedCommand::AdvanceSourceTimestamp {
@@ -385,9 +390,19 @@ where
                                             offset,
                                         },
                                     );
-                                },
-                               _ => {}
+                                }
                             }
+                            TimestampMessage::Update(id, timestamp, offset) => {
+                                broadcast(
+                                    &mut self.broadcast_tx,
+                                    SequencedCommand::AdvanceSourceTimestamp {
+                                        id,
+                                        timestamp,
+                                        offset,
+                                    },
+                                );
+                            },
+                            _ => {}
                         }
                     }
 
@@ -457,9 +472,7 @@ where
                         }
 
                         Message::Shutdown => {
-                            if let Some(channel) = &mut self.source_updates {
-                                channel.sender.send(TimestampMessage::Shutdown).unwrap();
-                            }
+                            ts_tx.send(TimestampMessage::Shutdown).unwrap();
                             self.shutdown();
                             break;
                         }
@@ -478,17 +491,16 @@ where
                             worker_id: _,
                             message: WorkerFeedback::DroppedSource(source_id)}) => {
                             // Notify timestamping thread that source has been dropped
-                            if let Some(channel) = &mut self.source_updates{
-                                channel.sender.send(TimestampMessage::DropInstance(source_id)).expect("Failed to send Drop Instance notice to Coordinator");
-                            }
+                            ts_tx
+                                .send(TimestampMessage::DropInstance(source_id))
+                                .expect("Failed to send Drop Instance notice to timestamper");
                         },
                         Message::Worker(WorkerFeedbackWithMeta {
                                             worker_id: _,
                                             message: WorkerFeedback::CreateSource(source_id,ksc,consistency)}) => {
-                            // Notify timestamping thread that source has been created
-                            if let Some(channel) = &mut self.source_updates{
-                                channel.sender.send(TimestampMessage::Add(source_id, ksc.addr, ksc.topic, ksc.ssl_certificate_file, consistency)).expect("Failed to send CREATE Instance notice to Coordinator");
-                            }
+                            ts_tx
+                                .send(TimestampMessage::Add(source_id, ksc.addr, ksc.topic, ksc.ssl_certificate_file, consistency))
+                                .expect("Failed to send CREATE Instance notice to timestamper");
                         }
                     }
                 }
