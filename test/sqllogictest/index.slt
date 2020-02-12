@@ -76,7 +76,7 @@ materialize.public.foo  materialize.public.foo_primary_idx  a            NULL   
 materialize.public.foo  materialize.public.foo_primary_idx  b            NULL        true   2
 materialize.public.foo  materialize.public.foo_primary_idx  c            NULL        true   3
 
-query error catalog item 'nonexistent' does not exist
+query error unknown catalog item 'nonexistent'
 SHOW INDEX FROM nonexistent
 
 query error bar_idx is not a view

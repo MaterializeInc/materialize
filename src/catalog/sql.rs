@@ -9,13 +9,13 @@
 
 use std::path::Path;
 
-use failure::bail;
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
 use serde::{Deserialize, Serialize};
 
 use expr::GlobalId;
 
+use crate::error::{Error, ErrorKind};
 use crate::names::{DatabaseSpecifier, FullName};
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
@@ -67,7 +67,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn open(path: Option<&Path>) -> Result<Connection, failure::Error> {
+    pub fn open(path: Option<&Path>) -> Result<Connection, Error> {
         let mut sqlite = match path {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
@@ -85,17 +85,19 @@ impl Connection {
         } else if app_id == APPLICATION_ID {
             false
         } else {
-            bail!("incorrect application_id in catalog");
+            return Err(Error::new(ErrorKind::Corruption {
+                detail: "catalog file has incorrect application_id".into(),
+            }));
         };
         tx.commit()?;
 
         Ok(Connection { inner: sqlite })
     }
 
-    pub fn load_databases(&self) -> Result<Vec<(i64, String)>, failure::Error> {
+    pub fn load_databases(&self) -> Result<Vec<(i64, String)>, Error> {
         self.inner
             .prepare("SELECT id, name FROM databases")?
-            .query_and_then(params![], |row| -> Result<_, failure::Error> {
+            .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
                 Ok((id, name))
@@ -103,14 +105,14 @@ impl Connection {
             .collect()
     }
 
-    pub fn load_schemas(&self) -> Result<Vec<(i64, Option<String>, String)>, failure::Error> {
+    pub fn load_schemas(&self) -> Result<Vec<(i64, Option<String>, String)>, Error> {
         self.inner
             .prepare(
                 "SELECT schemas.id, databases.name, schemas.name
                 FROM schemas
                 LEFT JOIN databases ON schemas.database_id = databases.id",
             )?
-            .query_and_then(params![], |row| -> Result<_, failure::Error> {
+            .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: i64 = row.get(0)?;
                 let database_name: Option<String> = row.get(1)?;
                 let schema_name: String = row.get(2)?;
@@ -119,7 +121,7 @@ impl Connection {
             .collect()
     }
 
-    pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, Vec<u8>)>, failure::Error> {
+    pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, Vec<u8>)>, Error> {
         self.inner
             .prepare(
                 "SELECT items.gid, databases.name, schemas.name, items.name, items.definition
@@ -128,7 +130,7 @@ impl Connection {
                 JOIN databases ON schemas.database_id = databases.id
                 ORDER BY items.rowid",
             )?
-            .query_and_then(params![], |row| -> Result<_, failure::Error> {
+            .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: SqlVal<GlobalId> = row.get(0)?;
                 let database: Option<String> = row.get(1)?;
                 let schema: String = row.get(2)?;
@@ -155,7 +157,7 @@ impl Connection {
         self.inner.prepare_cached(sql)
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, failure::Error> {
+    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
         // limited range of positive i64s.
@@ -163,14 +165,14 @@ impl Connection {
             row.get(0)
         })?;
         if id == i64::max_value() {
-            bail!("catalog id exhaustion: id counter overflows an i64");
+            return Err(Error::new(ErrorKind::IdExhaustion));
         }
         tx.execute("UPDATE gid_alloc SET next_gid = ?", params![id + 1])?;
         tx.commit()?;
         Ok(GlobalId::User(id as u64))
     }
 
-    pub fn transaction(&mut self) -> Result<Transaction, failure::Error> {
+    pub fn transaction(&mut self) -> Result<Transaction, Error> {
         Ok(Transaction {
             inner: self.inner.transaction()?,
         })
@@ -182,64 +184,58 @@ pub struct Transaction<'a> {
 }
 
 impl Transaction<'_> {
-    pub fn load_database_id(&self, database_name: &str) -> Result<i64, failure::Error> {
+    pub fn load_database_id(&self, database_name: &str) -> Result<i64, Error> {
         match self
             .inner
             .prepare_cached("SELECT id FROM databases WHERE name = ?")?
             .query_row(params![database_name], |row| row.get(0))
         {
             Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                bail!("unknown database '{}'", database_name);
-            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err(Error::new(
+                ErrorKind::UnknownDatabase(database_name.to_owned()),
+            )),
             Err(err) => Err(err.into()),
         }
     }
 
-    pub fn load_schema_id(
-        &self,
-        database_id: i64,
-        schema_name: &str,
-    ) -> Result<i64, failure::Error> {
+    pub fn load_schema_id(&self, database_id: i64, schema_name: &str) -> Result<i64, Error> {
         match self
             .inner
             .prepare_cached("SELECT id FROM schemas WHERE database_id = ? AND name = ?")?
             .query_row(params![database_id, schema_name], |row| row.get(0))
         {
             Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => bail!("unknown schema '{}'", schema_name),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                Err(Error::new(ErrorKind::UnknownSchema(schema_name.to_owned())))
+            }
             Err(err) => Err(err.into()),
         }
     }
 
-    pub fn insert_database(&mut self, database_name: &str) -> Result<i64, failure::Error> {
+    pub fn insert_database(&mut self, database_name: &str) -> Result<i64, Error> {
         match self
             .inner
             .prepare_cached("INSERT INTO databases (name) VALUES (?)")?
             .execute(params![database_name])
         {
             Ok(_) => Ok(self.inner.last_insert_rowid()),
-            Err(err) if is_constraint_violation(&err) => {
-                bail!("database '{}' already exists", database_name);
-            }
+            Err(err) if is_constraint_violation(&err) => Err(Error::new(
+                ErrorKind::DatabaseAlreadyExists(database_name.to_owned()),
+            )),
             Err(err) => Err(err.into()),
         }
     }
 
-    pub fn insert_schema(
-        &mut self,
-        database_id: i64,
-        schema_name: &str,
-    ) -> Result<i64, failure::Error> {
+    pub fn insert_schema(&mut self, database_id: i64, schema_name: &str) -> Result<i64, Error> {
         match self
             .inner
             .prepare_cached("INSERT INTO schemas (database_id, name) VALUES (?, ?)")?
             .execute(params![database_id, schema_name])
         {
             Ok(_) => Ok(self.inner.last_insert_rowid()),
-            Err(err) if is_constraint_violation(&err) => {
-                bail!("schema '{}' already exists", schema_name);
-            }
+            Err(err) if is_constraint_violation(&err) => Err(Error::new(
+                ErrorKind::SchemaAlreadyExists(schema_name.to_owned()),
+            )),
             Err(err) => Err(err.into()),
         }
     }
@@ -250,7 +246,7 @@ impl Transaction<'_> {
         schema_id: i64,
         item_name: &str,
         item: &[u8],
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), Error> {
         match self
             .inner
             .prepare_cached(
@@ -259,47 +255,50 @@ impl Transaction<'_> {
             .execute(params![SqlVal(&id), schema_id, item_name, item])
         {
             Ok(_) => Ok(()),
-            Err(err) if is_constraint_violation(&err) => {
-                bail!("catalog item '{}' already exists", item_name);
-            }
+            Err(err) if is_constraint_violation(&err) => Err(Error::new(
+                ErrorKind::ItemAlreadyExists(item_name.to_owned()),
+            )),
             Err(err) => Err(err.into()),
         }
     }
 
-    pub fn remove_database(&self, name: &str) -> Result<(), failure::Error> {
+    pub fn remove_database(&self, name: &str) -> Result<(), Error> {
         let n = self
             .inner
             .prepare_cached("DELETE FROM databases WHERE name = ?")?
             .execute(params![name])?;
         assert!(n <= 1);
-        if n != 1 {
-            bail!("database '{}' does not exist", name);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned())))
         }
-        Ok(())
     }
 
-    pub fn remove_schema(&self, database_id: i64, schema_name: &str) -> Result<(), failure::Error> {
+    pub fn remove_schema(&self, database_id: i64, schema_name: &str) -> Result<(), Error> {
         let n = self
             .inner
             .prepare_cached("DELETE FROM schemas WHERE database_id = ? AND name = ?")?
             .execute(params![database_id, schema_name])?;
         assert!(n <= 1);
-        if n != 1 {
-            bail!("schema '{}' does not exist", schema_name);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(Error::new(ErrorKind::UnknownSchema(schema_name.to_owned())))
         }
-        Ok(())
     }
 
-    pub fn remove_item(&self, id: GlobalId) -> Result<(), failure::Error> {
+    pub fn remove_item(&self, id: GlobalId) -> Result<(), Error> {
         let n = self
             .inner
             .prepare_cached("DELETE FROM items WHERE gid = ?")?
             .execute(params![SqlVal(id)])?;
         assert!(n <= 1);
-        if n != 1 {
-            bail!("item {} does not exist", id);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(Error::new(ErrorKind::UnknownItem(id.to_string())))
         }
-        Ok(())
     }
 
     pub fn commit(self) -> Result<(), rusqlite::Error> {

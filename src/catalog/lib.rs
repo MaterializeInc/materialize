@@ -22,10 +22,11 @@ use dataflow_types::{SinkConnector, SourceConnector};
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
 
+use crate::error::{Error, ErrorKind};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 
+mod error;
 pub mod names;
-
 pub mod sql;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -205,7 +206,7 @@ impl Catalog {
     /// Opens or creates a `Catalog` that stores data at `path`. The
     /// `initialize` callback will be invoked after database and schemas are
     /// loaded but before any persisted user items are loaded.
-    pub fn open<S, F>(path: Option<&Path>, f: F) -> Result<Catalog, failure::Error>
+    pub fn open<S, F>(path: Option<&Path>, f: F) -> Result<Catalog, Error>
     where
         S: CatalogItemSerializer,
         F: FnOnce(&mut Self),
@@ -267,15 +268,20 @@ impl Catalog {
             // safely even if the error message we're sniffing out changes.
             lazy_static! {
                 static ref LOGGING_ERROR: Regex =
-                    Regex::new("catalog item 'mz_catalog.[^']*' does not exist").unwrap();
+                    Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
             let item = match S::deserialize(&catalog, def) {
                 Ok(item) => item,
-                Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => bail!(
-                    "catalog item '{}' depends on system logging, but logging is disabled",
-                    name
-                ),
-                Err(e) => bail!("corrupt catalog: failed to deserialize item: {}", e),
+                Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
+                    return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
+                        depender_name: name.to_string(),
+                    }));
+                }
+                Err(e) => {
+                    return Err(Error::new(ErrorKind::Corruption {
+                        detail: format!("failed to deserialize item: {}", e),
+                    }))
+                }
             };
             catalog.insert_item(id, name, item);
         }
@@ -301,7 +307,7 @@ impl Catalog {
         self.storage.clone()
     }
 
-    pub fn allocate_id(&mut self) -> Result<GlobalId, failure::Error> {
+    pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().allocate_id()
     }
 
@@ -315,7 +321,7 @@ impl Catalog {
         current_database: DatabaseSpecifier,
         search_path: &[&str],
         name: &PartialName,
-    ) -> Result<FullName, failure::Error> {
+    ) -> Result<FullName, Error> {
         if let (Some(database_name), Some(schema_name)) = (&name.database, &name.schema) {
             // `name` is fully specified already. No resolution required.
             return Ok(FullName {
@@ -350,7 +356,7 @@ impl Catalog {
             }
         }
 
-        bail!("catalog item '{}' does not exist", name);
+        Err(Error::new(ErrorKind::UnknownItem(name.to_string())))
     }
 
     /// Returns the named catalog item, if it exists.
@@ -366,9 +372,9 @@ impl Catalog {
     /// Returns the named catalog item, or an error if it does not exist.
     ///
     /// See also [`Catalog::try_get`].
-    pub fn get(&self, name: &FullName) -> Result<&CatalogEntry, failure::Error> {
+    pub fn get(&self, name: &FullName) -> Result<&CatalogEntry, Error> {
         self.try_get(name)
-            .ok_or_else(|| failure::err_msg(format!("catalog item '{}' does not exist", name)))
+            .ok_or_else(|| Error::new(ErrorKind::UnknownItem(name.to_string())))
     }
 
     pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
@@ -383,7 +389,7 @@ impl Catalog {
     pub fn database_resolver<'a>(
         &'a self,
         database_spec: DatabaseSpecifier,
-    ) -> Result<DatabaseResolver<'a>, failure::Error> {
+    ) -> Result<DatabaseResolver<'a>, Error> {
         match &database_spec {
             DatabaseSpecifier::Ambient => Ok(DatabaseResolver {
                 database_spec,
@@ -396,7 +402,7 @@ impl Catalog {
                     database,
                     ambient_schemas: &self.ambient_schemas,
                 }),
-                None => bail!("unknown database '{}'", name),
+                None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
             },
         }
     }
@@ -526,7 +532,7 @@ impl Catalog {
         }
     }
 
-    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<OpStatus>, failure::Error> {
+    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<OpStatus>, Error> {
         trace!("transact: {:?}", ops);
 
         #[derive(Debug, Clone)]
@@ -569,12 +575,12 @@ impl Catalog {
                     schema_name,
                 } => {
                     if schema_name.starts_with("mz_") || schema_name.starts_with("pg_") {
-                        bail!("unacceptable schema name '{}'", schema_name);
+                        return Err(Error::new(ErrorKind::UnacceptableSchemaName(schema_name)));
                     }
                     let (database_id, database_name) = match database_name {
                         DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
                         DatabaseSpecifier::Ambient => {
-                            bail!("writing to {} is not allowed", schema_name)
+                            return Err(Error::new(ErrorKind::ReadOnlySystemSchema(schema_name)));
                         }
                     };
                     Action::CreateSchema {
@@ -587,7 +593,9 @@ impl Catalog {
                     let database_id = match &name.database {
                         DatabaseSpecifier::Name(name) => tx.load_database_id(&name)?,
                         DatabaseSpecifier::Ambient => {
-                            bail!("writing to {} is not allowed", name.schema)
+                            return Err(Error::new(ErrorKind::ReadOnlySystemSchema(
+                                name.to_string(),
+                            )));
                         }
                     };
                     let schema_id = tx.load_schema_id(database_id, &name.schema)?;
@@ -606,7 +614,7 @@ impl Catalog {
                     let (database_id, database_name) = match database_name {
                         DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
                         DatabaseSpecifier::Ambient => {
-                            bail!("dropping {} is not allowed", schema_name)
+                            return Err(Error::new(ErrorKind::ReadOnlySystemSchema(schema_name)));
                         }
                     };
                     tx.remove_schema(database_id, &schema_name)?;
