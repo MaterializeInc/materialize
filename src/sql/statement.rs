@@ -1320,16 +1320,14 @@ fn build_kafka_source(
                 schema,
             },
             Envelope::None,
-        ) => {
-            build_kafka_protobuf_source(
-                schema,
-                kafka_addr,
-                topic,
-                message_name,
-                consistency,
-                ssl_certificate_file,
-            )
-        }
+        ) => build_kafka_protobuf_source(
+            schema,
+            kafka_addr,
+            topic,
+            message_name,
+            consistency,
+            ssl_certificate_file,
+        ),
         (Format::Protobuf { .. }, Envelope::Debezium) => {
             bail!("Currently, Debezium-style envelopes are not supported for protobuf messages.")
         }
