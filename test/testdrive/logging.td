@@ -45,3 +45,9 @@
 > CREATE MATERIALIZED VIEW count_peek_durations AS SELECT count(*) FROM mz_peek_durations;
 > SELECT count(*) FROM count_peek_durations;
 1
+
+! DROP SCHEMA mz_catalog
+cannot drop schema mz_catalog because it is required by the database system
+
+! DROP VIEW mz_peek_durations
+cannot drop item mz_catalog.mz_peek_durations because it is required by the database system
