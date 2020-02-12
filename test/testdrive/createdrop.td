@@ -181,10 +181,10 @@ s is not of type VIEW
 # Test that drop without if exists does not work if the object does not exist
 
 ! DROP INDEX nonexistent
-catalog item 'nonexistent' does not exist
+unknown catalog item 'nonexistent'
 
 ! DROP VIEW nonexistent
-catalog item 'nonexistent' does not exist
+unknown catalog item 'nonexistent'
 
 ! DROP SOURCE nonexistent
-catalog item 'nonexistent' does not exist
+unknown catalog item 'nonexistent'
