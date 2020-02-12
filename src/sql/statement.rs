@@ -1223,6 +1223,12 @@ fn handle_drop_item(
 ) -> Result<Option<GlobalId>, failure::Error> {
     match scx.catalog.get(name) {
         Ok(catalog_entry) => {
+            if catalog_entry.id().is_system() {
+                bail!(
+                    "cannot drop item {} because it is required by the database system",
+                    name
+                );
+            }
             if !object_type_matches(object_type, catalog_entry.item()) {
                 bail!("{} is not of type {}", name, object_type);
             }
