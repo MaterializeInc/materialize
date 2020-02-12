@@ -28,7 +28,7 @@ _view&lowbar;name_ | The name of the view whose indexes you want to show.
 ```nofmt
  View | Key_name | Column_name | Expression | Null | Seq_in_index
 ------+----------+-------------+------------+------+--------------
- ... | ...       | ...         | ...        | ...  | ...
+ ...  | ...      | ...         | ...        | ...  | ...
 ```
 
 Field | Meaning
@@ -58,10 +58,10 @@ SHOW FULL VIEWS;
 ```sql
 SHOW INDEXES FROM my_materialized_view;
 ```
-```
+```nofmt
  View | Key_name | Column_name | Expression | Null | Seq_in_index
 ------+----------+-------------+------------+------+--------------
- ... | ...       | ...         | ...        | ...  | ...
+ ...  | ...      | ...         | ...        | ...  | ...
 ```
 
 ## Related pages
