@@ -82,7 +82,6 @@ EOF
     curl -fsSLO "$pkg_url"/dists/bionic/main/binary-amd64/Packages.gz
     gunzip Packages.gz
 
-    install_pkg libssl-dev
     install_pkg zlib1g
     install_pkg zlib1g-dev
 }
