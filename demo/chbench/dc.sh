@@ -184,8 +184,19 @@ dc_up() {
     runv docker-compose up -d --build "$@"
 }
 
-# Run docker-compose stop
+# Stop the named docker-compose service
+#
+# This can stop multiple services, but services started by 'docker-compose run -d'/'dc.sh
+# run -d' must be stopped one at at time.
 dc_stop() {
+    if [[ $# -eq 1 ]]; then
+        local run_cmd
+        run_cmd=$(dc_is_run_cmd "$1")
+        if [[ -n $run_cmd ]]; then
+            runv docker stop "$run_cmd"
+            return
+        fi
+    fi
     runv docker-compose stop "$@"
 }
 
@@ -195,7 +206,13 @@ dc_run() {
 
 dc_logs() {
   if [[ $# -eq 1 ]]; then
-    runv docker-compose logs "$1"
+    local run_cmd
+    run_cmd=$(dc_is_run_cmd "$1")
+    if [[ -n $run_cmd ]]; then
+        runv docker logs "$run_cmd"
+    else
+        runv docker-compose logs "$1"
+    fi
   elif [[ $# -eq 2 ]]; then
     runv docker-compose logs --tail "$2" "$1"
   fi
@@ -208,7 +225,7 @@ dc_status() {
 dc_status_inner() {
     local procs
     # shellcheck disable=SC2207
-    procs=($(docker ps --format '{{.Names}}' | grep '^chbench' | sed -e 's/^chbench_//' -e 's/_1$//' | tr $'\n' ' ' ))
+    procs=($(dc_chbench_containers | sed -e 's/^chbench_//' -e 's/_1$//' | tr $'\n' ' ' ))
     echo "CONTAINER PORT"
     echo "========= ===="
     set +e
@@ -218,6 +235,16 @@ dc_status_inner() {
         echo "$proc $port"
     done
     set -e
+}
+
+# Return the name of the container if the command looks like it was executed by way of 'run', instead of 'up'
+dc_is_run_cmd() {
+     dc_chbench_containers | grep -E "chbench_${1}_run_\w+"
+}
+
+# Get all the container names that belong to chbench
+dc_chbench_containers() {
+    docker ps --format '{{.Names}}' | grep '^chbench'
 }
 
 shut_down() {
