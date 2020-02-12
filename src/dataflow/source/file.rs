@@ -13,17 +13,21 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(not(target_os = "macos"))]
+use {
+    notify::{RecursiveMode, Watcher},
+    tokio::task,
+};
+
 use expr::SourceInstanceId;
 use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::{Fuse, Stream, StreamExt};
 use log::{error, warn};
-use notify::{RecursiveMode, Watcher};
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 use tokio::fs::File;
 use tokio::io::{self, AsyncRead};
-use tokio::task;
 use tokio_util::codec::{FramedRead, LinesCodec};
 
 use dataflow_types::Timestamp;
@@ -156,13 +160,13 @@ async fn read_file_task(
             // if the file has data available.
             //
             // https://github.com/notify-rs/notify/issues/240
-            #[cfg(target = "macos")]
+            #[cfg(target_os = "macos")]
             let (stream, watcher) = {
                 let interval = tokio::time::interval(Duration::from_millis(100));
                 (interval, None)
             };
 
-            #[cfg(not(target = "macos"))]
+            #[cfg(not(target_os = "macos"))]
             let (stream, watcher) = {
                 let (notice_tx, notice_rx) = std::sync::mpsc::channel();
                 let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
