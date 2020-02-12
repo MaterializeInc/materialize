@@ -9,14 +9,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use std::time::Instant;
 
-use futures::future::{self, BoxFuture, TryFutureExt};
-use hyper::service;
-use hyper::{Body, Method, Request, Response};
+use futures::channel::mpsc::UnboundedSender;
+use futures::future::TryFutureExt;
+use futures::sink::SinkExt;
+use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
 use prometheus::{register_gauge_vec, Encoder, Gauge, GaugeVec};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -35,28 +33,6 @@ lazy_static! {
     ]);
 }
 
-struct FutureResponse(BoxFuture<'static, Result<Response<Body>, failure::Error>>);
-
-impl From<Response<Body>> for FutureResponse {
-    fn from(res: Response<Body>) -> FutureResponse {
-        FutureResponse(Box::pin(future::ok(res)))
-    }
-}
-
-impl From<Result<Response<Body>, failure::Error>> for FutureResponse {
-    fn from(res: Result<Response<Body>, failure::Error>) -> FutureResponse {
-        FutureResponse(Box::pin(future::ready(res)))
-    }
-}
-
-impl Future for FutureResponse {
-    type Output = Result<Response<Body>, failure::Error>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx)
-    }
-}
-
 const METHODS: &[&[u8]] = &[
     b"OPTIONS", b"GET", b"HEAD", b"POST", b"PUT", b"DELETE", b"TRACE", b"CONNECT",
 ];
@@ -72,26 +48,30 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 
 pub async fn handle_connection<A: 'static + AsyncRead + AsyncWrite + Unpin>(
     a: A,
+    cmd_tx: UnboundedSender<coord::Command>,
     gather_metrics: bool,
     start_time: Instant,
 ) -> Result<(), failure::Error> {
-    let svc =
-        service::service_fn(
-            move |req: Request<Body>| match (req.method(), req.uri().path()) {
-                (&Method::GET, "/") => handle_home(req),
+    let svc = service::service_fn(move |req: Request<Body>| {
+        let cmd_tx = cmd_tx.clone();
+        async move {
+            match (req.method(), req.uri().path()) {
+                (&Method::GET, "/") => handle_home(req).await,
                 (&Method::GET, "/metrics") => {
-                    handle_prometheus(req, gather_metrics, start_time).into()
+                    handle_prometheus(req, gather_metrics, start_time).await
                 }
-                (&Method::GET, "/status") => handle_status(req, start_time),
-                _ => handle_unknown(req),
-            },
-        );
+                (&Method::GET, "/status") => handle_status(req, start_time).await,
+                (&Method::GET, "/internal/catalog") => handle_internal_catalog(req, cmd_tx).await,
+                _ => handle_unknown(req).await,
+            }
+        }
+    });
     let http = hyper::server::conn::Http::new();
     http.serve_connection(a, svc).err_into().await
 }
 
-fn handle_home(_: Request<Body>) -> FutureResponse {
-    Response::new(Body::from(format!(
+async fn handle_home(_: Request<Body>) -> Result<Response<Body>, failure::Error> {
+    Ok(Response::new(Body::from(format!(
         r#"<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -110,11 +90,10 @@ fn handle_home(_: Request<Body>) -> FutureResponse {
         version = crate::VERSION,
         build_sha = crate::BUILD_SHA,
         build_time = crate::BUILD_TIME,
-    )))
-    .into()
+    ))))
 }
 
-fn handle_prometheus(
+async fn handle_prometheus(
     _: Request<Body>,
     gather_metrics: bool,
     start_time: Instant,
@@ -140,7 +119,10 @@ fn handle_prometheus(
     }
 }
 
-fn handle_status(_: Request<Body>, start_time: Instant) -> FutureResponse {
+async fn handle_status(
+    _: Request<Body>,
+    start_time: Instant,
+) -> Result<Response<Body>, failure::Error> {
     let metric_families = load_prom_metrics(start_time);
 
     let desired_metrics = {
@@ -229,7 +211,7 @@ fn handle_status(_: Request<Body>, start_time: Instant) -> FutureResponse {
     }
     out += "    </pre>\n  </body>\n</html>\n";
 
-    Response::new(Body::from(out)).into()
+    Ok(Response::new(Body::from(out)))
 }
 
 /// Call [`prometheus::gather`], ensuring that all our metrics are up to date
@@ -332,10 +314,22 @@ impl PromMetric<'_> {
     }
 }
 
-fn handle_unknown(_: Request<Body>) -> FutureResponse {
-    Response::builder()
+async fn handle_internal_catalog(
+    _: Request<Body>,
+    mut cmd_tx: UnboundedSender<coord::Command>,
+) -> Result<Response<Body>, failure::Error> {
+    let (tx, rx) = futures::channel::oneshot::channel();
+    cmd_tx.send(coord::Command::DumpCatalog { tx }).await?;
+    let dump = rx.await?;
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(dump))
+        .unwrap())
+}
+
+async fn handle_unknown(_: Request<Body>) -> Result<Response<Body>, failure::Error> {
+    Ok(Response::builder()
         .status(403)
         .body(Body::from("bad request"))
-        .unwrap()
-        .into()
+        .unwrap())
 }

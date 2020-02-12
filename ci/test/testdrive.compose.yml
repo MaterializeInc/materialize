@@ -17,19 +17,22 @@ services:
       --kafka-addr=kafka:9092
       --schema-registry-url=http://schema-registry:8081
       --materialized-url=postgres://ignored@materialized:6875
+      --validate-catalog=/share/mzdata
       test/testdrive/*.td"
     environment:
-    - TMPDIR=/tmpshare
+    - TMPDIR=/share/tmp
     volumes:
     - ../../:/workdir
-    - tmpshare:/tmpshare
+    - mzdata:/share/mzdata
+    - tmp:/share/tmp
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
     depends_on: [kafka, zookeeper, schema-registry, materialized]
   materialized:
     image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
-    command: --logging-granularity=10ms
+    command: --logging-granularity=10ms --data-directory=/share/mzdata
     volumes:
-    - tmpshare:/tmpshare
+    - mzdata:/share/mzdata
+    - tmp:/share/tmp
     ulimits:
       nofile:
         soft: "65536"
@@ -48,4 +51,5 @@ services:
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
 volumes:
-  tmpshare:
+  mzdata:
+  tmp:

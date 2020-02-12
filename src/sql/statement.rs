@@ -12,7 +12,7 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use itertools::join;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::iter;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
@@ -410,7 +410,7 @@ fn handle_show_objects(
             None => build_like_regex_from_string("%")?,
         };
 
-        let empty_schema = HashMap::new();
+        let empty_schema = BTreeMap::new();
         let items = if let Some(mut from) = from {
             if from.0.len() > 2 {
                 bail!(

@@ -21,6 +21,7 @@ use std::fs;
 use std::iter;
 use std::path::Path;
 use std::thread;
+use std::time::Duration;
 
 use failure::bail;
 use futures::executor::block_on;
@@ -469,6 +470,10 @@ where
 
                         Message::Command(Command::CancelRequest { conn_id }) => {
                             self.sequence_cancel(conn_id);
+                        }
+
+                        Message::Command(Command::DumpCatalog { tx }) => {
+                            let _ = tx.send(self.catalog.dump());
                         }
 
                         Message::Shutdown => {
@@ -1951,4 +1956,18 @@ fn index_sql(
         if_not_exists: false,
     }
     .to_string()
+}
+
+pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
+    let (switchboard, runtime) = comm::Switchboard::local()?;
+    let coord = Coordinator::new(Config {
+        switchboard,
+        num_timely_workers: 1,
+        data_directory: Some(data_directory),
+        symbiosis_url: None,
+        logging: Some(&LoggingConfig::new(Duration::from_secs(0))),
+        executor: runtime.handle(),
+        timestamp: None,
+    })?;
+    Ok(coord.catalog.dump())
 }

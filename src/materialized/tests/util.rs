@@ -10,7 +10,7 @@
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct Config {
@@ -50,7 +50,6 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         data_directory: config.data_directory,
         symbiosis_url: None,
         gather_metrics: false,
-        start_time: Instant::now(),
     })?);
     let client = server.connect()?;
     Ok((server, client))

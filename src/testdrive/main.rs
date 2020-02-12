@@ -36,6 +36,12 @@ fn run() -> Result<(), Error> {
         "materialized connection string",
         "URL",
     );
+    opts.optopt(
+        "",
+        "validate-catalog",
+        "validate the on-disk state of the materialized catalog",
+        "PATH",
+    );
     opts.optflag("h", "help", "show this usage information");
     let usage_details = opts.usage("usage: testdrive [options] FILE");
     let opts = opts
@@ -57,6 +63,7 @@ fn run() -> Result<(), Error> {
         kafka_addr: opts.opt_str("kafka-addr"),
         schema_registry_url: opts.opt_str("schema-registry-url"),
         materialized_url: opts.opt_str("materialized-url"),
+        materialized_catalog_path: opts.opt_str("validate-catalog"),
     };
 
     if opts.free.is_empty() {

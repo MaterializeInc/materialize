@@ -15,6 +15,8 @@ COPY testdrive /usr/local/bin
 
 WORKDIR /workdir
 
-RUN mkdir -p /tmpshare && chmod 777 /tmpshare
+RUN mkdir -p /share/tmp && chmod 777 /share/tmp
+RUN mkdir -p /share/mzdata && chmod 777 /share/mzdata
 
-VOLUME ["/tmpshare"]
+VOLUME /share/tmp
+VOLUME /share/mzdata

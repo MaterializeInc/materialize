@@ -94,7 +94,7 @@ impl Action for SqlAction {
                         println!();
                     }
                     println!("rows match; continuing");
-                    return Ok(());
+                    break;
                 }
                 Err(err) => {
                     if i == 0 {
@@ -115,6 +115,39 @@ impl Action for SqlAction {
             thread::sleep(backoff);
             i += 1;
         }
+
+        if let Some(data_dir) = &state.data_dir {
+            match self.stmt {
+                Statement::CreateDatabase { .. }
+                | Statement::CreateIndex { .. }
+                | Statement::CreateSchema { .. }
+                | Statement::CreateSource { .. }
+                | Statement::CreateTable { .. }
+                | Statement::CreateView { .. }
+                | Statement::DropDatabase { .. }
+                | Statement::DropObjects { .. } => {
+                    let disk_state = coord::dump_catalog(data_dir).map_err(|e| e.to_string())?;
+                    let mem_state = reqwest::blocking::get(&format!(
+                        "http://{}/internal/catalog",
+                        state.materialized_addr
+                    ))
+                    .map_err(|e| e.to_string())?
+                    .text()
+                    .map_err(|e| e.to_string())?;
+                    if disk_state != mem_state {
+                        return Err(format!(
+                            "the on-disk state of the catalog does not match its in-memory state\n\
+                             disk:{}\n\
+                             mem:{}",
+                            disk_state, mem_state
+                        ));
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        Ok(())
     }
 }
 

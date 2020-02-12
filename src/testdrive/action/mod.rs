@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::net::ToSocketAddrs;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
@@ -32,11 +33,14 @@ pub struct Config {
     pub kafka_addr: Option<String>,
     pub schema_registry_url: Option<String>,
     pub materialized_url: Option<String>,
+    pub materialized_catalog_path: Option<String>,
 }
 
 pub struct State {
     seed: u32,
     temp_dir: tempfile::TempDir,
+    data_dir: Option<PathBuf>,
+    materialized_addr: String,
     pgclient: postgres::Client,
     schema_registry_url: String,
     ccsr_client: ccsr::Client,
@@ -197,19 +201,64 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
     let seed = rand::thread_rng().gen();
     let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory".into())?;
 
-    let pgclient = {
+    let data_dir = if let Some(path) = &config.materialized_catalog_path {
+        let mut path = PathBuf::from(path);
+        if !path.ends_with("catalog") {
+            path.push("catalog");
+        }
+        match fs::metadata(&path) {
+            Ok(m) if !m.is_file() => {
+                return Err(Error::General {
+                    ctx: "materialized catalog path is not a regular file".into(),
+                    cause: None,
+                    hints: vec![],
+                })
+            }
+            Ok(_) => {
+                path.pop();
+                Some(path)
+            }
+            Err(e) => {
+                return Err(Error::General {
+                    ctx: "opening materialized catalog path".into(),
+                    cause: Some(Box::new(e)),
+                    hints: vec![format!("is {} accessible to testdrive?", path.display())],
+                })
+            }
+        }
+    } else {
+        None
+    };
+
+    let (materialized_addr, pgclient) = {
         let url = config
             .materialized_url
             .as_deref()
             .unwrap_or_else(|| "postgres://ignored@localhost:6875");
-        postgres::Client::connect(url, postgres::NoTls).map_err(|e| Error::General {
-            ctx: "opening SQL connection".into(),
+        let pgconfig: postgres::Config = url.parse().map_err(|e| Error::General {
+            ctx: "parsing materialized url".into(),
             cause: Some(Box::new(e)),
-            hints: vec![
-                format!("connection string: {}", url),
-                "are you running the materialized server?".into(),
-            ],
-        })?
+            hints: vec![],
+        })?;
+        let pgclient = pgconfig
+            .connect(postgres::NoTls)
+            .map_err(|e| Error::General {
+                ctx: "opening SQL connection".into(),
+                cause: Some(Box::new(e)),
+                hints: vec![
+                    format!("connection string: {}", url),
+                    "are you running the materialized server?".into(),
+                ],
+            })?;
+        let materialized_addr = format!(
+            "{}:{}",
+            match &pgconfig.get_hosts()[0] {
+                postgres::config::Host::Tcp(s) => s.to_string(),
+                postgres::config::Host::Unix(p) => p.display().to_string(),
+            },
+            pgconfig.get_ports()[0]
+        );
+        (materialized_addr, pgclient)
     };
 
     let schema_registry_url = config
@@ -270,6 +319,8 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
     Ok(State {
         seed,
         temp_dir,
+        data_dir,
+        materialized_addr,
         pgclient,
         schema_registry_url,
         ccsr_client,
