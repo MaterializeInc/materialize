@@ -499,7 +499,7 @@ where
                                             worker_id: _,
                                             message: WorkerFeedback::CreateSource(source_id,ksc,consistency)}) => {
                             ts_tx
-                                .send(TimestampMessage::Add(source_id, ksc.addr, ksc.topic, ksc.ssl_certificate_file, consistency))
+                                .send(TimestampMessage::Add(source_id, ksc.url, ksc.topic, ksc.ssl_certificate_file, consistency))
                                 .expect("Failed to send CREATE Instance notice to timestamper");
                         }
                     }

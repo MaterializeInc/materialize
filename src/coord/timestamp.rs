@@ -10,7 +10,6 @@
 use rusqlite::{params, NO_PARAMS};
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -27,6 +26,7 @@ use rdkafka::ClientConfig;
 use dataflow_types::Consistency;
 
 use log::{error, info};
+use url::Url;
 
 pub struct TimestampConfig {
     pub frequency: Duration,
@@ -35,13 +35,7 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(
-        SourceInstanceId,
-        SocketAddr,
-        String,
-        Option<PathBuf>,
-        Consistency,
-    ),
+    Add(SourceInstanceId, Url, String, Option<PathBuf>, Consistency),
     DropInstance(SourceInstanceId),
     BatchedUpdate(u64, Vec<(SourceInstanceId, i64)>),
     Update(SourceInstanceId, u64, i64),
@@ -255,7 +249,7 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.coord_channel.receiver.try_recv() {
             match update {
-                TimestampMessage::Add(id, addr, topic, ssl_certificate_file, consistency) => {
+                TimestampMessage::Add(id, url, topic, ssl_certificate_file, consistency) => {
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
                         // Did not know about source, must update
                         match consistency {
@@ -264,7 +258,7 @@ impl Timestamper {
                                 let last_offset = self.rt_recover_source(id);
                                 let connector = self.create_rt_connector(
                                     id,
-                                    addr,
+                                    url,
                                     topic,
                                     ssl_certificate_file,
                                     last_offset,
@@ -274,7 +268,7 @@ impl Timestamper {
                             Consistency::BringYourOwn(consistency_topic) => {
                                 info!("Timestamping Source {} with BYO Consistency. Topic: {}, Consistency Topic: {}", id, topic, consistency_topic);
                                 let consumer = self.create_byo_connector(
-                                    addr,
+                                    url,
                                     topic,
                                     id,
                                     ssl_certificate_file,
@@ -320,7 +314,7 @@ impl Timestamper {
     fn create_rt_connector(
         &self,
         id: SourceInstanceId,
-        addr: SocketAddr,
+        url: Url,
         topic: String,
         ssl_certificate_file: Option<PathBuf>,
         last_offset: i64,
@@ -336,7 +330,7 @@ impl Timestamper {
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &addr.to_string());
+            .set("bootstrap.servers", &url.to_string());
 
         if let Some(path) = ssl_certificate_file {
             config.set("security.protocol", "ssl");
@@ -358,7 +352,7 @@ impl Timestamper {
     /// Creates a RT Kafka connector
     fn create_byo_connector(
         &self,
-        addr: SocketAddr,
+        url: Url,
         topic: String,
         id: SourceInstanceId,
         ssl_certificate_file: Option<PathBuf>,
@@ -378,7 +372,7 @@ impl Timestamper {
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &addr.to_string());
+            .set("bootstrap.servers", &url.to_string());
 
         if let Some(path) = ssl_certificate_file {
             config.set("security.protocol", "ssl");

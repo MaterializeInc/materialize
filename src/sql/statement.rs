@@ -14,7 +14,6 @@
 use itertools::join;
 use std::collections::HashMap;
 use std::iter;
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 
 use failure::{bail, format_err, ResultExt};
@@ -598,8 +597,8 @@ fn handle_show_create_source(
         scx.catalog.get(&name)?.item()
     {
         match &connector.connector {
-            ExternalSourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
-                format!("kafka://{}/{}", addr, topic)
+            ExternalSourceConnector::Kafka(KafkaSourceConnector { url, topic, .. }) => {
+                format!("kafka://{}/{}", url, topic)
             }
             ExternalSourceConnector::File(c) => {
                 // TODO https://github.com/MaterializeInc/materialize/issues/1093
@@ -658,10 +657,8 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     if !broker.contains(':') {
         broker += ":9092";
     }
-    let addr = match broker.to_socket_addrs()?.next() {
-        Some(addr) => addr,
-        None => bail!("unable to resolve kafka broker to any addresses"),
-    };
+
+    let url = broker.parse()?;
 
     let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.resolve_name(from)?;
@@ -675,7 +672,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         create_sql,
         from: catalog_entry.id(),
         connector: SinkConnector::Kafka(KafkaSinkConnector {
-            addr,
+            url,
             topic,
             schema_registry_url: schema_registry_url.parse()?,
         }),
@@ -931,13 +928,9 @@ fn handle_create_dataflow_pure(
                             join(with_options.keys(), ",")
                         )
                     }
-                    // TODO(brennan) - blocking here is unnecessary and can be moved into the Kafka source.
-                    let addr = match broker.to_socket_addrs()?.next() {
-                        Some(addr) => addr,
-                        None => bail!("unable to resolve kafka broker to any addresses"),
-                    };
+                    let url = broker.parse()?;
                     build_kafka_source(
-                        addr,
+                        url,
                         topic.clone(),
                         format,
                         envelope,
@@ -1299,7 +1292,7 @@ fn handle_query(
 }
 
 fn build_kafka_source(
-    kafka_addr: SocketAddr,
+    url: Url,
     topic: String,
     format: &Format,
     envelope: Envelope,
@@ -1308,7 +1301,7 @@ fn build_kafka_source(
 ) -> Result<Source, failure::Error> {
     match (format, envelope) {
         (Format::Avro(schema), Envelope::Debezium) => {
-            build_kafka_avro_source(schema, kafka_addr, topic, consistency, ssl_certificate_file)
+            build_kafka_avro_source(schema, url, topic, consistency, ssl_certificate_file)
         }
         (Format::Avro(_), _) => {
             // TODO(brennan) -- there's no reason not to support this
@@ -1322,7 +1315,7 @@ fn build_kafka_source(
             Envelope::None,
         ) => build_kafka_protobuf_source(
             schema,
-            kafka_addr,
+            url,
             topic,
             message_name,
             consistency,
@@ -1366,7 +1359,7 @@ async fn get_remote_avro_schema(url: Url, topic: String) -> Result<Schema, failu
 
 fn build_kafka_avro_source(
     schema: &AvroSchema,
-    kafka_addr: SocketAddr,
+    kafka_url: Url,
     topic: String,
     consistency: Consistency,
     ssl_certificate_file: Option<PathBuf>,
@@ -1386,13 +1379,13 @@ fn build_kafka_avro_source(
         AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
             unreachable!("File schema should already have been inlined")
         }
-        AvroSchema::CsrUrl { url, seed } => {
-            let url: Url = url.parse()?;
+        AvroSchema::CsrUrl { url: csr_url, seed } => {
+            let csr_url: Url = csr_url.parse()?;
             if let Some(seed) = seed {
                 Schema {
                     key_schema: seed.key_schema.clone(),
                     value_schema: seed.value_schema.clone(),
-                    schema_registry_url: Some(url),
+                    schema_registry_url: Some(csr_url),
                 }
             } else {
                 unreachable!("CSR seed resolution should already have been called")
@@ -1410,7 +1403,7 @@ fn build_kafka_avro_source(
         create_sql: "<filled in later>".into(),
         connector: SourceConnector {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                addr: kafka_addr,
+                url: kafka_url,
                 topic,
                 ssl_certificate_file,
             }),
@@ -1427,7 +1420,7 @@ fn build_kafka_avro_source(
 
 fn build_kafka_protobuf_source(
     schema: &sql_parser::ast::Schema,
-    kafka_addr: SocketAddr,
+    url: Url,
     topic: String,
     message_name: &str,
     consistency: Consistency,
@@ -1447,7 +1440,7 @@ fn build_kafka_protobuf_source(
         create_sql: "<filled in later>".into(),
         connector: SourceConnector {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                addr: kafka_addr,
+                url,
                 topic,
                 ssl_certificate_file,
             }),

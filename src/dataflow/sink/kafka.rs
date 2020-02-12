@@ -63,7 +63,7 @@ pub fn kafka<G>(
     match ccsr_client.publish_schema(&connector.topic, &schema.to_string()) {
         Ok(schema_id) => {
             let mut config = ClientConfig::new();
-            config.set("bootstrap.servers", &connector.addr.to_string());
+            config.set("bootstrap.servers", &connector.url.to_string());
             let producer: FutureProducer = config.create().unwrap();
 
             stream.sink(Pipeline, &format!("kafka-{}", id), move |input| {
