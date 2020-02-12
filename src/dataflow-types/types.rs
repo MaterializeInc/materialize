@@ -401,7 +401,7 @@ pub enum Consistency {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnector {
-    pub addr: std::net::SocketAddr,
+    pub url: Url,
     pub topic: String,
     pub ssl_certificate_file: Option<PathBuf>,
 }
@@ -420,7 +420,7 @@ pub enum SinkConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnector {
-    pub addr: std::net::SocketAddr,
+    pub url: Url,
     pub topic: String,
     pub schema_registry_url: Url,
 }

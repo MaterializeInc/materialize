@@ -51,7 +51,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let KafkaSourceConnector {
-        addr,
+        url,
         topic,
         ssl_certificate_file,
     } = connector.clone();
@@ -82,7 +82,7 @@ where
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &addr.to_string());
+            .set("bootstrap.servers", &url.to_string());
 
         if let Some(path) = ssl_certificate_file {
             // See https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka
