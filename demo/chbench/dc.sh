@@ -192,8 +192,14 @@ dc_stop() {
     if [[ $# -eq 1 ]]; then
         local run_cmd
         run_cmd=$(dc_is_run_cmd "$1")
+        is_up=$(dc_is_running "$1")
         if [[ -n $run_cmd ]]; then
             runv docker stop "$run_cmd"
+            return
+        elif [[ -n $is_up ]]; then
+            runv docker-compose stop "$1"
+            return
+        else
             return
         fi
     fi
@@ -239,12 +245,16 @@ dc_status_inner() {
 
 # Return the name of the container if the command looks like it was executed by way of 'run', instead of 'up'
 dc_is_run_cmd() {
-     dc_chbench_containers | grep -E "chbench_${1}_run_\w+"
+     ( dc_chbench_containers | grep -E "chbench_${1}_run_\w+" ) || true
+}
+
+dc_is_running() {
+    ( dc_chbench_containers | grep -E "chbench_${1}" ) || true
 }
 
 # Get all the container names that belong to chbench
 dc_chbench_containers() {
-    docker ps --format '{{.Names}}' | grep '^chbench'
+    ( docker ps --format '{{.Names}}' | grep '^chbench' ) || true
 }
 
 shut_down() {
