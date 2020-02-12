@@ -15,6 +15,7 @@ use itertools::join;
 use std::collections::HashMap;
 use std::iter;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
 
 use failure::{bail, format_err, ResultExt};
 use itertools::Itertools;
@@ -862,6 +863,13 @@ async fn handle_create_dataflow(
                         Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
+
+                    let ssl_certificate_file = match with_options.remove("ssl_certificate_file") {
+                        None => None,
+                        Some(Value::SingleQuotedString(p)) => Some(p.into()),
+                        Some(_) => bail!("ssl_certificate_file must be a string"),
+                    };
+
                     if !with_options.is_empty() {
                         bail!(
                             "Unexpected WITH options: {}",
@@ -875,7 +883,15 @@ async fn handle_create_dataflow(
                         Some(addr) => addr,
                         None => bail!("unable to resolve kafka broker to any addresses"),
                     };
-                    build_kafka_source(addr, topic.clone(), format, envelope, consistency).await?
+                    build_kafka_source(
+                        addr,
+                        topic.clone(),
+                        format,
+                        envelope,
+                        consistency,
+                        ssl_certificate_file,
+                    )
+                    .await?
                 }
                 Connector::File { path, with_options } => {
                     let mut with_options: HashMap<_, _> = with_options
@@ -1228,10 +1244,12 @@ async fn build_kafka_source(
     format: &mut Format,
     envelope: Envelope,
     consistency: Consistency,
+    ssl_certificate_file: Option<PathBuf>,
 ) -> Result<Source, failure::Error> {
     match (format, envelope) {
         (Format::Avro(schema), Envelope::Debezium) => {
-            build_kafka_avro_source(schema, kafka_addr, topic, consistency).await
+            build_kafka_avro_source(schema, kafka_addr, topic, consistency, ssl_certificate_file)
+                .await
         }
         (Format::Avro(_), _) => {
             // TODO(brennan) -- there's no reason not to support this
@@ -1244,7 +1262,15 @@ async fn build_kafka_source(
             },
             Envelope::None,
         ) => {
-            build_kafka_protobuf_source(schema, kafka_addr, topic, message_name, consistency).await
+            build_kafka_protobuf_source(
+                schema,
+                kafka_addr,
+                topic,
+                message_name,
+                consistency,
+                ssl_certificate_file,
+            )
+            .await
         }
         (Format::Protobuf { .. }, Envelope::Debezium) => {
             bail!("Currently, Debezium-style envelopes are not supported for protobuf messages.")
@@ -1287,6 +1313,7 @@ async fn build_kafka_avro_source(
     kafka_addr: SocketAddr,
     topic: String,
     consistency: Consistency,
+    ssl_certificate_file: Option<PathBuf>,
 ) -> Result<Source, failure::Error> {
     let Schema {
         key_schema,
@@ -1340,6 +1367,7 @@ async fn build_kafka_avro_source(
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,
+                ssl_certificate_file,
             }),
             encoding: DataEncoding::Avro(AvroEncoding {
                 raw_schema: value_schema,
@@ -1358,6 +1386,7 @@ async fn build_kafka_protobuf_source(
     topic: String,
     message_name: &str,
     consistency: Consistency,
+    ssl_certificate_file: Option<PathBuf>,
 ) -> Result<Source, failure::Error> {
     let descriptors = match schema {
         sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
@@ -1379,6 +1408,7 @@ async fn build_kafka_protobuf_source(
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addr: kafka_addr,
                 topic,
+                ssl_certificate_file,
             }),
             encoding: DataEncoding::Protobuf(ProtobufEncoding {
                 descriptors,

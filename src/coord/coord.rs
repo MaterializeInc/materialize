@@ -487,7 +487,7 @@ where
                                             message: WorkerFeedback::CreateSource(source_id,ksc,consistency)}) => {
                             // Notify timestamping thread that source has been created
                             if let Some(channel) = &mut self.source_updates{
-                                channel.sender.send(TimestampMessage::Add(source_id, ksc.addr, ksc.topic,consistency)).expect("Failed to send CREATE Instance notice to Coordinator");
+                                channel.sender.send(TimestampMessage::Add(source_id, ksc.addr, ksc.topic, ksc.ssl_certificate_file, consistency)).expect("Failed to send CREATE Instance notice to Coordinator");
                             }
                         }
                     }
