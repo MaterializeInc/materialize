@@ -60,7 +60,7 @@ $ file-write path=data-schema.json
 > SHOW CREATE SOURCE data
 Source   Create Source
 ------------------
-materialize.public.data  "kafka://${testdrive.kafka-addr-resolved}/testdrive-data-${testdrive.seed}"
+materialize.public.data  "kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}"
 
 ! SELECT * FROM data
 Cannot construct query out of existing materialized views
