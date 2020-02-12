@@ -1,7 +1,5 @@
-@import "reset";
 @import "colors";
 @import "variables";
-@import "animations";
 @import "grid";
 @import "base";
 @import "general";
@@ -14,34 +12,3 @@
 @import "docs_railroad_diagrams";
 @import "docs_sidebar";
 @import "docs_table";
-
-@font-face {
-  font-family: "graphik";
-  src: url("{{ "font/graphik-regular-web.eot" | relURL }}");
-  src: url("{{ "font/graphik-regular-web.eot?#iefix" | relURL }}") format("embedded-opentype"),
-    url("{{ "font/graphik-regular-web.woff" | relURL }}") format("woff");
-}
-@font-face {
-  font-family: "graphik-semibold";
-  font-weight: 600;
-  font-style: normal;
-  src: url("{{ "font/graphik-semibold-web.eot" | relURL }}");
-  src: url("{{ "font/graphik-semibold-web.eot?#iefix" | relURL }}") format("embedded-opentype"),
-    url("{{ "font/graphik-semibold-web.woff" | relURL }}") format("woff");
-}
-@font-face {
-  font-family: "graphik-bold";
-  font-weight: bold;
-  font-style: normal;
-  src: url("{{ "font/graphic-bold-web.eot" | relURL }}");
-  src: url("{{ "font/graphik-bold-web.eot?#iefix" | relURL }}") format("embedded-opentype"),
-    url("{{ "font/graphik-bold-web.woff" | relURL }}") format("woff");
-}
-
-@font-face {
-  font-family: "hkgrotesk-italic";
-  font-style: italic;
-  src: url("{{ "font/hkgrotesk-italic.eot" | relURL }}");
-  src: url("{{ "font/hkgrotesk-italic.eot?#iefix" | relURL }}") format("embedded-opentype"),
-    url("{{ "font/hkgrotesk-italic.woff" | relURL }}") format("woff");
-}
