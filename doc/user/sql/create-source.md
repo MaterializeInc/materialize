@@ -99,7 +99,7 @@ Field | Value
 **AVRO...** | Format the source using Avro.
 _avro&lowbar;schema&lowbar;spec_ | The Avro schema. For more details, see [Avro Schema Specifications](#avro-schema-specifications).
 **PROTOBUF...** | Format the source using Protobuf.
-_message&lowbar;name_ | The top-level Protobuf message name, in the format `.<package>.<message name>`. For example, `.billing.Batch`
+_message&lowbar;name_ | The top-level Protobuf message name, in the format `<package>.<message name>`. For example, `billing.Batch`
 _schema&lowbar;spec_ | The format/schema for the source's data. For more details, see [Standard schema specifications](#standard-schema-specifications).
 **REGEX** _regex_ | Format the source's data as a string, applying _regex_, whose capture groups define the columns of the relation. For more detail, see [Regex format details](#regex-format-details).
 **CSV WITH** _n_ | Format the source's data as a CSV with _n_ columns. Any data without _n_ columns is not propagated to the source.
@@ -176,11 +176,8 @@ Protobuf-formatted external sources require:
     _message&lowbar;name_ value would be:
 
     ```nofmt
-    .billing.Batch
+    billing.Batch
     ```
-
-    The leading period is intentional and an odd by-product of some
-    implementation details.
 
 ### Regex format details
 
