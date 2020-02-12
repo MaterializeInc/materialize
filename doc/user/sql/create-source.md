@@ -13,42 +13,48 @@ with its data as if it were in a SQL table.
 
 ## Conceptual framework
 
-To provide data to Materialze, you must create "sources", which is a catchall
+To provide data to Materialize, you must create "sources", which is a catchall
 term for a resource Materialize can read data from. For more detail about how
-sources work within the rest of Materialze, check out our [architecture
+sources work within the rest of Materialize, check out our [architecture
 overview](/docs/overview/architecture/).
 
-Materialize supports the following types of sources:
+Sources consist of three distinct elements:
+
+Element | Purpose | Example
+--------|---------|--------
+**Connector** | Provides actual bytes of data to Materialize | Kafka
+**Format** | The structure of the external source's bytes | Avro
+**Envelope** | How Materialize should handle the incoming data + additional formatting information | Append-only
+
+### Connectors
+
+Materialize can connect to the following types of sources:
 
 - Streaming sources like Kafka
 - File sources like `.csv` or unstructured log files
 
-### Streaming sources
+### Formats
 
-Materialize can ingest data from Kafka topics that publish a change feed from an
-underlying relational database, e.g. MySQL. In Materialize's current iteration,
-this only works with databases set up to publish a change feed to Kafka through
-[Debezium](https://debezium.io), a change data capture (CDC) tool for relational
-databases.
+Materialize can decode incoming bytes of data from several formats
 
-Materialize also needs to understand the structure of the source, so it relies
-on receiving the topic's schema from either a Confluent Schema Registry or a
-user-supplied Avro schema. Debezium handles this automatically by using
-Confluent Schema Registry, so most users do not need to do anything for this
-step.
+- Avro
+- Protobuf
+- Regex
+- CSV
+- Plain text
+- Raw bytes
 
-After you create the source, Materialize automatically collects all of the data
-that streams in, which is then used to supply your queries and views with data.
+### Envelopes
 
-### File sources
+What Materialize actually does with the data it receives depends on the
+"envelope" your data provides:
 
-Materialize can ingest data set from sources like `.csv` files or unstructured
-log file, in one of two ways:
+Envelope | Action
+---------|-------
+**Append-only** | Inserts all received data; does not support updates or deletes.
+**Debezium** | Treats data as wrapped in a "diff envelope" which indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].
 
-- Static files, which Materialize reads once and makes available for views.
-- Dynamic files, which Materialize regularly reads and propagates new values to
-  views that use the source. We call this "tailing a file" because it's similar
-  to running `tail` and looking for new lines at its end.
+For more information about envelopes, see [Envelope details](#envelope-details).
 
 ## Syntax
 
@@ -61,28 +67,56 @@ log file, in one of two ways:
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
-**FROM** _format&lowbar;spec_ | A specification of how to connect to the external resource providing the data. For more detail, see [Connector specifications](#connector-spec).
+**FROM** _connector&lowbar;spec_ | A specification of how to connect to the external resource providing the data. For more detail, see [Connector specifications](#connector-spec).
 **FORMAT** _format&lowbar;spec_ | A description of the format of data in the source. For more detail, see [Format specifications](#format-spec).
-**ENVELOPE** _envelope_ | The envelope type, either **NONE** or **DEBEZIUM**. **NONE** implies that each record appends to the source. **DEBEZIUM** requires records to have `before` and `after` fields, allowing deletes, inserts, and updates. It is currently only supported for Avro-format Kafka sources.
-**WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
+**ENVELOPE** _envelope_ | The envelope type.<br/><br/> &#8226; **NONE** implies that each record appends to the source. <br/><br/>&#8226; **DEBEZIUM** requires records have the [appropriate fields](#format-implications), which allow deletes, inserts, and updates. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [Debezium envelope details](#debezium-envelope-details).
 
 ### Connector specifications
 
 {{< diagram "connector-spec.html" >}}
 
-The following options are valid within the `WITH` clause.
-
 Field | Value
 ------|-----
-`tail` | Continually check the file for new content; as new content arrives, process it using other `WITH` options. (Only valid for file sources).
+**FILE** _path_ | The absolute path to the file you want to use as the source.
+**KAFKA BROKER** _host_ | The Kafka broker's host name.
+**TOPIC** _topic_ | The Kafka topic to ingest from.
+**WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
+
+#### `WITH` options
+
+The following options are valid within the `WITH` clause.
+
+Field | Value | Description
+------|-------|------------
+`tail` | `bool` | Continually check the file for new content; as new content arrives, process it using other `WITH` options. (Only valid for file sources).
 
 ### Format specifications
 
 {{< diagram "format-spec.html" >}}
 
+Field | Value
+------|-----
+**AVRO...** | Format the source using Avro.
+_avro&lowbar;schema&lowbar;spec_ | The Avro schema. For more details, see [Avro Schema Specifications](#avro-schema-specifications).
+**PROTOBUF...** | Format the source using Protobuf.
+_message&lowbar;name_ | The top-level Protobuf message name, in the format `.<package>.<message name>`. For example, `.billing.Batch`
+_schema&lowbar;spec_ | The format/schema for the source's data. For more details, see [Standard schema specifications](#standard-schema-specifications).
+**REGEX** _regex_ | Format the source's data as a string, applying _regex_, whose capture groups define the columns of the relation. For more detail, see [Regex format details](#regex-format-details).
+**CSV WITH** _n_ | Format the source's data as a CSV with _n_ columns. Any data without _n_ columns is not propagated to the source.
+**DELIMITED BY** _char_ | Delimit the CSV by _char_. ASCII comma by default (`','`). This must be an ASCII character; other Unicode code points are not supported.
+**TEXT** | Format the source's data as ASCII-encoded text.
+**BYTES** | Format the source's data as unformatted bytes.
+
+For more information about formats, see [Format details](#format-details).
+
 ### Avro schema specifications
 
 {{< diagram "avro-schema-spec.html" >}}
+
+Field | Value
+------|-----
+_url_ | The URL of the Confluent schema registry to get schema information from.
+_schema&lowbar;spec_ | The format/schema for the source's data. For more details, see [Standard schema specifications](#standard-schema-specifications).
 
 ### Standard schema specifications
 
@@ -90,107 +124,72 @@ Field | Value
 
 Field | Value
 ------|-----
-message_name | The protobuf message name.
-regex | A regular expression whose capture groups define the columns of the relation. For more detail, see [Regex on file sources](#regex-on-file-sources).
-n | The number of columns expected in each record of the CSV source.
-char | The delimiter of the CSV source. ASCII comma by default (`','`). This must be an ASCII character; other Unicode code points are not supported.
-url | The URL of the Confluent schema registry to get schema information from.
-schema_file_path | The absolute path to a file containing the schema.
-inline_schema | A string representing the schema.
+_schema&lowbar;file&lowbar;path_ | The absolute path to a file containing the schema.
+_inline&lowbar;schema_ | A string representing the schema.
 
-## Streaming source details
+## External source details
 
-### Overview
+External sources provide the actual bytes of data to Materialize.
 
-Materialize receives data from Kafka sources, which are set up to publish a
-change feed from a relational database (also known as "change data capture" or
-CDC).
+### Kafka source details
 
-For Materialize to meaningfully process arbitrary changes from the upstream
-database, it requires a "diff envelope", which describes records' old and new
-values. In the current landscape, the only CDC tool that provides a diff
-envelope from relational databases is [Debezium](https://debezium.io/).
+Materialize expects each source to use to one Kafka topic, which is&mdash;in
+  turn&mdash;generated by a single table in an upstream database.
 
-This means to create sources within Materialize, you must:
+### File source details
 
-- Configure Debezium with your database
-  ([MySQL](https://debezium.io/documentation/reference/0.10/connectors/mysql.html)/[PostgreSQL](https://debezium.io/documentation/reference/0.10/connectors/postgresql.html))
-  and Kafka.
-- Define the Kafka sources; these are 1:1 with Kafka topics.
-- Provide a schema for Materialize to structure the source's data, preferably
-  through Confluent Schema Registry. The source's schema will be mirrored in the
-  table-like API offered to you when reading from the source.
-
-   Note that this is handled automatically through Debezium.
-
-After creating the source and connecting to Kafka, Materialize receives all of
-the data published to the Kafka topic.
-
-### Source requirements
-
-Materialize optionally allows the data it receives from Kafka to have a
-structure that contains both the old and new values for any fields within a
-record (a "diff envelope"), which lets Differential dataflow process arbitrary
-changes to the underlying data, e.g. expressing a record's deletion.
-
-The only tool that we're aware of that provide data to Kafka in this form is
-Debezium through its envelope structure that contains a `before` and `after`
-field (although CockroachDB's change data capture feature is close to
-operational, as well).
-
-You can opt in to this behavior with the `ENVELOPE DEBEZIUM` option.
-
-### Source schema
-
-When creating a source, Materialize looks up stream's structure using a
-Confluent Schema Registry or with the Avro schema you define. The stream's
-schema is then used to create the source within Materialize, which is
-essentially equivalent to a table in the language of RDBMSes.
-
-Once Materialize has determined the structure of the stream, it connects the
-underlying Kafka stream directly to its Differential dataflow engine.
-
-### Data storage
-
-As data streams in from Kafka, Materialize's internal Differential instance
-builds an arrangement (which is roughly equivalent to an index in the language
-of RDBMSes). When the source is initially created this will receive all of the
-data that the Kafka stream contains for the topic, e.g. the last 24 hours of
-data, and construct its initial arrangement from that. As new data streams in,
-Materialize will collect that, as well.
-
-However, Materialize has a separate garbage collection period for arrangements,
-which works independently from the Kafka stream's retention period.
-
-When [creating views](../create-views), they are populated with all of the data
-from their sources that are available from the arrangements within Differential.
-
-## File source details
-
-File sources have the following caveats, in addition to any details of the
-specific file type you're using:
-
-- The specified path must be an absolute path to the file.
+- `path` values must be the file's absolute path, e.g.
+    ```sql
+    CREATE SOURCE server_source FROM FILE '/Users/sean/server.log'...
+    ```
 - All data in file sources are treated as [`string`](./data-types/string).
 
-### CSV sources
+## Format details
 
-- Every line of the CSV is treated as a row, i.e. there is no concept of
-  headers.
-- Columns in the source are named `column1`, `column2`, etc.
-- You must specify the number of columns using `WITH ( format = 'csv', columns =
-  n )`. Any row with a different number of columns gets discarded, though
-  Materialize will log an error.
+### Avro format details
 
-### Regex on file sources
+Avro-formatted external sources require providing you providing the schema in
+one of two ways:
 
-By using the `regex` flag in the `WITH` option list, you can apply a structure
-to a string of text that gets read from a file. This is particularly useful when
-processing unstructured log files.
+- Using the [Confluent Schema Registry](#using-a-confluent-schema-registry)
+- Providing the Avro schema [in-line when creating the
+  source](#inlining-the-avro-schema).
+
+### Protobuf format details
+
+Protobuf-formatted external sources require:
+
+- The `FileDescriptorSet`, which encodes the Protobuf messages' schema. You
+  can generate the `FileDescriptorSet` with `protoc`, e.g.
+    ```shell
+    protoc --include_imports --descriptor_set_out=SCHEMA billing.proto
+    ```
+- The name of the top-level message to decode, in the following format:
+
+    <!--clojure was chosen because of its specific formatting in this scenario-->
+    ```clojure
+    .<package name>.<top-level message>
+    ```
+
+    For example, if our `FileDescriptorSet` were from a `.proto` file in the
+    `billing` package, and our top-level message was called `Batch`, our
+    _message&lowbar;name_ value would be:
+
+    ```nofmt
+    .billing.Batch
+    ```
+
+    The leading period is intentional and an odd by-product of some
+    implementation details.
+
+### Regex format details
+
+Regex-formatted sources let you apply a structure to arbitrary strings passed in
+from file sources. This is particularly useful when processing unstructured log
+files.
 
 - To parse regex strings, Materialize uses
-  [rust-lang/regex](https://github.com/rust-lang/regex). The API this library
-  provides is similar to Python's built-in regex library.
+  [rust-lang/regex](https://github.com/rust-lang/regex). For more detail, refer to its [documented syntax](https://docs.rs/regex/latest/regex/#syntax).
 - To create a column in the source, create a capture group, i.e. a parenthesized
   expression, e.g. `([0-9a-f]{8})`.
     - Name columns by creating named captured groups, e.g. `?P<offset>` in
@@ -200,21 +199,133 @@ processing unstructured log files.
   non-capturing groups using `?:` as the leading pattern in the group, e.g.
   `(?:[0-9a-f]{4} ){8}`.
 
+### CSV format details
+
+CSV-formatted sources read lines from a CSV file.
+
+- Every line of the CSV is treated as a row, i.e. there is no concept of
+  headers.
+- Columns in the source are named `column1`, `column2`, etc.
+- You must specify the number of columns using `WITH ( format = 'csv', columns =
+  n )`. Any row with a different number of columns gets discarded, though
+  Materialize will log an error.
+
+### Text format details
+
+Text-formatted sources reads lines from a file.
+
+- Data from text-formatted sources is treated as newline-delimited.
+- Data is assumed to be UTF-8 encoded, and discarded if it cannot be converted to UTF-8.
+
+### Raw byte format details
+
+Raw byte-formatted sources provide Materialize the raw bytes received from the
+source without applying any formatting or decoding.
+
+## Envelope details
+
+Envelopes determine whether an incoming record inserts new data, updates or deletes existing data, or both.
+
+### Append-only envelope details
+
+Materialize's default behavior doesn't require any additional details from the
+data, and simply treats each record received from the source as a new entry.
+This means that sources using an append-only envelope do not support updates or
+deletes.
+
+Treating data from the external source as append-only does not change the
+expected format.
+
+### Debezium envelope details
+
+The Debezium envelope provides a "diff envelope", which describes the decoded
+records' old and new values; this is roughly equivalent to the notion of Change
+Data Capture, or CDC. Materialize can use the data in this diff envelope to
+process data as representing inserts, updates, or deletes.
+
+This envelope is called the Debezium envelope because the only tool that we're
+aware of that includes this data is [Debezium].
+
+To use the Debezium envelope with Materialize, you must configure Debezium with
+your database.
+
+- [MySQL](https://debezium.io/documentation/reference/0.10/connectors/mysql.html)
+- [PostgreSQL](https://debezium.io/documentation/reference/0.10/connectors/postgresql.html)
+
+The Debezium envelope is only supported by sources published to Kafka by
+Debezium.
+
+#### Format implications
+
+Using the Debezium envelopes changes the schema of your Avro-encoded Kafka
+topics to include something akin to the following field:
+
+```json
+{
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+        {
+        "name": "before",
+        "type": [
+            {
+            "name": "row",
+            "type": "record",
+            "fields": [
+                {"name": "a", "type": "long"},
+                {"name": "b", "type": "long"}
+            ]
+            },
+            "null"
+        ]
+        },
+        { "name": "after", "type": ["row", "null"] }
+    ]
+}
+```
+
+Note that:
+
+- If you use the Confluent Schema Registry to receive your schemas, you don't
+  need to manually create this field; Debezium will have taken care of it for
+  you.
+- The following section depends on the column's names and types, and is unlikely
+  to match our example:
+    ```json
+    ...
+    "fields": [
+            {"name": "a", "type": "long"},
+            {"name": "b", "type": "long"}
+        ]
+    ...
+    ```
+
 ## Examples
 
 ### Using a Confluent schema registry
 
 ```sql
-CREATE SOURCE ccsr_topic
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'topic'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
+CREATE SOURCE events
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
+FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
-### Manually defining Avro schema
+This creates a source that...
+
+- Automatically determines its schema from the Confluent Schema Registry.
+- Decodes data received from the `events` topic published by Kafka running on
+  `localhost:9092`.
+- Decodes using an Avro schema.
+- Is eligible to use the Debezium envelope because it's Avro-encoded and
+  published by Kafka; however, this still depends on whether or not the upstream
+  database publishes its data from a Debezium-enabled database.
+
+### Inlining the Avro schema
 
 ```sql
 CREATE SOURCE user
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'user'
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'user'
 FORMAT AVRO
 USING SCHEMA '{
   "type": "record",
@@ -224,33 +335,47 @@ USING SCHEMA '{
       "name": "before",
       "type": [
         {
-          "name": "row",
           "type": "record",
+          "name": "Envelope",
+          "namespace": "user",
           "fields": [
-            {"name": "a", "type": "long"},
-            {"name": "b", "type": "long"}
-          ]
-        },
-        "null"
-      ]
-    },
-    { "name": "after", "type": ["row", "null"] }
-  ]
-}'
-ENVELOPE DEBEZIUM;
+              ....
+          ],
+          "connect.name": "user.Envelope"
+        }'
+    ENVELOPE DEBEZIUM;
 ```
 
-### Creating a source from a static CSV
+This creates a source that...
+
+- Has its schema defined inline, and decodes data using that schema.
+- Decodes data received from the `user` topic published by Kafka running on
+  `localhost:9092`.
+- Uses the Debezium envelope, meaning it supports delete, updates, and inserts.
+
+### Creating a source from Protobufs
+
+Assuming you've already generated a `FileDescriptorSet` named `SCHEMA`:
 
 ```sql
-CREATE SOURCE test
-FROM FILE '/test.csv'
-FORMAT CSV WITH 5 COLUMNS;
+CREATE SOURCE batches
+KAFKA BROKER 'localhost:9092' TOPIC 'billing'
+FORMAT PROTOBUF MESSAGE '.billing.Batch'
+    USING '[path to SCHEMA]';
 ```
+
+This creates a source that...
+
+- Is append-only.
+- Decodes data received from the `billing` topic published by Kafka running on
+  `localhost:9092`.
+- Decodes data as the `Batch` message from the `billing` package, as described
+  in the [generated `FileDescriptorSet`](#protobuf-format-details).
 
 ### Creating a source from a dynamic, unstructured file
 
-In this example, we'll assume we have [`xxd`](https://linux.die.net/man/1/xxd) creating hex dumps for some incoming files. Its output might look like this:
+In this example, we'll assume we have [`xxd`](https://linux.die.net/man/1/xxd)
+creating hex dumps for some incoming files. Its output might look like this:
 
 ```nofmt
 00000000: 7f45 4c46 0201 0100 0000 0000 0000 0000  .ELF............
@@ -258,7 +383,8 @@ In this example, we'll assume we have [`xxd`](https://linux.die.net/man/1/xxd) c
 00000020: 4000 0000 0000 0000 7013 0200 0000 0000  @.......p.......
 ```
 
-We'll create a source that takes in these entire lines and extracts the file offset, as well as the decoded value.
+We'll create a source that takes in these entire lines and extracts the file
+offset, as well as the decoded value.
 
 ```sql
 CREATE SOURCE hex
@@ -269,13 +395,14 @@ WITH (
 );
 ```
 
-This creates a source...
+This creates a source that...
 
-- With two columns: `offset` and `decoded`.
-- That discards the second group, i.e. `(?:[0-9a-f]{4} ){8}`.
-- That Materialize dynamically polls for new entries.
+- Is append-only.
+- Has two columns: `offset` and `decoded`.
+- Discards the second group, i.e. `(?:[0-9a-f]{4} ){8}`.
+- Materialize dynamically checks for new entries.
 
-Using the above example, this would generate:
+Using the above example, this source would generate:
 
 ```nofmt
  offset  |     decoded
@@ -285,7 +412,25 @@ Using the above example, this would generate:
 00000020 | @.......p.......
 ```
 
+### Creating a source from a static CSV
+
+```sql
+CREATE SOURCE test
+FROM FILE '[path to .csv]'
+FORMAT CSV WITH 5 COLUMNS;
+```
+
+This creates a source that...
+
+- Is append-only.
+- Has 5 columns (`column1`...`column5`). Materialize will ignore all data
+  received without 5 columns.
+- Is only read once, i.e. any updates to the underlying CSV file will not
+  propagate to Materialize.
+
 ## Related pages
 
 - [`CREATE VIEW`](../create-view)
 - [`SELECT`](../select)
+
+[Debezium]: http://debezium.io
