@@ -15,7 +15,7 @@ use std::fs;
 
 fn main() {
     let out_dir = "protobuf/test_util/gen";
-    let input = &["testdata/fuzz.proto"];
+    let input = &["testdata/fuzz.proto", "testdata/benchmark.proto"];
     for fname in input {
         println!("cargo:rerun-if-changed={}", fname);
     }

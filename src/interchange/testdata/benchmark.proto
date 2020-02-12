@@ -1,0 +1,55 @@
+// Copyright Materialize, Inc. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package bench;
+
+message Value {
+  int32 l_orderkey = 1;
+  int32 l_partkey = 2;
+  int32 l_suppkey = 3;
+  int32 l_linenumber = 4;
+  double l_quantity = 5;
+  double l_extendedprice = 6;
+  double l_discount = 7;
+  double l_tax = 8;
+  string l_returnflag = 9;
+  string l_linestatus = 10;
+  int32 l_shipdate = 11;
+  int32 l_commitdate = 12;
+  int32 l_receiptdate = 13;
+  string l_shipinstruct = 14;
+  string l_shipmode = 15;
+  string l_comment = 16;
+}
+
+message Connector {
+  string version = 1;
+  string connector = 2;
+  string name = 3;
+  int64 server_id = 4;
+  int64 ts_sec = 5;
+  string gtid = 6;
+  string file = 7;
+  int64 pos = 8;
+  int64 row = 9;
+  bool snapshot = 10;
+  int64 thread = 11;
+  string db = 12;
+  string table = 13;
+  string query = 14;
+}
+
+message Record {
+  Value tcph_tcph_lineitem_value = 1;
+  Connector source = 2;
+  string op = 3;
+  int64 ts_ms = 4;
+}

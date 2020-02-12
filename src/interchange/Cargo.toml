@@ -9,8 +9,8 @@ publish = false
 path = "lib.rs"
 
 [[bench]]
-name = "interchange-avro"
-path = "benches/avro.rs"
+name = "interchange-bench"
+path = "benches/benches.rs"
 harness = false
 
 [dependencies]

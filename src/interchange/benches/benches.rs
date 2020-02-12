@@ -6,8 +6,13 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+//
+// Benchmarks for decoding input format
 
-//! Module for all generated proto code
+use criterion::{criterion_group, criterion_main};
 
-pub mod fuzz;
-pub mod benchmark;
+pub mod avro;
+pub mod protobuf;
+
+criterion_group!(benches, avro::bench_avro, protobuf::bench_protobuf);
+criterion_main!(benches);
