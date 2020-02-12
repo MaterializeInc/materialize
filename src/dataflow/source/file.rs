@@ -131,7 +131,11 @@ async fn read_file_task(
     let file = match File::open(&path).await {
         Ok(file) => file,
         Err(err) => {
-            error!("file source: unable to open file at path {}. Error: {}", path.to_string_lossy(), err);
+            error!(
+                "file source: unable to open file at path {}. Error: {}",
+                path.to_string_lossy(),
+                err
+            );
             return;
         }
     };
