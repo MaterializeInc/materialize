@@ -1,11 +1,46 @@
-<header class="site-header">
-    <a href="/" class="brand img-link">
-        <img src="{{ "images/materialize-horizontal.png" | relURL }}" alt="Materialize">
-    </a>
-    <nav role="navigation" class="global-nav">
-        <a href="/#features">Features</a>
-        <a href="/#team">Team</a>
-        <a href="/#board-and-investors">Investors</a>
-        <a href="https://jobs.lever.co/materialize">Careers</a>
-    </nav>
+<header id="main">
+  <div class="row middle-xs">
+    <div class="col-sm-3 col-xs-7 logo-wrapper">
+      <a href="/"><img src="{{ "images/logo.svg" | relURL }}" alt="Materialize Logo"> </a>
+    </div>
+    <div class="col-sm-9 col-xs-5 nav-wrapper text-right">
+      <div class="menu-main-menu-container">
+        <ul id="menu-main-menu" class="menu">
+          <li id="menu-item-171"
+            class="menu-item menu-item-type-post_type menu-item-object-page menu-item-home current-menu-item page_item page-item-9 current_page_item menu-item-171">
+            <a href="https://materializeinc.wpengine.com/" aria-current="page">Home</a></li>
+          <li id="menu-item-302" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-302"><a
+              href="https://materializeinc.wpengine.com/product/">Product</a></li>
+          <li id="menu-item-304" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-304"><a
+              href="https://materialize.io/docs/">Docs</a></li>
+          <li id="menu-item-170" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-170"><a
+              href="https://materializeinc.wpengine.com/blog/">Blog</a></li>
+          <li id="menu-item-1409" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-1409"><a
+              href="https://github.com/MaterializeInc/">Github</a></li>
+          <li id="menu-item-296" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-296"><a
+              href="https://materializeinc.wpengine.com/about/">About</a></li>
+          <li id="menu-item-297" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-297"><a
+              href="https://materializeinc.wpengine.com/careers/">Careers</a></li>
+          <li id="menu-item-298"
+            class="nav-button menu-item menu-item-type-post_type menu-item-object-page menu-item-298"><a
+              href="https://materializeinc.wpengine.com/contact/">Contact</a></li>
+          <li id="menu-item-305"
+            class="nav-button nav-button-alt menu-item menu-item-type-post_type menu-item-object-page menu-item-305"><a
+              href="https://materializeinc.wpengine.com/download/">Download</a></li>
+        </ul>
+      </div>
+      <div id="search">
+        {{/*  <img id="search-icon" src="{{ "images/search.svg" | relURL }}" alt="search icon"> */}}
+      </div>
+      <div id="nav-toggle">
+        &nbsp;
+      </div>
+    </div>
+  </div>
+  <div id="search-form-container" class="">
+    <form method="get" action="/">
+      <input type="text" id="s" name="s" placeholder="Enter search query..." required="">
+      <input type="submit" value="Search" class="button button-primary">
+    </form>
+  </div>
 </header>
