@@ -1270,9 +1270,9 @@ where
                         // case we should import the source to be sure that we have access
                         // to the collection to arrange it ourselves.
                         if let Some(view) = self.views.get(on_id) {
-                            if let Some(index) = view.primary_idxes.get(key_set) {
+                            if let Some(ids) = view.primary_idxes.get(key_set) {
                                 dataflow.add_index_import(
-                                    *index,
+                                    *ids.first().unwrap(),
                                     index_desc,
                                     typ.clone(),
                                     *view_id,
@@ -1363,7 +1363,7 @@ where
                     }
                 }
                 if let Some(view_state) = self.views.get_mut(&idx.on) {
-                    view_state.drop_primary_idx(&idx.keys);
+                    view_state.drop_primary_idx(&idx.keys, id);
                     if view_state.default_idx.is_none() {
                         view_state.queryable = false;
                         self.propagate_queryability(&idx.on);
@@ -1484,8 +1484,8 @@ where
                 results.append(&mut self.find_dependent_indexes(id));
             }
         } else {
-            for id in view_state.primary_idxes.values() {
-                results.push(*id);
+            for ids in view_state.primary_idxes.values() {
+                results.extend(ids.clone());
             }
         }
         results.sort();
@@ -1867,9 +1867,9 @@ pub struct ViewState {
     default_idx: Option<(GlobalId, Vec<ScalarExpr>)>,
     // TODO(andiwang): only allow one primary index?
     /// Currently all indexes are primary indexes
-    primary_idxes: BTreeMap<Vec<ScalarExpr>, GlobalId>,
+    primary_idxes: BTreeMap<Vec<ScalarExpr>, Vec<GlobalId>>,
     // TODO(andiwang): materialize#220 Implement seconary indexes
-    // secondary_idxes: BTreeMap<Vec<ScalarExpr>, GlobalId>,
+    // secondary_idxes: BTreeMap<Vec<ScalarExpr>, Vec<GlobalId>>,
 }
 
 impl ViewState {
@@ -1887,11 +1887,18 @@ impl ViewState {
         if self.default_idx.is_none() {
             self.default_idx = Some((id, primary_idx.to_owned()));
         }
-        self.primary_idxes.insert(primary_idx.to_owned(), id);
+        self.primary_idxes
+            .entry(primary_idx.to_owned())
+            .or_insert_with(Vec::new)
+            .push(id);
     }
 
-    pub fn drop_primary_idx(&mut self, primary_idx: &[ScalarExpr]) {
-        self.primary_idxes.remove(primary_idx);
+    pub fn drop_primary_idx(&mut self, primary_idx: &[ScalarExpr], id: GlobalId) {
+        let entry = self.primary_idxes.get_mut(primary_idx).unwrap();
+        entry.retain(|i| i != &id);
+        if entry.is_empty() {
+            self.primary_idxes.remove(primary_idx);
+        }
         let is_default = if let Some((_, keys)) = &self.default_idx {
             &keys[..] == primary_idx
         } else {
@@ -1902,7 +1909,7 @@ impl ViewState {
                 .primary_idxes
                 .iter()
                 .next()
-                .map(|(keys, id)| (*id, keys.to_owned()));
+                .map(|(keys, ids)| (*ids.first().unwrap(), keys.to_owned()));
         }
     }
 }

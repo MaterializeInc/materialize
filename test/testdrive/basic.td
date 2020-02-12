@@ -305,6 +305,52 @@ b  c
 1  3
 2  1
 
+# Create a suboptimal second index on the same column in data_view
+> CREATE INDEX data_view_idx2 on data_view(a)
+
+> SELECT * from data_view
+a b
+---
+1 1
+2 1
+3 1
+1 2
+
+> SELECT * from test6;
+d
+----
+-1
+3
+
+> SELECT * from test5
+b  c
+------
+1  3
+2  1
+
+#delete the first copy of the same index and ensure everything selects as normal
+> DROP INDEX data_view_idx;
+
+> SELECT * from data_view
+a b
+---
+1 1
+2 1
+3 1
+1 2
+
+> SELECT * from test6;
+d
+----
+-1
+3
+
+> SELECT * from test5
+b  c
+------
+1  3
+2  1
+
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 

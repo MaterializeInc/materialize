@@ -308,8 +308,22 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         manager.set(*export_id, WithDrop::new(local.trace.clone(), tokens));
                     }
                     Some(ArrangementFlavor::Trace(_)) => {
-                        // do nothing. there already exists an system
-                        // index on the same keys
+                        if let Some(existing_id) = dataflow
+                            .index_imports
+                            .iter()
+                            .filter_map(
+                                |(id, (desc, _))| if desc == index_desc { Some(id) } else { None },
+                            )
+                            .next()
+                        {
+                            // if the index being exported is a duplicate of an existing
+                            // one, just copy the existing one
+                            let trace = manager.get(existing_id).unwrap().clone();
+                            manager.set(*export_id, trace);
+                        }
+                        // Do nothing otherwise.
+                        // TODO: materialize#1985 Somehow this code branch is triggered
+                        // when materializing a view on `SELECT <constant>`
                     }
                     None => {
                         panic!("Arrangement alarmingly absent!");
