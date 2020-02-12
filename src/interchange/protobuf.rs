@@ -27,6 +27,17 @@ use crate::error::Result;
 
 pub mod test_util;
 
+fn proto_message_name(message_name: &str) -> String {
+    // Prepend a . (following the serde-protobuf naming scheme to list root paths
+    // for packaged messages) if the message is part of a package and the user hasn't
+    // already specified a root path
+    if message_name.is_empty() || !message_name.contains('.') || message_name.starts_with('.') {
+        message_name.to_string()
+    } else {
+        format!(".{}", message_name)
+    }
+}
+
 fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<ScalarType> {
     Ok(match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
@@ -105,10 +116,11 @@ pub fn decode_descriptors(descriptors: &[u8]) -> Result<Descriptors> {
 }
 
 pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
-    let message = descriptors.message_by_name(message_name).ok_or_else(|| {
+    let proto_name = proto_message_name(message_name);
+    let message = descriptors.message_by_name(&proto_name).ok_or_else(|| {
         format_err!(
             "Message {:?} not found in file descriptor set: {}",
-            message_name,
+            proto_name,
             descriptors
                 .iter_messages()
                 .map(|m| m.name())
@@ -152,7 +164,7 @@ impl Decoder {
         // TODO: verify that name exists
         Decoder {
             descriptors,
-            message_name: message_name.to_string(),
+            message_name: proto_message_name(message_name),
         }
     }
 
