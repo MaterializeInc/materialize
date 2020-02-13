@@ -9,11 +9,11 @@
 
 use avro_rs::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{black_box, Criterion, Throughput};
 
 use interchange::avro::{parse_schema, Decoder};
 
-fn bench_interchange(c: &mut Criterion) {
+pub fn bench_avro(c: &mut Criterion) {
     let schema_str = r#"
 {
   "type": "record",
@@ -297,6 +297,3 @@ fn bench_interchange(c: &mut Criterion) {
     });
     bg.finish();
 }
-
-criterion_group!(benches, bench_interchange);
-criterion_main!(benches);
