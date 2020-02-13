@@ -17,6 +17,8 @@ set -euo pipefail
 
 cargo build --bin materialized --release
 
+version=${BUILDKITE_TAG:-$BUILDKITE_COMMIT}
+
 # Keep archive building in sync with docker.sh.
 # TODO(benesch): extract into shared script.
 mkdir -p scratch/materialized/{bin,etc/materialized}
@@ -26,11 +28,13 @@ tar czf materialized.tar.gz -C scratch materialized
 aws s3 cp \
     --acl=public-read \
     "materialized.tar.gz" \
-    "s3://downloads.mtrlz.dev/materialized-$BUILDKITE_COMMIT-x86_64-apple-darwin.tar.gz"
+    "s3://downloads.mtrlz.dev/materialized-$version-x86_64-apple-darwin.tar.gz"
 
-echo -n > empty
-aws s3 cp \
-    --website-redirect="/materialized-$BUILDKITE_COMMIT-x86_64-apple-darwin.tar.gz" \
-    --acl=public-read \
-    empty \
-    "s3://downloads.mtrlz.dev/materialized-latest-x86_64-apple-darwin.tar.gz"
+if [[ -z ${BUILDKITE_TAG:-} ]]; then
+    echo -n > empty
+    aws s3 cp \
+        --website-redirect="/materialized-$version-x86_64-apple-darwin.tar.gz" \
+        --acl=public-read \
+        empty \
+        "s3://downloads.mtrlz.dev/materialized-latest-x86_64-apple-darwin.tar.gz"
+fi
