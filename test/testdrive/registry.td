@@ -65,14 +65,12 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp
 $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v1
+> CREATE MATERIALIZED SOURCE data_v1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 
-> CREATE MATERIALIZED VIEW data_v1_view as SELECT * from data_v1
-
-> SELECT * FROM data_v1_view
+> SELECT * FROM data_v1
 a
 ---
 1
@@ -83,20 +81,18 @@ $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp
 $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp=4
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v2
+> CREATE MATERIALIZED SOURCE data_v2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 
-> CREATE MATERIALIZED VIEW data_v2_view as SELECT * from data_v2
-
-> SELECT * FROM data_v1_view
+> SELECT * FROM data_v1
 a
 ---
 1
 2
 
-> SELECT * FROM data_v2_view
+> SELECT * FROM data_v2
 a b
 ----
 1 42

@@ -67,19 +67,15 @@ $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
 $ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE names_source
+> CREATE MATERIALIZED SOURCE names
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-names-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${names-schema}'
   ENVELOPE DEBEZIUM
 
-> CREATE SOURCE mods_source
+> CREATE MATERIALIZED SOURCE mods
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mods-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${mods-schema}'
   ENVELOPE DEBEZIUM
-
-> CREATE MATERIALIZED VIEW names AS SELECT * FROM names_source
-
-> CREATE MATERIALIZED VIEW mods AS SELECT * FROM mods_source
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names JOIN mods USING (num);
@@ -226,12 +222,16 @@ num name num mod
 <null> <null> 1 odd
 <null> <null> 2 even
 
+> CREATE SOURCE mods_unmat
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mods-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${mods-schema}'
+  ENVELOPE DEBEZIUM
+
 > CREATE VIEW test15 AS
-  SELECT * FROM names FULL OUTER JOIN mods_source ON 1 = 0;
+  SELECT * FROM names FULL OUTER JOIN mods_unmat ON 1 = 0;
 
 ! SELECT * FROM test15;
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
 
-# this will fail with an error message
-! SELECT * FROM names FULL OUTER JOIN mods_source ON 1 = 0;
+! SELECT * FROM names FULL OUTER JOIN mods_unmat ON 1 = 0;
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
