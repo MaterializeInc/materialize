@@ -1349,6 +1349,12 @@ macro_rules! make_visitor {
                         visitor.visit_option(option);
                     }
                 }
+                Connector::Kinesis { arn, with_options } => {
+                    visitor.visit_literal_string(arn);
+                    for option in with_options {
+                        visitor.visit_option(option);
+                    }
+                }
             }
         }
 

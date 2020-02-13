@@ -1609,7 +1609,7 @@ impl Parser {
     }
 
     pub fn parse_connector(&mut self) -> Result<Connector, ParserError> {
-        match self.expect_one_of_keywords(&["FILE", "KAFKA"])? {
+        match self.expect_one_of_keywords(&["FILE", "KAFKA", "KINESIS"])? {
             "FILE" => {
                 let path = self.parse_literal_string()?;
                 let with_options = self.parse_with_options()?;
@@ -1626,6 +1626,12 @@ impl Parser {
                     topic,
                     with_options,
                 })
+            }
+            "KINESIS" => {
+                self.expect_keyword("ARN")?;
+                let arn = self.parse_literal_string()?;
+                let with_options = self.parse_with_options()?;
+                Ok(Connector::Kinesis { arn, with_options })
             }
             _ => unreachable!(),
         }

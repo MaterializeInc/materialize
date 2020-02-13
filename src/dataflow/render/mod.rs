@@ -153,6 +153,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             read_from_kafka,
                         )
                     }
+                    ExternalSourceConnector::Kinesis(_c) => unreachable!(),
                     ExternalSourceConnector::File(c) => {
                         let read_style = if worker_index != 0 {
                             FileReadStyle::None

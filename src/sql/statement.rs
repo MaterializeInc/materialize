@@ -24,8 +24,8 @@ use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, Consistency, CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, ProtobufEncoding,
-    RowSetFinishing, SinkConnector, SourceConnector,
+    FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, KinesisSourceConnector,
+    PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnector, SourceConnector,
 };
 use expr::GlobalId;
 use interchange::{avro, protobuf};
@@ -600,6 +600,15 @@ fn handle_show_create_source(
             ExternalSourceConnector::Kafka(KafkaSourceConnector { url, topic, .. }) => {
                 format!("kafka://{}/{}", url, topic)
             }
+            ExternalSourceConnector::Kinesis(KinesisSourceConnector {
+                arn,
+                access_key,
+                secret_access_key,
+                region,
+            }) => format!(
+                "kinesis -> arn: '{}' access_key: {}, secret_access_key: {}, region: {}",
+                arn, access_key, secret_access_key, region
+            ),
             ExternalSourceConnector::File(c) => {
                 // TODO https://github.com/MaterializeInc/materialize/issues/1093
                 format!("file://{}", c.path.to_string_lossy())
@@ -642,6 +651,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             }
             (broker, topic)
         }
+        Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
     };
 
     let schema_registry_url = match format {
@@ -937,6 +947,72 @@ fn handle_create_dataflow_pure(
                         consistency,
                         ssl_certificate_file,
                     )?
+                }
+                Connector::Kinesis { arn, with_options } => {
+                    let mut with_options: HashMap<_, _> = with_options
+                        .iter()
+                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
+                        .collect();
+                    // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
+                    // https://github.com/materializeinc/materialize/issues/1991
+                    let access_key = match with_options.remove("access_key") {
+                        Some(Value::SingleQuotedString(access_key)) => access_key,
+                        _ => bail!("Kinesis sources require an `access_key` option"),
+                    };
+                    let secret_access_key = match with_options.remove("secret_access_key") {
+                        Some(Value::SingleQuotedString(secret_access_key)) => secret_access_key,
+                        _ => bail!("Kinesis sources require a `secret_access_key` option"),
+                    };
+                    let region = match with_options.remove("region") {
+                        Some(Value::SingleQuotedString(region)) => region,
+                        _ => bail!("Kinesis sources require a `region` option"),
+                    };
+                    if !with_options.is_empty() {
+                        bail!(
+                            "Unexpected WITH options: {}",
+                            join(with_options.keys(), ",")
+                        )
+                    }
+
+                    match envelope {
+                        dataflow_types::Envelope::None => {}
+                        dataflow_types::Envelope::Debezium => {
+                            bail!("Debezium-envelope Kinesis sources are not supported")
+                        }
+                    }
+
+                    let (encoding, desc) = match format {
+                        Format::Bytes => (
+                            DataEncoding::Bytes,
+                            RelationDesc::new(
+                                RelationType::new(vec![ColumnType::new(ScalarType::Bytes)]),
+                                vec![Some(String::from("record"))],
+                            ),
+                        ),
+                        _ => bail!("Kinesis sources only support data as bytes"),
+                    };
+
+                    let source = Source {
+                        create_sql: "<filled in later>".into(),
+                        connector: SourceConnector {
+                            connector: ExternalSourceConnector::Kinesis(KinesisSourceConnector {
+                                arn: arn.clone(),
+                                access_key,
+                                secret_access_key,
+                                region,
+                            }),
+                            encoding,
+                            envelope: Envelope::None,
+                            consistency: Consistency::RealTime,
+                        },
+                        desc,
+                    };
+                    dbg!(&source);
+
+                    // todo@jldlaughlin: Actually return the source when implemented!
+                    // We can bail gracefully in the planning stage (here),
+                    // but can't once we actually try to build a dataflow.
+                    bail!("Kinesis sources are not yet implemented")
                 }
                 Connector::File { path, with_options } => {
                     let mut with_options: HashMap<_, _> = with_options
