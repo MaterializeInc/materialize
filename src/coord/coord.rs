@@ -42,10 +42,7 @@ use dataflow_types::{
     Update,
 };
 use expr::transform::Optimizer;
-use expr::{
-    EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr,
-    SourceInstanceId,
-};
+use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr, SourceInstanceId};
 use futures::Stream;
 use ore::thread::JoinHandleExt;
 use ore::{collections::CollectionExt, future::MaybeFuture};
@@ -146,15 +143,14 @@ where
                     let index_name = format!("{}_primary_idx", log_src.name());
                     catalog.insert_item(
                         log_src.id(),
-                        view_name.clone(),
-                        CatalogItem::View(catalog::View {
-                            create_sql: "<system log>".to_string(),
-                            // Dummy placeholder
-                            expr: OptimizedRelationExpr::declare_optimized(RelationExpr::constant(
-                                vec![vec![]],
-                                log_src.schema().typ().clone(),
-                            )),
-                            eval_env: EvalEnv::default(),
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: "mz_catalog".into(),
+                            item: log_src.name().into(),
+                        },
+                        CatalogItem::Source(catalog::Source {
+                            create_sql: "TODO".to_string(),
+                            connector: dataflow_types::SourceConnector::Local,
                             desc: log_src.schema(),
                         }),
                     );
@@ -213,7 +209,7 @@ where
                                 item: log_view.name.into(),
                             };
                             let index_name = format!("{}_primary_idx", log_view.name);
-                            let index = auto_generate_primary_idx(
+                            let index = auto_generate_view_idx(
                                 index_name.clone(),
                                 view_name.clone(),
                                 &view,
@@ -276,7 +272,9 @@ where
                     //about how it was built. If we start building multiple sinks and/or indexes
                     //using a single dataflow, we have to make sure the rebuild process re-runs
                     //the same multiple-build dataflow.
-                    CatalogItem::Source(_) => (),
+                    CatalogItem::Source(_) => {
+                        coord.views.insert(id, ViewState::new(false, vec![]));
+                    }
                     CatalogItem::View(view) => {
                         coord.insert_view(id, &view);
                     }
@@ -593,34 +591,26 @@ where
                 desc,
                 if_not_exists,
             } => {
-                let view_id = self.catalog.allocate_id()?;
-                let view = catalog::View {
-                    create_sql: "<created by CREATE TABLE>".to_string(),
-                    expr: OptimizedRelationExpr::declare_optimized(
-                        // TODO: Adding a second `vec![]` here avoids some defect where
-                        // uniqueness of the constant expression results in incorrect
-                        // computation when using tables; this happens when we use the
-                        // type information (unique keys) to recommend which columns to
-                        // use for a default arrangement.
-                        RelationExpr::constant(vec![vec![], vec![]], desc.typ().clone()),
-                    ),
-                    eval_env: EvalEnv::default(),
+                let source_id = self.catalog.allocate_id()?;
+                let source = catalog::Source {
+                    create_sql: "TODO".to_string(),
+                    connector: dataflow_types::SourceConnector::Local,
                     desc,
                 };
                 let index_id = self.catalog.allocate_id()?;
                 let mut index_name = name.clone();
                 index_name.item += "_primary_idx";
-                let index = auto_generate_primary_idx(
+                let index = auto_generate_src_idx(
                     index_name.item.clone(),
                     name.clone(),
-                    &view,
-                    view_id,
+                    &source,
+                    source_id,
                 );
                 match self.catalog_transact(vec![
                     catalog::Op::CreateItem {
-                        id: view_id,
+                        id: source_id,
                         name: name.clone(),
-                        item: CatalogItem::View(view.clone()),
+                        item: CatalogItem::Source(source.clone()),
                     },
                     catalog::Op::CreateItem {
                         id: index_id,
@@ -629,7 +619,7 @@ where
                     },
                 ]) {
                     Ok(_) => {
-                        self.insert_view(view_id, &view);
+                        self.views.insert(source_id, ViewState::new(false, vec![]));
                         broadcast(
                             &mut self.broadcast_tx,
                             SequencedCommand::CreateLocalInput {
@@ -639,7 +629,7 @@ where
                                     on_id: index.on,
                                     keys: index.keys.clone(),
                                 },
-                                on_type: view.desc.typ().clone(),
+                                on_type: source.desc.typ().clone(),
                                 advance_to: self.local_input_time,
                             },
                         );
@@ -655,6 +645,7 @@ where
                 name,
                 source,
                 if_not_exists,
+                materialized,
             } => {
                 let source = catalog::Source {
                     create_sql: source.create_sql,
@@ -662,13 +653,45 @@ where
                     desc: source.desc,
                 };
                 let source_id = self.catalog.allocate_id()?;
-                let op = catalog::Op::CreateItem {
+                let mut ops = vec![catalog::Op::CreateItem {
                     id: source_id,
-                    name,
-                    item: CatalogItem::Source(source),
+                    name: name.clone(),
+                    item: CatalogItem::Source(source.clone()),
+                }];
+                let (index_id, index) = if materialized {
+                    let mut index_name = name.clone();
+                    index_name.item += "_primary_idx";
+                    let index = auto_generate_src_idx(
+                        index_name.item.clone(),
+                        name.clone(),
+                        &source,
+                        source_id,
+                    );
+                    let index_id = self.catalog.allocate_id()?;
+                    ops.push(catalog::Op::CreateItem {
+                        id: index_id,
+                        name: index_name,
+                        item: CatalogItem::Index(index.clone()),
+                    });
+                    (Some(index_id), Some(index))
+                } else {
+                    (None, None)
                 };
-                match self.catalog_transact(vec![op]) {
-                    Ok(()) => Ok(ExecuteResponse::CreatedSource { existed: false }),
+                match self.catalog_transact(ops) {
+                    Ok(()) => {
+                        self.views.insert(source_id, ViewState::new(false, vec![]));
+                        if materialized {
+                            let mut dataflow = DataflowDesc::new(name.to_string());
+                            self.import_source_or_view(&source_id, &source_id, &mut dataflow);
+                            self.build_arrangement(
+                                &index_id.unwrap(),
+                                index.unwrap(),
+                                source.desc.typ().clone(),
+                                dataflow,
+                            );
+                        }
+                        Ok(ExecuteResponse::CreatedSource { existed: false })
+                    }
                     Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
                     Err(err) => Err(err),
                 }
@@ -728,7 +751,7 @@ where
                 let (index_id, index) = if materialize {
                     let mut index_name = name.clone();
                     index_name.item += "_primary_idx";
-                    let index = auto_generate_primary_idx(
+                    let index = auto_generate_view_idx(
                         index_name.item.clone(),
                         name.clone(),
                         &view,
@@ -959,8 +982,7 @@ where
                             eval_env: eval_env.clone(),
                         };
                         self.build_view_collection(&view_id, &view, &mut dataflow);
-                        let index =
-                            auto_generate_primary_idx(index_name, view_name, &view, view_id);
+                        let index = auto_generate_view_idx(index_name, view_name, &view, view_id);
                         self.build_arrangement(&index_id, index.clone(), typ, dataflow);
                         Some(index)
                     } else {
@@ -1095,7 +1117,8 @@ where
             Plan::ShowViews {
                 ids,
                 full,
-                materialized: show_materialized,
+                show_queryable,
+                limit_materialized,
             } => {
                 let view_information = ids
                     .into_iter()
@@ -1105,7 +1128,7 @@ where
                             GlobalId::User(_) => "USER",
                         };
                         if let Some(view_state) = self.views.get(&id) {
-                            if !show_materialized || view_state.default_idx.is_some() {
+                            if !limit_materialized || view_state.default_idx.is_some() {
                                 Some((
                                     name,
                                     class,
@@ -1124,20 +1147,17 @@ where
                 let mut rows = view_information
                     .into_iter()
                     .map(|(name, class, queryable, materialized)| {
+                        let mut datums = vec![Datum::from(name.as_str())];
                         if full {
-                            if show_materialized {
-                                Row::pack(&[Datum::from(name.as_str()), Datum::from(class)])
-                            } else {
-                                Row::pack(&[
-                                    Datum::from(name.as_str()),
-                                    Datum::from(class),
-                                    Datum::from(queryable),
-                                    Datum::from(materialized),
-                                ])
+                            datums.push(Datum::from(class));
+                            if show_queryable {
+                                datums.push(Datum::from(queryable));
                             }
-                        } else {
-                            Row::pack(&[Datum::from(name.as_str())])
+                            if !limit_materialized {
+                                datums.push(Datum::from(materialized));
+                            }
                         }
+                        Row::pack(&datums)
                     })
                     .collect::<Vec<_>>();
                 rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
@@ -1162,7 +1182,10 @@ where
                 catalog::OpStatus::DroppedItem(entry) => {
                     self.report_catalog_update(entry.id(), entry.name().to_string(), false);
                     match entry.item() {
-                        CatalogItem::Source(_) => sources_to_drop.push(entry.id()),
+                        CatalogItem::Source(_) => {
+                            sources_to_drop.push(entry.id());
+                            views_to_drop.push(entry.id());
+                        }
                         CatalogItem::View(_) => views_to_drop.push(entry.id()),
                         CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
                         CatalogItem::Index(idx) => indexes_to_drop.push((entry.id(), idx)),
@@ -1207,32 +1230,45 @@ where
         {
             return;
         }
-        match self.catalog.get_by_id(id).item() {
-            CatalogItem::Source(source) => {
-                let instance_id = SourceInstanceId {
-                    sid: *id,
-                    vid: *orig_id,
-                };
-                dataflow.add_source_import(
-                    instance_id,
-                    source.connector.clone(),
-                    source.desc.clone(),
-                );
-            }
-
-            CatalogItem::View(view) => {
-                if let Some((index_id, keys)) = &self.views[id].default_idx {
-                    let index_desc = IndexDesc {
-                        on_id: *id,
-                        keys: keys.to_vec(),
-                    };
+        if let Some((index_id, keys)) = &self.views[id].default_idx {
+            let index_desc = IndexDesc {
+                on_id: *id,
+                keys: keys.to_vec(),
+            };
+            match self.catalog.get_by_id(id).item() {
+                CatalogItem::View(view) => {
                     dataflow.add_index_import(*index_id, index_desc, view.desc.typ().clone(), *id);
-                } else {
+                }
+                CatalogItem::Source(source) => {
+                    dataflow.add_index_import(
+                        *index_id,
+                        index_desc,
+                        source.desc.typ().clone(),
+                        *id,
+                    );
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            match self.catalog.get_by_id(id).item() {
+                CatalogItem::Source(source) => {
+                    // A source is being imported as part of a new view. We have to notify the timestamping
+                    // thread that a source instance is being created for this view
+                    let instance_id = SourceInstanceId {
+                        sid: *id,
+                        vid: *orig_id,
+                    };
+                    dataflow.add_source_import(
+                        instance_id,
+                        source.connector.clone(),
+                        source.desc.clone(),
+                    );
+                }
+                CatalogItem::View(view) => {
                     self.build_view_collection(id, &view, dataflow);
                 }
+                _ => unreachable!(),
             }
-
-            _ => unreachable!(),
         }
     }
 
@@ -1536,7 +1572,7 @@ where
                 true
             }
         }) {
-            bail!("Cannot construct query out of existing materialized views");
+            bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
         }
         uses_ids = uses_ids
             .into_iter()
@@ -1609,7 +1645,7 @@ where
     }
 
     /// Updates the upper frontier of a named view.
-    pub fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
+    fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
         if let Some(index_state) = self.indexes.get_mut(name) {
             let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
             if !changes.is_empty() {
@@ -1666,25 +1702,21 @@ where
     /// Initializes managed state and logs the insertion (and removal of any existing view).
     fn insert_view(&mut self, view_id: GlobalId, view: &catalog::View) {
         self.views.remove(&view_id);
-        let mut uses_views = Vec::new();
-        view.expr.as_ref().global_uses(&mut uses_views);
-        uses_views.sort();
-        uses_views.dedup();
-        let (queryable, uses_views): (Vec<_>, Vec<_>) = uses_views
-            .into_iter()
-            .filter_map(|id| {
-                if let Some(view_state) = self.views.get(&id) {
-                    Some((view_state.queryable, id))
-                } else {
-                    None
-                }
-            })
-            .unzip();
+        let mut uses = Vec::new();
+        view.expr.as_ref().global_uses(&mut uses);
+        uses.sort();
+        uses.dedup();
         self.views.insert(
             view_id,
             ViewState::new(
-                !queryable.is_empty() && queryable.iter().all(|q| *q),
-                uses_views,
+                uses.iter().all(|id| {
+                    if let Some(view_state) = self.views.get(&id) {
+                        view_state.queryable
+                    } else {
+                        false
+                    }
+                }),
+                uses,
             ),
         );
     }
@@ -1914,21 +1946,51 @@ impl ViewState {
     }
 }
 
-pub fn auto_generate_primary_idx(
+pub fn auto_generate_src_idx(
+    index_name: String,
+    source_name: FullName,
+    source: &catalog::Source,
+    source_id: GlobalId,
+) -> catalog::Index {
+    auto_generate_primary_idx(
+        index_name,
+        &source.desc.typ().keys,
+        source_name,
+        source_id,
+        &source.desc,
+    )
+}
+
+pub fn auto_generate_view_idx(
     index_name: String,
     view_name: FullName,
     view: &catalog::View,
     view_id: GlobalId,
 ) -> catalog::Index {
-    let keys = view.expr.as_ref().typ().keys;
+    auto_generate_primary_idx(
+        index_name,
+        &view.expr.as_ref().typ().keys,
+        view_name,
+        view_id,
+        &view.desc,
+    )
+}
+
+pub fn auto_generate_primary_idx(
+    index_name: String,
+    keys: &[Vec<usize>],
+    on_name: FullName,
+    on_id: GlobalId,
+    on_desc: &RelationDesc,
+) -> catalog::Index {
     let keys = if let Some(keys) = keys.first() {
         keys.clone()
     } else {
-        (0..view.desc.typ().column_types.len()).collect()
+        (0..on_desc.typ().column_types.len()).collect()
     };
     catalog::Index {
-        create_sql: index_sql(index_name, view_name, &view.desc, &keys),
-        on: view_id,
+        create_sql: index_sql(index_name, on_name, &on_desc, &keys),
+        on: on_id,
         keys: keys.into_iter().map(ScalarExpr::Column).collect(),
         eval_env: EvalEnv::default(),
     }

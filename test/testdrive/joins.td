@@ -225,3 +225,13 @@ num name num mod
 <null> <null> 0 even
 <null> <null> 1 odd
 <null> <null> 2 even
+
+> CREATE VIEW test15 AS
+  SELECT * FROM names FULL OUTER JOIN mods_source ON 1 = 0;
+
+! SELECT * FROM test15;
+Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
+
+# this will fail with an error message
+! SELECT * FROM names FULL OUTER JOIN mods_source ON 1 = 0;
+Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources

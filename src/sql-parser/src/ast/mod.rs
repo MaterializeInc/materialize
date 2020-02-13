@@ -754,6 +754,7 @@ pub enum Statement {
         format: Format,
         envelope: Envelope,
         if_not_exists: bool,
+        materialized: bool,
     },
     /// `CREATE SINK`
     CreateSink {
@@ -994,8 +995,13 @@ impl fmt::Display for Statement {
                 format,
                 envelope,
                 if_not_exists,
+                materialized,
             } => {
-                write!(f, "CREATE SOURCE ")?;
+                write!(f, "CREATE ")?;
+                if *materialized {
+                    write!(f, "MATERIALIZED ")?;
+                }
+                write!(f, "SOURCE ")?;
                 if *if_not_exists {
                     write!(f, "IF NOT EXISTS ")?;
                 }

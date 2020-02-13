@@ -51,6 +51,7 @@ pub enum Plan {
         name: FullName,
         source: Source,
         if_not_exists: bool,
+        materialized: bool,
     },
     CreateSink {
         name: FullName,
@@ -124,7 +125,8 @@ pub enum Plan {
     ShowViews {
         ids: Vec<(String, GlobalId)>,
         full: bool,
-        materialized: bool,
+        show_queryable: bool,
+        limit_materialized: bool,
     },
 }
 

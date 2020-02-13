@@ -51,13 +51,18 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 
 > CREATE INDEX i ON v(a)
 
-! CREATE INDEX no_index_on_source ON s("X")
-s is not a view
+> CREATE INDEX j on s("X");
 
 # Test that creating objects of the same name does not work
 
 ! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c
 catalog item 'i' already exists
+
+! CREATE INDEX i ON s("Y")
+catalog item 'i' already exists
+
+! CREATE INDEX j on v2(x)
+catalog item 'j' already exists
 
 ! CREATE INDEX v ON v2(x)
 catalog item 'v' already exists
@@ -145,6 +150,8 @@ s is not of type VIEW
 s is not of type VIEW
 
 # Delete objects
+
+> DROP INDEX j
 
 > DROP INDEX i
 
