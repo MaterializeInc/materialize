@@ -66,6 +66,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)requirements.*\.txt$' \
     -e '\.(md|json|asc|png|jpe?g|svg|eot|ttf|woff2?)$' \
     -e '^www/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
+    -e '^www/static/_redirects$' \
     -e '^misc/docker/ci-builder/ssh_known_hosts$' \
     -e '\.(protospec|pb)$' \
     -e '\.in$' \

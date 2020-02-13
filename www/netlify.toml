@@ -1,6 +1,0 @@
-[[redirects]]
-from = "/*"
-to = "https://materializeinc.wpengine.com/:splat"
-status = 200
-force = false
-headers = { Host = "materialize.io" }
