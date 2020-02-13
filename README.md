@@ -15,29 +15,29 @@ We support a large fraction of  PostgreSQL, and are actively working on supporti
 
 Materialize reads Avro, Protobuf, JSON, and newline-delimited text. Need something else? [Just ask](https://github.com/MaterializeInc/materialize/issues/new/choose).
 
-Materialize can read data from Kafka topics or just tail local files.
+Materialize can read data from Kafka topics or tail local files.
 
 **Coming soon**:
 
--   Support for AWS Kinesis streams, Azure Event Hub
--   Reading ORC and Parquet files on object storage
+-   Support for AWS Kinesis streams and Azure Event Hub
+-   Reading ORC and Parquet files on object storage (i.e. join your streams against your data lake in real-time)
 -   Getting data in from arbitrary HTTP endpoints
 
 ## Transform, manipulate, and read your data
 
-Once you've got the data in, define views and perform reads via the PostgreSQL protocol. Use your favorite PostgreSQL CLI, including the `psql` you probably already have on your system!
+Once you've got the data in, define views and perform reads via the PostgreSQL protocol. Use your favorite PostgreSQL CLI, including the `psql` you probably already have on your system.
 
 Materialize supports a comprehensive variery of SQL features, all using the PostgreSQL dialect and protocol:
 
--   Joins, Joins, Joins! Materialize supports multi-column join conditions, multi-way joins over, self-joins, cross-joins, inner joins, outer joins, etc.
--   Delta-join execution avoids intermediate state blowup - tested on joins of up to 64 relations.
+-   Joins, Joins, Joins! Materialize supports multi-column join conditions, multi-way joins, self-joins, cross-joins, inner joins, outer joins, etc.
+-   Delta-joins avoid intermediate state blowup compared to systems that can only plan nested binary joins - tested on joins of up to 64 relations.
 -   Support for subqueries. Materialize's SQL optimizer performs subquery decorrelation out-of-the-box, avoiding the need to manually rewrite subqueries into joins.
 -   Materialize supports streams that contain CDC data (currently supporting the [Debezium](https://debezium.io/blog/2017/09/25/streaming-to-another-database/) format). Materialize can incrementally maintain views in the presence of arbitrary inserts, updates, and deletes. No asterisks.
 -   All the aggregations. `GROUP BY` , `MIN`, `MAX`, `COUNT`, `SUM`, `STDDEV`, `HAVING`, etc.
 -   `ORDER BY`
 -   `LIMIT`
 -   `DISTINCT`
--   JSON support in the PostgreSQL dialect including operators and functions like `->`, `->>`, `@>`, `?`, `jsonb_array_element`, `jsonb_each`! Materialize automatically plans lateral joins for efficient `jsonb_each` support.
+-   JSON support in the PostgreSQL dialect including operators and functions like `->`, `->>`, `@>`, `?`, `jsonb_array_element`, `jsonb_each`. Materialize automatically plans lateral joins for efficient `jsonb_each` support.
 -   Nest views on views on views!
 -   Multiple views that have overlapping subplans can share underlying indices for space and compute efficiency, so just declaratively define _what you want_, and we'll worry about how to efficiently maintain them.
 
@@ -59,7 +59,7 @@ CREATE VIEW revenue (supplier_no, total_revenue) AS
     GROUP BY
         l_suppkey;
 
--- Materialized views are maintained automatically.
+-- Materialized views are maintained automatically, and can depend on non-materialized views.
 CREATE MATERIALIZED VIEW tpch_q15 AS
   SELECT
     s_suppkey,
@@ -102,9 +102,9 @@ Check out [our documentation](https://materialize.io/docs/).
 
 ## License
 
-Materialize is source-available and licensed under the BSL, converting to the open-source Apache 2.0 license after 4 years. Materialize is free forever on a single node.
+Materialize is source-available and [licensed](LICENSE) under the BSL 1.1, converting to the open-source Apache 2.0 license after 4 years. As stated in the BSL, Materialize is free forever on a single node.
 
-Materialize is available as [a paid cloud service](https://materializeinc.wpengine.com/download/) with high availability.
+Materialize is also available as [a paid cloud service](https://materializeinc.wpengine.com/download/) with additional features such as high availability via multi-active replication.
 
 ## How does it work?
 
@@ -114,8 +114,7 @@ Materialize is built on top of [differential dataflow](https://github.com/Timely
 
 Materialize is written entirely in Rust.
 
-Materialize's developers can find docs at [doc/developer](doc/developer),
-and Rust API documentation is hosted at <https://mtrlz.dev/api/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
+Developers can find docs at [doc/developer](doc/developer), and Rust API documentation is hosted at <https://mtrlz.dev/api/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
 
 Contributions are welcome. Prospective code contributors might find the [good first issue tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3A%22D-good+first+issue%22) useful. We value all contributions equally, but bug reports are more equal.
 
