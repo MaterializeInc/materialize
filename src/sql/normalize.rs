@@ -162,9 +162,11 @@ pub fn create_statement(
             format: _,
             envelope: _,
             if_not_exists,
+            materialized,
         } => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
+            *materialized = false;
         }
 
         Statement::CreateSink {

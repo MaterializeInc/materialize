@@ -380,11 +380,14 @@ pub enum Envelope {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SourceConnector {
-    pub connector: ExternalSourceConnector,
-    pub encoding: DataEncoding,
-    pub envelope: Envelope,
-    pub consistency: Consistency,
+pub enum SourceConnector {
+    External {
+        connector: ExternalSourceConnector,
+        encoding: DataEncoding,
+        envelope: Envelope,
+        consistency: Consistency,
+    },
+    Local,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

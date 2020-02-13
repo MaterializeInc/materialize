@@ -1428,13 +1428,27 @@ impl Parser {
             self.parse_create_schema()
         } else if self.parse_keyword("TABLE") {
             self.parse_create_table()
-        } else if self.parse_keyword("MATERIALIZED")
-            || self.parse_keyword("OR")
-            || self.parse_keyword("VIEW")
-        {
+        } else if self.parse_keyword("OR") || self.parse_keyword("VIEW") {
             self.prev_token();
             self.parse_create_view()
+        } else if self.parse_keyword("MATERIALIZED") {
+            if self.parse_keyword("VIEW") {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_view()
+            } else if self.parse_keyword("SOURCE") {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_source()
+            } else {
+                self.expected(
+                    self.peek_range(),
+                    "VIEW or SOURCE after CREATE MATERIALIZED",
+                    self.peek_token(),
+                )
+            }
         } else if self.parse_keyword("SOURCE") {
+            self.prev_token();
             self.parse_create_source()
         } else if self.parse_keyword("SINK") {
             self.parse_create_sink()
@@ -1571,6 +1585,8 @@ impl Parser {
     }
 
     pub fn parse_create_source(&mut self) -> Result<Statement, ParserError> {
+        let materialized = self.parse_keyword("MATERIALIZED");
+        self.expect_keyword("SOURCE")?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
@@ -1588,6 +1604,7 @@ impl Parser {
             format,
             envelope,
             if_not_exists,
+            materialized,
         })
     }
 
@@ -2553,7 +2570,7 @@ impl Parser {
 
         let materialized = self.parse_keyword("MATERIALIZED");
         if materialized {
-            self.expect_one_of_keywords(&["VIEWS"])?;
+            self.expect_one_of_keywords(&["SOURCES", "VIEWS"])?;
             self.prev_token();
         }
 

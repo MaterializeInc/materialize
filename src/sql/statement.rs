@@ -112,7 +112,7 @@ pub fn describe_statement(
                     ColumnType::new(ScalarType::Int64),
                 ]),
                 vec![
-                    "View",
+                    "Source_or_view",
                     "Key_name",
                     "Column_name",
                     "Expression",
@@ -143,10 +143,15 @@ pub fn describe_statement(
                     let mut relation_desc = RelationDesc::empty()
                         .add_column(col_name, ScalarType::String)
                         .add_column("TYPE", ScalarType::String);
-                    if ObjectType::View == object_type && !materialized {
-                        relation_desc = relation_desc
-                            .add_column("QUERYABLE", ScalarType::Bool)
-                            .add_column("MATERIALIZED", ScalarType::Bool);
+                    if !materialized {
+                        if ObjectType::View == object_type {
+                            relation_desc = relation_desc
+                                .add_column("QUERYABLE", ScalarType::Bool)
+                                .add_column("MATERIALIZED", ScalarType::Bool);
+                        } else if ObjectType::Source == object_type {
+                            relation_desc =
+                                relation_desc.add_column("MATERIALIZED", ScalarType::Bool);
+                        }
                     }
                     relation_desc
                 } else {
@@ -305,10 +310,14 @@ fn handle_show_variable(_: &StatementContext, variable: Ident) -> Result<Plan, f
 fn handle_tail(scx: &StatementContext, from: ObjectName) -> Result<Plan, failure::Error> {
     let from = scx.resolve_name(from)?;
     let entry = scx.catalog.get(&from)?;
-    if let CatalogItem::View(_) = entry.item() {
-        Ok(Plan::Tail(entry.clone()))
-    } else {
-        bail!("'{}' is not a view", from);
+    match entry.item() {
+        CatalogItem::View(_) => Ok(Plan::Tail(entry.clone())),
+        CatalogItem::Source(_) => Ok(Plan::Tail(entry.clone())),
+        _ => bail!(
+            "'{}' cannot be tailed because it is a {}",
+            from,
+            entry.item().type_string()
+        ),
     }
 }
 
@@ -447,13 +456,14 @@ fn handle_show_objects(
                     && like_regex.is_match(&entry.name().to_string())
             });
 
-        if object_type == ObjectType::View {
+        if object_type == ObjectType::View || object_type == ObjectType::Source {
             Ok(Plan::ShowViews {
                 ids: filtered_items
                     .map(|(name, entry)| (name.clone(), entry.id()))
                     .collect::<Vec<_>>(),
                 full,
-                materialized,
+                show_queryable: object_type == ObjectType::View,
+                limit_materialized: materialized,
             })
         } else {
             let mut rows = filtered_items
@@ -479,8 +489,14 @@ fn handle_show_indexes(
     }
     let from_name = scx.resolve_name(from_name)?;
     let from_entry = scx.catalog.get(&from_name)?;
-    if !object_type_matches(ObjectType::View, from_entry.item()) {
-        bail!("{} is not a view", from_name);
+    if !object_type_matches(ObjectType::View, from_entry.item())
+        && !object_type_matches(ObjectType::Source, from_entry.item())
+    {
+        bail!(
+            "cannot show indexes on {} because it is a {}",
+            from_name,
+            from_entry.item().type_string()
+        );
     }
     let rows = scx
         .catalog
@@ -596,23 +612,28 @@ fn handle_show_create_source(
     let source_url = if let CatalogItem::Source(catalog::Source { connector, .. }) =
         scx.catalog.get(&name)?.item()
     {
-        match &connector.connector {
-            ExternalSourceConnector::Kafka(KafkaSourceConnector { url, topic, .. }) => {
-                format!("kafka://{}/{}", url, topic)
+        match connector {
+            SourceConnector::External { connector, .. } => {
+                match connector {
+                    ExternalSourceConnector::Kafka(KafkaSourceConnector { url, topic, .. }) => {
+                        format!("kafka://{}/{}", url, topic)
+                    }
+                    ExternalSourceConnector::Kinesis(KinesisSourceConnector {
+                        arn,
+                        access_key,
+                        secret_access_key,
+                        region,
+                    }) => format!(
+                        "kinesis -> arn: '{}' access_key: {}, secret_access_key: {}, region: {}",
+                        arn, access_key, secret_access_key, region
+                    ),
+                    ExternalSourceConnector::File(c) => {
+                        // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                        format!("file://{}", c.path.to_string_lossy())
+                    }
+                }
             }
-            ExternalSourceConnector::Kinesis(KinesisSourceConnector {
-                arn,
-                access_key,
-                secret_access_key,
-                region,
-            }) => format!(
-                "kinesis -> arn: '{}' access_key: {}, secret_access_key: {}, region: {}",
-                arn, access_key, secret_access_key, region
-            ),
-            ExternalSourceConnector::File(c) => {
-                // TODO https://github.com/MaterializeInc/materialize/issues/1093
-                format!("file://{}", c.path.to_string_lossy())
-            }
+            SourceConnector::Local => "<internally generated source>".to_string(),
         }
     } else {
         bail!("{} is not a source", name);
@@ -709,8 +730,14 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
     let on_name = scx.resolve_name(on_name)?;
     let catalog_entry = scx.catalog.get(&on_name)?;
     let keys = query::plan_index_exprs(scx, catalog_entry.desc()?, &key_parts)?;
-    if !object_type_matches(ObjectType::View, catalog_entry.item()) {
-        bail!("{} is not a view", on_name);
+    if !object_type_matches(ObjectType::View, catalog_entry.item())
+        && !object_type_matches(ObjectType::Source, catalog_entry.item())
+    {
+        bail!(
+            "index cannot be created on {} because it is a {}",
+            on_name,
+            catalog_entry.item().type_string()
+        );
     }
     Ok(Plan::CreateIndex {
         name: FullName {
@@ -904,6 +931,7 @@ fn handle_create_dataflow_pure(
             format,
             envelope,
             if_not_exists,
+            materialized,
         } => {
             let envelope = match envelope {
                 sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
@@ -994,7 +1022,7 @@ fn handle_create_dataflow_pure(
 
                     let source = Source {
                         create_sql: "<filled in later>".into(),
-                        connector: SourceConnector {
+                        connector: SourceConnector::External {
                             connector: ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                                 arn: arn.clone(),
                                 access_key,
@@ -1124,7 +1152,7 @@ fn handle_create_dataflow_pure(
                     }
                     Source {
                         create_sql: "<filled in below>".into(),
-                        connector: SourceConnector {
+                        connector: SourceConnector::External {
                             connector: ExternalSourceConnector::File(FileSourceConnector {
                                 path: path.clone().into(),
                                 tail,
@@ -1147,12 +1175,14 @@ fn handle_create_dataflow_pure(
                 session: &*session,
             };
             let if_not_exists = *if_not_exists;
+            let materialized = *materialized;
             let name = scx.allocate_name(normalize::object_name(name.clone())?);
             source.create_sql = normalize::create_statement(&scx, stmt)?;
             Ok(Plan::CreateSource {
                 name,
                 source,
                 if_not_exists,
+                materialized,
             })
         }
         other => bail!("Unsupported statement: {:?}", other),
@@ -1483,7 +1513,7 @@ fn build_kafka_avro_source(
 
     Ok(Source {
         create_sql: "<filled in later>".into(),
-        connector: SourceConnector {
+        connector: SourceConnector::External {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 url: kafka_url,
                 topic,
@@ -1520,7 +1550,7 @@ fn build_kafka_protobuf_source(
     )?;
     Ok(Source {
         create_sql: "<filled in later>".into(),
-        connector: SourceConnector {
+        connector: SourceConnector::External {
             connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 url,
                 topic,

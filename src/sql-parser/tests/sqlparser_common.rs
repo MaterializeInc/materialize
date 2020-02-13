@@ -2454,6 +2454,58 @@ fn parse_show_objects_with_full() {
 }
 
 #[test]
+fn parse_show_sources() {
+    let sql = "SHOW SOURCES";
+    assert_eq!(
+        verified_stmt(&sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::Source,
+            extended: false,
+            full: false,
+            materialized: false,
+            from: None,
+            filter: None,
+        }
+    );
+    let sql = "SHOW MATERIALIZED SOURCES FROM foo";
+    assert_eq!(
+        verified_stmt(&sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::Source,
+            extended: false,
+            full: false,
+            materialized: true,
+            from: Some(ObjectName(vec!["foo".into()])),
+            filter: None,
+        }
+    );
+    let sql = "SHOW FULL MATERIALIZED SOURCES FROM baz";
+    assert_eq!(
+        verified_stmt(&sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::Source,
+            extended: false,
+            full: true,
+            materialized: true,
+            from: Some(ObjectName(vec!["baz".into()])),
+            filter: None,
+        }
+    );
+    let sql = "SHOW FULL SOURCES";
+    assert_eq!(
+        verified_stmt(&sql),
+        Statement::ShowObjects {
+            object_type: ObjectType::Source,
+            extended: false,
+            full: true,
+            materialized: false,
+            from: None,
+            filter: None,
+        }
+    );
+}
+
+#[test]
 fn parse_show_materialized_views() {
     let sql = "SHOW MATERIALIZED VIEWS FROM foo";
     assert_eq!(
@@ -3453,6 +3505,7 @@ fn parse_create_source_inline_schema() {
             format,
             envelope,
             if_not_exists,
+            materialized,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
@@ -3468,6 +3521,7 @@ fn parse_create_source_inline_schema() {
             );
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
+            assert!(!materialized);
         }
         _ => unreachable!(),
     }
@@ -3485,6 +3539,7 @@ fn parse_create_source_kafka() {
             format,
             envelope,
             if_not_exists,
+            materialized,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
@@ -3507,6 +3562,7 @@ fn parse_create_source_kafka() {
             assert_eq!(Format::Bytes, format);
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
+            assert!(!materialized);
         }
         _ => unreachable!(),
     }
@@ -3514,7 +3570,7 @@ fn parse_create_source_kafka() {
 
 #[test]
 fn parse_create_source_file_schema_protobuf_multiple_args() {
-    let sql = "CREATE SOURCE foo FROM FILE 'bar' \
+    let sql = "CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' \
                FORMAT PROTOBUF MESSAGE 'somemessage' USING SCHEMA FILE 'path'";
     match verified_stmt(sql) {
         Statement::CreateSource {
@@ -3523,6 +3579,7 @@ fn parse_create_source_file_schema_protobuf_multiple_args() {
             format,
             envelope,
             if_not_exists,
+            materialized,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
@@ -3541,6 +3598,7 @@ fn parse_create_source_file_schema_protobuf_multiple_args() {
             );
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
+            assert!(materialized);
         }
         _ => unreachable!(),
     }
@@ -3558,6 +3616,7 @@ fn parse_create_source_regex() {
             format,
             envelope,
             if_not_exists,
+            materialized,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
@@ -3573,6 +3632,7 @@ fn parse_create_source_regex() {
             assert_eq!(Format::Regex("(asdf)|(jkl)".into()), format);
             assert_eq!(Envelope::None, envelope);
             assert!(if_not_exists);
+            assert!(!materialized);
         }
         _ => unreachable!(),
     }
@@ -3590,6 +3650,7 @@ fn parse_create_source_csv() {
             format,
             envelope,
             if_not_exists,
+            materialized,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
@@ -3611,6 +3672,7 @@ fn parse_create_source_csv() {
             );
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
+            assert!(!materialized);
         }
         _ => unreachable!(),
     }
@@ -3628,6 +3690,7 @@ fn parse_create_source_csv_custom_delim() {
             format,
             envelope,
             if_not_exists,
+            materialized,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
@@ -3649,6 +3712,7 @@ fn parse_create_source_csv_custom_delim() {
             );
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
+            assert!(!materialized);
         }
         _ => unreachable!(),
     }
@@ -3659,6 +3723,16 @@ fn parse_missing_format() {
     let sql = "CREATE SOURCE foo FROM FILE 'bar' WITH (answer = 42)";
     let err = parse_sql_statements(sql).unwrap_err();
     assert_eq!("Expected FORMAT, found: EOF", err.message);
+}
+
+#[test]
+fn parse_materialized_invalid() {
+    let sql = "CREATE MATERIALIZED OR VIEW foo as SELECT * from bar";
+    let err = parse_sql_statements(sql).unwrap_err();
+    assert_eq!(
+        "Expected VIEW or SOURCE after CREATE MATERIALIZED, found: OR",
+        err.message
+    );
 }
 
 #[test]
@@ -3673,6 +3747,7 @@ fn parse_create_source_registry() {
             format,
             envelope,
             if_not_exists,
+            materialized,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
@@ -3691,6 +3766,7 @@ fn parse_create_source_registry() {
             );
             assert!(!if_not_exists);
             assert_eq!(Envelope::Debezium, envelope);
+            assert!(!materialized);
         }
         _ => unreachable!(),
     }

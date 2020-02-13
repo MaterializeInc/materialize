@@ -37,14 +37,14 @@ CREATE INDEX bar_idx ON bar (substr(z, 3))
 query TTTTBI colnames
 SHOW INDEX IN bar
 ----
-View                     Key_name                            Column_name  Expression     Null  Seq_in_index
+Source_or_view           Key_name                            Column_name  Expression     Null  Seq_in_index
 materialize.public.bar   materialize.public.bar_primary_idx  z            NULL           false 1
 materialize.public.bar   materialize.public.bar_idx          NULL         substr("z",␠3) true  1
 
 query TTTTBI colnames
 SHOW INDEX FROM foo
 ----
-View                     Key_name                            Column_name  Expression  Null   Seq_in_index
+Source_or_view                     Key_name                            Column_name  Expression  Null   Seq_in_index
 materialize.public.foo   materialize.public.foo_primary_idx  a            NULL        false  1
 materialize.public.foo   materialize.public.foo_primary_idx  b            NULL        true   2
 materialize.public.foo   materialize.public.foo_primary_idx  c            NULL        true   3
@@ -58,7 +58,7 @@ DROP INDEX foo_idx
 query TTTTBI colnames,rowsort
 SHOW INDEX in foo
 ----
-View                    Key_name                            Column_name  Expression  Null   Seq_in_index
+Source_or_view                    Key_name                            Column_name  Expression  Null   Seq_in_index
 materialize.public.foo  materialize.public.foo_primary_idx  a            NULL        false  1
 materialize.public.foo  materialize.public.foo_primary_idx  b            NULL        true   2
 materialize.public.foo  materialize.public.foo_primary_idx  c            NULL        true   3
@@ -71,7 +71,7 @@ DROP INDEX edge_columns
 query TTTTBI colnames,rowsort
 SHOW INDEX in foo
 ----
-View                    Key_name                            Column_name  Expression  Null   Seq_in_index
+Source_or_view                    Key_name                            Column_name  Expression  Null   Seq_in_index
 materialize.public.foo  materialize.public.foo_primary_idx  a            NULL        false  1
 materialize.public.foo  materialize.public.foo_primary_idx  b            NULL        true   2
 materialize.public.foo  materialize.public.foo_primary_idx  c            NULL        true   3
@@ -79,5 +79,5 @@ materialize.public.foo  materialize.public.foo_primary_idx  c            NULL   
 query error catalog item 'nonexistent' does not exist
 SHOW INDEX FROM nonexistent
 
-query error bar_idx is not a view
+query error cannot show indexes on materialize.public.bar_idx because it is a index
 SHOW INDEX FROM bar_idx
