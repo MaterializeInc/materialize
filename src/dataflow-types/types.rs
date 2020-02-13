@@ -390,6 +390,7 @@ pub struct SourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExternalSourceConnector {
     Kafka(KafkaSourceConnector),
+    Kinesis(KinesisSourceConnector),
     File(FileSourceConnector),
 }
 
@@ -404,6 +405,14 @@ pub struct KafkaSourceConnector {
     pub url: Url,
     pub topic: String,
     pub ssl_certificate_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KinesisSourceConnector {
+    pub arn: String,
+    pub access_key: String,
+    pub secret_access_key: String,
+    pub region: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -651,6 +651,10 @@ pub enum Connector {
         topic: String,
         with_options: Vec<SqlOption>,
     },
+    Kinesis {
+        arn: String,
+        with_options: Vec<SqlOption>,
+    },
 }
 
 impl fmt::Display for Connector {
@@ -673,6 +677,17 @@ impl fmt::Display for Connector {
                     "KAFKA BROKER '{}' TOPIC '{}'",
                     value::escape_single_quote_string(broker),
                     value::escape_single_quote_string(topic),
+                )?;
+                if !with_options.is_empty() {
+                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                }
+                Ok(())
+            }
+            Connector::Kinesis { arn, with_options } => {
+                write!(
+                    f,
+                    "KINESIS ARN '{}'",
+                    value::escape_single_quote_string(arn),
                 )?;
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
