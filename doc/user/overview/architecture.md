@@ -18,13 +18,21 @@ the outside world by interfacing with:
 
 ## Diagrams
 
-![Materialize deployment diagram](/images/architecture_deployment.png)
+{{<
+    figure src="/images/architecture_deployment.png"
+    alt="Materialize deployment diagram"
+    width="700"
+>}}
 
 _Above: Materialize deployed with multiple Kafka feeds as sources._
 
 _Below: Zooming in on Materialize's internal structure in the above deployment._
 
-![Materialize internal diagram](/images/architecture_internals.png)
+{{<
+    figure src="/images/architecture_internals.png"
+    alt="Materialize internal diagram"
+    width="700"
+>}}
 
 ## SQL shell: interacting with clients
 

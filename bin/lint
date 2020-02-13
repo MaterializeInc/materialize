@@ -74,7 +74,7 @@ copyright_files=$(grep -vE \
     <<< "$files"
 )
 
-newline_files=$(grep -vE '\.(png|jpe?g|eot|ttf|woff2?|protospec|pb|in)$' <<< "$files")
+newline_files=$(grep -vE '\.(png|jpe?g|eot|ttf|woff2?|protospec|pb|in|svg)$' <<< "$files")
 
 shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.md'))
 

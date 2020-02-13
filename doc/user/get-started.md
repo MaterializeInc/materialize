@@ -48,16 +48,16 @@ overview and doesn't contain any actual instruction.
 1. Using your `mzcli` connection, create a source for each Kafka topic/table
    from your database that you want to use.
 
-   When creating sources, you also need to provide the topic's schema to
-   Materialize by pointing Materialize to your Confluent Schema Registry or
-   providing the Avro schema.
+    When creating sources, you also need to provide the topic's schema to
+    Materialize by pointing Materialize to your Confluent Schema Registry or
+    providing the Avro schema.
 
 1. Ensure that your data is working as you expect by issuing some `SELECT`
    statements through Materialize.
 
 1. Once you have queries that you want to materialize, create views of them.
 
-   At this point, Materialize begins maintaining these views as new data
+    At this point, Materialize begins maintaining these views as new data
    streams in from Kafka.
 
 1. Configure your application to connect to Materialize and read the results of

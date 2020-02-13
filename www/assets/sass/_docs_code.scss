@@ -5,6 +5,9 @@ td {
   code {
     color: #3f6e75;
     font-family: "Roboto Mono", monospace;
+    span {
+      font-family: "Roboto Mono", monospace;
+    }
   }
 }
 
@@ -19,14 +22,22 @@ a:not(.headline-hash) {
   }
 }
 
+code {
+  background-color: white;
+  padding: 0px;
+}
+
 .highlight {
   font-family: "Roboto Mono", monospace;
-  background-color: #f9f7fd;
+  //   background-color: #f9f7fd;
   padding: 1rem;
-  margin-bottom: 1rem;
+  //   margin-bottom: 1rem;
   overflow-y: scroll;
 
   pre {
     background-color: #f9f7fd !important;
+  }
+  span {
+    font-family: "Roboto Mono", monospace;
   }
 }
