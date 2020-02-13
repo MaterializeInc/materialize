@@ -11,8 +11,8 @@ series of Docker images glued together via Docker Compose. As a secondary
 benefit, you can run the demo via Linux, an EC2 VM instance, or a Mac laptop.
 
 For a better sense of what this deployment looks like, see our [architecture
-doc](../../doc/architecture.md)––the only components not accounted for there
-are:
+documentation](https://materialize.io/docs/overview/architecture)––the only
+components not accounted for there are:
 
 - Kafka's infrastructure (e.g. Zookeeper)
 - Our MySQL load generator
@@ -22,7 +22,7 @@ are:
 Our load generator (`simple-loadgen`) populates MySQL with 3 tables: `region`,
 `user`, and `purchase`.
 
-![simple demo schema](schema.png)
+![simple demo schema](../../www/static/images/simple_demo_schema.png)
 
 The database gets seeded with regions, users in those regions, and the purchases
 those users make. After seeding, users continue making purchases (~10/second for
