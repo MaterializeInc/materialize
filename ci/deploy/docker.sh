@@ -19,10 +19,10 @@ docker pull "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID"
 
 version=${BUILDKITE_TAG:-$BUILDKITE_COMMIT}
 
-if [[ -n $BUILDKITE_TAG ]]; then
-    tags=("unstable-$BUILDKITE_COMMIT" latest)
-else
+if [[ $BUILDKITE_TAG ]]; then
     tags=("$BUILDKITE_TAG")
+else
+    tags=("unstable-$BUILDKITE_COMMIT" latest)
 fi
 
 for tag in "${tags[@]}"; do
@@ -47,7 +47,7 @@ aws s3 cp \
     "materialized.tar.gz" \
     "s3://downloads.mtrlz.dev/materialized-$version-x86_64-unknown-linux-gnu.tar.gz"
 
-if [[ -z ${BUILDKITE_TAG:-} ]]; then
+if [[ -z $BUILDKITE_TAG ]]; then
     echo -n > empty
     aws s3 cp \
         --website-redirect="/materialized-$version-x86_64-unknown-linux-gnu.tar.gz" \
