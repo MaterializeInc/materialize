@@ -119,7 +119,7 @@ images=(
     cargo-test
 )
 
-if [[ "$BUILDKITE_BRANCH" = master ]]; then
+if [[ "$BUILDKITE_BRANCH" = master || "$BUILDKITE_BRANCH" = v*.* ]]; then
     images+=(raw-materialized)
 fi
 
