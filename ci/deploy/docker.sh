@@ -17,7 +17,15 @@ set -euo pipefail
 
 docker pull "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID"
 
-for tag in "unstable-$BUILDKITE_COMMIT" latest; do
+version=${BUILDKITE_TAG:-$BUILDKITE_COMMIT}
+
+if [[ -n $BUILDKITE_TAG ]]; then
+    tags=("unstable-$BUILDKITE_COMMIT" latest)
+else
+    tags=("$BUILDKITE_TAG")
+fi
+
+for tag in "${tags[@]}"; do
     echo "Processing docker tag $tag"
     runv docker tag "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID" "materialize/materialized:$tag"
     runv docker push "materialize/materialized:$tag"
@@ -37,18 +45,20 @@ runv docker run --rm --entrypoint bash materialize/materialized -c "
 aws s3 cp \
     --acl=public-read \
     "materialized.tar.gz" \
-    "s3://downloads.mtrlz.dev/materialized-$BUILDKITE_COMMIT-x86_64-unknown-linux-gnu.tar.gz"
+    "s3://downloads.mtrlz.dev/materialized-$version-x86_64-unknown-linux-gnu.tar.gz"
 
-echo -n > empty
-aws s3 cp \
-    --website-redirect="/materialized-$BUILDKITE_COMMIT-x86_64-unknown-linux-gnu.tar.gz" \
-    --acl=public-read \
-    empty \
-    "s3://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz"
+if [[ -z ${BUILDKITE_TAG:-} ]]; then
+    echo -n > empty
+    aws s3 cp \
+        --website-redirect="/materialized-$version-x86_64-unknown-linux-gnu.tar.gz" \
+        --acl=public-read \
+        empty \
+        "s3://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz"
+fi
 
 docker pull "materialize/ci-peeker:$MATERIALIZED_IMAGE_ID"
 
-for tag in "unstable-$BUILDKITE_COMMIT" latest; do
+for tag in "${tags[@]}"; do
     echo "Processing docker tag for peeker: $tag"
     runv docker tag "materialize/ci-peeker:$MATERIALIZED_IMAGE_ID" "materialize/peeker:$tag"
     runv docker push "materialize/peeker:$tag"
@@ -56,7 +66,7 @@ done
 
 docker pull "materialize/ci-billing-demo:$MATERIALIZED_IMAGE_ID"
 
-for tag in "unstable-$BUILDKITE_COMMIT" latest; do
+for tag in "${tags[@]}"; do
     echo "Processing docker tag for billing-demo: $tag"
     runv docker tag "materialize/ci-billing-demo:$MATERIALIZED_IMAGE_ID" "materialize/billing-demo:$tag"
     runv docker push "materialize/billing-demo:$tag"

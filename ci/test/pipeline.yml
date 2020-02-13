@@ -129,7 +129,7 @@ steps:
     depends_on: [lint-fast, lint-slow, cargo-test, testdrive, streaming-demo, short-sqllogictest]
     trigger: deploy
     async: true
-    branches: master
+    branches: "master v*.*"
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
