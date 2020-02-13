@@ -157,10 +157,8 @@ services:
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
   # for Metabase to automatically load Materialize as a connection option.
   metabase:
-    image: metabase/metabase:v0.34.2
+    image: materialize/metabase:v0.0.5
     depends_on: [materialized]
-    volumes:
-      - ./metabase/materialize-driver-0.0.4.jar:/plugins/materialize-driver.jar
     ports:
       - *metabase
 
