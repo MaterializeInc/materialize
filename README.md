@@ -7,7 +7,7 @@ Materialize is the streaming data warehouse.
 
 Materialize lets you ask questions of your streaming data, and get the current answers in real time – offering the power and flexibility of a SQL data warehouse for the world of real-time data. Materialize is powered by [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow).
 
-Materialize computes correct answers. We support a large fraction of  PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
+Materialize computes exact answers at exact points-in-time: no approximate aggregations or eventually consistent streams. We support a large fraction of PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
 
 ## Get data in
 
