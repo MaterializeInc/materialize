@@ -5,9 +5,11 @@
 
 Materialize is the streaming data warehouse.
 
-Materialize lets you ask questions of your streaming data, and get the current answers in real time – offering the power and flexibility of a SQL data warehouse for the world of real-time data. Materialize is powered by [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow).
+Materialize lets you ask questions of your live data, which it answers and then maintains for you as your data continue to change. The moment you need a refreshed answer, you can get it in milliseconds. Materialize is designed to help you interactively explore your streaming data, perform data warehousing analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks.
 
-Materialize computes correct answers. We support a large fraction of  PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
+Materialize focuses on providing correct and consistent answers with minimal latency. It does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL92 queries as *dataflows*, which can react efficiently to changes in your data as they happen. Materialize is powered by [timely dataflow](https://github.com/TimelyDataflow/timely-dataflow), which connects the times at which your inputs change with the times of answers reported back to you.
+
+We support a large fraction of  PostgreSQL, and are actively working on supporting more builtin PostgreSQL functions. Please file an issue if there's something that you expected to work that didn't!
 
 ## Get data in
 
