@@ -2,9 +2,9 @@ CREATE MATERIALIZED VIEW billing_monthly_statement AS
 SELECT
 billing_agg_by_month.month,
 billing_agg_by_month.client_id,
-billing_agg_by_month.sum as execution_time_ms,
+billing_agg_by_month.value as execution_time_ms,
 billing_agg_by_month.cpu_num,
 billing_agg_by_month.memory_gb,
-floor((billing_agg_by_month.sum * ((billing_agg_by_month.cpu_num * billing_prices.price_per_cpu_ms) + (billing_agg_by_month.memory_gb * billing_prices.price_per_gb_ms)))) as monthly_bill
+floor((billing_agg_by_month.value * ((billing_agg_by_month.cpu_num * billing_prices.price_per_cpu_ms) + (billing_agg_by_month.memory_gb * billing_prices.price_per_gb_ms)))) as monthly_bill
 FROM billing_agg_by_month, billing_prices
 WHERE billing_agg_by_month.client_id = billing_prices.client_id AND billing_agg_by_month.meter = 'execution_time_ms';

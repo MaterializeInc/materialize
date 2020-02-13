@@ -1,4 +1,4 @@
 CREATE MATERIALIZED VIEW billing_agg_by_day AS
-SELECT date_trunc as day, client_id, meter, cpu_num, memory_gb, disk_gb, sum(value)
-FROM billing_records
-GROUP BY date_trunc('day', interval_start::timestamp), client_id, meter, cpu_num, memory_gb, disk_gb;
+SELECT date_trunc as day, client_id, meter, cpu_num, memory_gb, disk_gb, sum(value) as value
+FROM billing_agg_by_hour
+GROUP BY date_trunc('day', hour::timestamp), client_id, meter, cpu_num, memory_gb, disk_gb;
