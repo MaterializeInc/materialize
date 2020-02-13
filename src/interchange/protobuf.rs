@@ -21,7 +21,7 @@ use serde_protobuf::value::Value as ProtoValue;
 use serde_value::Value as SerdeValue;
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
 
@@ -242,7 +242,7 @@ fn default_datum_from_field<'a>(
     }
 
     if f.is_repeated() {
-        return Ok(Datum::Null);
+        return Ok(Datum::List(DatumList::empty()));
     }
 
     match f.field_type(descriptors) {
@@ -298,7 +298,7 @@ fn default_datum_from_field_nested<'a>(
     }
 
     if f.is_repeated() {
-        return Ok(Datum::Null);
+        return Ok(Datum::List(DatumList::empty()));
     }
 
     match f.field_type(descriptors) {
@@ -461,7 +461,7 @@ mod tests {
 
     use ordered_float::OrderedFloat;
     use repr::decimal::Significand;
-    use repr::{Datum, RelationDesc, ScalarType};
+    use repr::{Datum, DatumList, RelationDesc, ScalarType};
 
     fn sanity_check_relation(
         relation: &RelationDesc,
@@ -705,6 +705,11 @@ mod tests {
         } else {
             panic!("Expected the first field to be a list of datums!");
         }
+
+        for i in 1..datums.len() {
+            let d = datums[i];
+            assert_eq!(d, Datum::List(DatumList::empty()));
+        }
     }
 
     #[test]
@@ -746,6 +751,8 @@ mod tests {
             panic!("Expected the first field to be a dict of datums!");
         }
 
+        assert_eq!(datums[1], Datum::Null);
+
         let mut test_repeated_record = TestRepeatedRecord::new();
         let mut repeated_strings = RepeatedField::<String>::new();
         repeated_strings.push("start".to_string());
@@ -769,16 +776,25 @@ mod tests {
             let datumdict = d.iter().collect::<Vec<(&str, Datum)>>();
 
             for (name, datum) in datumdict.iter() {
-                if let (&"string_field", Datum::List(d)) = (name, datum) {
-                    let datumlist = d.iter().collect::<Vec<Datum>>();
-                    assert_eq!(
-                        datumlist,
-                        vec![
-                            Datum::String("start"),
-                            Datum::String("two"),
-                            Datum::String("three"),
-                        ]
-                    );
+                match (name, datum) {
+                    (&"string_field", Datum::List(d)) => {
+                        let datumlist = d.iter().collect::<Vec<Datum>>();
+                        assert_eq!(
+                            datumlist,
+                            vec![
+                                Datum::String("start"),
+                                Datum::String("two"),
+                                Datum::String("three"),
+                            ]
+                        );
+                    }
+                    (&"int_field", d) => {
+                        assert_eq!(*d, Datum::List(DatumList::empty()));
+                    }
+                    (&"double_field", d) => {
+                        assert_eq!(*d, Datum::List(DatumList::empty()));
+                    }
+                    _ => panic!("Nested arrays test failed"),
                 }
             }
         } else {
@@ -835,6 +851,11 @@ mod tests {
             }
         } else {
             panic!("Expected the first field to be a list of datums!");
+        }
+
+        for i in 1..datums.len() {
+            let d = datums[i];
+            assert_eq!(d, Datum::List(DatumList::empty()));
         }
     }
 }
