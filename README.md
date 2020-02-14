@@ -27,7 +27,7 @@ Materialize can read data from Kafka topics or tail local files.
 
 Once you've got the data in, define views and perform reads via the PostgreSQL protocol. Use your favorite PostgreSQL CLI, including the `psql` you probably already have on your system.
 
-Materialize supports a comprehensive variery of SQL features, all using the PostgreSQL dialect and protocol:
+Materialize supports a comprehensive variety of SQL features, all using the PostgreSQL dialect and protocol:
 
 -   Joins, Joins, Joins! Materialize supports multi-column join conditions, multi-way joins, self-joins, cross-joins, inner joins, outer joins, etc.
 -   Delta-joins avoid intermediate state blowup compared to systems that can only plan nested binary joins - tested on joins of up to 64 relations.
