@@ -179,7 +179,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             )
                         }
                     };
-
                     // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                     // a hypothetical future avro_extract, protobuf_extract, etc.
                     let stream = decode(&source, encoding, &dataflow.debug_name);

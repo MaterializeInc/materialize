@@ -46,7 +46,7 @@ use crate::arrangement::{
 };
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Consistency, DataflowDesc, Diff, IndexDesc, KafkaSourceConnector,
+    compare_columns, Consistency, DataflowDesc, Diff, ExternalSourceConnector, IndexDesc,
     PeekResponse, RowSetFinishing, Timestamp, Update,
 };
 use expr::{EvalEnv, GlobalId, SourceInstanceId};
@@ -162,7 +162,7 @@ pub enum WorkerFeedback {
     /// The id of a source whose source connector has been dropped
     DroppedSource(SourceInstanceId),
     /// The id of a source whose source connector has been created
-    CreateSource(SourceInstanceId, KafkaSourceConnector, Consistency),
+    CreateSource(SourceInstanceId, ExternalSourceConnector, Consistency),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -241,7 +241,7 @@ pub type TimestampChanges = Rc<
     RefCell<
         Vec<(
             SourceInstanceId,
-            Option<(KafkaSourceConnector, Consistency)>,
+            Option<(ExternalSourceConnector, Consistency)>,
         )>,
     >,
 >;

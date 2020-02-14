@@ -425,6 +425,9 @@ pub struct FileSourceConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KinesisSourceConnector {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkConnector {
     Kafka(KafkaSinkConnector),
     Tail(TailSinkConnector),
