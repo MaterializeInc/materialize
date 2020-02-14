@@ -76,57 +76,71 @@ fn measure_peek_times(config: &Args) {
     let mut peek_threads = vec![];
     for query in &config.config.queries {
         try_initialize(&mut postgres_client, query);
-        peek_threads.push(spawn_query_thread(
+        peek_threads.extend(spawn_query_thread(
             config.materialized_url.clone(),
             query.clone(),
         ));
     }
 
-    info!("started {} peek threads", peek_threads.len());
+    info!(
+        "started {} peek threads for {} queries",
+        peek_threads.len(),
+        config.config.queries.len()
+    );
     for pthread in peek_threads {
         pthread.join().unwrap();
     }
 }
 
-fn spawn_query_thread(mz_url: String, query: Query) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let query_name = &query.name;
-        let mut postgres_client = create_postgres_client(&mz_url);
-        let select = format!("SELECT * FROM {};", query_name);
-        let histogram = HISTOGRAM_UNLABELED.with_label_values(&[&query_name]);
-        let error_count = ERRORS_UNLABELED.with_label_values(&[&query_name]);
-        let mut backoff = get_baseline_backoff();
-        let mut last_was_failure = false;
-        let mut counter = 0u64;
-        let mut last_log = std::time::Instant::now();
-        loop {
-            let timer = prometheus::Histogram::start_timer(&histogram);
-            let query_result = postgres_client.query(&*select, &[]);
+fn spawn_query_thread(mz_url: String, query: Query) -> Vec<std::thread::JoinHandle<()>> {
+    let q = query;
+    let mut qs = vec![];
+    for _ in 0..q.thread_count {
+        let query = q.clone();
+        let mz_url = mz_url.clone();
+        qs.push(std::thread::spawn(move || {
+            let query_name = &query.name;
+            let mut postgres_client = create_postgres_client(&mz_url);
+            let select = format!("SELECT * FROM {};", query_name);
+            let histogram = HISTOGRAM_UNLABELED.with_label_values(&[&query_name]);
+            let error_count = ERRORS_UNLABELED.with_label_values(&[&query_name]);
+            let mut backoff = get_baseline_backoff();
+            let mut last_was_failure = false;
+            let mut counter = 0u64;
+            let mut last_log = std::time::Instant::now();
+            loop {
+                let timer = prometheus::Histogram::start_timer(&histogram);
+                let query_result = postgres_client.query(&*select, &[]);
 
-            match query_result {
-                Ok(_) => drop(timer),
-                Err(err) => {
-                    timer.stop_and_discard();
-                    error_count.inc();
-                    last_was_failure = true;
-                    print_error_and_backoff(&mut backoff, &query.name, err.to_string());
-                    try_initialize(&mut postgres_client, &query);
+                match query_result {
+                    Ok(_) => drop(timer),
+                    Err(err) => {
+                        timer.stop_and_discard();
+                        error_count.inc();
+                        last_was_failure = true;
+                        print_error_and_backoff(&mut backoff, &query.name, err.to_string());
+                        try_initialize(&mut postgres_client, &query);
+                    }
+                }
+                counter += 1;
+                if counter % 10 == 0 {
+                    let now = std::time::Instant::now();
+                    // log at most once per minute per thread
+                    if now.duration_since(last_log) > Duration::from_secs(60) {
+                        info!("peeked {} {} times", query_name, counter);
+                        last_log = now;
+                    }
+                }
+                if !last_was_failure {
+                    backoff = get_baseline_backoff();
+                }
+                if query.sleep != Duration::from_millis(0) {
+                    thread::sleep(query.sleep);
                 }
             }
-            counter += 1;
-            if counter % 10 == 0 {
-                let now = std::time::Instant::now();
-                // log at most once per minute per thread
-                if now.duration_since(last_log) > Duration::from_secs(60) {
-                    info!("peeked {} {} times", query_name, counter);
-                    last_log = now;
-                }
-            }
-            if !last_was_failure {
-                backoff = get_baseline_backoff();
-            }
-        }
-    })
+        }))
+    }
+    qs
 }
 
 fn get_baseline_backoff() -> Duration {

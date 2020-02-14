@@ -29,6 +29,14 @@ names = [
     "warehouse",
 ]
 
+[default_query]
+# the amount of time to sleep between peeks
+sleep_ms = 0
+# Spin up this many threads querying this view
+# This affects the ratio of times this query is executed vs other queries
+thread_count = 1
+
+
 [[queries]]
 name = "q01"
 enabled = true
@@ -48,6 +56,7 @@ ORDER BY ol_number
 
 
 [[queries]]
+sleep_ms = 1000
 name = "q02"
 query = """
 SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment

@@ -9,7 +9,9 @@
 
 //! [`Args::from_cli`] parses the command line arguments from the cli and the config file
 
-use serde::Deserialize;
+use std::time::Duration;
+
+use serde::{Deserialize, Deserializer};
 
 #[derive(Debug)]
 pub struct Args {
@@ -58,7 +60,7 @@ impl Args {
         let mut conf;
         match std::fs::read_to_string(&config_file) {
             Ok(contents) => {
-                conf = toml::from_str::<Config>(&contents)?;
+                conf = toml::from_str::<RawConfig>(&contents)?;
                 if let Some(queries) = popts.opt_str("queries") {
                     let qs: Vec<_> = queries.split(',').collect();
                     if !qs.is_empty() {
@@ -85,13 +87,16 @@ impl Args {
                 "materialized-url",
                 "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
             )?,
-            config: conf,
+            config: Config::from(conf),
         })
     }
 }
 
-/// The config file
-#[derive(Debug, Deserialize)]
+/// A query configuration
+///
+/// This is a normalized version of [`RawConfig`], which is what is actually parsed
+/// from the toml config file.
+#[derive(Debug)]
 pub struct Config {
     /// Queries are instanciated as views which are polled continuously
     pub queries: Vec<Query>,
@@ -99,12 +104,24 @@ pub struct Config {
     pub sources: Vec<Source>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Query {
-    pub name: String,
-    pub query: String,
-    #[serde(default = "btrue")]
-    pub enabled: bool,
+impl From<RawConfig> for Config {
+    fn from(conf: RawConfig) -> Config {
+        let default = conf.default_query;
+        Config {
+            queries: conf
+                .queries
+                .into_iter()
+                .map(|q| Query {
+                    name: q.name,
+                    query: q.query,
+                    enabled: q.enabled,
+                    sleep: q.sleep_ms.unwrap_or(default.sleep_ms),
+                    thread_count: q.thread_count.unwrap_or(default.thread_count),
+                })
+                .collect(),
+            sources: conf.sources,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -115,7 +132,64 @@ pub struct Source {
     pub names: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Query {
+    pub name: String,
+    pub query: String,
+    pub enabled: bool,
+    pub sleep: Duration,
+    pub thread_count: u32,
+}
+
+// inner parsing helpers
+
+/// The raw config file, it is parsed and then defaults are supplied, resulting in [`Config`]
+#[derive(Debug, Deserialize)]
+struct RawConfig {
+    /// Default to be filled in for other queries
+    default_query: DefaultQuery,
+    /// Queries are instanciated as views which are polled continuously
+    queries: Vec<RawQuery>,
+    /// Sources are created once at startup
+    sources: Vec<Source>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DefaultQuery {
+    #[serde(deserialize_with = "deser_duration_ms")]
+    sleep_ms: Duration,
+    thread_count: u32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RawQuery {
+    name: String,
+    query: String,
+    #[serde(default = "btrue")]
+    enabled: bool,
+    #[serde(default, deserialize_with = "deser_duration_ms_opt")]
+    sleep_ms: Option<Duration>,
+    #[serde(default)]
+    thread_count: Option<u32>,
+}
+
 /// helper for serde default
 fn btrue() -> bool {
     true
+}
+
+fn deser_duration_ms<'de, D>(deser: D) -> Result<Duration, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let d = Duration::from_millis(Deserialize::deserialize(deser)?);
+    Ok(d)
+}
+
+fn deser_duration_ms_opt<'de, D>(deser: D) -> Result<Option<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let d = Duration::from_millis(Deserialize::deserialize(deser)?);
+    Ok(Some(d))
 }
