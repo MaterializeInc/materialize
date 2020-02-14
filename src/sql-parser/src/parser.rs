@@ -2119,15 +2119,15 @@ impl Parser {
         let mut data_type = match self.next_token() {
             Some(Token::Word(k)) => match k.keyword.as_ref() {
                 "BOOL" | "BOOLEAN" => DataType::Boolean,
-                "FLOAT" => DataType::Float(self.parse_optional_precision()?),
+                "FLOAT" | "FLOAT4" => DataType::Float(self.parse_optional_precision()?),
                 "REAL" => DataType::Real,
-                "DOUBLE" => {
+                "DOUBLE" | "FLOAT8" => {
                     let _ = self.parse_keyword("PRECISION");
                     DataType::Double
                 }
                 "SMALLINT" => DataType::SmallInt,
-                "INT" | "INTEGER" => DataType::Int,
-                "BIGINT" => DataType::BigInt,
+                "INT" | "INTEGER" | "INT4" => DataType::Int,
+                "INT8" | "BIGINT" => DataType::BigInt,
                 "VARCHAR" => DataType::Varchar(self.parse_optional_precision()?),
                 "CHAR" | "CHARACTER" => {
                     if self.parse_keyword("VARYING") {

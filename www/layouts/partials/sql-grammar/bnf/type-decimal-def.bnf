@@ -1,2 +1,0 @@
-type_decimal_val ::=
-  'decimal' ( '(' precision ',' scale ')' )?

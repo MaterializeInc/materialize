@@ -1,2 +1,2 @@
-type_decimal_val ::=
+type_numeric_val ::=
   int ( '.' frac )? ( ( 'e' | 'E' ) '-'? exp )?

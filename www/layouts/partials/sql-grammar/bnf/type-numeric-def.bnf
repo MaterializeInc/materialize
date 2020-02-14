@@ -1,0 +1,2 @@
+type_numeric_val ::=
+  'numeric' ( '(' precision ',' scale ')' )?

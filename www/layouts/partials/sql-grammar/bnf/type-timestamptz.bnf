@@ -1,2 +1,3 @@
 type_timestamptz ::=
-  'TIMESTAMPTZ' "'" date_str time_str? ( ('+' | '-' ) tz_offset )? "'"
+  'TIMESTAMP WITH TIME ZONE' "'" date_str time_str? ( ('+' | '-' ) tz_offset )? "'"
+  | 'TIMESTAMPTZ' "'" date_str time_str? ( ('+' | '-' ) tz_offset )? "'"
