@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
+static DEFAULT_CONFIG: &str = include_str!("config.toml");
+
 #[derive(Debug)]
 pub struct Args {
     pub materialized_url: String,
@@ -26,7 +28,17 @@ impl Args {
 
         let mut opts = getopts::Options::new();
         opts.optflag("h", "help", "show this usage information");
-        opts.reqopt("c", "config-file", "The config file to use", "FNAME");
+        opts.optopt(
+            "c",
+            "config-file",
+            "The config file to use. Unspecified will use the default config with many tpcch queries",
+            "FNAME",
+        );
+        opts.optflag(
+            "",
+            "help-config",
+            "print the names of the available queries in the config file",
+        );
         opts.optopt(
             "q",
             "queries",
@@ -56,9 +68,10 @@ impl Args {
 
         let config_file = popts
             .opt_str("config-file")
-            .expect("config-file is a reqopt");
+            .map(|config_file| std::fs::read_to_string(config_file))
+            .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
         let mut conf;
-        match std::fs::read_to_string(&config_file) {
+        match &config_file {
             Ok(contents) => {
                 conf = toml::from_str::<RawConfig>(&contents)?;
                 if let Some(queries) = popts.opt_str("queries") {
@@ -82,12 +95,24 @@ impl Args {
             }
         }
 
+        let config = Config::from(conf);
+        if popts.opt_present("help-config") {
+            println!("named queries:");
+            for q in config.queries {
+                println!(
+                    "    {} thread_count={} sleep={:?}",
+                    q.name, q.thread_count, q.sleep
+                );
+            }
+            std::process::exit(0);
+        }
+
         Ok(Args {
             materialized_url: popts.opt_get_default(
                 "materialized-url",
                 "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
             )?,
-            config: Config::from(conf),
+            config,
         })
     }
 }

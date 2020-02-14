@@ -277,7 +277,6 @@ nuke_docker() {
 load_test() {
     runv docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
     runv docker-compose run peeker \
-         -c /etc/peeker/config.toml \
          --queries q01,q02,q05,q06,q08,q09,q12,q14,q17,q19
     runv docker-compose run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
