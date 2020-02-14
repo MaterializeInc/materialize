@@ -320,6 +320,8 @@ fn format_row(
                 }
                 (Type::Bool, Datum::False) => "false".to_owned(),
                 (Type::Bool, Datum::True) => "true".to_owned(),
+                (Type::Text, Datum::False) => "false".to_owned(),
+                (Type::Text, Datum::True) => "true".to_owned(),
 
                 // weird type coercions that sqllogictest doesn't document
                 (Type::Integer, Datum::Decimal(d)) => {
