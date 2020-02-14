@@ -15,7 +15,7 @@ if [[ "$#" -ne 1 ]]; then
 fi
 
 while :; do
-    out=$(psql -q -h materialized -p 6875 sslmode=disable -c '\timing' -c "$1")
+    out=$(psql -q -h materialized -p 6875 materialize -c '\timing' -c "$1")
     clear
     echo "$out"
 done

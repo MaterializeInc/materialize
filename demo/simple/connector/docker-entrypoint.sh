@@ -20,7 +20,7 @@ topics=(
   mysql.simple.user
 )
 
-echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --bootstrap-server kafka:9092 --create --partitions 1 --replication-factor 1 --topic
+echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --zookeeper zookeeper:2181 --create --if-not-exists --partitions 1 --replication-factor 1 --topic
 
 wait-for-it --timeout=60 connect:8083
 wait-for-it --timeout=60 mysql:3306
