@@ -1,14 +1,14 @@
 ---
-title: "decimal Data Type"
+title: "numeric Data Type"
 description: "Expresses an exact number with user-defined precision and scale"
 aliases:
-    - /docs/sql/types/numeric
+    - /docs/sql/types/decimal
 menu:
   main:
     parent: 'sql-types'
 ---
 
-`decimal` data expresses an exact number with user-defined precision and scale.
+`numeric` data expresses an exact number with user-defined precision and scale.
 
 Detail | Info
 -------|------
@@ -17,11 +17,13 @@ Detail | Info
 **Max scale** | 38
 **Default** | 38 precision, 0 scale
 
+Materialize also accepts `decimal` as an alias for `numeric`.
+
 ## Syntax
 
-### Decimal values
+### Numeric values
 
-{{< diagram "type-decimal-val.html" >}}
+{{< diagram "type-numeric-val.html" >}}
 
 Field | Use
 ------|-----------
@@ -29,12 +31,12 @@ Field | Use
 
 ### Decimal definitions
 
-{{< diagram "type-decimal-def.html" >}}
+{{< diagram "type-numeric-def.html" >}}
 
 Field | Use
 ------|-----------
-_precision_ | The total number of decimal values to track, e.g., `100` has a precision of 3. However, all `decimal` values in Materialize have a precision of 38.
-_scale_ | The total number of fractional decimal values to track, e.g. `.321` has a scale of 3. _scale_ cannot exceed the maximum precision.
+_precision_ | The total number of decimal digits to track, e.g., `100` has a precision of 3. However, all `numeric` values in Materialize have a precision of 38.
+_scale_ | The total number of fractional decimal digits to track, e.g. `.321` has a scale of 3. _scale_ cannot exceed the maximum precision.
 
 ## Details
 
@@ -44,17 +46,17 @@ _scale_ | The total number of fractional decimal values to track, e.g. `.321` ha
 
 ### Valid casts
 
-#### From `decimal`
+#### From `numeric`
 
-You can [cast](../../functions/cast) `decimal` to:
+You can [cast](../../functions/cast) `numeric` to:
 
 - [`int`](../int)
 - [`float`](../float)
 - [`string`](../string)
 
-#### To `decimal`
+#### To `numeric`
 
-You can [cast](../../functions/cast) the following types to `decimal`:
+You can [cast](../../functions/cast) the following types to `numeric`:
 
 - [`int`](../int)
 - [`float`](../float)
@@ -62,20 +64,20 @@ You can [cast](../../functions/cast) the following types to `decimal`:
 ## Examples
 
 ```sql
-SELECT 1.23::decimal AS dec_v;
+SELECT 1.23::numeric AS num_v;
 ```
 ```nofmt
- dec_v
+ num_v
 -------
      1
 ```
 <hr/>
 
 ```sql
-SELECT 1.23::decimal(38,3) AS dec_38_3_v;
+SELECT 1.23::numeric(38,3) AS num_38_3_v;
 ```
 ```nofmt
- dec_38_3_v
+ num_38_3_v
 ------------
       1.230
 ```
@@ -83,10 +85,10 @@ SELECT 1.23::decimal(38,3) AS dec_38_3_v;
 <hr/>
 
 ```sql
-SELECT 1.23e4 AS dec_w_exp;
+SELECT 1.23e4 AS num_w_exp;
 ```
 ```nofmt
- dec_w_exp
+ num_w_exp
 -----------
      12300
 ```

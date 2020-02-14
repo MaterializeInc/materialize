@@ -1,5 +1,5 @@
 ---
-title: "timestamp Data Type"
+title: "Timestamp Data Types"
 description: "Expresses a date and time"
 aliases:
     - /docs/sql/types/timestamptz
@@ -8,15 +8,18 @@ menu:
     parent: 'sql-types'
 ---
 
-`timestamp` and `timestamptz` data expresses a date and time in UTC.
+`timestamp` and `timestamp with time zone` data expresses a date and time in UTC.
 
 Detail | Info
 -------|------
-**Quick Syntax** | `TIMESTAMP '2007-02-01 15:04:05'` <br/> `TIMESTAMPTZ '2007-02-01 15:04:05+06'`
+**Quick Syntax** | `TIMESTAMP '2007-02-01 15:04:05'` <br/> `TIMESTAMP WITH TIME ZONE '2007-02-01 15:04:05+06'`
 **Size** | 8 bytes
 **Min value** | 4713 BC
 **Max value** | 294276 AD
 **Resolution** | 1 microsecond / 14 digits
+
+For convenience and compatibility with PostgreSQL, `timestamptz` is accepted
+as an alias for `timestamp with time zone`.
 
 ## Syntax
 
