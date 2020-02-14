@@ -44,8 +44,8 @@ where
                     for (payload, _) in data.iter() {
                         match decoder.decode(payload) {
                             Ok(row) => {
-                                events_success += 1;
                                 if let Some(row) = row {
+                                    events_success += 1;
                                     session.give((row, *cap.time(), 1));
                                 } else {
                                     events_error += 1;
