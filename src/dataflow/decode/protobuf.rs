@@ -37,26 +37,34 @@ where
         "ProtobufDecode",
         move |_, _| {
             move |input, output| {
+                let mut events_success = 0;
+                let mut events_error = 0;
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
                     for (payload, _) in data.iter() {
                         match decoder.decode(payload) {
                             Ok(row) => {
-                                EVENTS_COUNTER.protobuf.success.inc();
+                                events_success += 1;
                                 if let Some(row) = row {
                                     session.give((row, *cap.time(), 1));
                                 } else {
-                                    EVENTS_COUNTER.protobuf.error.inc();
+                                    events_error += 1;
                                     error!("protobuf deserialization returned None");
                                 }
                             }
                             Err(err) => {
-                                EVENTS_COUNTER.protobuf.error.inc();
+                                events_error += 1;
                                 error!("protobuf deserialization error: {}", err)
                             }
                         }
                     }
-                })
+                });
+                if events_success > 0 {
+                    EVENTS_COUNTER.protobuf.success.inc_by(events_success);
+                }
+                if events_error > 0 {
+                    EVENTS_COUNTER.protobuf.error.inc_by(events_error);
+                }
             }
         },
     )
