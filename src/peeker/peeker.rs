@@ -11,8 +11,8 @@
 
 use std::cmp::min;
 use std::convert::Infallible;
-use std::thread;
-use std::time::Duration;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use env_logger::{Builder as LogBuilder, Env, Target};
@@ -29,6 +29,9 @@ mod args;
 
 static MAX_BACKOFF: Duration = Duration::from_secs(2);
 static METRICS_PORT: u16 = 16875;
+
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Result<T> = std::result::Result<T, Error>;
 
 lazy_static! {
     static ref HISTOGRAM_UNLABELED: HistogramVec = register_histogram_vec!(
@@ -50,7 +53,7 @@ lazy_static! {
     .expect("can create histogram");
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     ore::panic::set_abort_on_panic();
 
     LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
@@ -92,13 +95,13 @@ fn measure_peek_times(config: &Args) {
     }
 }
 
-fn spawn_query_thread(mz_url: String, query: Query) -> Vec<std::thread::JoinHandle<()>> {
+fn spawn_query_thread(mz_url: String, query: Query) -> Vec<JoinHandle<()>> {
     let q = query;
     let mut qs = vec![];
     for _ in 0..q.thread_count {
         let query = q.clone();
         let mz_url = mz_url.clone();
-        qs.push(std::thread::spawn(move || {
+        qs.push(thread::spawn(move || {
             let query_name = &query.name;
             let mut postgres_client = create_postgres_client(&mz_url);
             let select = format!("SELECT * FROM {};", query_name);
@@ -107,7 +110,7 @@ fn spawn_query_thread(mz_url: String, query: Query) -> Vec<std::thread::JoinHand
             let mut backoff = get_baseline_backoff();
             let mut last_was_failure = false;
             let mut counter = 0u64;
-            let mut last_log = std::time::Instant::now();
+            let mut last_log = Instant::now();
             loop {
                 let timer = prometheus::Histogram::start_timer(&histogram);
                 let query_result = postgres_client.query(&*select, &[]);
@@ -124,7 +127,7 @@ fn spawn_query_thread(mz_url: String, query: Query) -> Vec<std::thread::JoinHand
                 }
                 counter += 1;
                 if counter % 10 == 0 {
-                    let now = std::time::Instant::now();
+                    let now = Instant::now();
                     // log at most once per minute per thread
                     if now.duration_since(last_log) > Duration::from_secs(60) {
                         info!("peeked {} {} times", query_name, counter);
@@ -166,10 +169,7 @@ fn print_error_and_backoff(backoff: &mut Duration, context: &str, error_message:
     *backoff = min(*backoff * 2, MAX_BACKOFF);
 }
 
-fn initialize_sources(
-    client: &mut Client,
-    sources: &[Source],
-) -> Result<(), Box<dyn std::error::Error>> {
+fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
     let mut failed = false;
     for source in sources {
         let mut still_to_try = source.names.clone();
@@ -201,7 +201,7 @@ fn initialize_sources(
             if still_to_try.is_empty() {
                 return Ok(());
             } else {
-                std::thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(3));
             }
         }
         if !still_to_try.is_empty() {
@@ -247,7 +247,7 @@ fn try_initialize(client: &mut Client, query: &Query) {
     }
 }
 
-async fn serve_metrics() -> Result<(), failure::Error> {
+async fn serve_metrics() -> Result<()> {
     info!("serving prometheus metrics on port {}", METRICS_PORT);
     let addr = ([0, 0, 0, 0], METRICS_PORT).into();
 
