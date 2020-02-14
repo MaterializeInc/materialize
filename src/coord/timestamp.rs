@@ -453,7 +453,7 @@ impl Timestamper {
                 error!("Kinesis sources are unsupported for timestamping");
                 ByoTimestampConsumer {
                     source_name: String::from(""),
-                    connector: ByoTimestampConnector::Kinesis(self.create_byo_rt_connector(
+                    connector: ByoTimestampConnector::Kinesis(self.create_byo_kinesis_connector(
                         id,
                         kinc,
                         timestamp_topic,
@@ -472,7 +472,7 @@ impl Timestamper {
         ByoFileConnector {}
     }
 
-    fn create_byo_rt_connector(
+    fn create_byo_kinesis_connector(
         &self,
         _id: SourceInstanceId,
         _kinc: KinesisSourceConnector,
