@@ -15,7 +15,7 @@ documentation](https://materialize.io/docs/overview/architecture)––the only
 components not accounted for there are:
 
 - Kafka's infrastructure (e.g. Zookeeper)
-- Our MySQL load generator
+- The MySQL load generator in this demo
 
 ## What to Expect
 
@@ -81,42 +81,31 @@ available to Docker Engine.
    Materialize.
 
     ```sql
-    CREATE SOURCES
-    LIKE 'mysql.simple.%'
-    FROM 'kafka://kafka:9092'
-    USING SCHEMA REGISTRY 'http://schema-registry:8081';
-    ```
+    CREATE SOURCE purchase
+    FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.simple.purchase'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+    ENVELOPE DEBEZIUM;
 
-    You'll see the name of the sources you created, which should exactly match
-    this:
+    CREATE SOURCE region
+    FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.simple.region'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+    ENVELOPE DEBEZIUM;
 
+    CREATE SOURCE user
+    FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.simple.user'
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+    ENVELOPE DEBEZIUM;
     ```
-    +-----------------------+
-    | Topic                 |
-    |-----------------------|
-    | mysql_simple_user     |
-    | mysql_simple_purchase |
-    | mysql_simple_region   |
-    +-----------------------+
-    ```
-
-    If the above command doesn't generate any topics, wait a few seconds and run
-    the command again. If it doesn't work after ~30 seconds, check the
-    **Troubleshooting** section below.
 
 1. Create a view for Materialize to maintain. In this case, we'll keep a sum of
    all purchases made by users in each region:
 
     ```sql
-    CREATE VIEW purchase_sum_by_region
-    AS
-        SELECT  sum(purchase.amount) AS region_sum,
-                region.id AS region_id
-        FROM mysql_simple_purchase AS purchase
-        INNER JOIN mysql_simple_user AS user
-            ON purchase.user_id = user.id
-        INNER JOIN mysql_simple_region AS region
-            ON region.id = user.region_id
+    CREATE MATERIALIZED VIEW purchase_sum_by_region AS
+        SELECT sum(purchase.amount) AS region_sum, region.id AS region_id
+        FROM purchase
+        INNER JOIN user ON purchase.user_id = user.id
+        INNER JOIN region ON region.id = user.region_id
         GROUP BY region.id;
     ```
 
@@ -129,7 +118,12 @@ available to Docker Engine.
     Go ahead and do that a few times; you should see the `region_sum` continue
     to increase for all `region_id`s.
 
-1. Close out of the Materialize CLI (_ctrl + d_).
+    The first time you run the command, you may see a message stating "At least
+    one input has no complete timestamps yet." This indicates that Materialize
+    is still reading the initial batch of data from Kafka, and is usually
+    resolved by trying again in a few moments.
+
+1. Close out of the Materialize CLI (<kbd>Ctrl</kbd> + <kbd>D</kbd>).
 
 1. Watch the report change using the `watch-sql` container, which continually
    streams changes from Materialize to your terminal.
@@ -138,8 +132,8 @@ available to Docker Engine.
     docker-compose run cli watch-sql "SELECT * FROM purchase_sum_by_region"
     ```
 
-1. Once you're sufficiently wowed, close out of the `watch-sql` container (_ctrl
-   + d_), and bring the entire demo down.
+1. Once you're sufficiently wowed, close out of the `watch-sql` container
+   (<kbd>Ctrl</kbd> + <kbd>D</kbd>), and bring the entire demo down.
 
     ```shell
     docker-compose down
@@ -150,20 +144,6 @@ available to Docker Engine.
 If you encounter any issues, such as not being able to create sources in
 Materialize or `purchase_sum_by_region` being empty, go through the following
 steps.
-
-1. View the sources that are available in Materialize.
-
-    ```shell
-    docker-compose run cli
-    ```
-    ```sql
-    SHOW SOURCES;
-    ```
-
-    If you see `mysql_simple_...` sources, you might have run into issues
-    because you've had a working instance running in the past. You can try to
-    resolve this by closing out of the Materialize CLI (`ctrl + d`), and then
-    bringing the demo down (`docker compose down`).
 
 1. Launch MySQL instance.
 
@@ -191,12 +171,3 @@ streaming the values out of MySQL; check the Kafka connector logs using
 
 If you don't see values here, there is likely an issue with the load generator;
 check its logs using `docker-compose logs loadgen`.
-
-### Caveats and FAQ
-
-- Materialize cannot currently order the results of the materialized view. This
-  is a known limitation and will be fixed in a future build.
-- Materialize requires that the load generator perform some updates on the
-  `region` and `user` table after the source has been created so that it picks
-  up that all of these records exist. This is a known limitation and will be
-  fixed in a future build.

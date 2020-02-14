@@ -7,14 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-version: '3.7'
+version: "3.7"
 services:
   materialized:
-    image: materialize/materialized:unstable-98bb1c42b931d30f6573b35da8bf9cadd7ad4673
+    image: materialize/materialized:v0.1.0
     init: true
     command: -w1
   mysql:
-    image: debezium/example-mysql:0.9
+    image: debezium/example-mysql:1.0
     ports:
      - 3306:3306
     environment:
@@ -22,7 +22,7 @@ services:
      - MYSQL_USER=mysqluser
      - MYSQL_PASSWORD=mysqlpw
   mysqlcli:
-    image: debezium/example-mysql:0.9
+    image: debezium/example-mysql:1.0
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium"]
     init: true
     depends_on:
@@ -37,16 +37,11 @@ services:
     environment:
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
       KAFKA_BROKER_ID: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:9092"
-      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
-      # To avoid race condition with control-center
-      CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
   connect:
-    image: debezium/connect:0.9
+    image: debezium/connect:1.0
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: 1
@@ -66,37 +61,12 @@ services:
     depends_on: [zookeeper, kafka]
   connector:
     build: connector
-  control-center:
-    image: confluentinc/cp-enterprise-control-center:5.3.0
-    container_name: control-center
-    restart: always
-    depends_on: [zookeeper, kafka, connect]
-    ports:
-      - "9021:9021"
-    environment:
-      CONTROL_CENTER_BOOTSTRAP_SERVERS: "kafka:9092"
-      CONTROL_CENTER_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      CONTROL_CENTER_REPLICATION_FACTOR: 1
-      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_INTERNAL_TOPICS_REPLICATION: 1
-      CONTROL_CENTER_COMMAND_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_METRICS_TOPIC_REPLICATION: 1
-      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
-      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
-      CONTROL_CENTER_METRICS_TOPIC_PARTITIONS: 1
-      CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS: 1
-      CONTROL_CENTER_CONNECT_CLUSTER: "http://connect:8083"
-      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
-      CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
   loadgen:
     build: simple-loadgen
     depends_on: [mysql]
   cli:
-    build: ../chbench/cli
+    build: ../../misc/docker/cli
     init: true
-    # if you run the terminal with a dark background uncomment these lines
-    # environment:
-    #   MZCLI_PROMPT: DARK_MODE
     depends_on:
       - materialized
   inspect:
