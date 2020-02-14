@@ -227,9 +227,7 @@ services:
       - materialized
       - connector
     # run peeker using 'dc.sh run' to adjust which queries are peeked
-    command: -c /etc/peeker/config.toml --queries q01,q17
-    volumes:
-      - ../../src/peeker:/etc/peeker
+    command: --queries q01,q02,q17
 
 volumes:
   chbench-gen:
