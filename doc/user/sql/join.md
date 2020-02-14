@@ -15,8 +15,9 @@ Much like an RDBMS, Materialize can join together any two table expressions (in
 our case, either [sources](../create-sources) or [views](../create-views)) into
 a single table expression.
 
-Materialize's support for `JOIN` is radically simplified from most streaming
-platforms, and generally provides unrestricted access to `JOIN`s.
+Materialize has much broader support for `JOIN` than most streaming platforms,
+i.e. we support all types of SQL joins in all of the conditions you would
+expect.
 
 ## Syntax
 

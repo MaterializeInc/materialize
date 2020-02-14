@@ -14,7 +14,7 @@ Detail | Info
 -------|------
 **Database** | `materialize`
 **Port** | `6875`
-**SSL** | Not supported yet; use `sslmode=disable`
+**SSL** | Not supported yet
 
 ### Supported tools
 

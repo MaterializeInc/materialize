@@ -448,7 +448,7 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
 1. Launch `psql` (or any Postgres CLI client), connecting to `materialize`:
 
     ```shell
-    psql -h localhost -p 6875 sslmode=disable -d materialize
+    psql -h localhost -p 6875 -d materialize
     ```
 
 1. Show the source we've created:

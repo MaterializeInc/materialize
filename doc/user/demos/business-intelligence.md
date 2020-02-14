@@ -2,9 +2,9 @@
 title: "Business Intelligence Demo"
 description: "Find out how Materialize can help improve your team's business intelligence tools."
 menu:
-  main:
-    parent: 'demos'
-    weight: 4
+    main:
+        parent: "demos"
+        weight: 4
 ---
 
 **tl;dr** Materialize can enable real-time monitoring within business
@@ -53,9 +53,10 @@ and is meant to test the capabilities of online analytic platforms by performing
 complex analytic style queries. This includes large aggregations, many
 groupings, and complex multi-way joins.
 
-For chBench, we've slightly modified TPC-H to leverage TPC-C's data set, but
-kept the queries close to their original forms. This lets us use a TPC-C load
-generator, and then perform TPC-H-like queries over that data.
+[CH-benCHmark](https://db.in.tum.de/research/projects/CHbenCHmark/?lang=en)
+brings together the a TPC-C-like dataset, with TPC-H's analytical queries. This
+is a great approximation for how many businesses perform OLAP queries over OLTP
+data.
 
 ### Database (MySQL)
 
@@ -116,7 +117,7 @@ Metabase](/images/demos/bi_architecture_diagram.png)
     git clone git@github.com:MaterializeInc/materialize.git
     ```
 
-2. Move to the `demo/chbench` dir:
+1. Move to the `demo/chbench` dir:
 
     ```shell
     cd <path to materialize>/demo/chbench
@@ -125,7 +126,7 @@ Metabase](/images/demos/bi_architecture_diagram.png)
     You can also find the demo's code on
     [GitHub](https://github.com/MaterializeInc/materialize/tree/master/demo/chbench).
 
-3. Deploy and start all of the components we've listed above.
+1. Deploy and start all of the components we've listed above.
 
     Note that pulling down all of the Docker images necessary for the demo takes
     quite a bit of time (upwards of 10 minutes, even on very fast connections).
@@ -159,6 +160,7 @@ Materialize to maintain for us.
     ```sql
     SHOW SOURCES;
     ```
+
     ```nofmt
     mysql_tpcch_customer
     mysql_tpcch_district
@@ -193,8 +195,8 @@ Materialize to maintain for us.
         ol_number;
     ```
 
-     This is used to repesent "Query 01" in chBench, which tracks statistics
-     about the TPC-C `orderline` table.
+    This is used to repesent "Query 01" in chBench, which tracks statistics
+    about the TPC-C `orderline` table.
 
 1. Check the results of the view:
 
@@ -269,13 +271,13 @@ Materialize to maintain for us.
 
 1. On the **Add your data** page, fill in the following information:
 
-    Field | Enter...
-    ------|----------
-    Database | **Materialize**
-    Name | **tpcch**
-    Host | **materialized**
-    Port | **6875**
-    Database name | **materialize**
+    Field             | Enter...
+    ----------------- | ----------------
+    Database          | **Materialize**
+    Name              | **tpcch**
+    Host              | **materialized**
+    Port              | **6875**
+    Database name     | **materialize**
     Database username | **root**
     Database password | Leave empty.
 
@@ -300,8 +302,7 @@ Materialize to maintain for us.
 
     Metabase will store comments alongside queries, and it's a good practice
     to keep a verbatim copy of the view's definition alongside places that
-    use it. However, this same information is also retrievable with `SHOW
-    CREATE VIEW <name>`. If you follow that practice, the text entry box would
+    use it. However, this same information is also retrievable with `SHOW CREATE VIEW <name>`. If you follow that practice, the text entry box would
     look like:
 
     ```sql
@@ -323,8 +324,7 @@ Materialize to maintain for us.
 
 1. Click the large **>** button.
 
-    If you receive an error stating `One or more sources has no closed
-    timestamps`, wait a few seconds, press enter in the query editor, and then
+    If you receive an error stating `One or more sources has no closed timestamps`, wait a few seconds, press enter in the query editor, and then
     repeat this process.
 
 1. Once you see the results similar to those below, click **Save**, enter
@@ -352,10 +352,10 @@ If you want to see more chBench queries, you can repeat these steps for the view
 
 In this demo, we saw:
 
-- How to define sources and views within Materialize
-- How to query defined views in a BI tool
-- Materialize's ability to serve results for views with the fastest refresh
-  rates the tool offers
+-   How to define sources and views within Materialize
+-   How to query defined views in a BI tool
+-   Materialize's ability to serve results for views with the fastest refresh
+    rates the tool offers
 
 ## Details
 
@@ -368,19 +368,18 @@ as ran queries within your BI tool, Metabase.
 To give you a sense of what this experience would look like if you were two
 different people, let's highlight what the expected workflow is.
 
-- **Business analysts** perform _ad hoc_ queries in Materialize to determine
-  what queries are meaningful to them.
-- **Business analysts** then provide those queries to **DBAs**.
-- **DBAs** turn those queries into materialized views, and then provide the
-  **business analysts** with the views' names, e.g. `some_view`. **Business
-  analysts** then query those views from within their BI tools, e.g. `SELECT *
-  FROM some_view`.
+-   **Business analysts** perform _ad hoc_ queries in Materialize to determine
+    what queries are meaningful to them.
+-   **Business analysts** then provide those queries to **DBAs**.
+-   **DBAs** turn those queries into materialized views, and then provide the
+    **business analysts** with the views' names, e.g. `some_view`. **Business
+    analysts** then query those views from within their BI tools, e.g. `SELECT * FROM some_view`.
 
 Of course, it's possible to change this workflow to make it more self-service,
 etc. but this is a reasonable workflow.
 
 ## Related pages
 
-- [Microservice demo](../microservice)
-- [Log parsing demo](../log-parsing)
-- [`CREATE SOURCE`](../../sql/create-source)
+-   [Microservice demo](../microservice)
+-   [Log parsing demo](../log-parsing)
+-   [`CREATE SOURCE`](../../sql/create-source)

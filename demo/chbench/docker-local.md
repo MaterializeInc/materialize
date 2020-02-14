@@ -63,7 +63,7 @@ distributions or for macOS.
 5. Now run the chbench load generator command as normal (see the load_test
    function in dc.sh for the exact command), but with one small difference: when
    running the `chbench run` command you will need to add the flag
-   `--mz-url='postgresql://172.17.0.1:6875/?sslmode=disable'` to tell the
+   `--mz-url='postgresql://172.17.0.1:6875/'` to tell the
    container where to find the host's `materialized` instance.
 
 6. **VERY IMPORTANT**: Don't forget to remove all the stuff that got added to
