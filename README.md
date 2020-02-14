@@ -1,7 +1,7 @@
 [![Build status](https://badge.buildkite.com/97d6604e015bf633d1c2a12d166bb46f3b43a927d3952c999a.svg?branch=master)](https://buildkite.com/materialize/tests)
 [![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.io/docs)
 
-[<img src="https://materializeinc.wpengine.com/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.io)
+[<img src="https://materialize.io/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.io)
 
 Materialize is the streaming data warehouse.
 
@@ -104,7 +104,7 @@ Check out [our documentation](https://materialize.io/docs/).
 
 Materialize is source-available and [licensed](LICENSE) under the BSL 1.1, converting to the open-source Apache 2.0 license after 4 years. As stated in the BSL, Materialize is free forever on a single node.
 
-Materialize is also available as [a paid cloud service](https://materializeinc.wpengine.com/download/) with additional features such as high availability via multi-active replication.
+Materialize is also available as [a paid cloud service](https://materialize.io/cloud-3/) with additional features such as high availability via multi-active replication.
 
 ## How does it work?
 
