@@ -567,6 +567,9 @@ impl fmt::Display for CsrSeed {
 pub enum Format {
     Bytes,
     Avro(AvroSchema),
+    AvroOcf {
+        schema: String,
+    },
     Protobuf {
         message_name: String,
         schema: Schema,
@@ -635,6 +638,7 @@ impl fmt::Display for Format {
             ),
             Self::Json => write!(f, "JSON"),
             Self::Text => write!(f, "TEXT"),
+            Self::AvroOcf { schema } => write!(f, "OCF SCHEMA '{}'", schema),
         }
     }
 }
@@ -643,66 +647,46 @@ impl fmt::Display for Format {
 pub enum Connector {
     File {
         path: String,
-        with_options: Vec<SqlOption>,
     },
     Kafka {
         broker: String,
         topic: String,
-        with_options: Vec<SqlOption>,
     },
     Kinesis {
         arn: String,
-        with_options: Vec<SqlOption>,
     },
     /// Avro Object Container File
     AvroOcf {
         path: String,
-        with_options: Vec<SqlOption>,
     },
 }
 
 impl fmt::Display for Connector {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Connector::File { path, with_options } => {
+            Connector::File { path } => {
                 write!(f, "FILE '{}'", value::escape_single_quote_string(path))?;
-                if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
-                }
                 Ok(())
             }
-            Connector::Kafka {
-                broker,
-                topic,
-                with_options,
-            } => {
+            Connector::Kafka { broker, topic } => {
                 write!(
                     f,
                     "KAFKA BROKER '{}' TOPIC '{}'",
                     value::escape_single_quote_string(broker),
                     value::escape_single_quote_string(topic),
                 )?;
-                if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
-                }
                 Ok(())
             }
-            Connector::Kinesis { arn, with_options } => {
+            Connector::Kinesis { arn } => {
                 write!(
                     f,
                     "KINESIS ARN '{}'",
                     value::escape_single_quote_string(arn),
                 )?;
-                if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
-                }
                 Ok(())
             }
-            Connector::AvroOcf { path, with_options } => {
+            Connector::AvroOcf { path } => {
                 write!(f, "AVRO OCF '{}'", value::escape_single_quote_string(path))?;
-                if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
-                }
                 Ok(())
             }
         }
@@ -762,6 +746,7 @@ pub enum Statement {
     CreateSource {
         name: ObjectName,
         connector: Connector,
+        with_options: Vec<SqlOption>,
         format: Option<Format>,
         envelope: Envelope,
         if_not_exists: bool,
@@ -1003,6 +988,7 @@ impl fmt::Display for Statement {
             Statement::CreateSource {
                 name,
                 connector,
+                with_options,
                 format,
                 envelope,
                 if_not_exists,
@@ -1017,6 +1003,9 @@ impl fmt::Display for Statement {
                     write!(f, "IF NOT EXISTS ")?;
                 }
                 write!(f, "{} FROM {}", name, connector,)?;
+                if !with_options.is_empty() {
+                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                }
                 if let Some(format) = format {
                     write!(f, " FORMAT {}", format)?;
                 }

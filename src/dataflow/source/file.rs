@@ -20,20 +20,21 @@ use {
 };
 
 use expr::SourceInstanceId;
-use futures::ready;
 use futures::sink::SinkExt;
 use futures::stream::{Fuse, Stream, StreamExt};
+use futures::{ready, Future};
 use log::{error, warn};
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 use tokio::fs::File;
 use tokio::io::{self, AsyncRead};
-use tokio_util::codec::{FramedRead, LinesCodec};
 
 use dataflow_types::Timestamp;
 
 use crate::source::util::source;
 use crate::source::{SourceStatus, SourceToken};
+
+use std::fmt::Display;
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
@@ -98,23 +99,23 @@ where
     }
 }
 
-async fn send_lines<R>(
-    reader: R,
-    mut tx: futures::channel::mpsc::Sender<String>,
+async fn send_records<S, Out, Err>(
+    mut stream: S,
+    mut tx: futures::channel::mpsc::Sender<Out>,
     activator: Arc<Mutex<SyncActivator>>,
 ) where
-    R: AsyncRead + Unpin,
+    S: Stream<Item = Result<Out, Err>> + Unpin,
+    Err: Display,
 {
-    let mut lines = FramedRead::new(reader, LinesCodec::new());
-    while let Some(line) = lines.next().await {
-        let line = match line {
-            Ok(line) => line,
+    while let Some(record) = stream.next().await {
+        let record = match record {
+            Ok(record) => record,
             Err(err) => {
                 error!("file source: error while reading file: {}", err);
                 return;
             }
         };
-        if tx.send(line).await.is_err() {
+        if tx.send(record).await.is_err() {
             // The receiver went away, probably due to `DROP SOURCE`
             break;
         }
@@ -126,12 +127,18 @@ async fn send_lines<R>(
     }
 }
 
-async fn read_file_task(
+async fn read_file_task<Ctor, S, Out, Err, Fut>(
     path: PathBuf,
-    tx: futures::channel::mpsc::Sender<String>,
+    tx: futures::channel::mpsc::Sender<Out>,
     activator: Arc<Mutex<SyncActivator>>,
     read_style: FileReadStyle,
-) {
+    stream_ctor: Ctor,
+) where
+    S: Stream<Item = Result<Out, Err>> + Unpin,
+    Ctor: FnOnce(Box<dyn AsyncRead + Unpin + Send>) -> Fut,
+    Err: Display,
+    Fut: Future<Output = Result<S, Err>>,
+{
     let file = match File::open(&path).await {
         Ok(file) => file,
         Err(err) => {
@@ -143,9 +150,19 @@ async fn read_file_task(
             return;
         }
     };
+
     match read_style {
         FileReadStyle::None => unreachable!(),
-        FileReadStyle::ReadOnce => send_lines(file, tx, activator).await,
+        FileReadStyle::ReadOnce => {
+            let stream = match stream_ctor(Box::new(file)).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    error!("Failed to create read-once source: {}", err);
+                    return;
+                }
+            };
+            send_records(stream, tx, activator).await
+        }
         FileReadStyle::TailFollowFd => {
             // FSEvents doesn't raise events until you close the file, making it
             // useless for tailing log files that are kept open by the daemon
@@ -161,13 +178,13 @@ async fn read_file_task(
             //
             // https://github.com/notify-rs/notify/issues/240
             #[cfg(target_os = "macos")]
-            let (stream, watcher) = {
+            let (file_events_stream, watcher) = {
                 let interval = tokio::time::interval(Duration::from_millis(100));
                 (interval, None)
             };
 
             #[cfg(not(target_os = "macos"))]
-            let (stream, watcher) = {
+            let (file_events_stream, watcher) = {
                 let (notice_tx, notice_rx) = std::sync::mpsc::channel();
                 let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
                     Ok(w) => w,
@@ -192,45 +209,59 @@ async fn read_file_task(
             };
 
             let file = ForeverTailedAsyncFile {
-                rx: stream.fuse(),
+                rx: file_events_stream.fuse(),
                 inner: file,
                 _w: watcher,
             };
-            send_lines(file, tx, activator).await
+
+            let stream = match stream_ctor(Box::new(file)).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    error!("Failed to create tailed file source: {}", err);
+                    return;
+                }
+            };
+            send_records(stream, tx, activator).await
         }
     }
 }
 
-pub fn file<G>(
+pub fn file<G, Ctor, S, Out, Err, Fut>(
     id: SourceInstanceId,
     region: &G,
     name: String,
     path: PathBuf,
     executor: &tokio::runtime::Handle,
     read_style: FileReadStyle,
+    stream_ctor: Ctor,
 ) -> (
-    timely::dataflow::Stream<G, (Vec<u8>, Option<i64>)>,
+    timely::dataflow::Stream<G, (Out, Option<i64>)>,
     Option<SourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
+    S: Stream<Item = Result<Out, Err>> + Unpin + Send + 'static,
+    Ctor: FnOnce(Box<dyn AsyncRead + Unpin + Send>) -> Fut + Send + 'static,
+    Err: Display + Send + 'static,
+    Out: Send + Clone + 'static,
+    Fut: Future<Output = Result<S, Err>> + Send + 'static,
 {
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
-    const MAX_LINES_PER_INVOCATION: usize = 1024;
+    const MAX_RECORDS_PER_INVOCATION: usize = 1024;
     let n2 = name.clone();
     let read_file = read_style != FileReadStyle::None;
     let (stream, capability) = source(id, None, region, &name, move |info| {
         let activator = region.activator_for(&info.address[..]);
-        let (tx, mut rx) = futures::channel::mpsc::channel(MAX_LINES_PER_INVOCATION);
+        let (tx, mut rx) = futures::channel::mpsc::channel(MAX_RECORDS_PER_INVOCATION);
         if read_file {
             let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
-            executor.spawn(read_file_task(path, tx, activator, read_style));
+            executor.spawn(read_file_task(path, tx, activator, read_style, stream_ctor));
         }
-        let mut total_lines_read = 0;
+        let mut total_records_read = 0;
         move |cap, output| {
             // We need to make sure we always downgrade the capability.
             // Otherwise, the system will be stuck forever waiting for the timestamp
-            // associated with the last-read batch of lines to close.
+            // associated with the last-read batch of records to close.
             //
             // To do this, we normally downgrade to one millisecond past the current time.
             // However, if we were *already* 1ms past the current time, we don't want to
@@ -245,10 +276,10 @@ where
             // logging an error and shipping data at the capability timestamp.
             //
             // Example flow:
-            // * Line read at 8, we ship it and downgrade to 9
-            // * Line read at 15, we ship it and downgrade to 16
-            // * Line read at 15, we ship it (at 16, since we can't go backwards) and reschedule for 1ms in the future
-            // We wake up and see that it is 16. Regardless of whether we have lines to read, we will downgrade to 17.
+            // * Record read at 8, we ship it and downgrade to 9
+            // * Record read at 15, we ship it and downgrade to 16
+            // * Record read at 15, we ship it (at 16, since we can't go backwards) and reschedule for 1ms in the future
+            // We wake up and see that it is 16. Regardless of whether we have records to read, we will downgrade to 17.
             let cap_time = *cap.time();
             let sys_time = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -273,22 +304,22 @@ where
                 sys_time + 1
             };
 
-            let mut lines_read = 0;
+            let mut records_read = 0;
 
             let mut session = output.session(cap);
-            while lines_read < MAX_LINES_PER_INVOCATION {
-                if let Ok(line) = rx.try_next() {
-                    lines_read += 1;
-                    total_lines_read += 1;
-                    match line {
-                        Some(line) => session.give((line.into_bytes(), Some(total_lines_read))),
+            while records_read < MAX_RECORDS_PER_INVOCATION {
+                if let Ok(record) = rx.try_next() {
+                    records_read += 1;
+                    total_records_read += 1;
+                    match record {
+                        Some(record) => session.give((record, Some(total_records_read))),
                         None => return SourceStatus::Done,
                     }
                 } else {
                     break;
                 }
             }
-            if lines_read == MAX_LINES_PER_INVOCATION {
+            if records_read == MAX_RECORDS_PER_INVOCATION {
                 next_activation_duration = Default::default();
             }
             cap.downgrade(&next_time);

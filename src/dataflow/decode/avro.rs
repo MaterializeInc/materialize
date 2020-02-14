@@ -22,6 +22,7 @@ pub fn avro<G>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     raw_schema: &str,
     schema_registry: Option<Url>,
+    is_debezium: bool,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -30,7 +31,8 @@ where
         Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
         "AvroDecode",
         move |_, _| {
-            let mut decoder = interchange::avro::Decoder::new(raw_schema, schema_registry);
+            let mut decoder =
+                interchange::avro::Decoder::new(raw_schema, schema_registry, is_debezium);
             move |input, output| {
                 let mut events_success = 0;
                 let mut events_error = 0;

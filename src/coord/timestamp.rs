@@ -360,10 +360,12 @@ impl Timestamper {
                 connector: RtTimestampConnector::Kafka(self.create_rt_kafka_connector(id, kc)),
                 last_offset,
             },
-            ExternalSourceConnector::File(fc) => RtTimestampConsumer {
-                connector: RtTimestampConnector::File(self.create_rt_file_connector(id, fc)),
-                last_offset,
-            },
+            ExternalSourceConnector::File(fc) | ExternalSourceConnector::AvroOcf(fc) => {
+                RtTimestampConsumer {
+                    connector: RtTimestampConnector::File(self.create_rt_file_connector(id, fc)),
+                    last_offset,
+                }
+            }
             ExternalSourceConnector::Kinesis(kinc) => RtTimestampConsumer {
                 connector: RtTimestampConnector::Kinesis(block_on(
                     self.create_rt_kinesis_connector(id, kinc),
@@ -466,7 +468,7 @@ impl Timestamper {
                     timestamp_topic,
                 )),
             },
-            ExternalSourceConnector::File(fc) => {
+            ExternalSourceConnector::File(fc) | ExternalSourceConnector::AvroOcf(fc) => {
                 error!("File sources are unsupported for timestamping");
                 ByoTimestampConsumer {
                     source_name: String::from(""),

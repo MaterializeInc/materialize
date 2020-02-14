@@ -16,6 +16,7 @@ use avro_rs::schema::{RecordField, Schema, SchemaFingerprint, UnionSchema};
 use avro_rs::types::Value;
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use failure::bail;
+use futures::executor::block_on;
 use serde_json::json;
 
 use sha2::Sha256;
@@ -57,57 +58,61 @@ pub fn validate_key_schema(key_schema: &str, value_desc: &RelationDesc) -> Resul
 }
 
 /// Converts an Apache Avro schema into a [`repr::RelationDesc`].
-pub fn validate_value_schema(schema: &str) -> Result<RelationDesc> {
+pub fn validate_value_schema(schema: &str, is_debezium: bool) -> Result<RelationDesc> {
     let schema = parse_schema(schema)?;
 
-    // The top-level record needs to be a diff "envelope" that contains
-    // `before` and `after` fields, where the `before` and `after` fields
-    // have the same schema.
-    let row_schema = match &schema {
-        Schema::Record { fields, .. } => {
-            let before = fields.iter().find(|f| f.name == "before");
-            let after = fields.iter().find(|f| f.name == "after");
-            match (before, after) {
-                (Some(before), Some(after)) => {
-                    if let Some((left, right)) =
-                        first_mismatched_schema_types(&before.schema, &after.schema)
-                    {
-                        bail!(
+    let row_schema = if is_debezium {
+        // The top-level record needs to be a diff "envelope" that contains
+        // `before` and `after` fields, where the `before` and `after` fields
+        // have the same schema.
+        let row_schema = match &schema {
+            Schema::Record { fields, .. } => {
+                let before = fields.iter().find(|f| f.name == "before");
+                let after = fields.iter().find(|f| f.name == "after");
+                match (before, after) {
+                    (Some(before), Some(after)) => {
+                        if let Some((left, right)) =
+                            first_mismatched_schema_types(&before.schema, &after.schema)
+                        {
+                            bail!(
                             "source schema has mismatched 'before' and 'after' schemas: before={:?} after={:?}",
                             left,
                             right
                         )
+                        }
+                        &before.schema
                     }
-                    &before.schema
+                    (None, _) => bail!("source schema is missing 'before' field"),
+                    (_, None) => bail!("source schema is missing 'after' field"),
                 }
-                (None, _) => bail!("source schema is missing 'before' field"),
-                (_, None) => bail!("source schema is missing 'after' field"),
             }
-        }
-        _ => bail!("source schema does not match required envelope format"),
-    };
+            _ => bail!("source schema does not match required envelope format"),
+        };
 
-    // The "row" schema used by the `before` and `after` fields needs to be
-    // a nullable record type.
-    let row_schema = match &row_schema {
-        Schema::Union(us) => {
-            if us.variants().len() != 2 {
-                bail!("source schema 'before'/'after' fields are not of expected type");
+        // The "row" schema used by the `before` and `after` fields needs to be
+        // a nullable record type.
+        match &row_schema {
+            Schema::Union(us) => {
+                if us.variants().len() != 2 {
+                    bail!("source schema 'before'/'after' fields are not of expected type");
+                }
+                let has_null = us.variants().iter().any(|s| is_null(s));
+                let record = us.variants().iter().find(|s| match s {
+                    Schema::Record { .. } => true,
+                    _ => false,
+                });
+                if !has_null {
+                    bail!("source schema has non-nullable 'before'/'after' fields");
+                }
+                match record {
+                    Some(record) => record,
+                    None => bail!("source schema 'before/'after' fields are not of expected type"),
+                }
             }
-            let has_null = us.variants().iter().any(|s| is_null(s));
-            let record = us.variants().iter().find(|s| match s {
-                Schema::Record { .. } => true,
-                _ => false,
-            });
-            if !has_null {
-                bail!("source schema has non-nullable 'before'/'after' fields");
-            }
-            match record {
-                Some(record) => record,
-                None => bail!("source schema 'before/'after' fields are not of expected type"),
-            }
+            _ => bail!("source schema has non-nullable 'before'/'after' fields"),
         }
-        _ => bail!("source schema has non-nullable 'before'/'after' fields"),
+    } else {
+        &schema
     };
 
     // The diff envelope is sane. Convert the actual record schema for the row.
@@ -132,7 +137,7 @@ fn validate_schema_1(schema: &Schema) -> Result<RelationDesc> {
                 column_names,
             ))
         }
-        _ => bail!("row schemas must be records, got {:?}", schema),
+        _ => bail!("row schemas must be records, got: {:?}", schema),
     }
 }
 
@@ -310,6 +315,77 @@ fn first_mismatched_schema_types<'a>(
     }
 }
 
+pub fn value_to_datum(v: &Value) -> Result<Datum<'_>> {
+    match v {
+        Value::Null => Ok(Datum::Null),
+        Value::Boolean(true) => Ok(Datum::True),
+        Value::Boolean(false) => Ok(Datum::False),
+        Value::Int(i) => Ok(Datum::Int32(*i)),
+        Value::Long(i) => Ok(Datum::Int64(*i)),
+        Value::Float(f) => Ok(Datum::Float32((*f).into())),
+        Value::Double(f) => Ok(Datum::Float64((*f).into())),
+        Value::Date(d) => Ok(Datum::Date(*d)),
+        Value::Timestamp(d) => Ok(Datum::Timestamp(*d)),
+        Value::Decimal { unscaled, .. } => Ok(Datum::Decimal(
+            Significand::from_twos_complement_be(&unscaled)?,
+        )),
+        Value::Bytes(b) => Ok(Datum::Bytes(b)),
+        Value::String(s) => Ok(Datum::String(s)),
+        Value::Union(v) => value_to_datum(v),
+        other @ Value::Fixed(..)
+        | other @ Value::Enum(..)
+        | other @ Value::Array(_)
+        | other @ Value::Map(_)
+        | other @ Value::Record(_) => bail!("unsupported avro value: {:?}", other),
+    }
+}
+
+pub fn extract_row<'a, I>(mut v: Value, strip_union: bool, extra: I) -> Result<Option<Row>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    if strip_union {
+        v = match v {
+            Value::Union(v) => *v,
+            _ => bail!("unsupported avro value: {:?}", v),
+        }
+    }
+    match v {
+        Value::Record(fields) => {
+            let mut row = RowPacker::new();
+            for (_, col) in fields.iter() {
+                row.push(value_to_datum(col)?);
+            }
+            for d in extra {
+                row.push(d);
+            }
+            Ok(Some(row.finish()))
+        }
+        Value::Null => Ok(None),
+        _ => bail!("unsupported avro value: {:?}", v),
+    }
+}
+
+pub fn extract_debezium_slow(v: Value) -> Result<DiffPair> {
+    let mut before = None;
+    let mut after = None;
+    match v {
+        Value::Record(fields) => {
+            for (name, val) in fields {
+                if name == "before" {
+                    before = extract_row(val, true, iter::once(Datum::Int64(-1)))?;
+                } else if name == "after" {
+                    after = extract_row(val, true, iter::once(Datum::Int64(1)))?;
+                } else {
+                    // Intentionally ignore other fields.
+                }
+            }
+        }
+        _ => bail!("avro envelope had unexpected type: {:?}", v),
+    };
+    Ok(DiffPair { before, after })
+}
+
 #[derive(Debug)]
 pub struct DiffPair {
     pub before: Option<Row>,
@@ -321,6 +397,7 @@ pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     fast_row_schema: Option<Schema>,
+    is_debezium: bool,
 }
 
 impl fmt::Debug for Decoder {
@@ -346,7 +423,11 @@ impl Decoder {
     /// The provided schema is called the "reader schema", which is the schema
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
-    pub fn new(reader_schema: &str, schema_registry_url: Option<url::Url>) -> Decoder {
+    pub fn new(
+        reader_schema: &str,
+        schema_registry_url: Option<url::Url>,
+        is_debezium: bool,
+    ) -> Decoder {
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
         let reader_schema = parse_schema(reader_schema).unwrap();
@@ -371,6 +452,7 @@ impl Decoder {
             reader_schema,
             writer_schemas,
             fast_row_schema,
+            is_debezium,
         }
     }
 
@@ -409,86 +491,42 @@ impl Decoder {
             None => (&self.reader_schema, None),
         };
 
-        fn value_to_datum(v: &Value) -> Result<Datum<'_>> {
-            match v {
-                Value::Null => Ok(Datum::Null),
-                Value::Boolean(true) => Ok(Datum::True),
-                Value::Boolean(false) => Ok(Datum::False),
-                Value::Int(i) => Ok(Datum::Int32(*i)),
-                Value::Long(i) => Ok(Datum::Int64(*i)),
-                Value::Float(f) => Ok(Datum::Float32((*f).into())),
-                Value::Double(f) => Ok(Datum::Float64((*f).into())),
-                Value::Date(d) => Ok(Datum::Date(*d)),
-                Value::Timestamp(d) => Ok(Datum::Timestamp(*d)),
-                Value::Decimal { unscaled, .. } => Ok(Datum::Decimal(
-                    Significand::from_twos_complement_be(&unscaled)?,
-                )),
-                Value::Bytes(b) => Ok(Datum::Bytes(b)),
-                Value::String(s) => Ok(Datum::String(s)),
-                Value::Union(v) => value_to_datum(v),
-                other @ Value::Fixed(..)
-                | other @ Value::Enum(..)
-                | other @ Value::Array(_)
-                | other @ Value::Map(_)
-                | other @ Value::Record(_) => bail!("unsupported avro value: {:?}", other),
+        let result = if self.is_debezium {
+            if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
+                // The record is laid out such that we can extract the `before` and
+                // `after` fields without decoding the entire record.
+                let before = extract_row(
+                    block_on(avro_rs::from_avro_datum(&schema, &mut bytes, None))?,
+                    true,
+                    iter::once(Datum::Int64(-1)),
+                )?;
+                let after = extract_row(
+                    block_on(avro_rs::from_avro_datum(&schema, &mut bytes, None))?,
+                    true,
+                    iter::once(Datum::Int64(1)),
+                )?;
+                DiffPair { before, after }
+            } else {
+                let val = block_on(avro_rs::from_avro_datum(
+                    writer_schema,
+                    &mut bytes,
+                    reader_schema,
+                ))?;
+                extract_debezium_slow(val)?
+            }
+        } else {
+            let val = block_on(avro_rs::from_avro_datum(
+                writer_schema,
+                &mut bytes,
+                reader_schema,
+            ))?;
+            let row = extract_row(val, false, iter::empty())?;
+            DiffPair {
+                before: None,
+                after: row,
             }
         };
-
-        fn extract_row<'a, I>(v: Value, extra: I) -> Result<Option<Row>>
-        where
-            I: IntoIterator<Item = Datum<'a>>,
-        {
-            let v = match v {
-                Value::Union(v) => *v,
-                _ => bail!("unsupported avro value: {:?}", v),
-            };
-            match v {
-                Value::Record(fields) => {
-                    let mut row = RowPacker::new();
-                    for (_, col) in fields.iter() {
-                        row.push(value_to_datum(col)?);
-                    }
-                    for d in extra {
-                        row.push(d);
-                    }
-                    Ok(Some(row.finish()))
-                }
-                Value::Null => Ok(None),
-                _ => bail!("unsupported avro value: {:?}", v),
-            }
-        }
-
-        let mut before = None;
-        let mut after = None;
-        if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
-            // The record is laid out such that we can extract the `before` and
-            // `after` fields without decoding the entire record.
-            before = extract_row(
-                avro_rs::from_avro_datum(&schema, &mut bytes, None)?,
-                iter::once(Datum::Int64(-1)),
-            )?;
-            after = extract_row(
-                avro_rs::from_avro_datum(&schema, &mut bytes, None)?,
-                iter::once(Datum::Int64(1)),
-            )?;
-        } else {
-            let val = avro_rs::from_avro_datum(writer_schema, &mut bytes, reader_schema)?;
-            match val {
-                Value::Record(fields) => {
-                    for (name, val) in fields {
-                        if name == "before" {
-                            before = extract_row(val, iter::once(Datum::Int64(-1)))?;
-                        } else if name == "after" {
-                            after = extract_row(val, iter::once(Datum::Int64(1)))?;
-                        } else {
-                            // Intentionally ignore other fields.
-                        }
-                    }
-                }
-                _ => bail!("avro envelope had unexpected type: {:?}", val),
-            }
-        }
-        Ok(DiffPair { before, after })
+        Ok(result)
     }
 }
 
@@ -782,7 +820,7 @@ mod tests {
             // avoids embedding JSON strings inside of JSON, which is hard on
             // the eyes.
             let schema = serde_json::to_string(&tc.input)?;
-            let output = super::validate_value_schema(&schema)?;
+            let output = super::validate_value_schema(&schema, true)?;
             assert_eq!(output, tc.expected, "failed test case name: {}", tc.name)
         }
 

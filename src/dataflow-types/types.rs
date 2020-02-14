@@ -24,8 +24,10 @@ use expr::{
     ColumnOrder, EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr,
     SourceInstanceId,
 };
+use interchange::avro;
+use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
-use repr::{Datum, RelationDesc, RelationType, Row};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -325,15 +327,83 @@ pub enum DataEncoding {
     Protobuf(ProtobufEncoding),
     Bytes,
     Text,
+    AvroOcf {
+        schema: String,
+    },
+}
+
+impl DataEncoding {
+    pub fn desc(&self, envelope: Envelope) -> Result<RelationDesc, failure::Error> {
+        let desc = match self {
+            DataEncoding::Bytes => RelationDesc::from_cols(vec![(
+                ColumnType::new(ScalarType::Bytes),
+                Some("data".to_owned()),
+            )]),
+            DataEncoding::AvroOcf { schema } => {
+                avro::validate_value_schema(&*schema, envelope == Envelope::Debezium)?
+            }
+            DataEncoding::Avro(AvroEncoding { value_schema, key_schema, .. }) => {
+                let mut desc = avro::validate_value_schema(value_schema, envelope == Envelope::Debezium)?;
+                if let Some(key_schema) = key_schema {
+                    let keys = avro::validate_key_schema(key_schema, &desc)?;
+                    desc = desc.add_keys(keys);
+                }
+                desc
+            }
+            DataEncoding::Protobuf(ProtobufEncoding {
+                descriptors,
+                message_name,
+            }) => {
+                let d = decode_descriptors(descriptors)?;
+                validate_descriptors(message_name, &d)?
+            }
+            DataEncoding::Regex { regex } => {
+                RelationDesc::from_cols(
+                    regex
+                        .capture_names()
+                        .enumerate()
+                        // The first capture is the entire matched string.
+                        // This will often not be useful, so skip it.
+                        // If people want it they can just surround their
+                        // entire regex in an explicit capture group.
+                        .skip(1)
+                        .map(|(i, ocn)| {
+                            (
+                                ColumnType::new(ScalarType::String).nullable(true),
+                                match ocn {
+                                    None => Some(format!("column{}", i)),
+                                    Some(ocn) => Some(String::from(ocn)),
+                                },
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            DataEncoding::Csv(CsvEncoding { n_cols, .. }) => RelationDesc::from_cols(
+                (1..=*n_cols)
+                    .map(|i| {
+                        (
+                            ColumnType::new(ScalarType::String),
+                            Some(format!("column{}", i)),
+                        )
+                    })
+                    .collect(),
+            ),
+            DataEncoding::Text => RelationDesc::from_cols(vec![(
+                ColumnType::new(ScalarType::String),
+                Some("text".to_owned()),
+            )]),
+        };
+        Ok(desc)
+    }
 }
 
 /// Encoding in Avro format.
-///
-/// Assumes Debezium-style `before: ..., after: ...` structure.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AvroEncoding {
-    pub raw_schema: String,
+    pub key_schema: Option<String>,
+    pub value_schema: String,
     pub schema_registry_url: Option<Url>,
 }
 
@@ -373,7 +443,7 @@ pub struct SinkDesc {
     pub connector: SinkConnector,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Envelope {
     None,
     Debezium,
@@ -395,6 +465,23 @@ pub enum ExternalSourceConnector {
     Kafka(KafkaSourceConnector),
     Kinesis(KinesisSourceConnector),
     File(FileSourceConnector),
+    AvroOcf(FileSourceConnector),
+}
+
+impl ExternalSourceConnector {
+    pub fn metadata_columns(&self) -> Vec<(ColumnType, Option<String>)> {
+        match self {
+            Self::Kafka(_) => vec![],
+            Self::File(_) => vec![(
+                ColumnType::new(ScalarType::Int64),
+                Some("mz_line_no".into()),
+            )],
+            Self::Kinesis(_) => vec![],
+            Self::AvroOcf(_) => {
+                vec![(ColumnType::new(ScalarType::Int64), Some("mz_obj_no".into()))]
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

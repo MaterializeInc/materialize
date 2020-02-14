@@ -2898,19 +2898,15 @@ fn parse_create_source_inline_schema() {
         Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
             assert_eq!("foo", name.to_string());
-            assert_eq!(
-                Connector::File {
-                    path: "bar".into(),
-                    with_options: vec![]
-                },
-                connector
-            );
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
+            assert!(with_options.is_empty());
             assert_eq!(
                 Format::Avro(AvroSchema::Schema(Schema::Inline("baz".into()))),
                 format.unwrap()
@@ -2932,6 +2928,7 @@ fn parse_create_source_kafka() {
         Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
@@ -2942,18 +2939,21 @@ fn parse_create_source_kafka() {
                 Connector::Kafka {
                     broker: "bar".into(),
                     topic: "baz".into(),
-                    with_options: vec![
-                        SqlOption {
-                            name: "consistency".into(),
-                            value: Value::SingleQuotedString("lug".into()),
-                        },
-                        SqlOption {
-                            name: "ssl_certificate_file".into(),
-                            value: Value::SingleQuotedString("/Path/to/file".into()),
-                        },
-                    ],
                 },
                 connector
+            );
+            assert_eq!(
+                vec![
+                    SqlOption {
+                        name: "consistency".into(),
+                        value: Value::SingleQuotedString("lug".into()),
+                    },
+                    SqlOption {
+                        name: "ssl_certificate_file".into(),
+                        value: Value::SingleQuotedString("/Path/to/file".into()),
+                    },
+                ],
+                with_options
             );
             assert_eq!(Format::Bytes, format.unwrap());
             assert_eq!(Envelope::None, envelope);
@@ -2972,19 +2972,15 @@ fn parse_create_source_file_schema_protobuf_multiple_args() {
         Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
             assert_eq!("foo", name.to_string());
-            assert_eq!(
-                Connector::File {
-                    path: "bar".into(),
-                    with_options: vec![]
-                },
-                connector
-            );
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
+            assert!(with_options.is_empty());
             assert_eq!(
                 Format::Protobuf {
                     message_name: "somemessage".into(),
@@ -3009,21 +3005,20 @@ fn parse_create_source_regex() {
         Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
             assert_eq!("foo", name.to_string());
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
             assert_eq!(
-                Connector::File {
-                    path: "bar".into(),
-                    with_options: vec![SqlOption {
-                        name: "tail".into(),
-                        value: Value::Boolean(true)
-                    }]
-                },
-                connector
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(true)
+                }],
+                with_options,
             );
             assert_eq!(Format::Regex("(asdf)|(jkl)".into()), format.unwrap());
             assert_eq!(Envelope::None, envelope);
@@ -3043,21 +3038,20 @@ fn parse_create_source_csv() {
         Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
             assert_eq!("foo", name.to_string());
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
             assert_eq!(
-                Connector::File {
-                    path: "bar".into(),
-                    with_options: vec![SqlOption {
-                        name: "tail".into(),
-                        value: Value::Boolean(false)
-                    }]
-                },
-                connector
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(false)
+                }],
+                with_options
             );
             assert_eq!(
                 Format::Csv {
@@ -3083,21 +3077,20 @@ fn parse_create_source_csv_custom_delim() {
         Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
             assert_eq!("foo", name.to_string());
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
             assert_eq!(
-                Connector::File {
-                    path: "bar".into(),
-                    with_options: vec![SqlOption {
-                        name: "tail".into(),
-                        value: Value::Boolean(true)
-                    }]
-                },
-                connector
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(true)
+                }],
+                with_options
             );
             assert_eq!(
                 Format::Csv {
@@ -3132,16 +3125,17 @@ fn parse_avro_object() {
             name,
             connector,
             format,
+            with_options,
             ..
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
                 Connector::AvroOcf {
                     path: "/tmp/bar".into(),
-                    with_options: vec![]
                 },
                 connector
             );
+            assert!(with_options.is_empty());
             assert_eq!(None, format);
         }
         _ => unreachable!(),
@@ -3157,19 +3151,15 @@ fn parse_create_source_registry() {
         Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
             assert_eq!("foo", name.to_string());
-            assert_eq!(
-                Connector::File {
-                    path: "bar".into(),
-                    with_options: vec![]
-                },
-                connector
-            );
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
+            assert!(with_options.is_empty());
             assert_eq!(
                 Format::Avro(AvroSchema::CsrUrl {
                     url: "http://localhost:8081".into(),
@@ -3265,13 +3255,7 @@ fn parse_create_sink() {
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", from.to_string());
-            assert_eq!(
-                Connector::File {
-                    path: "baz".into(),
-                    with_options: vec![]
-                },
-                connector
-            );
+            assert_eq!(Connector::File { path: "baz".into() }, connector);
             assert_eq!(Format::Bytes, format);
             assert!(!if_not_exists);
         }

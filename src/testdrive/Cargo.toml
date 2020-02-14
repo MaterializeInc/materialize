@@ -14,7 +14,7 @@ path = "main.rs"
 
 [dependencies]
 atty = "0.2"
-avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
+avro-rs = { path = "../../../avro-rs" }
 backoff = "0.1.6"
 byteorder = "1.3"
 ccsr = { path = "../ccsr" }

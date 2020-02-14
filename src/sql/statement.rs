@@ -11,10 +11,7 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
-use itertools::join;
 use std::collections::{BTreeMap, HashMap};
-use std::iter;
-use std::path::PathBuf;
 
 use failure::{bail, format_err, ResultExt};
 use itertools::Itertools;
@@ -23,12 +20,11 @@ use url::Url;
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
-    AvroEncoding, Consistency, CsvEncoding, DataEncoding, Envelope, ExternalSourceConnector,
+    AvroEncoding, Consistency, CsvEncoding, DataEncoding, ExternalSourceConnector,
     FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, KinesisSourceConnector,
     PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnector, SourceConnector,
 };
 use expr::GlobalId;
-use interchange::{avro, protobuf};
 use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
@@ -40,6 +36,7 @@ use sql_parser::ast::{
 use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
 use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, View};
+use regex::Regex;
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -619,19 +616,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
 
     let (mut broker, topic) = match connector {
         Connector::File { .. } => bail!("file sinks are not yet supported"),
-        Connector::Kafka {
-            broker,
-            topic,
-            with_options,
-        } => {
-            if !with_options.is_empty() {
-                bail!(
-                    "Unexpected WITH options: {}",
-                    join(with_options.into_iter().map(|o| o.name.value), ",")
-                )
-            }
-            (broker, topic)
-        }
+        Connector::Kafka { broker, topic } => (broker, topic),
         Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
         Connector::AvroOcf { .. } => bail!("Avro object sinks are not yet supported"),
     };
@@ -827,9 +812,6 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
         connector, format, ..
     } = &mut stmt
     {
-        let format = format
-            .as_mut()
-            .ok_or_else(|| format_err!("Source format must be specified"))?;
         let topic = if let Connector::Kafka { broker, topic, .. } = connector {
             if !broker.contains(':') {
                 *broker += ":9092";
@@ -839,42 +821,59 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
             None
         };
 
-        match format {
-            Format::Avro(schema) => match schema {
-                AvroSchema::CsrUrl { url, seed } => {
-                    let topic = if let Some(topic) = topic {
-                        topic
-                    } else {
-                        bail!("Confluent Schema Registry is only supported with Kafka sources")
-                    };
-                    if seed.is_none() {
-                        let url = url.parse()?;
-                        let Schema {
-                            key_schema,
-                            value_schema,
-                            ..
-                        } = get_remote_avro_schema(url, topic.clone()).await?;
-                        *seed = Some(CsrSeed {
-                            key_schema,
-                            value_schema,
-                        });
+        if let Some(format) = format {
+            match format {
+                Format::Avro(schema) => match schema {
+                    AvroSchema::CsrUrl { url, seed } => {
+                        let topic = if let Some(topic) = topic {
+                            topic
+                        } else {
+                            bail!("Confluent Schema Registry is only supported with Kafka sources")
+                        };
+                        if seed.is_none() {
+                            let url = url.parse()?;
+                            let Schema {
+                                key_schema,
+                                value_schema,
+                                ..
+                            } = get_remote_avro_schema(url, topic.clone()).await?;
+                            *seed = Some(CsrSeed {
+                                key_schema,
+                                value_schema,
+                            });
+                        }
+                    }
+                    AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
+                        let value_schema = tokio::fs::read_to_string(path).await?;
+                        *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
+                    }
+                    _ => {}
+                },
+                Format::Protobuf { schema, .. } => {
+                    if let sql_parser::ast::Schema::File(path) = schema {
+                        let descriptors = tokio::fs::read(path).await?;
+                        let mut buf = String::new();
+                        strconv::format_bytes(&mut buf, &descriptors);
+                        *schema = sql_parser::ast::Schema::Inline(buf);
                     }
                 }
-                AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
-                    let value_schema = tokio::fs::read_to_string(path).await?;
-                    *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
-                }
                 _ => {}
-            },
-            Format::Protobuf { schema, .. } => {
-                if let sql_parser::ast::Schema::File(path) = schema {
-                    let descriptors = tokio::fs::read(path).await?;
-                    let mut buf = String::new();
-                    strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = sql_parser::ast::Schema::Inline(buf);
-                }
             }
-            _ => {}
+        } else {
+            match connector {
+                Connector::AvroOcf { path, .. } => {
+                    let path = path.clone();
+                    let schema =
+                        tokio::task::spawn_blocking(move || -> Result<_, failure::Error> {
+                            let f = std::fs::File::open(path)?;
+                            Ok(avro_rs::Reader::new(f)?.writer_schema().clone())
+                        })
+                        .await??;
+                    let schema = serde_json::to_string(&schema).unwrap();
+                    *format = Some(Format::AvroOcf { schema })
+                }
+                _ => bail!("Source format must be specified"),
+            }
         }
     }
     Ok(stmt)
@@ -885,62 +884,43 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
         Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
-            let format = format
-                .as_ref()
-                .ok_or_else(|| format_err!("Source format must be specified"))?;
             let envelope = match envelope {
                 sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
                 sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
             };
 
-            let mut source = match connector {
-                Connector::Kafka {
-                    broker,
-                    topic,
-                    with_options,
-                } => {
-                    let mut with_options: HashMap<_, _> = with_options
-                        .iter()
-                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
-                        .collect();
-                    let consistency = match with_options.remove("consistency") {
-                        None => Consistency::RealTime,
-                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
-                        Some(_) => bail!("consistency must be a string"),
-                    };
+            let mut with_options: HashMap<_, _> = with_options
+                .iter()
+                .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
+                .collect();
 
+            let mut consistency = Consistency::RealTime;
+            let external_connector = match connector {
+                Connector::Kafka { broker, topic, .. } => {
                     let ssl_certificate_file = match with_options.remove("ssl_certificate_file") {
                         None => None,
                         Some(Value::SingleQuotedString(p)) => Some(p.into()),
                         Some(_) => bail!("ssl_certificate_file must be a string"),
                     };
+                    consistency = match with_options.remove("consistency") {
+                        None => Consistency::RealTime,
+                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
+                        Some(_) => bail!("consistency must be a string"),
+                    };
 
-                    if !with_options.is_empty() {
-                        bail!(
-                            "Unexpected WITH options: {}",
-                            join(with_options.keys(), ",")
-                        )
-                    }
-                    let url = broker.parse()?;
-                    build_kafka_source(
-                        url,
-                        topic.clone(),
-                        format,
-                        envelope,
-                        consistency,
+                    ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                        url: broker.parse()?,
+                        topic: topic.clone(),
                         ssl_certificate_file,
-                    )?
+                    })
                 }
-                Connector::Kinesis { arn, with_options } => {
-                    let mut with_options: HashMap<_, _> = with_options
-                        .iter()
-                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
-                        .collect();
+                Connector::Kinesis { arn, .. } => {
                     // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
                     // https://github.com/materializeinc/materialize/issues/1991
                     let access_key = match with_options.remove("access_key") {
@@ -955,176 +935,132 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::SingleQuotedString(region)) => region,
                         _ => bail!("Kinesis sources require a `region` option"),
                     };
-                    if !with_options.is_empty() {
-                        bail!(
-                            "Unexpected WITH options: {}",
-                            join(with_options.keys(), ",")
-                        )
-                    }
-
-                    match envelope {
-                        dataflow_types::Envelope::None => {}
-                        dataflow_types::Envelope::Debezium => {
-                            bail!("Debezium-envelope Kinesis sources are not supported")
-                        }
-                    }
-
-                    let (encoding, desc) = match format {
-                        Format::Bytes => (
-                            DataEncoding::Bytes,
-                            RelationDesc::new(
-                                RelationType::new(vec![ColumnType::new(ScalarType::Bytes)]),
-                                vec![Some(String::from("record"))],
-                            ),
-                        ),
-                        _ => bail!("Kinesis sources only support data as bytes"),
-                    };
-
-                    Source {
-                        create_sql: "<filled in later>".into(),
-                        connector: SourceConnector::External {
-                            connector: ExternalSourceConnector::Kinesis(KinesisSourceConnector {
-                                arn: arn.clone(),
-                                access_key,
-                                secret_access_key,
-                                region,
-                            }),
-                            encoding,
-                            envelope: Envelope::None,
-                            consistency: Consistency::RealTime,
-                        },
-                        desc,
-                    }
+                    ExternalSourceConnector::Kinesis(KinesisSourceConnector {
+                        arn: arn.clone(),
+                        access_key,
+                        secret_access_key,
+                        region,
+                    })
                 }
-                Connector::File { path, with_options } => {
-                    let mut with_options: HashMap<_, _> = with_options
-                        .iter()
-                        .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
-                        .collect();
+                Connector::File { path, .. } => {
                     let tail = match with_options.remove("tail") {
                         None => false,
                         Some(Value::Boolean(b)) => b,
                         Some(_) => bail!("tail must be a boolean"),
                     };
-                    if !with_options.is_empty() {
-                        bail!(
-                            "Unexpected WITH options: {}",
-                            join(with_options.keys(), ",")
-                        )
-                    }
-                    let (encoding, desc) = match format {
-                        Format::Bytes => (
-                            DataEncoding::Bytes,
-                            RelationDesc::new(
-                                RelationType::new(vec![
-                                    ColumnType::new(ScalarType::Bytes),
-                                    ColumnType::new(ScalarType::Int64).nullable(true),
-                                ]),
-                                iter::once(Some(String::from("data")))
-                                    .chain(iter::once(Some(String::from("mz_line_no")))),
-                            ),
-                        ),
-                        Format::Avro(_) => bail!("Avro-format file sources are not yet supported"),
-                        Format::Protobuf { .. } => {
-                            bail!("Protobuf-format file sources are not yet supported")
-                        }
-                        Format::Regex(s) => {
-                            let regex = match regex::Regex::new(&s) {
-                                Ok(r) => r,
-                                Err(e) => bail!("Error compiling regex: {}", e),
-                            };
-                            let names: Vec<_> = regex
-                                .capture_names()
-                                .enumerate()
-                                // The first capture is the entire matched string.
-                                // This will often not be useful, so skip it.
-                                // If people want it they can just surround their
-                                // entire regex in an explicit capture group.
-                                .skip(1)
-                                .map(|(i, ocn)| match ocn {
-                                    None => Some(format!("column{}", i)),
-                                    Some(ocn) => Some(String::from(ocn)),
-                                })
-                                .chain(iter::once(Some(String::from("mz_line_no"))))
-                                .collect();
-                            let n_cols = names.len() - 1;
-                            if n_cols == 0 {
-                                bail!("source regex must contain at least one capture group to be useful");
-                            }
-                            let cols =
-                                iter::repeat(ColumnType::new(ScalarType::String).nullable(true))
-                                    .take(n_cols)
-                                    .chain(iter::once(
-                                        ColumnType::new(ScalarType::Int64).nullable(true),
-                                    ))
-                                    .collect();
-                            (
-                                DataEncoding::Regex { regex },
-                                RelationDesc::new(RelationType::new(cols), names),
-                            )
-                        }
-                        Format::Csv { n_cols, delimiter } => {
-                            let delimiter = match *delimiter as u32 {
-                                0..=127 => *delimiter as u8,
-                                _ => bail!("CSV delimiter must be an ASCII character"),
-                            };
-                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
-                                .take(*n_cols)
-                                .chain(iter::once(
-                                    ColumnType::new(ScalarType::Int64).nullable(true),
-                                ))
-                                .collect();
-                            let names = (1..=*n_cols)
-                                .map(|i| Some(format!("column{}", i)))
-                                .chain(iter::once(Some(String::from("mz_line_no"))));
-                            (
-                                DataEncoding::Csv(CsvEncoding {
-                                    n_cols: *n_cols,
-                                    delimiter,
-                                }),
-                                RelationDesc::new(RelationType::new(cols), names),
-                            )
-                        }
-                        Format::Json => bail!("JSON-format file sources are not yet supported"),
-                        Format::Text => (
-                            DataEncoding::Text,
-                            RelationDesc::new(
-                                RelationType::new(vec![
-                                    ColumnType::new(ScalarType::String),
-                                    ColumnType::new(ScalarType::Int64).nullable(true),
-                                ]),
-                                iter::once(Some(String::from("text")))
-                                    .chain(iter::once(Some(String::from("mz_line_no")))),
-                            ),
-                        ),
-                    };
-                    match envelope {
-                        dataflow_types::Envelope::None => {}
-                        dataflow_types::Envelope::Debezium => {
-                            bail!("Debezium-envelope file sources are not supported")
-                        }
-                    }
-                    Source {
-                        create_sql: "<filled in below>".into(),
-                        connector: SourceConnector::External {
-                            connector: ExternalSourceConnector::File(FileSourceConnector {
-                                path: path.clone().into(),
-                                tail,
-                            }),
-                            encoding,
-                            envelope,
-                            consistency: Consistency::RealTime,
-                        },
-                        desc,
-                    }
+                    ExternalSourceConnector::File(FileSourceConnector {
+                        path: path.clone().into(),
+                        tail,
+                    })
                 }
-                Connector::AvroOcf { .. } => bail!("Avro object files are not yet supported."),
+                Connector::AvroOcf { path, .. } => {
+                    let tail = match with_options.remove("tail") {
+                        None => false,
+                        Some(Value::Boolean(b)) => b,
+                        Some(_) => bail!("tail must be a boolean"),
+                    };
+                    ExternalSourceConnector::AvroOcf(FileSourceConnector {
+                        path: path.clone().into(),
+                        tail,
+                    })
+                }
             };
+
+            let format = format
+                .as_ref()
+                .ok_or_else(|| format_err!("Source format must be specified"))?;
+
+            let encoding = match format {
+                Format::AvroOcf { schema } => DataEncoding::AvroOcf {
+                    schema: schema.to_owned(),
+                },
+                Format::Bytes => DataEncoding::Bytes,
+                Format::Avro(schema) => {
+                    let Schema {
+                        key_schema,
+                        value_schema,
+                        schema_registry_url,
+                    } = match schema {
+                        // TODO(jldlaughlin): we need a way to pass in primary key information
+                        // when building a source from a string or file.
+                        AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Schema {
+                            key_schema: None,
+                            value_schema: schema.clone(),
+                            schema_registry_url: None,
+                        },
+                        AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
+                            unreachable!("File schema should already have been inlined")
+                        }
+                        AvroSchema::CsrUrl { url: csr_url, seed } => {
+                            let csr_url: Url = csr_url.parse()?;
+                            if let Some(seed) = seed {
+                                Schema {
+                                    key_schema: seed.key_schema.clone(),
+                                    value_schema: seed.value_schema.clone(),
+                                    schema_registry_url: Some(csr_url),
+                                }
+                            } else {
+                                unreachable!("CSR seed resolution should already have been called")
+                            }
+                        }
+                    };
+
+                    DataEncoding::Avro(AvroEncoding {
+                        key_schema,
+                        value_schema,
+                        schema_registry_url,
+                    })
+                }
+                Format::Protobuf {
+                    message_name,
+                    schema,
+                } => {
+                    let descriptors = match schema {
+                        sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
+                        sql_parser::ast::Schema::File(_) => {
+                            unreachable!("File schema should already have been inlined")
+                        }
+                    };
+
+                    DataEncoding::Protobuf(ProtobufEncoding {
+                        descriptors,
+                        message_name: message_name.to_owned(),
+                    })
+                }
+                Format::Regex(regex) => {
+                    let regex = Regex::new(regex)?;
+                    DataEncoding::Regex { regex }
+                }
+                Format::Csv { n_cols, delimiter } => DataEncoding::Csv(CsvEncoding {
+                    n_cols: *n_cols,
+                    delimiter: match *delimiter as u32 {
+                        0..=127 => *delimiter as u8,
+                        _ => bail!("CSV delimiter must be an ASCII character"),
+                    },
+                }),
+                Format::Json => bail!("JSON sources are not supported yet."),
+                Format::Text => DataEncoding::Text,
+            };
+
+            let mut desc = encoding.desc(envelope)?;
+            desc.add_cols(external_connector.metadata_columns());
+
 
             let if_not_exists = *if_not_exists;
             let materialized = *materialized;
             let name = scx.allocate_name(normalize::object_name(name.clone())?);
-            source.create_sql = normalize::create_statement(&scx, stmt)?;
+            let create_sql = normalize::create_statement(&scx, stmt)?;
+
+            let source = Source {
+                create_sql,
+                connector: SourceConnector::External {
+                    connector: external_connector,
+                    encoding,
+                    envelope,
+                    consistency,
+                },
+                desc,
+            };
             Ok(Plan::CreateSource {
                 name,
                 source,
@@ -1342,43 +1278,6 @@ fn handle_query(
     Ok((expr.decorrelate()?, desc, finishing))
 }
 
-fn build_kafka_source(
-    url: Url,
-    topic: String,
-    format: &Format,
-    envelope: Envelope,
-    consistency: Consistency,
-    ssl_certificate_file: Option<PathBuf>,
-) -> Result<Source, failure::Error> {
-    match (format, envelope) {
-        (Format::Avro(schema), Envelope::Debezium) => {
-            build_kafka_avro_source(schema, url, topic, consistency, ssl_certificate_file)
-        }
-        (Format::Avro(_), _) => {
-            // TODO(brennan) -- there's no reason not to support this
-            bail!("Currently, only Avro in Debezium-envelope format is supported")
-        }
-        (
-            Format::Protobuf {
-                message_name,
-                schema,
-            },
-            Envelope::None,
-        ) => build_kafka_protobuf_source(
-            schema,
-            url,
-            topic,
-            message_name,
-            consistency,
-            ssl_certificate_file,
-        ),
-        (Format::Protobuf { .. }, Envelope::Debezium) => {
-            bail!("Currently, Debezium-style envelopes are not supported for protobuf messages.")
-        }
-        _ => bail!("Currently, Kafka sources only support Avro and Protobuf formats."), // TODO(brennan)
-    }
-}
-
 #[derive(Debug)]
 struct Schema {
     key_schema: Option<String>,
@@ -1405,104 +1304,6 @@ async fn get_remote_avro_schema(url: Url, topic: String) -> Result<Schema, failu
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
         schema_registry_url: Some(url),
-    })
-}
-
-fn build_kafka_avro_source(
-    schema: &AvroSchema,
-    kafka_url: Url,
-    topic: String,
-    consistency: Consistency,
-    ssl_certificate_file: Option<PathBuf>,
-) -> Result<Source, failure::Error> {
-    let Schema {
-        key_schema,
-        value_schema,
-        schema_registry_url,
-    } = match schema {
-        // TODO(jldlaughlin): we need a way to pass in primary key information
-        // when building a source from a string or file.
-        AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Schema {
-            key_schema: None,
-            value_schema: schema.clone(),
-            schema_registry_url: None,
-        },
-        AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
-            unreachable!("File schema should already have been inlined")
-        }
-        AvroSchema::CsrUrl { url: csr_url, seed } => {
-            let csr_url: Url = csr_url.parse()?;
-            if let Some(seed) = seed {
-                Schema {
-                    key_schema: seed.key_schema.clone(),
-                    value_schema: seed.value_schema.clone(),
-                    schema_registry_url: Some(csr_url),
-                }
-            } else {
-                unreachable!("CSR seed resolution should already have been called")
-            }
-        }
-    };
-
-    let mut desc = avro::validate_value_schema(&value_schema)?;
-    if let Some(key_schema) = key_schema {
-        let keys = avro::validate_key_schema(&key_schema, &desc)?;
-        desc = desc.add_keys(keys);
-    }
-
-    Ok(Source {
-        create_sql: "<filled in later>".into(),
-        connector: SourceConnector::External {
-            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                url: kafka_url,
-                topic,
-                ssl_certificate_file,
-            }),
-            encoding: DataEncoding::Avro(AvroEncoding {
-                raw_schema: value_schema,
-                schema_registry_url,
-            }),
-            envelope: Envelope::Debezium,
-            consistency,
-        },
-        desc,
-    })
-}
-
-fn build_kafka_protobuf_source(
-    schema: &sql_parser::ast::Schema,
-    url: Url,
-    topic: String,
-    message_name: &str,
-    consistency: Consistency,
-    ssl_certificate_file: Option<PathBuf>,
-) -> Result<Source, failure::Error> {
-    let descriptors = match schema {
-        sql_parser::ast::Schema::Inline(bytes) => strconv::parse_bytes(&bytes)?,
-        sql_parser::ast::Schema::File(_) => {
-            unreachable!("File schema should already have been inlined")
-        }
-    };
-    let desc = protobuf::validate_descriptors(
-        &message_name,
-        &protobuf::decode_descriptors(&descriptors)?,
-    )?;
-    Ok(Source {
-        create_sql: "<filled in later>".into(),
-        connector: SourceConnector::External {
-            connector: ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                url,
-                topic,
-                ssl_certificate_file,
-            }),
-            encoding: DataEncoding::Protobuf(ProtobufEncoding {
-                descriptors,
-                message_name: message_name.to_owned(),
-            }),
-            envelope: Envelope::None,
-            consistency,
-        },
-        desc,
     })
 }
 

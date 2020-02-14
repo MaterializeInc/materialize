@@ -130,13 +130,28 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 [[package]]
 name = "avro-rs"
 version = "0.6.5"
-source = "git+https://github.com/MaterializeInc/avro-rs.git#dd965e4560ae0c600a52acc2e250ffad891355fc"
 dependencies = [
  "chrono",
  "digest",
  "failure",
+ "futures",
  "libflate",
  "log",
+ "rand 0.4.6",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "avro-rs"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bbe285d473a84df9f7fc25668d3ef50430eab208eeb5c635d323f5d30ebefbd"
+dependencies = [
+ "digest",
+ "failure",
+ "libflate",
  "rand 0.4.6",
  "serde",
  "serde_json",
@@ -710,6 +725,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
+ "avro-rs 0.6.5",
  "bincode",
  "ccsr",
  "comm",
@@ -718,8 +734,10 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "expr",
+ "failure",
  "futures",
  "interchange",
+ "itertools",
  "lazy_static 1.4.0",
  "log",
  "notify",
@@ -754,6 +772,8 @@ version = "0.1.0"
 dependencies = [
  "comm",
  "expr",
+ "failure",
+ "interchange",
  "pdqselect",
  "pretty_assertions",
  "regex",
@@ -1475,13 +1495,14 @@ checksum = "6c346c299e3fe8ef94dc10c2c0253d858a69aac1245157a3bf4125915d528caf"
 name = "interchange"
 version = "0.1.0"
 dependencies = [
- "avro-rs",
+ "avro-rs 0.6.5",
  "base64 0.11.0",
  "byteorder",
  "ccsr",
  "chrono",
  "criterion",
  "failure",
+ "futures",
  "num-traits",
  "ordered-float",
  "ore",
@@ -3333,6 +3354,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sql"
 version = "0.1.0"
 dependencies = [
+ "avro-rs 0.7.0",
  "catalog",
  "ccsr",
  "chrono",
@@ -3347,6 +3369,7 @@ dependencies = [
  "pretty_assertions",
  "regex",
  "repr",
+ "serde_json",
  "sql-parser",
  "tokio",
  "unicase",
@@ -3551,7 +3574,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "atty",
- "avro-rs",
+ "avro-rs 0.6.5",
  "backoff",
  "byteorder",
  "ccsr",

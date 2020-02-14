@@ -1177,6 +1177,10 @@ impl Parser {
             Format::Text
         } else if self.parse_keyword("BYTES") {
             Format::Bytes
+        } else if self.parse_keyword("OCF") {
+            self.expect_keyword("SCHEMA")?;
+            let schema = self.parse_literal_string()?;
+            Format::AvroOcf { schema }
         } else {
             return self.expected(
                 self.peek_range(),
@@ -1248,6 +1252,7 @@ impl Parser {
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let connector = self.parse_connector()?;
+        let with_options = self.parse_with_options()?;
         let format = if self.parse_keyword("FORMAT") {
             Some(self.parse_format()?)
         } else {
@@ -1262,6 +1267,7 @@ impl Parser {
         Ok(Statement::CreateSource {
             name,
             connector,
+            with_options,
             format,
             envelope,
             if_not_exists,
@@ -1291,32 +1297,24 @@ impl Parser {
         match self.expect_one_of_keywords(&["FILE", "KAFKA", "KINESIS", "AVRO"])? {
             "FILE" => {
                 let path = self.parse_literal_string()?;
-                let with_options = self.parse_with_options()?;
-                Ok(Connector::File { path, with_options })
+                Ok(Connector::File { path })
             }
             "KAFKA" => {
                 self.expect_keyword("BROKER")?;
                 let broker = self.parse_literal_string()?;
                 self.expect_keyword("TOPIC")?;
                 let topic = self.parse_literal_string()?;
-                let with_options = self.parse_with_options()?;
-                Ok(Connector::Kafka {
-                    broker,
-                    topic,
-                    with_options,
-                })
+                Ok(Connector::Kafka { broker, topic })
             }
             "KINESIS" => {
                 self.expect_keyword("ARN")?;
                 let arn = self.parse_literal_string()?;
-                let with_options = self.parse_with_options()?;
-                Ok(Connector::Kinesis { arn, with_options })
+                Ok(Connector::Kinesis { arn })
             }
             "AVRO" => {
                 self.expect_keyword("OCF")?;
                 let path = self.parse_literal_string()?;
-                let with_options = self.parse_with_options()?;
-                Ok(Connector::AvroOcf { path, with_options })
+                Ok(Connector::AvroOcf { path })
             }
             _ => unreachable!(),
         }
