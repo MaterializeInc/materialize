@@ -1,15 +1,10 @@
-p,
-li,
-th,
-td {
-  code {
+code {
     color: #3f6e75;
     font-family: "Roboto Mono", monospace;
     span {
       font-family: "Roboto Mono", monospace;
     }
   }
-}
 
 // Coloring of code overrides link coloring;
 // instead insert border-bottom to indicate
@@ -32,12 +27,25 @@ code {
   //   background-color: #f9f7fd;
   padding: 1rem;
   //   margin-bottom: 1rem;
-  overflow-y: scroll;
+  overflow-y: auto;
 
   pre {
+    // word-wrap: normal;
     background-color: #f9f7fd !important;
+    // border: 0px;
+    border-radius: 0;
+    code {
+      white-space: pre;
+    }
   }
   span {
     font-family: "Roboto Mono", monospace;
+  }
+}
+
+td {
+  pre {
+    padding: 0;
+    margin-bottom: 0;
   }
 }

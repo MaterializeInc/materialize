@@ -501,7 +501,7 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
     ```nofmt
                id           |        batch_id        |           interval_start            |            interval_end             |       meter       | value | client_id | vm_id | cpu_num | memory_gb | disk_gb
    ------------------------+------------------------+-------------------------------------+-------------------------------------+-------------------+-------+-----------+-------+---------+-----------+---------
-   --AkrKbvQ8mOMt64WHAEQw | vB_PDgD_SWm8rG0pxCsa4w | 2020-01-28T10:36:03.331566645+00:00 | 2020-01-28T10:43:41.331566645+00:00 | execution_time_ms |    32 |        12 |  1771 |       1 |        16 |     128
+       AkrKbvQ8mOMt64WHAEQw | vB_PDgD_SWm8rG0pxCsa4w | 2020-01-28T10:36:03.331566645+00:00 | 2020-01-28T10:43:41.331566645+00:00 | execution_time_ms |    32 |        12 |  1771 |       1 |        16 |     128
     ```
 
     Note that this data is very wide, so you'll need to scroll left-to-right to
