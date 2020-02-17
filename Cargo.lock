@@ -3412,7 +3412,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#7bcb15a870ab4710299f9a69c0e9aaca3bda2199"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#55538cd49e59150460dab7c0c181aa9254ea592a"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3426,12 +3426,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#7bcb15a870ab4710299f9a69c0e9aaca3bda2199"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#55538cd49e59150460dab7c0c181aa9254ea592a"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#7bcb15a870ab4710299f9a69c0e9aaca3bda2199"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#55538cd49e59150460dab7c0c181aa9254ea592a"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3446,7 +3446,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#7bcb15a870ab4710299f9a69c0e9aaca3bda2199"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#55538cd49e59150460dab7c0c181aa9254ea592a"
 
 [[package]]
 name = "timely_sort"
