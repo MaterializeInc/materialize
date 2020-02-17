@@ -7,10 +7,10 @@ explains everything needed to start contributing changes to Materialize!
 
 * [develop.md](develop.md) contains instructions for building Materialize
 from source and getting your local environment set up to run all of the tests
-* [develop-testing.md](develop-testing.md) contains information about our main
-categories of tests and guidance on which ones to add
-* [develop-debugging.md](develop-debugging.md) is a guide to debugging Materialize
-using rust-gdb / rust-lldb
+* [testing.md](testing.md) contains information about our main categories of tests
+and guidance on which ones to add
+* [debugging.md](debugging.md) is a guide to debugging Materialize using
+rust-gdb / rust-lldb
 * [demo.md](demo.md) contains instructions for running a simple Materialize demo
 locally
 * [metabase-demo.md](metabase-demo.md) contains instructions for setting up and viewing

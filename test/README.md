@@ -3,4 +3,4 @@
 This directory contains system test files for Materialize. Its contents are
 explained in detail in [Developer guide: testing].
 
-[Developer guide: testing]: /doc/developer/develop-testing.md
+[Developer guide: testing]: /doc/developer/testing.md

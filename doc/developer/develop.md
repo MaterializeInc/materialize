@@ -170,7 +170,7 @@ more details.
 ## Testing
 
 Materialize's testing philosophy is sufficiently complex that it warrants its
-own document. See [Developer guide: testing](develop-testing.md).
+own document. See [Developer guide: testing](testing.md).
 
 ## Git workflow
 
