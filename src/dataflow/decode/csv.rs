@@ -32,6 +32,8 @@ where
         "CsvDecode",
         |_, _| {
             move |input, output| {
+                let mut events_success = 0;
+                let mut events_error = 0;
                 input.for_each(|cap, lines| {
                     let mut session = output.session(&cap);
                     // TODO: There is extra work going on here:
@@ -47,7 +49,7 @@ where
                         for result in csv_reader.records() {
                             let record = result.unwrap();
                             if record.len() != n_cols {
-                                EVENTS_COUNTER.csv.error.inc();
+                                events_error += 1;
                                 error!(
                                     "CSV error: expected {} columns, got {}. Ignoring row.",
                                     n_cols,
@@ -55,7 +57,7 @@ where
                                 );
                                 continue;
                             }
-                            EVENTS_COUNTER.csv.success.inc();
+                            events_success += 1;
                             session.give((
                                 Row::pack(
                                     record
@@ -69,6 +71,12 @@ where
                         }
                     }
                 });
+                if events_success > 0 {
+                    EVENTS_COUNTER.csv.success.inc_by(events_success);
+                }
+                if events_error > 0 {
+                    EVENTS_COUNTER.csv.error.inc_by(events_error);
+                }
             }
         },
     )

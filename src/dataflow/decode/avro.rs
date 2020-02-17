@@ -32,12 +32,14 @@ where
         move |_, _| {
             let mut decoder = interchange::avro::Decoder::new(raw_schema, schema_registry);
             move |input, output| {
+                let mut events_success = 0;
+                let mut events_error = 0;
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
                     for (payload, _) in data.iter() {
                         match decoder.decode(payload) {
                             Ok(diff_pair) => {
-                                EVENTS_COUNTER.avro.success.inc();
+                                events_success += 1;
                                 if let Some(before) = diff_pair.before {
                                     session.give((before, *cap.time(), 1));
                                 }
@@ -46,12 +48,18 @@ where
                                 }
                             }
                             Err(err) => {
-                                EVENTS_COUNTER.avro.error.inc();
+                                events_error += 1;
                                 error!("avro deserialization error: {}", err)
                             }
                         }
                     }
                 });
+                if events_success > 0 {
+                    EVENTS_COUNTER.avro.success.inc_by(events_success);
+                }
+                if events_error > 0 {
+                    EVENTS_COUNTER.avro.error.inc_by(events_error);
+                }
             }
         },
     )

@@ -116,6 +116,8 @@ where
         let mut last_processed_offset: i64 = -1;
 
         move |cap, output| {
+            // Accumulate updates to BYTES_READ_COUNTER;
+            let mut bytes_read = 0;
             if advance_timestamp {
                 if let Some(consumer) = consumer.as_mut() {
                     // Repeatedly interrogate Kafka for messages. Cease when
@@ -168,7 +170,7 @@ where
 
                                 if let Some(payload) = payload {
                                     let out = payload.to_vec();
-                                    BYTES_READ_COUNTER.inc_by(out.len() as i64);
+                                    bytes_read += out.len() as i64;
                                     output.session(&cap).give((out, Some(message.offset())));
                                 }
 
@@ -204,6 +206,9 @@ where
                 }
                 // Ensure that we poll kafka more often than the eviction timeout
                 activator.activate_after(Duration::from_secs(60));
+                if bytes_read > 0 {
+                    BYTES_READ_COUNTER.inc_by(bytes_read);
+                }
                 SourceStatus::Alive
             } else {
                 if let Some(consumer) = consumer.as_mut() {
@@ -245,7 +250,7 @@ where
                                 };
 
                                 let out = payload.to_vec();
-                                BYTES_READ_COUNTER.inc_by(out.len() as i64);
+                                bytes_read += out.len() as i64;
                                 output.session(&cap).give((out, Some(message.offset())));
                             }
                             Err(err) => error!("kafka error: {}: {}", name, err),
@@ -258,12 +263,18 @@ where
                             // configured to unpark our thread when a new message
                             // arrives.
                             activator.activate();
+                            if bytes_read > 0 {
+                                BYTES_READ_COUNTER.inc_by(bytes_read);
+                            }
                             return SourceStatus::Alive;
                         }
                     }
                 }
                 // Ensure that we poll kafka more often than the eviction timeout
                 activator.activate_after(Duration::from_secs(60));
+                if bytes_read > 0 {
+                    BYTES_READ_COUNTER.inc_by(bytes_read);
+                }
                 SourceStatus::Alive
             }
         }
