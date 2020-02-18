@@ -21,7 +21,7 @@ function done()
     exit 0
 }
 
-/^#![ \t\n]*\//         { next }
-/^(\/\/|#)?.*Copyright/ { copyright=$0 }
+/^(#![ \t\n]*\/|<!doctype)/         { next }
+/^(\/\/|#|<!--)?.*Copyright/ { copyright=$0 }
 /^[ \t\n]*$/            { next }
 !/^(<!--|\/\/|#)/       { done() }
