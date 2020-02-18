@@ -32,7 +32,8 @@ curl -L https://downloads.mtrlz.dev/materialized-latest-x86_64-apple-darwin.tar.
 ### apt
 
 ```shell
-echo "deb [trusted=yes] https://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/fury.lis
+echo "deb [trusted=yes] https://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/materialize.list
+apt update
 apt install materialized
 ```
 
