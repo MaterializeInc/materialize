@@ -1,63 +1,77 @@
 @font-face {
   font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-Bold.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Bold.woff") format("woff");
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Bold.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Bold.woff") format("woff");
   font-weight: bold;
+  font-style: normal;
+}
+@font-face {
+  font-family: "RM Neue";
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Bold.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Bold.woff") format("woff");
+  font-weight: 900;
   font-style: normal;
 }
 
 @font-face {
   font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-BoldItalic.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Bold.woff") format("woff");
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-BoldItalic.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Bold.woff") format("woff");
   font-weight: bold;
+  font-style: italic;
+}
+@font-face {
+  font-family: "RM Neue";
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-BoldItalic.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Bold.woff") format("woff");
+  font-weight: 900;
   font-style: italic;
 }
 
 @font-face {
   font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBold.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBold.woff") format("woff");
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-SemiBold.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-SemiBold.woff") format("woff");
   font-weight: 600;
   font-style: normal;
 }
 
 @font-face {
   font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBoldItalic.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBoldItalic.woff") format("woff");
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-SemiBoldItalic.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-SemiBoldItalic.woff") format("woff");
   font-weight: 600;
   font-style: italic;
 }
 
 @font-face {
   font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-Regular.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Regular.woff") format("woff");
-  font-weight: 400;
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Regular.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Regular.woff") format("woff");
+  font-weight: 500;
   font-style: normal;
 }
 
 @font-face {
   font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-Italic.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Regular.woff") format("woff");
-  font-weight: 400;
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Italic.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Italic.woff") format("woff");
+  font-weight: 500;
   font-style: italic;
 }
 
 @font-face {
   font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-Light.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Light.woff") format("woff");
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Light.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-Light.woff") format("woff");
   font-weight: normal;
   font-style: normal;
 }
 
 @font-face {
   font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-LightItalic.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Light.woff") format("woff");
+  src: url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-LightItalic.woff2") format("woff2"),
+    url("https://materialize.io/wp-content/themes/materialize/fonts/RMNeue-LightItalic.woff") format("woff");
   font-weight: normal;
   font-style: italic;
 }
@@ -66,7 +80,7 @@ p,
 li,
 td,
 th {
-  font-size: 1.3rem;
+  font-size: 1.5rem;
   letter-spacing: 0;
   line-height: 1.6;
 }
@@ -91,18 +105,18 @@ main {
   }
 
   h2 {
-    font-weight: 600;
     font-size: 2rem;
     margin-top: 3rem;
     a {
       color: black !important;
+      font-weight: 600;
     }
   }
 
   h3 {
     font-size: 1.8rem;
     margin-top: 3.5rem;
-    font-weight: 400;
+    font-weight: 600 !important;
     a {
       color: #666666 !important;
     }
@@ -129,6 +143,7 @@ main {
     // Needed to remove conflict with nav header underlines.
     border-bottom: none;
     color: $purple !important;
+    font-weight: 500;
     &:hover {
       opacity: 0.75;
       text-decoration: none;
@@ -161,7 +176,6 @@ main {
     &:before {
       content: counter(list-counter);
       color: $grey;
-      @include fontstyle;
       font-size: 3rem;
       margin-top: 0.75rem;
       margin-right: 2rem;

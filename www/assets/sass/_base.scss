@@ -8,69 +8,7 @@ Version: 9999
 // @import "node_modules/flexboxgrid/dist/flexboxgrid";
 // @import "node_modules/normalize.css/normalize";
 // @import "node_modules/slick-carousel/slick/slick.scss";
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-Bold.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Bold.woff") format("woff");
-  font-weight: bold;
-  font-style: normal;
-}
 
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBold.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBold.woff") format("woff");
-  font-weight: 600;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBoldItalic.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBoldItalic.woff") format("woff");
-  font-weight: 600;
-  font-style: italic;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-Regular.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Regular.woff") format("woff");
-  font-weight: normal;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBold.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBold.woff") format("woff");
-  font-weight: 600;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-Regular.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Regular.woff") format("woff");
-  font-weight: normal;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBoldItalic.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-SemiBoldItalic.woff") format("woff");
-  font-weight: 600;
-  font-style: italic;
-}
-
-@font-face {
-  font-family: "RM Neue";
-  src: url("https://materializeinc.wpengine.com/fonts/RMNeue-Bold.woff2") format("woff2"),
-    url("https://materializeinc.wpengine.com/fonts/RMNeue-Bold.woff") format("woff");
-  font-weight: bold;
-  font-style: normal;
-}
 $purple: #612dd3;
 $lime: #77e04c;
 $black: #2b2c30;
@@ -157,7 +95,7 @@ header#main {
     z-index: 1000;
     width: 40px;
     height: 40px;
-    background-image: url(https://materializeinc.wpengine.com/wp-content/themes/materialize/img/open.svg);
+    background-image: url(https://materialize.io/wp-content/themes/materialize/img/open.svg);
     background-repeat: no-repeat;
     background-position: center center;
     background-size: 100%;
