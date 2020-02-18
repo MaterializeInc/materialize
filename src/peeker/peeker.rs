@@ -5,24 +5,35 @@
 //
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0..
+// by the Apache License, Version 2.0.
+
+//! Peek materialized views as fast as possible
 
 use std::cmp::min;
 use std::convert::Infallible;
-use std::thread;
-use std::time::Duration;
+use std::process;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use env_logger::{Builder as LogBuilder, Env, Target};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Response, Server};
 use lazy_static::lazy_static;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use postgres::Client;
-use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, Encoder, HistogramVec};
+use prometheus::{register_counter_vec, register_histogram_vec};
+use prometheus::{CounterVec, Encoder, HistogramVec};
+
+use crate::args::{Args, QueryGroup, Source};
+
+mod args;
 
 static MAX_BACKOFF: Duration = Duration::from_secs(2);
 static METRICS_PORT: u16 = 16875;
+
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Result<T> = std::result::Result<T, Error>;
 
 lazy_static! {
     static ref HISTOGRAM_UNLABELED: HistogramVec = register_histogram_vec!(
@@ -44,12 +55,7 @@ lazy_static! {
     .expect("can create histogram");
 }
 
-#[derive(Debug)]
-struct Config {
-    materialized_url: String,
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     ore::panic::set_abort_on_panic();
 
     LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
@@ -57,118 +63,249 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     info!("startup {}", Utc::now());
 
-    let args: Vec<_> = std::env::args().collect();
-
-    let mut opts = getopts::Options::new();
-    opts.optflag("h", "help", "show this usage information");
-    opts.optopt(
-        "",
-        "materialized-url",
-        "url of the materialized instance to collect metrics from",
-        "URL",
-    );
-    let popts = opts.parse(&args[1..])?;
-    if popts.opt_present("h") {
-        print!("{}", opts.usage("usage: materialized [options]"));
-        return Ok(());
-    }
-    let config = Config {
-        materialized_url: popts.opt_get_default(
-            "materialized-url",
-            "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
-        )?,
-    };
+    let config = Args::from_cli()?;
 
     // Launch metrics server.
     let runtime = tokio::runtime::Runtime::new().expect("creating tokio runtime failed");
     runtime.spawn(serve_metrics());
 
+    let mut init_result = initialize(&config);
     // Start peek timing loop. This should never return.
-    measure_peek_times(&config);
-    unreachable!()
+    if config.only_initialize {
+        let mut counter = 6;
+        while let Err(_) = init_result {
+            counter -= 1;
+            if counter <= 0 {
+                process::exit(1);
+            }
+            warn!("init error, retry in 10 seconds ({} remaining)", counter);
+            thread::sleep(Duration::from_secs(10));
+            init_result = initialize(&config);
+        }
+    } else {
+        let _ = init_result;
+        measure_peek_times(&config);
+        unreachable!()
+    }
+    Ok(())
 }
 
-fn measure_peek_times(config: &Config) {
-    let mut postgres_client = create_postgres_client(&config);
-    try_initialize(&mut postgres_client);
+fn measure_peek_times(config: &Args) {
+    let mut peek_threads = vec![];
+    for group in &config.config.groups {
+        peek_threads.extend(spawn_query_thread(
+            config.materialized_url.clone(),
+            group.clone(),
+        ));
+    }
 
-    let query = "SELECT * FROM q01;";
-    let histogram = HISTOGRAM_UNLABELED.with_label_values(&[query]);
-    let error_count = ERRORS_UNLABELED.with_label_values(&[query]);
-    let mut backoff = get_baseline_backoff();
-    let mut last_was_failure = false;
-    loop {
-        let timer = prometheus::Histogram::start_timer(&histogram);
-        let query_result = postgres_client.query(query, &[]);
+    info!(
+        "started {} peek threads for {} queries",
+        peek_threads.len(),
+        config.config.query_count()
+    );
+    for pthread in peek_threads {
+        pthread.join().unwrap();
+    }
+}
 
-        match query_result {
-            Ok(_) => drop(timer),
-            Err(err) => {
-                timer.stop_and_discard();
-                error_count.inc();
-                last_was_failure = true;
-                print_error_and_backoff(&mut backoff, err.to_string());
-                try_initialize(&mut postgres_client);
-            }
-        }
-        if !last_was_failure {
-            backoff = get_baseline_backoff();
+fn initialize(config: &Args) -> Result<()> {
+    let mut postgres_client = create_postgres_client(&config.materialized_url);
+    initialize_sources(&mut postgres_client, &config.config.sources)
+        .expect("need to have sources for anything else to work");
+    let mut errors = 0;
+    for group in config.config.queries_in_declaration_order() {
+        if !try_initialize(&mut postgres_client, group) {
+            errors += 1;
         }
     }
+    if errors == 0 {
+        Ok(())
+    } else {
+        Err(format!("There were {} errors initializing query groups", errors).into())
+    }
+}
+
+fn spawn_query_thread(mz_url: String, query_group: QueryGroup) -> Vec<JoinHandle<()>> {
+    let qg = query_group;
+    let mut qs = vec![];
+    for _ in 0..qg.thread_count {
+        let group = qg.clone();
+        let mz_url = mz_url.clone();
+        qs.push(thread::spawn(move || {
+            let mut postgres_client = create_postgres_client(&mz_url);
+            let selects = group
+                .queries
+                .iter()
+                .map(|q| {
+                    let stmt = postgres_client
+                        .prepare(&format!("SELECT * FROM {}", q.name))
+                        .expect("should be able to prepare a query");
+                    let hist = HISTOGRAM_UNLABELED.with_label_values(&[&q.name]);
+                    (stmt, q.name.clone(), hist)
+                })
+                .collect::<Vec<_>>();
+            let mut backoff = get_baseline_backoff();
+            let mut last_was_failure = false;
+            let mut counter = 0u64;
+            let mut err_count = 0u64;
+            let mut last_log = Instant::now();
+            loop {
+                for (select, q_name, hist) in &selects {
+                    let timer = hist.start_timer();
+                    let query_result = postgres_client.query(select, &[]);
+
+                    match query_result {
+                        Ok(_) => {
+                            counter += 1;
+                            drop(timer)
+                        }
+                        Err(err) => {
+                            timer.stop_and_discard();
+                            err_count += 1;
+                            prom_error(&q_name);
+                            last_was_failure = true;
+                            print_error_and_backoff(&mut backoff, &q_name, err.to_string());
+                            try_initialize(&mut postgres_client, &group);
+                        }
+                    }
+                    if (err_count + counter) % 10 == 0 {
+                        let now = Instant::now();
+                        // log at most once per minute per thread
+                        if now.duration_since(last_log) > Duration::from_secs(60) {
+                            info!(
+                                "peeked {} {} times with {} errors",
+                                group.name, counter, err_count
+                            );
+                            last_log = now;
+                        }
+                    }
+                    if !last_was_failure {
+                        backoff = get_baseline_backoff();
+                    }
+                    if group.sleep != Duration::from_millis(0) {
+                        thread::sleep(group.sleep);
+                    }
+                }
+            }
+        }))
+    }
+    qs
+}
+
+fn prom_error(query_name: &str) {
+    ERRORS_UNLABELED.with_label_values(&[&query_name]).inc()
 }
 
 fn get_baseline_backoff() -> Duration {
     Duration::from_millis(250)
 }
 
-fn create_postgres_client(config: &Config) -> Client {
+fn create_postgres_client(mz_url: &str) -> Client {
     let mut backoff = get_baseline_backoff();
     loop {
-        match Client::connect(&*config.materialized_url, postgres::NoTls) {
+        match Client::connect(&mz_url, postgres::NoTls) {
             Ok(client) => return client,
-            Err(err) => print_error_and_backoff(&mut backoff, err.to_string()),
+            Err(err) => print_error_and_backoff(&mut backoff, "client creation", err.to_string()),
         }
     }
 }
 
-fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
-    warn!("{}. Sleeping for {:#?} seconds", error_message, *backoff);
+fn print_error_and_backoff(backoff: &mut Duration, context: &str, error_message: String) {
+    warn!(
+        "for {}: {}. Sleeping for {:#?}",
+        context, error_message, *backoff
+    );
     thread::sleep(*backoff);
     *backoff = min(*backoff * 2, MAX_BACKOFF);
+}
+
+fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
+    let mut failed = false;
+    for source in sources {
+        let mut still_to_try = source.names.clone();
+        for _ in 0..10 {
+            let this_time = still_to_try.clone();
+            still_to_try.clear();
+            for name in this_time {
+                let create_source = format!(
+                    r#"CREATE SOURCE IF NOT EXISTS "{name}"
+                     FROM KAFKA BROKER '{broker}' TOPIC '{prefix}{name}'
+                     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{registry}'
+                     ENVELOPE DEBEZIUM"#,
+                    name = name,
+                    broker = source.kafka_broker,
+                    prefix = source.topic_namespace,
+                    registry = source.schema_registry
+                );
+                match client.batch_execute(&create_source) {
+                    Ok(_) => info!(
+                        "installed source {} for topic {}{}",
+                        name, source.topic_namespace, name
+                    ),
+                    Err(err) => {
+                        warn!("error trying to create source {}: {}", name, err);
+                        still_to_try.push(name)
+                    }
+                }
+            }
+            if still_to_try.is_empty() {
+                return Ok(());
+            } else {
+                thread::sleep(Duration::from_secs(3));
+            }
+        }
+        if !still_to_try.is_empty() {
+            warn!(
+                "Some sources were not successfully created! {:?}",
+                still_to_try
+            );
+            failed = true;
+        }
+    }
+    if failed {
+        Err("Some sources were not created".into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Try to build the views and sources that are needed for this script
 ///
 /// This ignores errors (just logging them), and can just be run multiple times.
-fn try_initialize(client: &mut Client) {
-    match client.batch_execute(
-        "CREATE SOURCE IF NOT EXISTS mysql_tpcch_orderline \
-        FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline' \
-        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-        ENVELOPE DEBEZIUM",
-    ) {
-        Ok(_) => info!("source is installed"),
-        Err(err) => warn!("error trying to create sources: {}", err),
+///
+/// # Returns
+///
+/// Success: `true` if everything succeed
+fn try_initialize(client: &mut Client, query_group: &QueryGroup) -> bool {
+    let mut success = true;
+    if !query_group.enabled {
+        info!("skipping disabled query group {}", query_group.name);
+        return success;
     }
-    match client.batch_execute(
-        "CREATE MATERIALIZED VIEW q01 AS
-         SELECT
-            ol_number,
-            sum(ol_quantity) as sum_qty,
-            sum(ol_amount) as sum_amount,
-            avg(ol_quantity) as avg_qty,
-            avg(ol_amount) as avg_amount,
-            count(*) as count_order
-         FROM orderline
-         WHERE ol_delivery_d > date '1998-12-01'
-         GROUP BY ol_number",
-    ) {
-        Ok(_) => info!("view q01 is installed"),
-        Err(err) => warn!("error trying to create view: {}", err),
+    for query in &query_group.queries {
+        let mz_result = client.batch_execute(&format!(
+            "CREATE MATERIALIZED VIEW {} AS {}",
+            query.name, query.query
+        ));
+        match mz_result {
+            Ok(_) => info!("installed view {}", query.name),
+            Err(err) => {
+                let errmsg = err.to_string();
+                if !errmsg.ends_with("already exists") {
+                    success = false;
+                    warn!("error trying to create view {}: {}", query.name, err);
+                } else {
+                    // this only matters for timeline debugging, in general it is fine
+                    debug!("view previously installed: {} err={}", query.name, err);
+                }
+            }
+        }
     }
+    success
 }
 
-async fn serve_metrics() -> Result<(), failure::Error> {
+async fn serve_metrics() -> Result<()> {
     info!("serving prometheus metrics on port {}", METRICS_PORT);
     let addr = ([0, 0, 0, 0], METRICS_PORT).into();
 
