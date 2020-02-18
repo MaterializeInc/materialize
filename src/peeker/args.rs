@@ -14,6 +14,7 @@ use std::convert::TryFrom;
 use std::result::Result as StdResult;
 use std::time::Duration;
 
+use log::debug;
 use serde::{Deserialize, Deserializer};
 
 use crate::{Error, Result};
@@ -23,6 +24,8 @@ static DEFAULT_CONFIG: &str = include_str!("config.toml");
 #[derive(Debug)]
 pub struct Args {
     pub materialized_url: String,
+    /// If true, don't run peeks, just create sources and views
+    pub only_initialize: bool,
     pub config: Config,
 }
 
@@ -56,6 +59,11 @@ impl Args {
             "url of the materialized instance to collect metrics from",
             "URL",
         );
+        opts.optflag(
+            "",
+            "only-initialize",
+            "run the initalization of sources and views, but don't start peeking",
+        );
         let popts = match opts.parse(&args[1..]) {
             Ok(popts) => {
                 if popts.opt_present("h") {
@@ -83,6 +91,7 @@ impl Args {
                 "materialized-url",
                 "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
             )?,
+            only_initialize: popts.opt_present("only-initialize"),
             config,
         })
     }
@@ -121,13 +130,20 @@ fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Resu
     if let Some(queries) = cli_queries {
         let enabled_qs: Vec<_> = queries.split(',').collect();
         if !enabled_qs.is_empty() {
+            debug!("filtering to queries: {:?}", enabled_qs);
             config.groups = config
                 .groups
                 .into_iter()
                 .filter(|qg| enabled_qs.contains(&&*qg.name))
                 .collect();
+            config.queries = config
+                .queries
+                .into_iter()
+                .filter(|q| enabled_qs.contains(&&*q.name))
+                .collect();
         }
     } else {
+        debug!("using all config-enabled queries");
         config.groups.retain(|q| q.enabled);
     }
     if config.groups.is_empty() {

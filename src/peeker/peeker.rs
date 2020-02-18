@@ -11,6 +11,7 @@
 
 use std::cmp::min;
 use std::convert::Infallible;
+use std::process;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -68,19 +69,29 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().expect("creating tokio runtime failed");
     runtime.spawn(serve_metrics());
 
+    let mut init_result = initialize(&config);
     // Start peek timing loop. This should never return.
-    measure_peek_times(&config);
-    unreachable!()
+    if config.only_initialize {
+        let mut counter = 6;
+        while let Err(_) = init_result {
+            counter -= 1;
+            if counter <= 0 {
+                process::exit(1);
+            }
+            warn!("init error, retry in 10 seconds ({} remaining)", counter);
+            thread::sleep(Duration::from_secs(10));
+            init_result = initialize(&config);
+        }
+    } else {
+        let _ = init_result;
+        measure_peek_times(&config);
+        unreachable!()
+    }
+    Ok(())
 }
 
 fn measure_peek_times(config: &Args) {
-    let mut postgres_client = create_postgres_client(&config.materialized_url);
-    initialize_sources(&mut postgres_client, &config.config.sources)
-        .expect("need to have sources for anything else to work");
     let mut peek_threads = vec![];
-    for group in config.config.queries_in_declaration_order() {
-        try_initialize(&mut postgres_client, group);
-    }
     for group in &config.config.groups {
         peek_threads.extend(spawn_query_thread(
             config.materialized_url.clone(),
@@ -95,6 +106,23 @@ fn measure_peek_times(config: &Args) {
     );
     for pthread in peek_threads {
         pthread.join().unwrap();
+    }
+}
+
+fn initialize(config: &Args) -> Result<()> {
+    let mut postgres_client = create_postgres_client(&config.materialized_url);
+    initialize_sources(&mut postgres_client, &config.config.sources)
+        .expect("need to have sources for anything else to work");
+    let mut errors = 0;
+    for group in config.config.queries_in_declaration_order() {
+        if !try_initialize(&mut postgres_client, group) {
+            errors += 1;
+        }
+    }
+    if errors == 0 {
+        Ok(())
+    } else {
+        Err(format!("There were {} errors initializing query groups", errors).into())
     }
 }
 
@@ -245,10 +273,15 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
 /// Try to build the views and sources that are needed for this script
 ///
 /// This ignores errors (just logging them), and can just be run multiple times.
-fn try_initialize(client: &mut Client, query_group: &QueryGroup) {
+///
+/// # Returns
+///
+/// Success: `true` if everything succeed
+fn try_initialize(client: &mut Client, query_group: &QueryGroup) -> bool {
+    let mut success = true;
     if !query_group.enabled {
         info!("skipping disabled query group {}", query_group.name);
-        return;
+        return success;
     }
     for query in &query_group.queries {
         let mz_result = client.batch_execute(&format!(
@@ -260,6 +293,7 @@ fn try_initialize(client: &mut Client, query_group: &QueryGroup) {
             Err(err) => {
                 let errmsg = err.to_string();
                 if !errmsg.ends_with("already exists") {
+                    success = false;
                     warn!("error trying to create view {}: {}", query.name, err);
                 } else {
                     // this only matters for timeline debugging, in general it is fine
@@ -268,6 +302,7 @@ fn try_initialize(client: &mut Client, query_group: &QueryGroup) {
             }
         }
     }
+    success
 }
 
 async fn serve_metrics() -> Result<()> {

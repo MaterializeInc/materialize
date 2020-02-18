@@ -295,6 +295,7 @@ demo_load() {
         --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
         --config-file-path=/etc/chbenchmark/mz-default.cfg \
 	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+    dc_run peeker --only-initialize --queries q01,q02,q17,q22
 }
 
 main "$@"
