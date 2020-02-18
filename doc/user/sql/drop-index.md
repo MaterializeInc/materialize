@@ -11,7 +11,7 @@ do not have any indexes.)
 
 ## Syntax
 
-{{< diagram "show-index.html" >}}
+{{< diagram "drop-index.html" >}}
 
 Field | Use
 ------|-----
