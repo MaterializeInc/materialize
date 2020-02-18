@@ -1,44 +1,46 @@
 <header id="main">
   <div class="row middle-xs">
     <div class="col-sm-3 col-xs-7 logo-wrapper">
-      <a href="/"><img src="https://materializeinc.wpengine.com/wp-content/themes/materialize/img/logo.svg"
-          alt="Materialize Logo"> </a>
+      <a href="/"><img src="https://materialize.io/wp-content/themes/materialize/img/logo.svg" alt="Materialize Logo">
+      </a>
     </div>
     <div class="col-sm-9 col-xs-5 nav-wrapper text-right">
       <div class="menu-main-menu-container">
         <ul id="menu-main-menu" class="menu">
           <li id="menu-item-171"
-            class="menu-item menu-item-type-post_type menu-item-object-page menu-item-home current-menu-item page_item page-item-9 current_page_item menu-item-171">
-            <a href="https://materialize.io/" aria-current="page">Home</a></li>
+            class="menu-item menu-item-type-post_type menu-item-object-page menu-item-home menu-item-171"><a
+              href="https://materialize.io/">Home</a></li>
           <li id="menu-item-302" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-302"><a
               href="https://materialize.io/product/">Product</a></li>
           <li id="menu-item-304" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-304"><a
-              href="https://materialize.io/docs/">Docs</a></li>
+              href="https://materialize.io/docs/" aria-current="page">Docs</a></li>
           <li id="menu-item-170" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-170"><a
               href="https://materialize.io/blog/">Blog</a></li>
-          <li id="menu-item-1409" class="menu-item menu-item-type-custom menu-item-object-custom menu-item-1409"><a
-              href="https://github.com/MaterializeInc/">Github</a></li>
           <li id="menu-item-296" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-296"><a
               href="https://materialize.io/about/">About</a></li>
           <li id="menu-item-297" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-297"><a
               href="https://materialize.io/careers/">Careers</a></li>
-          <li id="menu-item-298"
-            class="nav-button menu-item menu-item-type-post_type menu-item-object-page menu-item-298"><a
+          <li id="menu-item-298" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-298"><a
               href="https://materialize.io/contact/">Contact</a></li>
+          <li id="menu-item-1409"
+            class="nav-button menu-item menu-item-type-custom menu-item-object-custom menu-item-1409"><a
+              href="https://github.com/MaterializeInc/materialize">Github</a></li>
+          {{/*  margin-right is used to "replace" search button  */}}
           <li id="menu-item-305"
-            class="nav-button nav-button-alt menu-item menu-item-type-post_type menu-item-object-page menu-item-305"><a
-              href="https://materialize.io/download/">Download</a></li>
+            class="nav-button nav-button-alt menu-item menu-item-type-post_type menu-item-object-page current-menu-item page_item page-item-290 current_page_item menu-item-305"
+            style="margin-right:25px;">
+            <a href="https://materialize.io/download/">Download</a></li>
         </ul>
       </div>
       <div id="search">
-        {{/*  <img id="search-icon" src="{{ "images/search.svg" | relURL }}" alt="search icon"> */}}
+        {{/*  <img id="search-icon" src="/wp-content/themes/materialize/img/search.svg" alt="search icon">  */}}
+        <td width="25">&nbsp;</td>
       </div>
       <div id="nav-toggle">
-        &nbsp;
       </div>
     </div>
   </div>
-  <div id="search-form-container" class="">
+  <div id="search-form-container">
     <form method="get" action="/">
       <input type="text" id="s" name="s" placeholder="Enter search query..." required="">
       <input type="submit" value="Search" class="button button-primary">
