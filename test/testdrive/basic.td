@@ -67,7 +67,7 @@ $ file-write path=data-schema.json
 > SHOW CREATE SOURCE data
 Source   Create Source
 ------------------
-materialize.public.data  "kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}"
+materialize.public.data  "CREATE SOURCE \"materialize\".\"public\".\"data\" FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA '{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"}           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] }   ] }' ENVELOPE DEBEZIUM"
 
 ! SELECT * FROM data
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources

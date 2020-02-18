@@ -86,7 +86,7 @@ pub fn describe_statement(
             Some(
                 RelationDesc::empty()
                     .add_column("Source", ScalarType::String)
-                    .add_column("Source URL", ScalarType::String),
+                    .add_column("Create Source", ScalarType::String),
             ),
             vec![],
         ),
@@ -609,39 +609,15 @@ fn handle_show_create_source(
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = scx.resolve_name(object_name)?;
-    let source_url = if let CatalogItem::Source(catalog::Source { connector, .. }) =
-        scx.catalog.get(&name)?.item()
+    if let CatalogItem::Source(catalog::Source { create_sql, .. }) = scx.catalog.get(&name)?.item()
     {
-        match connector {
-            SourceConnector::External { connector, .. } => {
-                match connector {
-                    ExternalSourceConnector::Kafka(KafkaSourceConnector { url, topic, .. }) => {
-                        format!("kafka://{}/{}", url, topic)
-                    }
-                    ExternalSourceConnector::Kinesis(KinesisSourceConnector {
-                        arn,
-                        access_key,
-                        secret_access_key,
-                        region,
-                    }) => format!(
-                        "kinesis -> arn: '{}' access_key: {}, secret_access_key: {}, region: {}",
-                        arn, access_key, secret_access_key, region
-                    ),
-                    ExternalSourceConnector::File(c) => {
-                        // TODO https://github.com/MaterializeInc/materialize/issues/1093
-                        format!("file://{}", c.path.to_string_lossy())
-                    }
-                }
-            }
-            SourceConnector::Local => "<internally generated source>".to_string(),
-        }
+        Ok(Plan::SendRows(vec![Row::pack(&[
+            Datum::String(&name.to_string()),
+            Datum::String(&create_sql),
+        ])]))
     } else {
         bail!("{} is not a source", name);
-    };
-    Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(&name.to_string()),
-        Datum::String(&source_url),
-    ])]))
+    }
 }
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
