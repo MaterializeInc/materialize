@@ -762,9 +762,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     let mut outcomes = Outcomes::default();
     let mut state = State::start().unwrap();
     println!("==> {}", source);
-    for record in crate::parser::parse_records(&input) {
-        let record = record.unwrap();
-
+    for record in crate::parser::parse_records(&input).unwrap() {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
@@ -830,8 +828,8 @@ pub fn rewrite_file(filename: &Path, _verbosity: usize) {
 
     let mut state = State::start().unwrap();
     println!("==> {}", filename.display());
-    for record in crate::parser::parse_records(&input) {
-        let record = record.unwrap();
+    for record in crate::parser::parse_records(&input).unwrap() {
+        let record = record;
         let outcome = state.run_record(&record).unwrap();
 
         // If we see an output failure for a query, rewrite the expected output

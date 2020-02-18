@@ -48,7 +48,8 @@ fn parse_types(input: &str) -> Result<Vec<Type>, failure::Error> {
 
 fn parse_sql<'a>(input: &mut &'a str) -> Result<&'a str, failure::Error> {
     lazy_static! {
-        static ref QUERY_OUTPUT_REGEX: Regex = Regex::new("(\r?\n----\r?\n?)|$").unwrap();
+        static ref QUERY_OUTPUT_REGEX: Regex =
+            Regex::new("(\r?\n----\r?\n)|(\r?\n\r?\n)|$").unwrap();
     }
     split_at(input, &QUERY_OUTPUT_REGEX)
 }
@@ -59,9 +60,9 @@ lazy_static! {
 
 pub fn parse_record<'a>(
     mode: &mut Mode,
-    mut input: &'a str,
+    input: &mut &'a str,
 ) -> Result<Option<Record<'a>>, failure::Error> {
-    if input == "" {
+    if *input == "" {
         // must have just been a bunch of comments
         return Ok(None);
     }
@@ -69,7 +70,7 @@ pub fn parse_record<'a>(
     lazy_static! {
         static ref COMMENT_AND_LINE_REGEX: Regex = Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap();
     }
-    let first_line = split_at(&mut input, &COMMENT_AND_LINE_REGEX)?.trim();
+    let first_line = split_at(input, &COMMENT_AND_LINE_REGEX)?.trim();
 
     if first_line == "" {
         // query starts on the next line
@@ -78,9 +79,9 @@ pub fn parse_record<'a>(
 
     let mut words = first_line.split(' ').peekable();
     match words.next().unwrap() {
-        "statement" => Ok(Some(parse_statement(words, first_line, &mut input)?)),
+        "statement" => Ok(Some(parse_statement(words, first_line, input)?)),
 
-        "query" => Ok(Some(parse_query(words, first_line, &mut input, *mode)?)),
+        "query" => Ok(Some(parse_query(words, first_line, input, *mode)?)),
 
         "hash-threshold" => {
             let threshold = words
@@ -88,9 +89,6 @@ pub fn parse_record<'a>(
                 .ok_or_else(|| format_err!("missing threshold in: {}", first_line))?
                 .parse::<u64>()
                 .map_err(|err| format_err!("invalid threshold ({}) in: {}", err, first_line))?;
-            if input != "" {
-                bail!("leftover input: {}", input)
-            }
             Ok(Some(Record::HashThreshold { threshold }))
         }
 
@@ -154,9 +152,6 @@ fn parse_statement<'a>(
         _ => bail!("invalid statement disposition: {}", first_line),
     };
     let sql = parse_sql(input)?;
-    if *input != "" {
-        bail!("leftover input: {}", input)
-    }
     Ok(Record::Statement {
         expected_error,
         rows_affected,
@@ -229,44 +224,57 @@ fn parse_query<'a>(
     } else {
         None
     };
-    let output_str = *input;
-    let output = match HASH_REGEX.captures(input) {
+    lazy_static! {
+        static ref EOF_REGEX: Regex = Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap();
+        static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
+    }
+    let output_str = if multiline {
+        split_at(input, &EOF_REGEX)?
+    } else if input.starts_with('\n') || input.starts_with('\r') {
+        // QUERY_REGEX already ate a newline, so if there is one more left then the output must be empty
+        ""
+    } else {
+        split_at(input, &DOUBLE_LINE_REGEX)?
+    };
+    let output = match HASH_REGEX.captures(output_str) {
         Some(captures) => Output::Hashed {
             num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
             md5: captures.get(2).unwrap().as_str().to_owned(),
         },
         None => {
-            let mut vals: Vec<String> = input.trim().lines().map(|s| s.to_owned()).collect();
-            if mode == Mode::Cockroach {
-                let mut rows: Vec<Vec<String>> = vec![];
-                for line in vals {
-                    let cols = split_cols(&line, types.len());
-                    if sort != Sort::No && cols.len() != types.len() {
-                        // We can't check this condition for
-                        // Sort::No, because some tests use strings
-                        // with whitespace that look like extra
-                        // columns. (Note that these tests never
-                        // use any of the sorting options.)
-                        bail!(
-                            "col len ({}) did not match declared col len ({})",
-                            cols.len(),
-                            types.len()
-                        );
-                    }
-                    rows.push(cols.into_iter().map(|col| col.replace("␠", " ")).collect());
-                }
-                if sort == Sort::Row {
-                    rows.sort();
-                }
-                vals = rows.into_iter().flatten().collect();
-                if sort == Sort::Value {
-                    vals.sort();
-                }
-            }
             if multiline {
-                vals = vec![vals.join("\n")];
+                Output::Values(vec![output_str.to_owned()])
+            } else {
+                let mut vals: Vec<String> =
+                    output_str.trim().lines().map(|s| s.to_owned()).collect();
+                if let Mode::Cockroach = mode {
+                    let mut rows: Vec<Vec<String>> = vec![];
+                    for line in vals {
+                        let cols = split_cols(&line, types.len());
+                        if sort != Sort::No && cols.len() != types.len() {
+                            // We can't check this condition for
+                            // Sort::No, because some tests use strings
+                            // with whitespace that look like extra
+                            // columns. (Note that these tests never
+                            // use any of the sorting options.)
+                            bail!(
+                                "col len ({}) did not match declared col len ({})",
+                                cols.len(),
+                                types.len()
+                            );
+                        }
+                        rows.push(cols.into_iter().map(|col| col.replace("␠", " ")).collect());
+                    }
+                    if sort == Sort::Row {
+                        rows.sort();
+                    }
+                    vals = rows.into_iter().flatten().collect();
+                    if sort == Sort::Value {
+                        vals.sort();
+                    }
+                }
+                Output::Values(vals)
             }
-            Output::Values(vals)
         }
     };
     Ok(Record::Query {
@@ -279,6 +287,7 @@ fn parse_query<'a>(
             mode,
             output,
             output_str,
+            multiline,
         }),
     })
 }
@@ -307,18 +316,17 @@ pub(crate) fn split_cols(line: &str, expected_columns: usize) -> Vec<&str> {
     }
 }
 
-pub fn parse_records(input: &str) -> impl Iterator<Item = Result<Record, failure::Error>> {
+pub fn parse_records(mut input: &str) -> Result<Vec<Record>, failure::Error> {
     lazy_static! {
         static ref DOUBLE_LINE_REGEX: Regex = Regex::new("(\n|\r\n)(\n|\r\n)").unwrap();
     }
     let mut mode = Mode::Standard;
-    DOUBLE_LINE_REGEX
-        .split(input)
-        .map(str::trim)
-        .filter(|lines| *lines != "")
-        .filter_map(move |lines| parse_record(&mut mode, lines).transpose())
-        .take_while(|record| match record {
-            Ok(Record::Halt) => false,
-            _ => true,
-        })
+    let mut records = vec![];
+    loop {
+        match parse_record(&mut mode, &mut input)? {
+            None | Some(Record::Halt) => break,
+            Some(record) => records.push(record),
+        }
+    }
+    Ok(records)
 }

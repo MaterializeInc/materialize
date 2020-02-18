@@ -490,6 +490,20 @@ impl fmt::Debug for Row {
     }
 }
 
+impl fmt::Display for Row {
+    /// Display representation using the internal datums
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("(")?;
+        for (i, datum) in self.iter().enumerate() {
+            if i != 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", datum)?;
+        }
+        f.write_str(")")
+    }
+}
+
 impl<'a> DatumList<'a> {
     pub fn empty() -> DatumList<'static> {
         DatumList { data: &[] }

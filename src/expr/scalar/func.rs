@@ -1812,6 +1812,70 @@ impl BinaryFunc {
             _ => true,
         }
     }
+
+    pub fn is_infix_op(&self) -> bool {
+        use BinaryFunc::*;
+        match self {
+            And
+            | Or
+            | AddInt32
+            | AddInt64
+            | AddFloat32
+            | AddFloat64
+            | AddTimestampInterval
+            | AddTimestampTzInterval
+            | AddDateTime
+            | AddDateInterval
+            | AddTimeInterval
+            | AddInterval
+            | SubInterval
+            | AddDecimal
+            | SubInt32
+            | SubInt64
+            | SubFloat32
+            | SubFloat64
+            | SubTimestamp
+            | SubTimestampTz
+            | SubTimestampInterval
+            | SubTimestampTzInterval
+            | SubDate
+            | SubDateInterval
+            | SubTime
+            | SubTimeInterval
+            | SubDecimal
+            | MulInt32
+            | MulInt64
+            | MulFloat32
+            | MulFloat64
+            | MulDecimal
+            | DivInt32
+            | DivInt64
+            | DivFloat32
+            | DivFloat64
+            | DivDecimal
+            | ModInt32
+            | ModInt64
+            | ModFloat32
+            | ModFloat64
+            | ModDecimal
+            | Eq
+            | NotEq
+            | Lt
+            | Lte
+            | Gt
+            | Gte
+            | JsonbConcat
+            | JsonbContainsJsonb
+            | JsonbGetInt64
+            | JsonbGetString
+            | JsonbContainsString
+            | JsonbDeleteInt64
+            | JsonbDeleteString
+            | TextConcat => true,
+            MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTrunc
+            | CastFloat32ToDecimal | CastFloat64ToDecimal | RoundDecimal(_) => false,
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
@@ -1872,14 +1936,14 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),
-            BinaryFunc::JsonbGetInt64 => f.write_str("b->i64"),
-            BinaryFunc::JsonbGetString => f.write_str("b->str"),
-            BinaryFunc::JsonbContainsString => f.write_str("b?"),
-            BinaryFunc::JsonbConcat => f.write_str("b||"),
-            BinaryFunc::JsonbContainsJsonb => f.write_str("b<@"),
-            BinaryFunc::JsonbDeleteInt64 => f.write_str("b-int64"),
-            BinaryFunc::JsonbDeleteString => f.write_str("b-string"),
-            BinaryFunc::RoundDecimal(_) => f.write_str("b-rounddec"),
+            BinaryFunc::JsonbGetInt64 => f.write_str("->"),
+            BinaryFunc::JsonbGetString => f.write_str("->"),
+            BinaryFunc::JsonbContainsString => f.write_str("?"),
+            BinaryFunc::JsonbConcat => f.write_str("||"),
+            BinaryFunc::JsonbContainsJsonb => f.write_str("<@"),
+            BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
+            BinaryFunc::JsonbDeleteString => f.write_str("-"),
+            BinaryFunc::RoundDecimal(_) => f.write_str("round"),
         }
     }
 }
@@ -2147,24 +2211,6 @@ impl UnaryFunc {
             UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
             UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
         }
-    }
-
-    /// Reports whether this function has a symbolic string representation.
-    pub fn display_is_symbolic(&self) -> bool {
-        let out = match self {
-            UnaryFunc::Not
-            | UnaryFunc::NegInt32
-            | UnaryFunc::NegInt64
-            | UnaryFunc::NegFloat32
-            | UnaryFunc::NegFloat64
-            | UnaryFunc::NegDecimal
-            | UnaryFunc::NegInterval => true,
-            _ => false,
-        };
-        // This debug assertion is an attempt to ensure that this function
-        // stays in sync when new `UnaryFunc` variants are added.
-        debug_assert_eq!(out, self.to_string().len() < 3);
-        out
     }
 
     pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
@@ -2435,7 +2481,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::LengthBytes => f.write_str("lengthbytes"),
-            UnaryFunc::MatchRegex(regex) => write!(f, "{} ~", regex.as_str()),
+            UnaryFunc::MatchRegex(regex) => write!(f, "\"{}\" ~", regex.as_str()),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
             UnaryFunc::ExtractIntervalDay => f.write_str("ivextractday"),

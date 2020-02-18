@@ -8,17 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashSet;
-use std::fmt;
 use std::mem;
 
 use chrono::{DateTime, Utc};
-use pretty::{DocAllocator, DocBuilder};
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 use serde::{Deserialize, Serialize};
 
 use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
-use crate::pretty::DocBuilderExt;
 
 pub mod func;
 pub mod like_pattern;
@@ -422,73 +419,6 @@ impl ScalarExpr {
             },
         }
     }
-
-    /// Converts this [`ScalarExpr`] to a document for pretty printing. See
-    /// [`RelationExpr::to_doc`](crate::RelationExpr::to_doc) for details on the
-    /// approach.
-    pub fn to_doc<'a, A>(&'a self, alloc: &'a A) -> DocBuilder<'a, A>
-    where
-        A: DocAllocator<'a>,
-        A::Doc: Clone,
-    {
-        use ScalarExpr::*;
-
-        let needs_wrap = |expr: &ScalarExpr| match expr {
-            CallUnary { func, .. } => match func {
-                // `UnaryFunc::MatchRegex` renders as a binary function that
-                // matches the embedded regex.
-                UnaryFunc::MatchRegex(_) => true,
-                _ => false,
-            },
-            CallBinary { .. } | If { .. } => true,
-            Column(_) | Literal(_, _) | CallVariadic { .. } | CallNullary(_) => false,
-        };
-
-        let maybe_wrap = |expr| {
-            if needs_wrap(expr) {
-                expr.to_doc(alloc).tightly_embrace("(", ")")
-            } else {
-                expr.to_doc(alloc)
-            }
-        };
-
-        match self {
-            Column(n) => alloc.text("#").append(n.to_string()),
-            Literal(..) => alloc.text(self.as_literal().unwrap().to_string()),
-            CallNullary(func) => alloc.text(func.to_string()),
-            CallUnary { func, expr } => {
-                let mut doc = alloc.text(func.to_string());
-                if !func.display_is_symbolic() && !needs_wrap(expr) {
-                    doc = doc.append(" ");
-                }
-                doc.append(maybe_wrap(expr))
-            }
-            CallBinary { func, expr1, expr2 } => maybe_wrap(expr1)
-                .group()
-                .append(alloc.line())
-                .append(func.to_string())
-                .append(alloc.line())
-                .append(maybe_wrap(expr2).group()),
-            CallVariadic { func, exprs } => alloc.text(func.to_string()).append(
-                alloc
-                    .intersperse(
-                        exprs.iter().map(|e| e.to_doc(alloc)),
-                        alloc.text(",").append(alloc.line()),
-                    )
-                    .tightly_embrace("(", ")"),
-            ),
-            If { cond, then, els } => alloc
-                .text("if")
-                .append(alloc.line().append(cond.to_doc(alloc)).nest(2))
-                .append(alloc.line())
-                .append("then")
-                .append(alloc.line().append(then.to_doc(alloc)).nest(2))
-                .append(alloc.line())
-                .append("else")
-                .append(alloc.line().append(els.to_doc(alloc)).nest(2)),
-        }
-        .group()
-    }
 }
 
 /// An evaluation environment. Stores state that controls how certain
@@ -513,126 +443,4 @@ pub enum EvalError {
     UnterminatedLikeEscapeSequence,
 }
 
-impl fmt::Display for EvalError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            EvalError::DivisionByZero => f.write_str("division by zero"),
-            EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
-            EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
-            EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
-            EvalError::InvalidByteSequence {
-                byte_sequence,
-                encoding_name,
-            } => write!(
-                f,
-                "invalid byte sequence '{}' for encoding '{}'",
-                byte_sequence, encoding_name
-            ),
-            EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
-            EvalError::UnterminatedLikeEscapeSequence => {
-                f.write_str("unterminated escape sequence in LIKE")
-            }
-        }
-    }
-}
-
 impl std::error::Error for EvalError {}
-
-#[cfg(test)]
-mod tests {
-    use pretty::RcDoc;
-
-    use super::*;
-
-    impl ScalarExpr {
-        fn doc(&self) -> RcDoc {
-            self.to_doc(&pretty::RcAllocator).into_doc()
-        }
-    }
-
-    #[test]
-    fn test_pretty_scalar_expr() {
-        use ScalarType::*;
-        let col_type = |st| ColumnType::new(st);
-        let int64_lit = |n| ScalarExpr::literal(Datum::Int64(n), col_type(Int64));
-
-        let plus_expr = int64_lit(1).call_binary(int64_lit(2), BinaryFunc::AddInt64);
-        assert_eq!(plus_expr.doc().pretty(72).to_string(), "1 + 2");
-
-        let like_expr = ScalarExpr::literal(Datum::String("foo"), col_type(String)).call_binary(
-            ScalarExpr::literal(Datum::String("f?oo"), col_type(String)),
-            BinaryFunc::MatchLikePattern,
-        );
-        assert_eq!(
-            like_expr.doc().pretty(72).to_string(),
-            r#""foo" like "f?oo""#
-        );
-
-        let neg_expr = int64_lit(1).call_unary(UnaryFunc::NegInt64);
-        assert_eq!(neg_expr.doc().pretty(72).to_string(), "-1");
-
-        let bool_expr = ScalarExpr::literal(Datum::True, col_type(Bool))
-            .call_binary(
-                ScalarExpr::literal(Datum::False, col_type(Bool)),
-                BinaryFunc::And,
-            )
-            .call_unary(UnaryFunc::Not);
-        assert_eq!(bool_expr.doc().pretty(72).to_string(), "!(true && false)");
-
-        let cond_expr = ScalarExpr::if_then_else(
-            ScalarExpr::literal(Datum::True, col_type(Bool)),
-            neg_expr.clone(),
-            plus_expr.clone(),
-        );
-        assert_eq!(
-            cond_expr.doc().pretty(72).to_string(),
-            "if true then -1 else 1 + 2"
-        );
-
-        let variadic_expr = ScalarExpr::CallVariadic {
-            func: VariadicFunc::Coalesce,
-            exprs: vec![ScalarExpr::Column(7), plus_expr, neg_expr.clone()],
-        };
-        assert_eq!(
-            variadic_expr.doc().pretty(72).to_string(),
-            "coalesce(#7, 1 + 2, -1)"
-        );
-
-        let mega_expr = ScalarExpr::CallVariadic {
-            func: VariadicFunc::Coalesce,
-            exprs: vec![cond_expr],
-        }
-        .call_binary(neg_expr, BinaryFunc::ModInt64)
-        .call_unary(UnaryFunc::IsNull)
-        .call_unary(UnaryFunc::Not)
-        .call_binary(bool_expr, BinaryFunc::Or);
-        assert_eq!(
-            mega_expr.doc().pretty(72).to_string(),
-            "!isnull(coalesce(if true then -1 else 1 + 2) % -1) || !(true && false)"
-        );
-        println!("{}", mega_expr.doc().pretty(64).to_string());
-        assert_eq!(
-            mega_expr.doc().pretty(64).to_string(),
-            "!isnull(coalesce(if true then -1 else 1 + 2) % -1)
-||
-!(true && false)"
-        );
-        assert_eq!(
-            mega_expr.doc().pretty(16).to_string(),
-            "!isnull(
-  coalesce(
-    if
-      true
-    then
-      -1
-    else
-      1 + 2
-  )
-  %
-  -1
-)
-||
-!(true && false)"
-        );
-    }
-}
