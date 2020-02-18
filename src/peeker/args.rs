@@ -230,9 +230,10 @@ pub struct QueryGroup {
     ///
     /// possibly the name of the query if it was default created
     pub name: String,
+    pub queries: Vec<Query>,
+    // configuration parameters
     pub thread_count: u32,
     pub sleep: Duration,
-    pub queries: Vec<Query>,
     pub enabled: bool,
 }
 
@@ -272,18 +273,19 @@ impl QueryGroup {
     }
 }
 
+/// The non-configuration parts of a [`QueryGroup`]
+#[derive(Clone, Debug)]
+pub struct Query {
+    pub name: String,
+    pub query: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Source {
     pub schema_registry: String,
     pub kafka_broker: String,
     pub topic_namespace: String,
     pub names: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Query {
-    pub name: String,
-    pub query: String,
 }
 
 // inner parsing helpers

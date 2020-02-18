@@ -226,8 +226,11 @@ services:
     depends_on:
       - materialized
       - connector
-    # run peeker using 'dc.sh run' to adjust which queries are peeked
+    # run peeker using 'dc.sh run peeker' to adjust which queries are peeked,
+    # and see /src/peeker/config.toml for a list of queries
     command: --queries q01,q02,q17
+    volumes:
+      - ./peeker-config:/etc/peeker
 
 volumes:
   chbench-gen:
