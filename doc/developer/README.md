@@ -27,6 +27,7 @@ codebase
 
 ## Additional Info
 
-For a more general introduction to Materialize [user docs.](https://materialize.io/docs)
-and Rust API documentation for Materialize is [here.](https://mtrlz.dev/api/)
-If you need anything else - [just ask](https://github.com/MaterializeInc/materialize/issues/new/choose)
+For a more general introduction to Materialize, see the [user
+documentation](https://materialize.io/docs). For Rust API documentation, see
+<https://mtrlz.dev/api/>. If you need anything else, [file an
+issue](https://github.com/MaterializeInc/materialize/issues/new/choose).
