@@ -36,6 +36,23 @@ sleep_ms = 0
 # This affects the ratio of times this query is executed vs other queries
 thread_count = 1
 
+[[groups]]
+# group settings override per-query enabled, enable/disable groups with the `-q` flag,
+# same as queries
+#
+# Groups spin up thread_count threads, and then within a thread go through each query in
+# a continuous loop
+name = "fast-complicated"
+queries = ["q01", "q03", "q17", "q22"]
+# default values for groups:
+thread_count = 1
+enabled = true
+sleep_ms = 0
+
+[[groups]]
+name = "loadtest"
+queries = ["q01", "q02", "q05", "q06", "q08", "q09", "q12", "q14", "q17", "q19"]
+thread_count = 5
 
 [[queries]]
 name = "q01"

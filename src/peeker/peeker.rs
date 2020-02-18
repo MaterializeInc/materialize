@@ -21,9 +21,10 @@ use hyper::{Body, Response, Server};
 use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
 use postgres::Client;
-use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, Encoder, HistogramVec};
+use prometheus::{register_counter_vec, register_histogram_vec};
+use prometheus::{CounterVec, Encoder, HistogramVec};
 
-use crate::args::{Args, Query, Source};
+use crate::args::{Args, QueryGroup, Source};
 
 mod args;
 
@@ -77,73 +78,95 @@ fn measure_peek_times(config: &Args) {
     initialize_sources(&mut postgres_client, &config.config.sources)
         .expect("need to have sources for anything else to work");
     let mut peek_threads = vec![];
-    for query in &config.config.queries {
-        try_initialize(&mut postgres_client, query);
+    for group in config.config.queries_in_declaration_order() {
+        try_initialize(&mut postgres_client, group);
+    }
+    for group in &config.config.groups {
         peek_threads.extend(spawn_query_thread(
             config.materialized_url.clone(),
-            query.clone(),
+            group.clone(),
         ));
     }
 
     info!(
         "started {} peek threads for {} queries",
         peek_threads.len(),
-        config.config.queries.len()
+        config.config.query_count()
     );
     for pthread in peek_threads {
         pthread.join().unwrap();
     }
 }
 
-fn spawn_query_thread(mz_url: String, query: Query) -> Vec<JoinHandle<()>> {
-    let q = query;
+fn spawn_query_thread(mz_url: String, query_group: QueryGroup) -> Vec<JoinHandle<()>> {
+    let qg = query_group;
     let mut qs = vec![];
-    for _ in 0..q.thread_count {
-        let query = q.clone();
+    for _ in 0..qg.thread_count {
+        let group = qg.clone();
         let mz_url = mz_url.clone();
         qs.push(thread::spawn(move || {
-            let query_name = &query.name;
             let mut postgres_client = create_postgres_client(&mz_url);
-            let select = format!("SELECT * FROM {};", query_name);
-            let histogram = HISTOGRAM_UNLABELED.with_label_values(&[&query_name]);
-            let error_count = ERRORS_UNLABELED.with_label_values(&[&query_name]);
+            let selects = group
+                .queries
+                .iter()
+                .map(|q| {
+                    let stmt = postgres_client
+                        .prepare(&format!("SELECT * FROM {}", q.name))
+                        .expect("should be able to prepare a query");
+                    let hist = HISTOGRAM_UNLABELED.with_label_values(&[&q.name]);
+                    (stmt, q.name.clone(), hist)
+                })
+                .collect::<Vec<_>>();
             let mut backoff = get_baseline_backoff();
             let mut last_was_failure = false;
             let mut counter = 0u64;
+            let mut err_count = 0u64;
             let mut last_log = Instant::now();
             loop {
-                let timer = prometheus::Histogram::start_timer(&histogram);
-                let query_result = postgres_client.query(&*select, &[]);
+                for (select, q_name, hist) in &selects {
+                    let timer = hist.start_timer();
+                    let query_result = postgres_client.query(select, &[]);
 
-                match query_result {
-                    Ok(_) => drop(timer),
-                    Err(err) => {
-                        timer.stop_and_discard();
-                        error_count.inc();
-                        last_was_failure = true;
-                        print_error_and_backoff(&mut backoff, &query.name, err.to_string());
-                        try_initialize(&mut postgres_client, &query);
+                    match query_result {
+                        Ok(_) => {
+                            counter += 1;
+                            drop(timer)
+                        }
+                        Err(err) => {
+                            timer.stop_and_discard();
+                            err_count += 1;
+                            prom_error(&q_name);
+                            last_was_failure = true;
+                            print_error_and_backoff(&mut backoff, &q_name, err.to_string());
+                            try_initialize(&mut postgres_client, &group);
+                        }
                     }
-                }
-                counter += 1;
-                if counter % 10 == 0 {
-                    let now = Instant::now();
-                    // log at most once per minute per thread
-                    if now.duration_since(last_log) > Duration::from_secs(60) {
-                        info!("peeked {} {} times", query_name, counter);
-                        last_log = now;
+                    if (err_count + counter) % 10 == 0 {
+                        let now = Instant::now();
+                        // log at most once per minute per thread
+                        if now.duration_since(last_log) > Duration::from_secs(60) {
+                            info!(
+                                "peeked {} {} times with {} errors",
+                                group.name, counter, err_count
+                            );
+                            last_log = now;
+                        }
                     }
-                }
-                if !last_was_failure {
-                    backoff = get_baseline_backoff();
-                }
-                if query.sleep != Duration::from_millis(0) {
-                    thread::sleep(query.sleep);
+                    if !last_was_failure {
+                        backoff = get_baseline_backoff();
+                    }
+                    if group.sleep != Duration::from_millis(0) {
+                        thread::sleep(group.sleep);
+                    }
                 }
             }
         }))
     }
     qs
+}
+
+fn prom_error(query_name: &str) {
+    ERRORS_UNLABELED.with_label_values(&[&query_name]).inc()
 }
 
 fn get_baseline_backoff() -> Duration {
@@ -222,26 +245,26 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
 /// Try to build the views and sources that are needed for this script
 ///
 /// This ignores errors (just logging them), and can just be run multiple times.
-fn try_initialize(client: &mut Client, query: &Query) {
-    if !query.enabled {
-        info!("skipping disabled query {}", query.name);
+fn try_initialize(client: &mut Client, query_group: &QueryGroup) {
+    if !query_group.enabled {
+        info!("skipping disabled query group {}", query_group.name);
         return;
     }
-    match client.batch_execute(&format!(
-        "CREATE MATERIALIZED VIEW {} AS {}",
-        query.name, query.query
-    )) {
-        Ok(_) => info!("view {} is installed", query.name),
-        Err(err) => {
-            let errmsg = err.to_string();
-            if !errmsg.ends_with("already exists") {
-                warn!("error trying to create view {}: {}", query.name, err);
-            } else {
-                // this only matters for timeline issues, in general it is fine
-                debug!(
-                    "create view that already exists: {} err={}",
-                    query.name, err
-                );
+    for query in &query_group.queries {
+        let mz_result = client.batch_execute(&format!(
+            "CREATE MATERIALIZED VIEW {} AS {}",
+            query.name, query.query
+        ));
+        match mz_result {
+            Ok(_) => info!("installed view {}", query.name),
+            Err(err) => {
+                let errmsg = err.to_string();
+                if !errmsg.ends_with("already exists") {
+                    warn!("error trying to create view {}: {}", query.name, err);
+                } else {
+                    // this only matters for timeline debugging, in general it is fine
+                    debug!("view previously installed: {} err={}", query.name, err);
+                }
             }
         }
     }

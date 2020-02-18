@@ -9,9 +9,14 @@
 
 //! [`Args::from_cli`] parses the command line arguments from the cli and the config file
 
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::result::Result as StdResult;
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
+
+use crate::{Error, Result};
 
 static DEFAULT_CONFIG: &str = include_str!("config.toml");
 
@@ -23,7 +28,7 @@ pub struct Args {
 
 impl Args {
     /// Load the arguments provided on the cli, and parse the required config file
-    pub fn from_cli() -> Result<Args, Box<dyn std::error::Error>> {
+    pub fn from_cli() -> Result<Args> {
         let args: Vec<_> = std::env::args().collect();
 
         let mut opts = getopts::Options::new();
@@ -66,44 +71,10 @@ impl Args {
             }
         };
 
-        let config_file = popts
-            .opt_str("config-file")
-            .map(|config_file| std::fs::read_to_string(config_file))
-            .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
-        let mut conf;
-        match &config_file {
-            Ok(contents) => {
-                conf = toml::from_str::<RawConfig>(&contents)?;
-                if let Some(queries) = popts.opt_str("queries") {
-                    let qs: Vec<_> = queries.split(',').collect();
-                    if !qs.is_empty() {
-                        conf.queries = conf
-                            .queries
-                            .into_iter()
-                            .filter(|q| qs.contains(&&*q.name))
-                            .collect()
-                    }
-                }
-                if conf.queries.is_empty() {
-                    eprintln!("at least one query in {:?} is required", config_file);
-                    std::process::exit(1);
-                }
-            }
-            Err(e) => {
-                eprintln!("unable to read config file {:?}: {}", config_file, e);
-                std::process::exit(1);
-            }
-        }
+        let config = load_config(popts.opt_str("config-file"), popts.opt_str("queries"))?;
 
-        let config = Config::from(conf);
         if popts.opt_present("help-config") {
-            println!("named queries:");
-            for q in config.queries {
-                println!(
-                    "    {} thread_count={} sleep={:?}",
-                    q.name, q.thread_count, q.sleep
-                );
-            }
+            print_config_supplied(config);
             std::process::exit(0);
         }
 
@@ -117,6 +88,80 @@ impl Args {
     }
 }
 
+fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Result<Config> {
+    // load and parse th toml
+    let config_file = config_path
+        .as_ref()
+        .map(|config_file| std::fs::read_to_string(config_file))
+        .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
+    let conf = match &config_file {
+        Ok(contents) => toml::from_str::<RawConfig>(&contents).map_err(|e| {
+            format!(
+                "Unable to parse config file {}: {}",
+                config_path.as_deref().unwrap_or("DEFAULT"),
+                e
+            )
+        })?,
+        Err(e) => {
+            eprintln!(
+                "unable to read config file {:?}: {}",
+                config_path.as_deref().unwrap_or("DEFAULT"),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // Get everything into the normalized QueryGroup representation
+    let mut config = Config::try_from(conf)?;
+
+    // filter to only things enabled in the command line OR the config file
+    //
+    // TODO: consider if this would be better to just flip the enabled flag to true/false and retail everthing
+    if let Some(queries) = cli_queries {
+        let enabled_qs: Vec<_> = queries.split(',').collect();
+        if !enabled_qs.is_empty() {
+            config.groups = config
+                .groups
+                .into_iter()
+                .filter(|qg| enabled_qs.contains(&&*qg.name))
+                .collect();
+        }
+    } else {
+        config.groups.retain(|q| q.enabled);
+    }
+    if config.groups.is_empty() {
+        eprintln!(
+            "at least one enabled query or group in {:?} is required",
+            config_path.as_deref().unwrap_or("the default config")
+        );
+        std::process::exit(1);
+    }
+    Ok(config)
+}
+
+fn print_config_supplied(config: Config) {
+    println!("named queries:");
+    let mut groups = config.groups.iter().collect::<Vec<_>>();
+    groups.sort_by_key(|g| g.queries.len());
+    for g in groups {
+        if g.queries.len() == 1 {
+            println!(
+                "    thread_count={} sleep={:?} query={}",
+                g.thread_count, g.sleep, g.queries[0].name
+            );
+        } else {
+            println!(
+                "    group={} thread_count={} sleep={:?}",
+                g.name, g.thread_count, g.sleep
+            );
+            for q in &g.queries {
+                println!("        query={}", q.name);
+            }
+        }
+    }
+}
+
 /// A query configuration
 ///
 /// This is a normalized version of [`RawConfig`], which is what is actually parsed
@@ -124,28 +169,106 @@ impl Args {
 #[derive(Debug)]
 pub struct Config {
     /// Queries are instanciated as views which are polled continuously
-    pub queries: Vec<Query>,
+    pub groups: Vec<QueryGroup>,
+    queries: Vec<QueryGroup>,
     /// Sources are created once at startup
     pub sources: Vec<Source>,
 }
 
-impl From<RawConfig> for Config {
-    fn from(conf: RawConfig) -> Config {
+impl Config {
+    /// How many total queries there are in this config
+    pub fn query_count(&self) -> usize {
+        self.groups.iter().map(|g| g.queries.iter().count()).sum()
+    }
+
+    pub fn queries_in_declaration_order(&self) -> impl Iterator<Item = &QueryGroup> {
+        self.queries.iter()
+    }
+}
+
+impl TryFrom<RawConfig> for Config {
+    type Error = Error;
+
+    /// Convert the toml into the nicer representation
+    ///
+    /// This performs the grouping and normalization from [`Query`]s and [`GroupConfig`]s
+    /// into [`QueryGroup`]s
+    fn try_from(conf: RawConfig) -> Result<Config> {
         let default = conf.default_query;
-        Config {
-            queries: conf
+        let mut queries_by_name = HashMap::new();
+        let queries: Vec<_> = conf
+            .queries
+            .into_iter()
+            .map(|rq| {
+                let q = Query {
+                    name: rq.name.clone(),
+                    query: rq.query.clone(),
+                };
+                queries_by_name.insert(q.name.clone(), q);
+                QueryGroup::from_raw_query(rq, &default)
+            })
+            .collect();
+
+        let groups = conf
+            .groups
+            .into_iter()
+            .map(|g| QueryGroup::from_group_config(g, &queries_by_name))
+            .chain(queries.iter().cloned().map(|q| Ok(q)))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Config {
+            groups,
+            queries,
+            sources: conf.sources,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct QueryGroup {
+    /// The name of the group
+    ///
+    /// possibly the name of the query if it was default created
+    pub name: String,
+    pub thread_count: u32,
+    pub sleep: Duration,
+    pub queries: Vec<Query>,
+    pub enabled: bool,
+}
+
+impl QueryGroup {
+    /// Create a default QueryGroup using fields from the query
+    fn from_raw_query(q: RawQuery, default: &DefaultQuery) -> QueryGroup {
+        QueryGroup {
+            name: q.name.clone(),
+            sleep: q.sleep_ms.unwrap_or(default.sleep_ms),
+            thread_count: q.thread_count.unwrap_or(default.thread_count),
+            queries: vec![Query {
+                name: q.name,
+                query: q.query,
+            }],
+            enabled: q.enabled,
+        }
+    }
+
+    fn from_group_config(g: GroupConfig, queries: &HashMap<String, Query>) -> Result<QueryGroup> {
+        let g_name = g.name.clone();
+        Ok(QueryGroup {
+            name: g_name.clone(),
+            sleep: g.sleep_ms,
+            thread_count: g.thread_count,
+            queries: g
                 .queries
                 .into_iter()
-                .map(|q| Query {
-                    name: q.name,
-                    query: q.query,
-                    enabled: q.enabled,
-                    sleep: q.sleep_ms.unwrap_or(default.sleep_ms),
-                    thread_count: q.thread_count.unwrap_or(default.thread_count),
+                .map(|q_name| {
+                    let q = queries.get(&*q_name).cloned();
+                    q.ok_or_else(|| {
+                        format!("Unable to get query for group {}: {}", g_name, q_name).into()
+                    })
                 })
-                .collect(),
-            sources: conf.sources,
-        }
+                .collect::<Result<_>>()?,
+            enabled: g.enabled,
+        })
     }
 }
 
@@ -161,9 +284,6 @@ pub struct Source {
 pub struct Query {
     pub name: String,
     pub query: String,
-    pub enabled: bool,
-    pub sleep: Duration,
-    pub thread_count: u32,
 }
 
 // inner parsing helpers
@@ -175,6 +295,8 @@ struct RawConfig {
     default_query: DefaultQuery,
     /// Queries are instanciated as views which are polled continuously
     queries: Vec<RawQuery>,
+    /// Defined query groups
+    groups: Vec<GroupConfig>,
     /// Sources are created once at startup
     sources: Vec<Source>,
 }
@@ -184,6 +306,25 @@ struct DefaultQuery {
     #[serde(deserialize_with = "deser_duration_ms")]
     sleep_ms: Duration,
     thread_count: u32,
+    /// Groups share their connection and only one query happens at a time
+    #[serde(default)]
+    group: Option<String>,
+}
+
+/// An explicitly created, named group
+#[derive(Clone, Debug, Deserialize)]
+struct GroupConfig {
+    name: String,
+    /// The names of the queries that belong in this group, must be specified separately
+    /// in the config file
+    queries: Vec<String>,
+    #[serde(default = "one")]
+    thread_count: u32,
+    #[serde(default, deserialize_with = "deser_duration_ms")]
+    sleep_ms: Duration,
+    /// Whether to enabled this group. Overrides enabled in queries
+    #[serde(default = "btrue")]
+    enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -203,7 +344,11 @@ fn btrue() -> bool {
     true
 }
 
-fn deser_duration_ms<'de, D>(deser: D) -> Result<Duration, D::Error>
+fn one() -> u32 {
+    1
+}
+
+fn deser_duration_ms<'de, D>(deser: D) -> StdResult<Duration, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -211,7 +356,7 @@ where
     Ok(d)
 }
 
-fn deser_duration_ms_opt<'de, D>(deser: D) -> Result<Option<Duration>, D::Error>
+fn deser_duration_ms_opt<'de, D>(deser: D) -> StdResult<Option<Duration>, D::Error>
 where
     D: Deserializer<'de>,
 {
