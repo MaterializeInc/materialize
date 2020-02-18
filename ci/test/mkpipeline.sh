@@ -21,9 +21,10 @@ cd "$(dirname "$0")/../.."
 #
 # Reports whether there were any changes on this branch in a file whose name
 # matches GLOB. Note that this function always returns true if there were any
-# changes to the build configuration itself.
+# changes to the build configuration itself, or if building on a release
+# branch or tag.
 changes_matching() {
-    if [[ "${BUILDKITE_BRANCH:-}" = master ]] ||
+    if [[ "${BUILDKITE_BRANCH:-}" = master ]] || [[ "${BUILDKITE_TAG:-}" ]] ||
         ! git diff --no-patch --quiet origin/master... -- "bin/*" "ci/*" "$@"
     then
         echo true
