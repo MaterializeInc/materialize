@@ -5,74 +5,218 @@ menu: "main"
 weight: 3
 ---
 
-To get started with Materialize, we'll cover:
+To help you get started with Materialize, we'll:
 
-- Conceptual framework, which explains how you should typically expect to
-  interact with Materialize
-- Hands-on experience, which will give you a chance to get some limited
-  experience with a simple, local Materialize deployment
+- Install, run, and connect to Materialize
+- Explore its API
+- Set up a real-time stream to perform aggregations on
 
-## Conceptual framework
+## Prerequisites
 
-Before trying to deploy Materialize, you should check out:
+To complete this demo, you need:
 
-- [What is Materialize?](../overview/what-is-materialize)
-- Our [architecture overview](../overview/architecture)
+- Command line and network access.
+- A [PostgreSQL-compatible CLI](../connect/cli/). If you have PostgreSQL installed `psql` works.
 
-Below is a high-level overview of how Materialize works. This is simply an
-overview and doesn't contain any actual instruction.
+We also highly recommend checking out [What is Materialize?](../overview/what-is-materialize)
 
-### Preparing Kafka
+## Install, run, connect
 
-1. Materialize relies on getting data from your database through Kafka, so
-   you'll need to have access to the typical suite of Kafka tools, including
-   Kafka itself, Kafka Connect, and ZooKeeper.
+1. Install the `materialized` binary using [these instructions](../install).
+1. Run the `materialized` binary. For example, if you installed it in your `$PATH`:
 
-1. To get data from your database into Kafka, you'll need to use a change data
-   capture (CDC) tool. The only CDC tool that provides the requisite structure
-   to Materialize is Debezium, so you'll need to configure that to publish a
-   changefeed to your Kafka cluster.
+    ```shell
+    materialized
+    ```
 
-1. Materialize needs to understand your Kafka topics' schemas, so you'll need to
-   have your topics reports their schema to a Confluent Schema Registry, or know
-   the topics' Avro schemas.
+    This starts the daemon listening on port 6875.
+1. Connect to `materialized` through your PostgreSQL CLI, e.g.:
 
-   Note that if you are using Debezium (and you should be), all of this happens
-   automatically.
+    ```shell
+    psql -h localhost -p 6875 materialize
+    ```
 
-### Using Materialize
+## Explore Materialize's API
 
-1. Start a Materialize server (through the `materialized` process) on a server,
-   and connect to it through `mzcli`.
+Materialize offers ANSI Standard SQL, but is not simply a relational database. Instead of tables of data, you typically connect Materialize to external sources of data (called **sources**), and then create materialized views of the data that Materialize sees from those sources.
 
-1. Using your `mzcli` connection, create a source for each Kafka topic/table
-   from your database that you want to use.
+To get started, though, we'll begin with a simple version that doesn't require connecting to an external data source.
 
-    When creating sources, you also need to provide the topic's schema to
-    Materialize by pointing Materialize to your Confluent Schema Registry or
-    providing the Avro schema.
+1. From your PostgreSQL CLI, create a materialized view that contains actual data we can work with.
 
-1. Ensure that your data is working as you expect by issuing some `SELECT`
-   statements through Materialize.
+    ```sql
+    CREATE MATERIALIZED VIEW pseudo_source AS
+        SELECT column1 as key, column2 as value FROM (VALUES
+            ('a', 1),
+            ('a', 2),
+            ('a', 3),
+            ('a', 4),
+            ('b', 5),
+            ('c', 6),
+            ('c', 7)) AS tbl;
+    ```
 
-1. Once you have queries that you want to materialize, create views of them.
+    You'll notice that we end up entering data into Materialize by creating a materialized view from some other data, rather than the typical `INSERT` operation. This is how one interacts with Materialize. In most cases, this data would have come from an external source and get fed into Materialize from a file or a stream.
 
-    At this point, Materialize begins maintaining these views as new data
-   streams in from Kafka.
+1. With data in a materialized view, we can perform arbitrary `SELECT` statements on the data.
 
-1. Configure your application to connect to Materialize and read the results of
-   your views, e.g. `SELECT * FROM some_view;`.
+    Let's start by viewing all of the data:
 
-## Hands-on experience
+    ```sql
+    SELECT * FROM pseudo_source;
+    ```
+    ```nofmt
+     key | value
+    -----+-------
+     a   |     1
+     a   |     2
+     a   |     3
+     a   |     4
+     b   |     5
+     c   |     6
+     c   |     7
+    ```
 
-To see what this feels like in action, we have a simple demo in
-`materialize/demo/simple-demo`.
+1. Determine the sum of the values for each key:
 
-For something slightly more involved, check out `materialize/demo/chbench`.
+    ```sql
+    SELECT key, sum(value) FROM pseudo_source GROUP BY key;
+    ```
+    ```nofmt
+     key | sum
+    -----+-----
+     a   |  10
+     b   |   5
+     c   |  13
+    ```
 
-## Related pages
+    We can actually then save this query as its own materialized view:
 
-- [What is Materialize?](../overview/what-is-materialize)
-- [Architecture documentation](../overview/architecture)
-- [`CREATE SOURCE`](../sql/create-source)
-- [`CREATE VIEW`](../sql/create-view)
+    ```sql
+    CREATE MATERIALIZED VIEW key_sums AS
+        SELECT key, sum(value) FROM pseudo_source GROUP BY key;
+    ```
+
+1. Determine the sum of all keys' sums:
+
+    ```sql
+    SELECT sum(sum) FROM key_sums;
+    ```
+
+1. We can also perform complex operations like `JOIN`s. Given the simplicity of our data, the `JOIN` clauses themselves aren't very exciting, but Materialize offers support for a full range of arbitrarily complex `JOIN`s.
+
+    ```sql
+    CREATE MATERIALIZED VIEW lhs AS
+        SELECT column1 as key, column2 as value FROM (VALUES
+            ('x', 'a'),
+            ('y', 'b'),
+            ('z', 'c')) AS lhs;
+    ```
+    ```sql
+    SELECT lhs.key, sum(rhs.value)
+    FROM lhs
+    JOIN pseudo_source AS rhs
+    ON lhs.value = rhs.key
+    GROUP BY lhs.key;
+    ```
+
+Of course, these are trivial examples, but hope begin to illustrate some of Materialize's potential.
+
+## Create a real-time stream
+
+Materialize is built to handle streams of data, and provide incredibly low-latency answers to queries over that data. To show off that capability, in this section we'll set up a real-time stream, and then see how Materialize lets you query it.
+
+1. We'll set up a stream of Wikipedia's recent changes, and simply write all data that we see to a file.
+
+    From your shell, run:
+    ```
+    while true; do
+      curl --max-time 9999999 -N https://stream.wikimedia.org/v2/stream/recentchange >> wikirecent
+    done
+    ```
+
+    Note the absolute path of the location where you write `wikirecent`, which we'll need in the next step.
+
+1. From within the CLI, create a source from the `wikirecent` file:
+
+    ```sql
+    CREATE SOURCE wikirecent
+    FROM FILE '[path to wikirecent]'
+    WITH ( tail=true )
+    FORMAT REGEX '^data: (?P<data>.*)';
+    ```
+
+    This source takes the lines from the stream, finds those that begins with `data:`, and then captures the rest of the line in a column called `data`
+
+    You can see the columns that get generated for this source:
+
+    ```sql
+    SHOW COLUMNS FROM wikirecent
+    ```
+
+1. Because this stream comes in as JSON, we'll need to normalize the data to perform aggregations on it. Materialize offers the ability to do this easily using our built-in [`jsonb` functions](/docs/sql/functions/#json).
+
+    ```sql
+    CREATE MATERIALIZED VIEW recentchanges AS
+        SELECT
+        val->>'$schema' AS r_schema,
+        (val->'bot')::bool AS bot,
+        val->>'comment' AS comment,
+        (val->'id')::float::int AS id,
+        (val->'length'->'new')::float::int AS length_new,
+        (val->'length'->'old')::float::int AS length_old,
+        val->'meta'->>'uri' AS meta_uri,
+        val->'meta'->>'id' as meta_id,
+        (val->'minor')::bool AS minor,
+        (val->'namespace')::float AS namespace,
+        val->>'parsedcomment' AS parsedcomment,
+        (val->'revision'->'new')::float::int AS revision_new,
+        (val->'revision'->'old')::float::int AS revision_old,
+        val->>'server_name' AS server_name,
+        (val->'server_script_path')::text AS server_script_path,
+        val->>'server_url' AS server_url,
+        (val->'timestamp')::float AS r_ts,
+        val->>'title' AS title,
+        val->>'type' AS type,
+        val->>'user' AS user,
+        val->>'wiki' AS wiki
+        FROM (SELECT data::jsonb AS val FROM wikirecent);
+    ```
+
+1. From here we can start building our aggregations. The simplest place to start is simply counting the number of items we've seen:
+
+    ```sql
+    CREATE MATERIALIZED VIEW counter
+    AS SELECT COUNT(*) FROM recentchanges;
+    ```
+
+1. However,  we can also see more interesting things from our stream. For instance, who are making the most changes to Wikipedia?
+
+    ```sql
+    CREATE MATERIALIZED VIEW useredits AS SELECT user, count(*) FROM recentchanges GROUP BY user;
+    ```
+
+    ```sql
+    SELECT * FROM useredits ORDER BY count DESC;
+    ```
+
+1. If this is a factoid we often want to know, we could also create a view of just the top 10 editors we've seen.
+
+    ```sql
+    CREATE MATERIALIZED VIEW top10
+    AS SELECT * FROM useredits ORDER BY "count" DESC LIMIT 10;
+    ```
+
+    We can then quickly get the answer to who the top 10 editors are:
+
+    ```sql
+    SELECT * FROM top10 ORDER BY "count" DESC;
+    ```
+
+Naturally, there are many interesting views of this data. If you're interested in continuing to explore it, you can checkout the stream's documentation from Wikipedia.
+
+Once you're done, don't forget to stop `curl` and `rm wikirecent`.
+
+## Up next
+
+Checkout out [architecture overview](../overview/architecture).
