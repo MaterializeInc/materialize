@@ -1,5 +1,6 @@
 [![Build status](https://badge.buildkite.com/97d6604e015bf633d1c2a12d166bb46f3b43a927d3952c999a.svg?branch=master)](https://buildkite.com/materialize/tests)
 [![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.io/docs)
+[![Gitter](https://badges.gitter.im/MaterializeInc/community.svg)](https://gitter.im/MaterializeInc/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
 [<img src="https://materialize.io/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.io)
 
