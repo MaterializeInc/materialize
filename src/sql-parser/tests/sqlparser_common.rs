@@ -3730,7 +3730,7 @@ fn parse_materialized_invalid() {
 
 #[test]
 fn parse_avro_object() {
-    let sql = "CREATE SOURCE foo FROM AVRO OBJECT '/tmp/bar'";
+    let sql = "CREATE SOURCE foo FROM AVRO OCF '/tmp/bar'";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
@@ -3740,7 +3740,7 @@ fn parse_avro_object() {
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!(
-                Connector::AvroObject {
+                Connector::AvroOcf {
                     path: "/tmp/bar".into(),
                     with_options: vec![]
                 },

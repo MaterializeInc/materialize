@@ -1341,7 +1341,7 @@ macro_rules! make_visitor {
             connector: &'ast $($mut)* Connector,
         ) {
             match connector {
-                Connector::File { path, with_options } | Connector::AvroObject { path, with_options } => {
+                Connector::File { path, with_options } | Connector::AvroOcf { path, with_options } => {
                     visitor.visit_literal_string(path);
                     for option in with_options {
                         visitor.visit_option(option);

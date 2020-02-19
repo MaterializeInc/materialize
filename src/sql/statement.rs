@@ -649,7 +649,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             (broker, topic)
         }
         Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
-        Connector::AvroObject { .. } => bail!("Avro object sinks are not yet supported"),
+        Connector::AvroOcf { .. } => bail!("Avro object sinks are not yet supported"),
     };
 
     let schema_registry_url = match format {
@@ -1147,7 +1147,7 @@ fn handle_create_dataflow_pure(
                         desc,
                     }
                 }
-                Connector::AvroObject { .. } => bail!("Avro object files are not yet supported."),
+                Connector::AvroOcf { .. } => bail!("Avro object files are not yet supported."),
             };
 
             // TODO(benesch): figure out how to get the actual catalog in here.

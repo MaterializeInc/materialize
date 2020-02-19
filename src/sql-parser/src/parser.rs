@@ -1655,10 +1655,10 @@ impl Parser {
                 Ok(Connector::Kinesis { arn, with_options })
             }
             "AVRO" => {
-                self.expect_keyword("OBJECT")?;
+                self.expect_keyword("OCF")?;
                 let path = self.parse_literal_string()?;
                 let with_options = self.parse_with_options()?;
-                Ok(Connector::AvroObject { path, with_options })
+                Ok(Connector::AvroOcf { path, with_options })
             }
             _ => unreachable!(),
         }

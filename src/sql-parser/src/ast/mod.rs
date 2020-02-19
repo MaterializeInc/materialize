@@ -655,7 +655,8 @@ pub enum Connector {
         arn: String,
         with_options: Vec<SqlOption>,
     },
-    AvroObject {
+    /// Avro Object Container File
+    AvroOcf {
         path: String,
         with_options: Vec<SqlOption>,
     },
@@ -698,12 +699,8 @@ impl fmt::Display for Connector {
                 }
                 Ok(())
             }
-            Connector::AvroObject { path, with_options } => {
-                write!(
-                    f,
-                    "AVRO OBJECT '{}'",
-                    value::escape_single_quote_string(path)
-                )?;
+            Connector::AvroOcf { path, with_options } => {
+                write!(f, "AVRO OCF '{}'", value::escape_single_quote_string(path))?;
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }
