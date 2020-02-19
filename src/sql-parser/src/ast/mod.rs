@@ -655,6 +655,10 @@ pub enum Connector {
         arn: String,
         with_options: Vec<SqlOption>,
     },
+    AvroObject {
+        path: String,
+        with_options: Vec<SqlOption>,
+    },
 }
 
 impl fmt::Display for Connector {
@@ -688,6 +692,17 @@ impl fmt::Display for Connector {
                     f,
                     "KINESIS ARN '{}'",
                     value::escape_single_quote_string(arn),
+                )?;
+                if !with_options.is_empty() {
+                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                }
+                Ok(())
+            }
+            Connector::AvroObject { path, with_options } => {
+                write!(
+                    f,
+                    "AVRO OBJECT '{}'",
+                    value::escape_single_quote_string(path)
                 )?;
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
@@ -751,7 +766,7 @@ pub enum Statement {
     CreateSource {
         name: ObjectName,
         connector: Connector,
-        format: Format,
+        format: Option<Format>,
         envelope: Envelope,
         if_not_exists: bool,
         materialized: bool,
@@ -1006,7 +1021,9 @@ impl fmt::Display for Statement {
                     write!(f, "IF NOT EXISTS ")?;
                 }
                 write!(f, "{} FROM {}", name, connector,)?;
-                write!(f, " FORMAT {}", format)?;
+                if let Some(format) = format {
+                    write!(f, " FORMAT {}", format)?;
+                }
                 if *envelope != Default::default() {
                     write!(f, " ENVELOPE {}", envelope)?;
                 }

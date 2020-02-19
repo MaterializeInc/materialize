@@ -3517,7 +3517,7 @@ fn parse_create_source_inline_schema() {
             );
             assert_eq!(
                 Format::Avro(AvroSchema::Schema(Schema::Inline("baz".into()))),
-                format
+                format.unwrap()
             );
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
@@ -3559,7 +3559,7 @@ fn parse_create_source_kafka() {
                 },
                 connector
             );
-            assert_eq!(Format::Bytes, format);
+            assert_eq!(Format::Bytes, format.unwrap());
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
             assert!(!materialized);
@@ -3594,7 +3594,7 @@ fn parse_create_source_file_schema_protobuf_multiple_args() {
                     message_name: "somemessage".into(),
                     schema: Schema::File("path".into())
                 },
-                format
+                format.unwrap()
             );
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
@@ -3629,7 +3629,7 @@ fn parse_create_source_regex() {
                 },
                 connector
             );
-            assert_eq!(Format::Regex("(asdf)|(jkl)".into()), format);
+            assert_eq!(Format::Regex("(asdf)|(jkl)".into()), format.unwrap());
             assert_eq!(Envelope::None, envelope);
             assert!(if_not_exists);
             assert!(!materialized);
@@ -3668,7 +3668,7 @@ fn parse_create_source_csv() {
                     n_cols: 3,
                     delimiter: ','
                 },
-                format
+                format.unwrap()
             );
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
@@ -3708,7 +3708,7 @@ fn parse_create_source_csv_custom_delim() {
                     n_cols: 3,
                     delimiter: '|'
                 },
-                format
+                format.unwrap()
             );
             assert_eq!(Envelope::None, envelope);
             assert!(!if_not_exists);
@@ -3719,13 +3719,6 @@ fn parse_create_source_csv_custom_delim() {
 }
 
 #[test]
-fn parse_missing_format() {
-    let sql = "CREATE SOURCE foo FROM FILE 'bar' WITH (answer = 42)";
-    let err = parse_sql_statements(sql).unwrap_err();
-    assert_eq!("Expected FORMAT, found: EOF", err.message);
-}
-
-#[test]
 fn parse_materialized_invalid() {
     let sql = "CREATE MATERIALIZED OR VIEW foo as SELECT * from bar";
     let err = parse_sql_statements(sql).unwrap_err();
@@ -3733,6 +3726,30 @@ fn parse_materialized_invalid() {
         "Expected VIEW or SOURCE after CREATE MATERIALIZED, found: OR",
         err.message
     );
+}
+
+#[test]
+fn parse_avro_object() {
+    let sql = "CREATE SOURCE foo FROM AVRO OBJECT '/tmp/bar'";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            connector,
+            format,
+            ..
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!(
+                Connector::AvroObject {
+                    path: "/tmp/bar".into(),
+                    with_options: vec![]
+                },
+                connector
+            );
+            assert_eq!(None, format);
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[test]
@@ -3762,7 +3779,7 @@ fn parse_create_source_registry() {
                     url: "http://localhost:8081".into(),
                     seed: None,
                 }),
-                format
+                format.unwrap()
             );
             assert!(!if_not_exists);
             assert_eq!(Envelope::Debezium, envelope);
@@ -3784,7 +3801,7 @@ fn parse_create_source_registry() {
                         value_schema: "blah".into(),
                     }),
                 }),
-                format
+                format.unwrap()
             );
         }
         _ => unreachable!(),
@@ -3803,7 +3820,7 @@ fn parse_create_source_registry() {
                         value_schema: "b".into(),
                     }),
                 }),
-                format
+                format.unwrap()
             );
         }
         _ => unreachable!(),
