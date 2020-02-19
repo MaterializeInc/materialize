@@ -1482,7 +1482,6 @@ impl Parser {
     }
 
     pub fn parse_format(&mut self) -> Result<Format, ParserError> {
-        self.expect_keyword("FORMAT")?;
         let format = if self.parse_keyword("AVRO") {
             self.expect_keyword("USING")?;
             Format::Avro(self.parse_avro_schema()?)
@@ -1591,7 +1590,11 @@ impl Parser {
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
         let connector = self.parse_connector()?;
-        let format = self.parse_format()?;
+        let format = if self.parse_keyword("FORMAT") {
+            Some(self.parse_format()?)
+        } else {
+            None
+        };
         let envelope = if self.parse_keyword("ENVELOPE") {
             self.parse_envelope()?
         } else {
@@ -1615,6 +1618,7 @@ impl Parser {
         let from = self.parse_object_name()?;
         self.expect_keyword("INTO")?;
         let connector = self.parse_connector()?;
+        self.expect_keyword("FORMAT")?;
         let format = self.parse_format()?;
         Ok(Statement::CreateSink {
             name,
@@ -1626,7 +1630,7 @@ impl Parser {
     }
 
     pub fn parse_connector(&mut self) -> Result<Connector, ParserError> {
-        match self.expect_one_of_keywords(&["FILE", "KAFKA", "KINESIS"])? {
+        match self.expect_one_of_keywords(&["FILE", "KAFKA", "KINESIS", "AVRO"])? {
             "FILE" => {
                 let path = self.parse_literal_string()?;
                 let with_options = self.parse_with_options()?;
@@ -1649,6 +1653,12 @@ impl Parser {
                 let arn = self.parse_literal_string()?;
                 let with_options = self.parse_with_options()?;
                 Ok(Connector::Kinesis { arn, with_options })
+            }
+            "AVRO" => {
+                self.expect_keyword("OCF")?;
+                let path = self.parse_literal_string()?;
+                let with_options = self.parse_with_options()?;
+                Ok(Connector::AvroOcf { path, with_options })
             }
             _ => unreachable!(),
         }

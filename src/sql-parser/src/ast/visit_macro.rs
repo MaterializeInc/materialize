@@ -360,7 +360,7 @@ macro_rules! make_visitor {
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
                 connector: &'ast $($mut)* Connector,
-                format: &'ast $($mut)* Format,
+                format: Option<&'ast $($mut)* Format>,
                 envelope: &'ast $($mut)* Envelope,
                 if_not_exists: bool,
                 materialized: bool,
@@ -672,7 +672,7 @@ macro_rules! make_visitor {
                     envelope,
                     if_not_exists,
                     materialized,
-                } => visitor.visit_create_source(name, connector, format, envelope, *if_not_exists, *materialized),
+                } => visitor.visit_create_source(name, connector, format.as_auto_ref(), envelope, *if_not_exists, *materialized),
                 Statement::CreateSink {
                     name,
                     from,
@@ -1323,14 +1323,16 @@ macro_rules! make_visitor {
             visitor: &mut V,
             name: &'ast $($mut)* ObjectName,
             connector: &'ast $($mut)* Connector,
-            format: &'ast $($mut)* Format,
+            format: Option<&'ast $($mut)* Format>,
             envelope: &'ast $($mut)* Envelope,
             _if_not_exists: bool,
             _materialized: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_connector(connector);
-            visitor.visit_format(format);
+            if let Some(format) = format {
+                visitor.visit_format(format);
+            }
             visitor.visit_source_envelope(envelope);
         }
 
@@ -1339,7 +1341,7 @@ macro_rules! make_visitor {
             connector: &'ast $($mut)* Connector,
         ) {
             match connector {
-                Connector::File { path, with_options } => {
+                Connector::File { path, with_options } | Connector::AvroOcf { path, with_options } => {
                     visitor.visit_literal_string(path);
                     for option in with_options {
                         visitor.visit_option(option);

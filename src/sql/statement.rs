@@ -649,6 +649,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             (broker, topic)
         }
         Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
+        Connector::AvroOcf { .. } => bail!("Avro object sinks are not yet supported"),
     };
 
     let schema_registry_url = match format {
@@ -846,6 +847,9 @@ async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Err
         connector, format, ..
     } = &mut stmt
     {
+        let format = format
+            .as_mut()
+            .ok_or_else(|| format_err!("Source format must be specified"))?;
         let topic = if let Connector::Kafka { broker, topic, .. } = connector {
             if !broker.contains(':') {
                 *broker += ":9092";
@@ -909,6 +913,9 @@ fn handle_create_dataflow_pure(
             if_not_exists,
             materialized,
         } => {
+            let format = format
+                .as_ref()
+                .ok_or_else(|| format_err!("Source format must be specified"))?;
             let envelope = match envelope {
                 sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
                 sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
@@ -1140,6 +1147,7 @@ fn handle_create_dataflow_pure(
                         desc,
                     }
                 }
+                Connector::AvroOcf { .. } => bail!("Avro object files are not yet supported."),
             };
 
             // TODO(benesch): figure out how to get the actual catalog in here.

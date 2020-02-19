@@ -308,6 +308,7 @@ define_keywords!(
     NUMERIC,
     OBJECT,
     OCCURRENCES_REGEX,
+    OCF,
     OCTET_LENGTH,
     OF,
     OFFSET,
