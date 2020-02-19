@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::server::{TimestampChanges, TimestampHistories};
-use dataflow_types::{Consistency, KafkaSourceConnector, Timestamp};
+use dataflow_types::{Consistency, ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
 use log::{error, warn};
 use prometheus::{register_int_counter, IntCounter};
@@ -59,10 +59,10 @@ where
     let ts = if read_kafka {
         let prev = timestamp_histories.borrow_mut().insert(id.clone(), vec![]);
         assert!(prev.is_none());
-        timestamp_tx
-            .as_ref()
-            .borrow_mut()
-            .push((id, Some((connector, consistency))));
+        timestamp_tx.as_ref().borrow_mut().push((
+            id,
+            Some((ExternalSourceConnector::Kafka(connector), consistency)),
+        ));
         Some(timestamp_tx)
     } else {
         None

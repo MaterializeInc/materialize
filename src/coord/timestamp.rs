@@ -10,7 +10,6 @@
 use rusqlite::{params, NO_PARAMS};
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::str;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -23,10 +22,12 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 
-use dataflow_types::Consistency;
+use dataflow_types::{
+    Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
+    KinesisSourceConnector,
+};
 
 use log::{error, info};
-use url::Url;
 
 pub struct TimestampConfig {
     pub frequency: Duration,
@@ -35,7 +36,7 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, Url, String, Option<PathBuf>, Consistency),
+    Add(SourceInstanceId, ExternalSourceConnector, Consistency),
     DropInstance(SourceInstanceId),
     BatchedUpdate(u64, Vec<(SourceInstanceId, i64)>),
     Update(SourceInstanceId, u64, i64),
@@ -47,30 +48,76 @@ pub struct TimestampChannel {
     pub receiver: std::sync::mpsc::Receiver<TimestampMessage>,
 }
 
-/// Timestamp consumer: wrapper around Kafka consumer that stores necessary information
+/// Timestamp consumer: wrapper around source consumers that stores necessary information
 /// about topics and offset for real-time consistency
 struct RtTimestampConsumer {
-    consumer: BaseConsumer,
-    topic: String,
+    connector: RtTimestampConnector,
     last_offset: i64,
 }
 
+enum RtTimestampConnector {
+    Kafka(RtKafkaConnector),
+    File(RtFileConnector),
+    Kinesis(RtKinesisConnector),
+}
+
+/// Timestamp consumer: wrapper around source consumers that stores necessary information
+/// about topics and offset for byo consistency
 struct ByoTimestampConsumer {
+    connector: ByoTimestampConnector,
+    source_name: String,
+}
+
+enum ByoTimestampConnector {
+    Kafka(ByoKafkaConnector),
+    File(ByoFileConnector),
+    Kinesis(ByoKinesisConnector),
+}
+
+/// Data consumer for Kafka source with RT consistency
+struct RtKafkaConnector {
     consumer: BaseConsumer,
     topic: String,
+}
+
+/// Data consumer for Kafka source with BYO consistency
+struct ByoKafkaConnector {
+    consumer: BaseConsumer,
     timestamp_topic: String,
 }
+
+/// Data consumer for Kinesis source with RT consistency
+struct RtKinesisConnector {}
+
+/// Data consumer stub for Kinesis source with BYO consistency
+struct ByoKinesisConnector {}
+
+/// Data consumer stub for File source with RT consistency
+struct RtFileConnector {}
+
+/// Data consumer stub for File source with BYO consistency
+struct ByoFileConnector {}
 
 fn byo_query_source(consumer: &mut ByoTimestampConsumer, max_increment_size: i64) -> Vec<Vec<u8>> {
     let mut messages = vec![];
     let mut msg_count = 0;
-    while let Some(payload) = get_next_message(consumer) {
-        messages.push(payload);
-        msg_count += 1;
-        if msg_count == max_increment_size {
-            // Make sure to bound the number of timestamp updates we have at once,
-            // to avoid overflowing the system
-            break;
+    match &mut consumer.connector {
+        ByoTimestampConnector::Kafka(kafka_consumer) => {
+            while let Some(payload) = kafka_get_next_message(&mut kafka_consumer.consumer) {
+                messages.push(payload);
+                msg_count += 1;
+                if msg_count == max_increment_size {
+                    // Make sure to bound the number of timestamp updates we have at once,
+                    // to avoid overflowing the system
+                    break;
+                }
+            }
+        }
+        ByoTimestampConnector::Kinesis(_kinesis_consumer) => {
+            error!("Timestamping for Kinesis sources is unimplemented");
+        }
+        ByoTimestampConnector::File(_file_consumer) => {
+            error!("Timestamping for File sources is unimplemented");
         }
     }
     messages
@@ -106,7 +153,7 @@ fn byo_extract_ts_update(
                         continue;
                     }
                 };
-                if topic_name == consumer.topic {
+                if topic_name == consumer.source_name {
                     updates.push((ts, offset))
                 }
             }
@@ -130,8 +177,8 @@ fn byo_notify_coordinator(
 }
 
 /// Polls a message from a Kafka Source
-fn get_next_message(consumer: &mut ByoTimestampConsumer) -> Option<Vec<u8>> {
-    if let Some(result) = consumer.consumer.poll(Duration::from_millis(60)) {
+fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Option<Vec<u8>> {
+    if let Some(result) = consumer.poll(Duration::from_millis(60)) {
         match result {
             Ok(message) => match message.payload() {
                 Some(p) => Some(p.to_vec()),
@@ -249,31 +296,19 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.coord_channel.receiver.try_recv() {
             match update {
-                TimestampMessage::Add(id, url, topic, ssl_certificate_file, consistency) => {
+                TimestampMessage::Add(id, sc, consistency) => {
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
                         // Did not know about source, must update
                         match consistency {
                             Consistency::RealTime => {
                                 info!("Timestamping Source {} with Real Time Consistency", id);
                                 let last_offset = self.rt_recover_source(id);
-                                let connector = self.create_rt_connector(
-                                    id,
-                                    url,
-                                    topic,
-                                    ssl_certificate_file,
-                                    last_offset,
-                                );
+                                let connector = self.create_rt_connector(id, sc, last_offset);
                                 self.rt_sources.insert(id, connector);
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Topic: {}, Consistency Topic: {}", id, topic, consistency_topic);
-                                let consumer = self.create_byo_connector(
-                                    url,
-                                    topic,
-                                    id,
-                                    ssl_certificate_file,
-                                    consistency_topic,
-                                );
+                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}", id, consistency_topic);
+                                let consumer = self.create_byo_connector(id, sc, consistency_topic);
                                 self.byo_sources.insert(id, consumer);
                             }
                         }
@@ -310,19 +345,40 @@ impl Timestamper {
         }
     }
 
-    /// Creates a RT Kafka connector
+    /// Creates a RT connector
     fn create_rt_connector(
         &self,
         id: SourceInstanceId,
-        url: Url,
-        topic: String,
-        ssl_certificate_file: Option<PathBuf>,
+        sc: ExternalSourceConnector,
         last_offset: i64,
     ) -> RtTimestampConsumer {
+        match sc {
+            ExternalSourceConnector::Kafka(kc) => RtTimestampConsumer {
+                connector: RtTimestampConnector::Kafka(self.create_rt_kafka_connector(id, kc)),
+                last_offset,
+            },
+            ExternalSourceConnector::File(fc) => RtTimestampConsumer {
+                connector: RtTimestampConnector::File(self.create_rt_file_connector(id, fc)),
+                last_offset,
+            },
+            ExternalSourceConnector::Kinesis(kinc) => RtTimestampConsumer {
+                connector: RtTimestampConnector::Kinesis(
+                    self.create_rt_kinesis_connector(id, kinc),
+                ),
+                last_offset,
+            },
+        }
+    }
+
+    fn create_rt_kafka_connector(
+        &self,
+        id: SourceInstanceId,
+        kc: KafkaSourceConnector,
+    ) -> RtKafkaConnector {
         let mut config = ClientConfig::new();
         config
             .set("auto.offset.reset", "smallest")
-            .set("group.id", &format!("materialize-rt-{}-{}", &topic, id))
+            .set("group.id", &format!("materialize-rt-{}-{}", &kc.topic, id))
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest")
@@ -330,9 +386,9 @@ impl Timestamper {
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &url.to_string());
+            .set("bootstrap.servers", &kc.url.to_string());
 
-        if let Some(path) = ssl_certificate_file {
+        if let Some(path) = kc.ssl_certificate_file {
             config.set("security.protocol", "ssl");
             config.set(
                 "ssl.ca.location",
@@ -342,22 +398,95 @@ impl Timestamper {
         }
 
         let k_consumer: BaseConsumer = config.create().expect("Failed to create Kakfa consumer");
-        RtTimestampConsumer {
+        RtKafkaConnector {
             consumer: k_consumer,
-            topic,
-            last_offset,
+            topic: kc.topic,
         }
     }
 
-    /// Creates a RT Kafka connector
+    fn create_rt_file_connector(
+        &self,
+        _id: SourceInstanceId,
+        _fc: FileSourceConnector,
+    ) -> RtFileConnector {
+        error!("Timestamping is unsupported for file sources");
+        RtFileConnector {}
+    }
+
+    fn create_rt_kinesis_connector(
+        &self,
+        _id: SourceInstanceId,
+        _kinc: KinesisSourceConnector,
+    ) -> RtKinesisConnector {
+        error!("Timestamping is unsupported for kinesis sources");
+        RtKinesisConnector {}
+    }
+
+    /// Creates a BYO connector
     fn create_byo_connector(
         &self,
-        url: Url,
-        topic: String,
         id: SourceInstanceId,
-        ssl_certificate_file: Option<PathBuf>,
+        sc: ExternalSourceConnector,
         timestamp_topic: String,
     ) -> ByoTimestampConsumer {
+        match sc {
+            ExternalSourceConnector::Kafka(kc) => ByoTimestampConsumer {
+                source_name: kc.topic.clone(),
+                connector: ByoTimestampConnector::Kafka(self.create_byo_kafka_connector(
+                    id,
+                    kc,
+                    timestamp_topic,
+                )),
+            },
+            ExternalSourceConnector::File(fc) => {
+                error!("File sources are unsupported for timestamping");
+                ByoTimestampConsumer {
+                    source_name: String::from(""),
+                    connector: ByoTimestampConnector::File(self.create_byo_file_connector(
+                        id,
+                        fc,
+                        timestamp_topic,
+                    )),
+                }
+            }
+            ExternalSourceConnector::Kinesis(kinc) => {
+                error!("Kinesis sources are unsupported for timestamping");
+                ByoTimestampConsumer {
+                    source_name: String::from(""),
+                    connector: ByoTimestampConnector::Kinesis(self.create_byo_kinesis_connector(
+                        id,
+                        kinc,
+                        timestamp_topic,
+                    )),
+                }
+            }
+        }
+    }
+
+    fn create_byo_file_connector(
+        &self,
+        _id: SourceInstanceId,
+        _fc: FileSourceConnector,
+        _timestamp_topic: String,
+    ) -> ByoFileConnector {
+        ByoFileConnector {}
+    }
+
+    fn create_byo_kinesis_connector(
+        &self,
+        _id: SourceInstanceId,
+        _kinc: KinesisSourceConnector,
+        _timestamp_topic: String,
+    ) -> ByoKinesisConnector {
+        ByoKinesisConnector {}
+    }
+
+    fn create_byo_kafka_connector(
+        &self,
+        id: SourceInstanceId,
+        kc: KafkaSourceConnector,
+        timestamp_topic: String,
+    ) -> ByoKafkaConnector {
         let mut config = ClientConfig::new();
         config
             .set("auto.offset.reset", "smallest")
@@ -372,9 +501,9 @@ impl Timestamper {
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &url.to_string());
+            .set("bootstrap.servers", &kc.url.to_string());
 
-        if let Some(path) = ssl_certificate_file {
+        if let Some(path) = kc.ssl_certificate_file {
             config.set("security.protocol", "ssl");
             config.set(
                 "ssl.ca.location",
@@ -384,9 +513,8 @@ impl Timestamper {
         }
 
         let k_consumer: BaseConsumer = config.create().expect("Failed to create Kakfa consumer");
-        let consumer = ByoTimestampConsumer {
+        let consumer = ByoKafkaConnector {
             consumer: k_consumer,
-            topic,
             timestamp_topic,
         };
         consumer
@@ -434,23 +562,33 @@ impl Timestamper {
     fn rt_query_sources(&mut self) -> Vec<(SourceInstanceId, i64)> {
         let mut result = vec![];
         for (id, cons) in self.rt_sources.iter_mut() {
-            let watermark = cons
-                .consumer
-                .fetch_watermarks(&cons.topic, 0, Duration::from_secs(1));
-            match watermark {
-                Ok(watermark) => {
-                    let high = watermark.1 - 1;
-                    // Bound the next timestamp to be no more than max_increment_size in the future
-                    let next_ts = if (high - cons.last_offset) > self.max_increment_size {
-                        cons.last_offset + self.max_increment_size
-                    } else {
-                        high
-                    };
-                    cons.last_offset = next_ts;
-                    result.push((*id, next_ts))
+            match &cons.connector {
+                RtTimestampConnector::Kafka(kc) => {
+                    let watermark =
+                        kc.consumer
+                            .fetch_watermarks(&kc.topic, 0, Duration::from_secs(1));
+                    match watermark {
+                        Ok(watermark) => {
+                            let high = watermark.1 - 1;
+                            // Bound the next timestamp to be no more than max_increment_size in the future
+                            let next_ts = if (high - cons.last_offset) > self.max_increment_size {
+                                cons.last_offset + self.max_increment_size
+                            } else {
+                                high
+                            };
+                            cons.last_offset = next_ts;
+                            result.push((*id, next_ts))
+                        }
+                        Err(e) => {
+                            error!("Failed to obtain Kafka Watermark Information: {} {}", id, e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to obtain Kafka Watermark Information: {} {}", id, e);
+                RtTimestampConnector::File(_cons) => {
+                    error!("Timestamping for File sources is not supported");
+                }
+                RtTimestampConnector::Kinesis(_cons) => {
+                    error!("Timestamping for Kinesis sources is not supported");
                 }
             }
         }
@@ -500,7 +638,7 @@ impl Timestamper {
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.
-    /// This may require multiple calls to the underlying now() system method, which is not
+    /// This may require multiple calls to the underlying now() system method, which is not443Gk
     /// guaranteed to increase monotonically
     fn rt_generate_next_timestamp(&mut self) {
         let mut new_ts = 0;
