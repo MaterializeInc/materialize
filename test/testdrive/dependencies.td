@@ -93,10 +93,10 @@ cannot drop materialize.public.test1: still depended upon by catalog item 'mater
 # rather than verifying the drop by checking whether DROP VIEW fails.
 
 ! DROP VIEW test1;
-catalog item 'test1' does not exist
+unknown catalog item 'test1'
 
 ! DROP VIEW test2;
-catalog item 'test2' does not exist
+unknown catalog item 'test2'
 
 # Test that DROP VIEW IF EXISTS succeeds even if the view does not exist.
 
@@ -110,7 +110,7 @@ catalog item 'test2' does not exist
 > DROP SOURCE s CASCADE;
 
 ! DROP VIEW test4;
-catalog item 'test4' does not exist
+unknown catalog item 'test4'
 
 > CREATE SOURCE s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -164,7 +164,7 @@ materialize.public.v2  materialize.public.v2_primary_idx     x           <null> 
 > DROP VIEW v2a;
 
 ! DROP VIEW v2a;
-catalog item 'v2a' does not exist
+unknown catalog item 'v2a'
 
 > SHOW INDEX in v2;
 Source_or_view           Key_name                              Column_name Expression Null  Seq_in_index
@@ -173,7 +173,7 @@ materialize.public.v2    materialize.public.i1                 x           <null
 materialize.public.v2    materialize.public.v2_primary_idx     x           <null>     false 1
 
 ! DROP INDEX i2;
-catalog item 'i2' does not exist
+unknown catalog item 'i2'
 
 > CREATE MATERIALIZED VIEW v4 AS SELECT x, y from s;
 
@@ -200,10 +200,10 @@ materialize.public.v4   materialize.public.v4_primary_idx  y           <null>   
 > DROP VIEW v4a CASCADE;
 
 ! DROP VIEW v4a;
-catalog item 'v4a' does not exist
+unknown catalog item 'v4a'
 
 ! DROP INDEX i3;
-catalog item 'i3' does not exist
+unknown catalog item 'i3'
 
 > SHOW INDEX in v4;
 Source_or_view          Key_name                              Column_name Expression Null  Seq_in_index
@@ -235,16 +235,16 @@ materialize.public.multicol  materialize.public.i6  d            <null>       fa
 > DROP VIEW v4 CASCADE;
 
 ! DROP VIEW v4;
-catalog item 'v4' does not exist
+unknown catalog item 'v4'
 
 ! DROP INDEX i5;
-catalog item 'i5' does not exist
+unknown catalog item 'i5'
 
 ! DROP VIEW v5;
-catalog item 'v5' does not exist
+unknown catalog item 'v5'
 
 ! DROP INDEX i4;
-catalog item 'i4' does not exist
+unknown catalog item 'i4'
 
 # Test that dropping indexes even with cascade does not cause the underlying view to be dropped
 

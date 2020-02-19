@@ -1194,7 +1194,7 @@ fn handle_drop_database(
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.
         }
-        Err(err) => return Err(err),
+        Err(err) => return Err(err.into()),
     }
     Ok(Plan::DropDatabase { name })
 }
@@ -1255,7 +1255,7 @@ fn handle_drop_schema(
             // TODO(benesch): generate a notice indicating that the
             // database does not exist.
         }
-        Err(err) => return Err(err),
+        Err(err) => return Err(err.into()),
     }
     Ok(Plan::DropSchema {
         database_name,
@@ -1337,7 +1337,7 @@ fn handle_drop_item(
             // item does not exist.
             Ok(None)
         }
-        Err(err) => Err(err),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -1600,7 +1600,8 @@ impl<'a> StatementContext<'a> {
 
     pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
         let name = normalize::object_name(name)?;
-        self.catalog
-            .resolve(self.session.database(), self.session.search_path(), &name)
+        Ok(self
+            .catalog
+            .resolve(self.session.database(), self.session.search_path(), &name)?)
     }
 }

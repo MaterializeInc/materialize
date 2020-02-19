@@ -45,7 +45,7 @@ mode cockroach
 statement ok
 CREATE TABLE A(x INT)
 
-statement error pgcode 42P01 catalog item 'A' does not exist
+statement error pgcode 42P01 unknown catalog item 'A'
 SHOW COLUMNS FROM "A"
 
 # statement error pgcode 42P01 catalog item '"A"' does not exist
@@ -63,7 +63,7 @@ SHOW COLUMNS FROM "A"
 # statement error pgcode 42P01 catalog item '"A"' does not exist
 # SHOW CONSTRAINTS FROM "A"
 
-statement error pgcode 42P01 catalog item 'A' does not exist
+statement error pgcode 42P01 unknown catalog item 'A'
 SELECT * FROM "A"
 
 # statement error pgcode 42P01 catalog item '"A"' does not exist
@@ -117,7 +117,7 @@ DROP TABLE a
 statement ok
 CREATE TABLE "B"(x INT)
 
-statement error pgcode 42P01 catalog item 'b' does not exist
+statement error pgcode 42P01 unknown catalog item 'b'
 SHOW COLUMNS FROM B
 
 # statement error pgcode 42P01 catalog item 'b' does not exist
@@ -135,7 +135,7 @@ SHOW COLUMNS FROM B
 # statement error pgcode 42P01 catalog item 'b' does not exist
 # SHOW CONSTRAINTS FROM B
 
-statement error pgcode 42P01 catalog item 'b' does not exist
+statement error pgcode 42P01 unknown catalog item 'b'
 SELECT * FROM B
 
 # statement error pgcode 42P01 catalog item 'b' does not exist
