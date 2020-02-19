@@ -80,7 +80,7 @@ fn test_mpsc_limited_close() -> Result<(), Box<dyn Error>> {
 /// AddrNotAvailable error because the OS will run out of outgoing TCP ports.
 #[test]
 fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let mut runtime = Runtime::new()?;
     let executor = runtime.handle().clone();

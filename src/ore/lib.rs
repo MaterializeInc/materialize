@@ -22,12 +22,12 @@ pub mod future;
 pub mod hash;
 pub mod hint;
 pub mod iter;
-pub mod log;
 pub mod netio;
 pub mod option;
 pub mod panic;
 pub mod stats;
 pub mod sync;
+pub mod test;
 pub mod thread;
 pub mod tokio;
 

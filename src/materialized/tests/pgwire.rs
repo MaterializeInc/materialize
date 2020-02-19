@@ -23,7 +23,7 @@ pub mod util;
 
 #[test]
 fn test_bind_params() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let (_server, mut client) = util::start_server(util::Config::default())?;
 
@@ -66,7 +66,7 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_partial_read() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let (_server, mut client) = util::start_server(util::Config::default())?;
     let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
@@ -95,7 +95,7 @@ fn test_partial_read() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let (_server, mut client) = util::start_server(util::Config::default())?;
     let query = "VALUES (1), (2), (3)";
@@ -112,7 +112,7 @@ fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_conn_params() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let (server, mut client) = util::start_server(util::Config::default())?;
 
@@ -201,7 +201,7 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let data_dir = tempfile::tempdir()?;
     let config = util::Config::default().data_directory(data_dir.path().to_owned());

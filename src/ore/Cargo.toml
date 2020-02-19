@@ -10,7 +10,6 @@ path = "lib.rs"
 
 [dependencies]
 bytes = "0.5"
-env_logger = "0.7.1"
 failure = "0.1.6"
 fallible-iterator = "0.2.0"
 futures = "0.3"
@@ -19,6 +18,7 @@ libc = "0.2.66"
 log = "0.4.8"
 smallvec = "1.2"
 tokio = { version = "0.2", features = ["io-util", "rt-threaded", "tcp"] }
+tracing-subscriber = "0.2.1"
 
 [dev-dependencies]
 crossbeam = "0.7.2"

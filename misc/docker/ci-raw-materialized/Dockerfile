@@ -11,4 +11,4 @@ FROM ubuntu:bionic
 
 COPY materialized /usr/local/bin
 
-ENTRYPOINT ["materialized"]
+ENTRYPOINT ["materialized", "--log-file=stderr"]

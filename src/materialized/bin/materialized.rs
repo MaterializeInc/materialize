@@ -18,8 +18,8 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use std::env;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::panic;
 use std::panic::PanicInfo;
@@ -31,6 +31,10 @@ use std::thread;
 use backtrace::Backtrace;
 use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
+use once_cell::sync::OnceCell;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
+
+static LOG_FILE: OnceCell<File> = OnceCell::new();
 
 fn main() {
     if let Err(err) = run() {
@@ -41,7 +45,6 @@ fn main() {
 
 fn run() -> Result<(), failure::Error> {
     panic::set_hook(Box::new(handle_panic));
-    ore::log::init();
 
     let args: Vec<_> = env::args().collect();
 
@@ -96,6 +99,12 @@ fn run() -> Result<(), failure::Error> {
         "where materialized will store metadata (default mzdata)",
         "PATH",
     );
+    opts.optopt(
+        "",
+        "log-file",
+        "where materialized will write logs (default <data directory>/materialized.log)",
+        "PATH",
+    );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
 
@@ -132,6 +141,7 @@ fn run() -> Result<(), failure::Error> {
         Some(d) => Some(parse_duration::parse(&d)?),
     };
 
+    let log_file = popts.opt_str("log-file");
     let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
     let threads = popts.opt_get_default("threads", 1)?;
     let process = popts.opt_get_default("process", 0)?;
@@ -151,6 +161,33 @@ fn run() -> Result<(), failure::Error> {
     };
 
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
+
+    // Configure tracing.
+    {
+        let filter = EnvFilter::try_from_env("MZ_LOG")
+            .or_else(|_| EnvFilter::try_new("info"))
+            .unwrap();
+        let subscriber = FmtSubscriber::builder().with_env_filter(filter);
+        if log_file.as_deref() == Some("stderr") {
+            subscriber.with_writer(io::stderr).init();
+        } else {
+            let path = match log_file {
+                Some(path) => PathBuf::from(path),
+                None => data_directory.join("materialized.log"),
+            };
+            let file = fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(path)?;
+            // The current design of tracing-subscriber means we need to store
+            // this file in a global variable. Stupid, but it works.
+            LOG_FILE.set(file).unwrap();
+            subscriber
+                .with_ansi(false)
+                .with_writer(|| LOG_FILE.get().unwrap())
+                .init();
+        }
+    }
 
     // Inform the user about what they are using, and how to contact us.
     beta_splash();
