@@ -32,7 +32,7 @@ Field | Use
 ------|-----
 _select&lowbar;pred_ | The predicating [`SELECT`](../select) clauses you want to use, e.g. `SELECT col_ref FROM table_ref...`. The _table&lowbar;ref_ from the _select&lowbar;pred_ is the left-hand table.
 **NATURAL** | Join table expressions on all columns with the same names in both tables. This is similar to the `USING` clause naming all identically named columns in both tables.
-_join&lowbar;type_ | The type of `JOIN` you want to use (_`INNER` is implied default_).
+_join&lowbar;type_ | The type of `JOIN` you want to use _(`INNER` is implied default)_.
 _table&lowbar;ref_ | The table expression you want to join, i.e. the right-hand table.
 **USING (** _col&lowbar;ref..._ **)** | If the join condition does not require table-level qualification (i.e. joining tables on columns with the same name), the columns to join the tables on. For example, `USING (customer_id)`.
 **ON** _expression_ | The condition on which to join the tables. For example `ON purchase.customer_id = customer.id`.

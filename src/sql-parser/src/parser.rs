@@ -2446,10 +2446,22 @@ impl Parser {
                 break;
             }
             self.next_token(); // skip past the set operator
+
+            let all = self.parse_keyword("ALL");
+            let all_range = self.peek_prev_range();
+            let distinct = self.parse_keyword("DISTINCT");
+            let distinct_range = self.peek_prev_range();
+            if all && distinct {
+                return parser_err!(
+                    self,
+                    all_range.start..distinct_range.end,
+                    "Cannot specify both ALL and DISTINCT in set operation"
+                );
+            }
             expr = SetExpr::SetOperation {
                 left: Box::new(expr),
                 op: op.unwrap(),
-                all: self.parse_keyword("ALL"),
+                all,
                 right: Box::new(self.parse_query_body(next_precedence)?),
             };
         }
