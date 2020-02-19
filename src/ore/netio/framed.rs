@@ -12,7 +12,7 @@ use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 
 /// The maximum allowable size of a frame in a framed stream.
-pub const MAX_FRAME_SIZE: u32 = 8 << 10;
+pub const MAX_FRAME_SIZE: usize = 64 << 20;
 
 /// An error indicating that a frame in a framed stream exceeded
 /// [`MAX_FRAME_SIZE`].
