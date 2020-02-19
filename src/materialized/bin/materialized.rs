@@ -99,9 +99,6 @@ fn run() -> Result<(), failure::Error> {
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
 
-    // Inform the user about what they are using, and how to contact us.
-    beta_splash();
-
     let popts = opts.parse(&args[1..])?;
     if popts.opt_present("h") {
         print!("{}", opts.usage("usage: materialized [options]"));
@@ -154,6 +151,9 @@ fn run() -> Result<(), failure::Error> {
     };
 
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
+
+    // Inform the user about what they are using, and how to contact us.
+    beta_splash();
 
     let _server = materialized::serve(materialized::Config {
         logging_granularity,
