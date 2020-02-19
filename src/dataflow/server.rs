@@ -878,3 +878,14 @@ impl PendingPeek {
         })
     }
 }
+
+/// The presence of this function forces `rustc` to instantiate the
+/// slow-to-compile differential and timely templates while compiling this
+/// crate. This means that iterating on crates that depend upon this crate is
+/// much faster, because these templates don't need to be reinstantiated
+/// whenever a downstream dependency changes. And iterating on this crate
+/// doesn't really become slower, because you needed to instantiate these
+/// templates anyway to run tests.
+pub fn __explicit_instantiation__() {
+    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _, _, _, _) -> _);
+}

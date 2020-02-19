@@ -20,6 +20,7 @@ pub mod collections;
 pub mod fmt;
 pub mod future;
 pub mod hash;
+pub mod hint;
 pub mod iter;
 pub mod log;
 pub mod netio;
