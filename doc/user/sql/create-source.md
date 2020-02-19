@@ -386,10 +386,8 @@ offset, as well as the decoded value.
 ```sql
 CREATE SOURCE hex
 FROM FILE '/xxd.log'
-FORMAT REGEX '(?P<offset>[0-9a-f]{8}): (?:[0-9a-f]{4} ){8} (?P<decoded>.*)$'
-WITH (
-    tail=true
-);
+WITH (tail = true)
+FORMAT REGEX '(?P<offset>[0-9a-f]{8}): (?:[0-9a-f]{4} ){8} (?P<decoded>.*)$';
 ```
 
 This creates a source that...
