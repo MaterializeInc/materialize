@@ -26,7 +26,7 @@ pub mod util;
 
 #[test]
 fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let (_server, mut client) = util::start_server(util::Config::default())?;
 
@@ -54,7 +54,7 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_regex_sources() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let temp_dir = tempfile::tempdir()?;
     let config = util::Config::default();
@@ -137,7 +137,7 @@ fn test_regex_sources() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn test_file_sources() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let temp_dir = tempfile::tempdir()?;
     let config = util::Config::default();
@@ -258,7 +258,7 @@ New York,NY,10004
 // does not keep the server alive forever.
 #[test]
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
-    ore::log::init();
+    ore::test::init_logging();
 
     let temp_dir = tempfile::tempdir()?;
     let (_server, mut client) = util::start_server(util::Config::default())?;
