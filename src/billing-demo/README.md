@@ -56,7 +56,7 @@ on how to install Kafka.
 3. Run the billing demo with:
 
 ```shell session
-$ RUST_LOG==debug cargo run --release -- --message-count <number of messages to generate> --csv-file-name <absolute path to write price file to>
+$ RUST_LOG=debug cargo run --release -- --message-count <number of messages to generate> --csv-file-name <absolute path to write price file to>
 ```
 
 The `RUST_LOG` environment variable determines which log level is printed to stdout.
