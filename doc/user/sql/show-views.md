@@ -19,9 +19,9 @@ Field | Use
 
 ## Details
 
-### Output format for `SHOW FULL VIEW`
+### Output format for `SHOW FULL VIEWS`
 
-`SHOW FULL VIEW`'s output is a table, with this structure:
+`SHOW FULL VIEWS`'s output is a table, with this structure:
 
 ```nofmt
  VIEWS | TYPE | QUERYABLE | MATERIALIZED
