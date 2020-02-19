@@ -121,6 +121,7 @@ steps:
       - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.3:
           config: ci/test/metabase.compose.yml
+          run: metabase
     if: $CHANGED_RUST
 
   - id: full-sqllogictest
