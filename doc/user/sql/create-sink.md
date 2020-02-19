@@ -15,7 +15,7 @@ Sinks let you stream data out of Materialize, using either sources or views.
 Sink source type | Description
 -----------------|------------
 **Source** | Simply pass all data received from the source to the sink without modifying it.
-**View** | Stream all changes to the view to the sink. This lets you use Materialize to process a stream, and then stream the processed values.
+**Materialized view** | Stream all changes to the view to the sink. This lets you use Materialize to process a stream, and then stream the processed values. Note that this feature only works with [materialized views](../create-materialized-view), and _does not_ work with [non-materialized views](../create-view).
 
 ## Syntax
 
@@ -43,10 +43,13 @@ Field | Value
 ### Kafka sinks
 
 When creating sinks, Materialize expects either:
+
 - You are publishing to a sink that already exists with a schema that matches the sink's source within Materialize
 - Your Kafka instances have [`auto.create.topics.enable`](https://kafka.apache.org/documentation/) enabled. This lets Kafka automatically create new topics when it receives messages from topics it hasn't seen before.
 
 ## Examples
+
+### From sources
 
 ```sql
 CREATE SOURCE quotes
@@ -57,6 +60,28 @@ CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```sql
 CREATE SINK quotes_sink
 FROM quotes
+INTO 'kafka://localhost/quotes-sink'
+WITH
+    (
+        schema_registry_url = 'http://localhost:8081'
+    );
+```
+
+### From materialized views
+
+```sql
+CREATE SOURCE quotes
+FROM 'kafka://localhost/quotes'
+USING SCHEMA REGISTRY 'http://localhost:8081';
+```
+```sql
+CREATE MATERIALIZED VIEW frank_quotes AS
+    SELECT * FROM quotes
+    WHERE attributed_to = 'Frank McSherry';
+```
+```sql
+CREATE SINK frank_quotes_sink
+FROM frank_quotes
 INTO 'kafka://localhost/quotes-sink'
 WITH
     (
