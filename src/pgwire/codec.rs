@@ -290,11 +290,9 @@ enum DecodeState {
     Data(u8, usize),
 }
 
-const MAX_FRAME_SIZE: usize = 8 << 10;
-
 fn parse_frame_len(src: &[u8]) -> Result<usize, io::Error> {
     let n = usize::cast_from(NetworkEndian::read_u32(src));
-    if n > MAX_FRAME_SIZE {
+    if n > netio::MAX_FRAME_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             netio::FrameTooBig,
