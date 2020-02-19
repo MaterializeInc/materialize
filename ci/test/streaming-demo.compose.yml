@@ -13,10 +13,10 @@ services:
     image: materialize/ci-billing-demo:${BUILDKITE_BUILD_NUMBER}
     entrypoint: /bin/bash
     volumes:
-      - db-data:/var/lib/billing-demo/data
+      - db-data:/share/billing-demo/data
     command: -c "wait-for-it materialized:6875 kafka:9092 --
       billing-demo --message-count 1000 --materialized-host materialized
-      --kafka-host kafka --csv-file-name /var/lib/billing-demo/data/prices.csv"
+      --kafka-host kafka --csv-file-name /share/billing-demo/data/prices.csv"
     environment:
     - RUST_LOG=billing-demo=debug,info
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
@@ -24,7 +24,7 @@ services:
   materialized:
     image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
     volumes:
-      - db-data:/var/lib/billing-demo/data
+      - db-data:/share/billing-demo/data
     command: --logging-granularity=10ms
     depends_on: [kafka]
     ulimits:
