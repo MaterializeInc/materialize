@@ -50,8 +50,9 @@ When creating sinks, Materialize expects either:
 
 ```sql
 CREATE SOURCE quotes
-FROM 'kafka://localhost/quotes'
-USING SCHEMA REGISTRY 'http://localhost:8081';
+FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
+FORMAT AVRO USING
+CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 ```sql
 CREATE SINK quotes_sink
