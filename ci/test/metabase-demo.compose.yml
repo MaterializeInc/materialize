@@ -17,7 +17,7 @@ x-port-mappings:
 version: '3.7'
 services:
   healthcheck:
-    image: materialize/healthcheck:latest
+    image: materialize/ci-healthcheck:latest
     depends_on: [metabase]
   metabase:
     image: materialize/metabase:latest
