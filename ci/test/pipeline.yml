@@ -120,7 +120,7 @@ steps:
     plugins:
       - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.3:
-          config: ci/test/metabase.compose.yml
+          config: ci/test/metabase-demo.compose.yml
           run: metabase
     if: $CHANGED_RUST
 
