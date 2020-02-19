@@ -1,11 +1,10 @@
 # Project management
 
-*Originally authored by Nikhil Benesch, with some addition by Robert Grimm.
-Last updated October 1, 2019.*
+*Last updated February 18, 2020.*
 
-This note addresses a scary subject: project management. The current
-strategy is to impose the bare minimum amount of process to make sure everyone
-knows what to work on next.
+This note addresses a scary subject: project management. The current strategy
+is to impose the bare minimum amount of process to make sure everyone knows what
+to work on next.
 
 A problem I've had in other jobs is that the backlog is either non-durable,
 existing only in engineers' minds, or durable but essentially infinite, where no
@@ -20,31 +19,38 @@ of the open issues are scheduled for the next release? How many of those
 are actual bugs, and how many are just new features? How should I figure out,
 as an engineer, what to work on next?
 
-To solve the issue management problem, we're currently experimenting withs
-ZenHub. There's quite a bit of Agile/Kanban vocabulary ("boards", "sprints",
-"epics", "story points", etc.) that can be a bit offputting, but hopefully we
-can ignore most of that.
+The following sections detail the elements of our project management process
+that are visible through GitHub.
 
-The basic idea is that we periodically create milestones with set goals. Every
-bug we want fixed and every feature we want implemented is decided ahead of
-time. We also create long-running releases, whose requirements are allowed to
-shift over time.
+## Project Boards
 
-ZenHub can then show us our progress towards each milestone and each release, as
-well as indicate when release requirements shifted, e.g., because a serious bug
-was discovered, or customer requirements mandated a change in scope.
+**If you're looking for your next task, start here.**
 
-NOTE(benesch): it's not yet clear whether we need both milestones and releases.
-For now we've created a "Demo" milestone and a "Demo" release, both of which
-represent the same moment in time.
+We currently use [organization-wide project boards](https://github.com/orgs/MaterializeInc/projects)
+to track prioritized tasks using a kanban style of organization. Tasks flow from
+left to right. The project descriptions should contain more detail. Note that
+you must be a member of the MateralizeInc organization to see the project
+boards.
+
+## Milestones
+
+As each issue is triaged, we will assign a milestone. A milestone should be
+treated as an upper bound for when the issue should be resolved. Everyone will
+be quite happy if you merge a PR that resolves an issue any time before the date
+of the milestone. We aim to have releases roughly once a week, so your merged
+PRs will go out in the next release. Marketing for new features may wait until
+the milestone.
+
+If a required change is unlikely to merge before the associated milestone,
+please make that clear in a comment in the issue as early as possible.
+
+## Issue labels
 
 The last piece of the puzzle is fastidiously assigning labels to issues. The
 scheme is documented in the next section. The idea here is to make it possible
 to ask questions like "are there any outstanding bugs in this release?" or "what
 scheduled SQL features are missing from this release?" without doing a full
 table scan.
-
-## Issue labels
 
 There are presently four classes of GitHub labels:
 
