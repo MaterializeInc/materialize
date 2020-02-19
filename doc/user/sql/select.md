@@ -31,11 +31,11 @@ Scenario | `SELECT` dataflow behavior
 
 ## Syntax
 
-{{< diagram "select.html" >}}
+{{< diagram "select_stmt.html" >}}
 
 Field | Use
 ------|-----
-**ALL** | Return all rows from query (_implied default_).
+**ALL** | Return all rows from query _(implied default)_.
 **DISTINCT** | Return only distinct values from query.
 **DISTINCT ON (** _col&lowbar;ref..._ **)**  | Return only the first row with a distinct value for _col&lowbar;ref_.
 _target&lowbar;elem_ | Return identified columns or functions.
@@ -47,6 +47,9 @@ _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` docume
 **ORDER BY** _col&lowbar;ref_ ... | Order results in either **ASC** or **DESC** order (_**ASC** is implied default_).<br/><br>**ORDER BY** does not work when creating views, but does work when reading from views.
 **LIMIT** | Limit the number of returned results to _expr_.
 **OFFSET** | Skip the first _expr_ number of rows.
+**UNION** | Records present in `select_stmt` or `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the sum of the times it occurs in each input statement.
+**INTERSECT** | Records present in both `select_stmt` and `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the lesser of the times it occurs in each input statement.
+**EXCEPT** | Records present in `select_stmt` but not in `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the times it occurs in `select_stmt` less the times it occurs in `another_select_stmt`, or not at all if the former is greater than latter.
 
 ## Details
 
