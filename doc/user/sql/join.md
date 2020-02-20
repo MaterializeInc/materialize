@@ -12,7 +12,7 @@ expression.
 ## Conceptual Framework
 
 Much like an RDBMS, Materialize can join together any two table expressions (in
-our case, either [sources](../create-sources) or [views](../create-views)) into
+our case, either [sources](../create-source) or [views](../create-view)) into
 a single table expression.
 
 Materialize's support for `JOIN` is radically simplified from most streaming

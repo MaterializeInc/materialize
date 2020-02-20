@@ -4,6 +4,8 @@ description: "Expresses TRUE or FALSE"
 menu:
   main:
     parent: 'sql-types'
+aliases:
+    - /docs/sql/types/bool
 ---
 
 `boolean` data expresses a binary value of either `TRUE` or `FALSE`.
