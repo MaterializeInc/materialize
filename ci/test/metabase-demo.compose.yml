@@ -10,13 +10,11 @@
 version: '3.7'
 services:
   healthcheck:
-    image: materialize/ci-healthcheck:latest
+    build: metabase-healthcheck
     depends_on: [metabase]
   metabase:
     image: materialize/metabase:latest
     depends_on: [materialized]
-    ports:
-      - "3000:3000"
   materialized:
     image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
     command: --logging-granularity=10ms
@@ -33,6 +31,3 @@ services:
       - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
       - KAFKA_ADVERTISED_HOST_NAME=kafka
     depends_on: [zookeeper]
-
-volumes:
-  db-data:
