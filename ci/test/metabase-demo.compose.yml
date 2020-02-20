@@ -13,7 +13,7 @@ services:
     build: metabase-healthcheck
     depends_on: [metabase]
   metabase:
-    image: materialize/metabase:latest
+    image: materialize/metabase:v0.0.5
     depends_on: [materialized]
   materialized:
     image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
