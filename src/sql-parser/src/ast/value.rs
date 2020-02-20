@@ -20,8 +20,10 @@
 
 use std::fmt;
 
+use repr::datetime::DateTimeField;
+
 mod datetime;
-pub use datetime::{DateTimeField, ExtractField, IntervalValue};
+pub use datetime::{ExtractField, IntervalValue};
 
 #[derive(Debug)]
 pub struct ValueError(String);
