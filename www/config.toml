@@ -5,6 +5,10 @@ pygmentsCodeFences = true
 pygmentsStyle = "xcode"
 disableKinds = ["home"]
 
+[params]
+  current_version = "v0.1.0"
+  next_version = "v0.1.1"
+
 [menu]
     [[menu.main]]
     identifier = "overview"

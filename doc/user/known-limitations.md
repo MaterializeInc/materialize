@@ -5,13 +5,14 @@ menu: "main"
 weight: 100
 ---
 
+This document applies to Materialize {{< version >}}.
+
 The following links describe features that Materialize does not yet support, but
 plans to in future releases. If any of these issues impact you, feel free to let
 us know on the linked-to GitHub issue.
 
 For a complete and current overview, check out our [`known-limitations`
 tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3Aknown-limitation).
-
 
 ## SQL
 
