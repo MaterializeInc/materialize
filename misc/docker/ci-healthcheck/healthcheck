@@ -15,7 +15,7 @@
 #   - If we don't see a successful curl, Buildkite will time out
 #     and fail this test.
 
-while [ ! "$(curl -fsS metabase:3000)" ]; do
+while ! curl -fsS metabase:3000; do
     echo "Failed to curl metabase:3000. Sleeping..."
     sleep 15
 done

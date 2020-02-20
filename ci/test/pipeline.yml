@@ -116,7 +116,7 @@ steps:
   - id: metabase-demo
     label: "metabase-demo"
     depends_on: build
-    timeout_in_minutes: 5
+    timeout_in_minutes: 10
     plugins:
       - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.3:
