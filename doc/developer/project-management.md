@@ -128,3 +128,16 @@ When filing an issue, these are the rules to adhere to:
 3. Assign **good first issue** if the issue would make a good starter project
    for a new employee. You will be soundly thanked for this when the next
    employee starts!
+
+## Communicating changes
+
+When landing large or substantial changes, we want to make sure users are aware of the work you're doing! This means we require:
+
+- Coordination with a technical writer to generate or update user-facing documentation that will show up on <materialize.io/docs>. If you have questions, open an issue with the `A-docs` tag.
+- Generating release notes by describing your change in `doc/user/release-notes.md`. If there any questions about which version the feature will be released in, consult <materialize.io/docs/versions> or chat with us.
+
+### Changes that require documentation
+
+- All new features
+- All API changes
+- Large bug fixes
