@@ -7,7 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Demonstrate sticking a whole lot of protobuf messages into materialized
+//! Microservice demo using materialized to build a real-time billing application
+//!
+//! Specifically, this demo shows off materialized's ability to ingest Protobuf
+//! messages, normalize incoming data with jsonb functions, perform joins between
+//! a Kafka topic and a local file, and perform time based aggregates.
+//!
+//! Further details can be found on the Materialize docs:
+//! <https://materialize.io/docs/demos/microservice/>
 
 #![deny(missing_debug_implementations, missing_docs)]
 
