@@ -272,10 +272,10 @@ materialize.public.s3   materialize.public.s3_primary_idx     y           <null>
 > DROP SOURCE s3;
 
 ! DROP SOURCE s3;
-catalog item 's3' does not exist
+unknown catalog item 's3'
 
 ! DROP INDEX j1;
-catalog item 'j1' does not exist
+unknown catalog item 'j1'
 
 # Test cascade deletes all indexes associated with cascaded sources and views
 
@@ -305,16 +305,16 @@ materialize.public.w   materialize.public.j3               z           <null>   
 > DROP SOURCE s4 CASCADE;
 
 ! DROP VIEW w;
-catalog item 'w' does not exist
+unknown catalog item 'w'
 
 ! DROP INDEX j3;
-catalog item 'j3' does not exist
+unknown catalog item 'j3'
 
 ! DROP SOURCE s4;
-catalog item 's4' does not exist
+unknown catalog item 's4'
 
 ! DROP INDEX j2;
-catalog item 'j2' does not exist
+unknown catalog item 'j2'
 
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
