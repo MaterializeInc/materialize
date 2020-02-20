@@ -146,7 +146,8 @@ The basic configuration is as follows:
 % brew install --token='<redacted>' buildkite-agent
 % brew services start buildkite-agent
 % vim /usr/local/etc/buildkite-agent/buildkite-agent.cfg
-<edit to match config above>
+tags="queue=mac"
+<otherwise edit to match config above>
 % brew install cmake [other materialize dependencies...]
 % curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 % cat /usr/local/etc/buildkite-agent/hooks/environment
