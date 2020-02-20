@@ -142,7 +142,8 @@ it.
 The basic configuration is as follows:
 
 ```
-% brew install --token='<redacted>' buildkite/buildkite/buildkite-agent
+% brew tap buildkite/buildkite
+% brew install --token='<redacted>' buildkite-agent
 % brew services start buildkite-agent
 % vim /usr/local/etc/buildkite-agent/buildkite-agent.cfg
 <edit to match config above>
