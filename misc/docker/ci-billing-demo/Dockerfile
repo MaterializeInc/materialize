@@ -14,4 +14,7 @@ RUN apt-get install -qy wait-for-it
 
 COPY billing-demo /usr/local/bin
 
+RUN mkdir -p /share/billing-demo/data && chmod 777 /share/billing-demo/data
+VOLUME /share/billing-demo/data
+
 ENTRYPOINT ["billing-demo"]
