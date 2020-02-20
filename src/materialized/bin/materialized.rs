@@ -161,6 +161,8 @@ fn run() -> Result<(), failure::Error> {
     };
 
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
+    fs::create_dir_all(&data_directory)
+        .with_context(|e| format!("creating data directory: {}", e))?;
 
     // Configure tracing.
     {
