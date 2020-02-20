@@ -69,25 +69,21 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().expect("creating tokio runtime failed");
     runtime.spawn(serve_metrics());
 
-    let mut init_result = initialize(&config);
+    let init_result = initialize(&config);
     // Start peek timing loop. This should never return.
     if config.only_initialize {
-        let mut counter = 6;
-        while let Err(_) = init_result {
-            counter -= 1;
-            if counter <= 0 {
+        match init_result {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                error!("{}", e);
                 process::exit(1);
             }
-            warn!("init error, retry in 10 seconds ({} remaining)", counter);
-            thread::sleep(Duration::from_secs(10));
-            init_result = initialize(&config);
         }
     } else {
         let _ = init_result;
         measure_peek_times(&config);
         unreachable!()
     }
-    Ok(())
 }
 
 fn measure_peek_times(config: &Args) {
@@ -110,9 +106,24 @@ fn measure_peek_times(config: &Args) {
 }
 
 fn initialize(config: &Args) -> Result<()> {
+    let mut counter = 6;
+    let mut init_result = init_inner(&config);
+    while let Err(e) = init_result {
+        counter -= 1;
+        if counter <= 0 {
+            return Err(format!("unable to initialize: {}", e).into());
+        }
+        warn!("init error, retry in 10 seconds ({} remaining)", counter);
+        thread::sleep(Duration::from_secs(10));
+        init_result = initialize(&config);
+    }
+    Ok(())
+}
+
+fn init_inner(config: &Args) -> Result<()> {
     let mut postgres_client = create_postgres_client(&config.materialized_url);
     initialize_sources(&mut postgres_client, &config.config.sources)
-        .expect("need to have sources for anything else to work");
+        .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
     let mut errors = 0;
     for group in config.config.queries_in_declaration_order() {
         if !try_initialize(&mut postgres_client, group) {
