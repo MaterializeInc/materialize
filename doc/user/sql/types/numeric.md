@@ -1,11 +1,11 @@
 ---
 title: "numeric Data Type"
 description: "Expresses an exact number with user-defined precision and scale"
-aliases:
-    - /docs/sql/types/decimal
 menu:
   main:
     parent: 'sql-types'
+aliases:
+    - /docs/sql/types/decimal
 ---
 
 `numeric` data expresses an exact number with user-defined precision and scale.
