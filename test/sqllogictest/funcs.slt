@@ -16,7 +16,7 @@ mode cockroach
 query T
 SELECT date_trunc('microseconds', TIMESTAMP '2019-11-26 15:56:46.241150')
 ----
-2019-11-26 15:56:46.241150
+2019-11-26 15:56:46.24115
 
 query T
 SELECT date_trunc('milliseconds', TIMESTAMP '2019-11-26 15:56:46.241150')
