@@ -49,7 +49,7 @@ Field | Use
 ------|-----
 _index&lowbar;name_ | A name for the index.
 _view&lowbar;name_ | The name of the view for which you want to create an index.
-_col&lowbar;ref_**...** | The columns to use as the key into the index, listed in the order you want to index them. For more details, see [Column order](#column-order).
+_col&lowbar;ref_**...** | The columns to use as the key into the index.
 
 ## Details
 
@@ -68,45 +68,28 @@ _col&lowbar;ref_**...** | The columns to use as the key into the index, listed i
     consider creating another materialized view that uses `SELECT some_subset
     FROM this_view...`.
 
-### Column order
-
-The order of indexed columns does impact the underlying structure of the index,
-i.e. columns are indexed in the order in which you list them.
-
-This can be most clearly seen when joining two relations; in these cases, you
-want the relations to have join keys listed in the same order to ensure simple
-point lookups (vs. index scans).
-
-For example, if we are joining relations `a` and `b` on columns `order_id` and
-`customer_id`, the following indexes would perform well:
-
--    ```sql
-     CREATE INDEX a_o_idx ON a(order_id, customer_id);
-     CREATE INDEX b_o_idx ON b(order_id, customer_id);
-     ```
-
--   ```sql
-    CREATE INDEX a_c_idx ON a(customer_id, order_id);
-    CREATE INDEX b_c_idx ON b(customer_id, order_id);
-    ```
-
-However, transposing the order of the columns would result in **poor**
-performance:
-
--    ```sql
-     CREATE INDEX a_t_idx ON a(order_id, customer_id);
-     CREATE INDEX b_t_idx ON b(customer_id, order_id);
-     ```
-
 ### Structure
 
 Indexes in Materialize have the following structure for each unique row.
 
 ```nofmt
-((tuple of indexed columns), (tuple of the row))
+((tuple of indexed columns), (tuple of the row, i.e. stored columns))
 ```
 
-Index are maintained in ascending order for the tuple of indexed columns.
+#### Indexed columns vs. stored columns
+
+Automatically created columns index all of a table's columns, unless Materialize
+is provided or can infer a unique key for the result set.
+
+For instance, unique keys can be...
+
+- **Provided** by the schema provided for the source, e.g. through the Confluent
+  Schema Registry.
+- **Inferred** when the query's results...
+  - Contains a `GROUP BY`.
+  - Uses results derived from a unique key without adding any additional columns.
+
+When creating your own indexes, you can choose the indexed columns.
 
 ### Memory footprint
 
@@ -176,7 +159,7 @@ CREATE INDEX active_customers_primary_idx
 
 Note that this index is different than the primary index that Materialize would
 automatically create if you had used `CREATE MATERIALIZED VIEW`. Indexes that
-are automatically created contain an index of all columns in the result set.
+are automatically created contain an index of all columns in the result set, unless they contain a unique keyy.
 (Remember that indexes store a copy of a row's indexed columns _and_ a copy of
 the entire row.)
 

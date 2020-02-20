@@ -8,11 +8,13 @@ menu:
 
 `SELECT` is used in a few ways within Materialize, letting you:
 
-- Express a view you want to materialize. e.g. `CREATE VIEW some_view AS SELECT...`
-- Read from materialized views, e.g. `SELECT * FROM some_view;`
-- Read from your sources.
+- Express a view you want to materialize. e.g. `CREATE MATERIALIZED VIEW some_view AS
+  SELECT...`
+- Read from materialized views or sources, e.g. `SELECT * FROM some_view;`
+- Describe a view without materializing it, e.g. `CREATE VIEW some_nonmaterialized_view AS...`
 
-To better understand the distinction between these uses, you should check out our [architecture overview](../../overview/architecture).
+To better understand the distinction between these uses, you should check out
+our [architecture overview](../../overview/architecture).
 
 ## Conceptual framework
 
