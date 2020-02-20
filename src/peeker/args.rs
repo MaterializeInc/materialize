@@ -9,7 +9,7 @@
 
 //! [`Args::from_cli`] parses the command line arguments from the cli and the config file
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::result::Result as StdResult;
 use std::time::Duration;
@@ -136,11 +136,6 @@ fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Resu
                 .into_iter()
                 .filter(|qg| enabled_qs.contains(&&*qg.name))
                 .collect();
-            config.queries = config
-                .queries
-                .into_iter()
-                .filter(|q| enabled_qs.contains(&&*q.name))
-                .collect();
         }
     } else {
         debug!("using all config-enabled queries");
@@ -185,7 +180,10 @@ fn print_config_supplied(config: Config) {
 #[derive(Debug)]
 pub struct Config {
     /// Queries are instanciated as views which are polled continuously
+    ///
+    /// This contains the list of only *enabled* query groups
     pub groups: Vec<QueryGroup>,
+    /// The raw list of all queries and groups, in declaration order
     queries: Vec<QueryGroup>,
     /// Sources are created once at startup
     pub sources: Vec<Source>,
@@ -197,8 +195,17 @@ impl Config {
         self.groups.iter().map(|g| g.queries.iter().count()).sum()
     }
 
-    pub fn queries_in_declaration_order(&self) -> impl Iterator<Item = &QueryGroup> {
-        self.queries.iter()
+    /// A list of queries that may need to be initialized
+    pub fn queries_in_declaration_order(&self) -> Vec<&QueryGroup> {
+        let enabled_queries: HashSet<_> = self
+            .groups
+            .iter()
+            .flat_map(|qg| qg.queries.iter().map(|q| &q.name))
+            .collect();
+        self.queries
+            .iter()
+            .filter(|qg| enabled_queries.contains(&qg.name))
+            .collect::<Vec<_>>()
     }
 }
 
