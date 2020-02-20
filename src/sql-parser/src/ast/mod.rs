@@ -784,6 +784,7 @@ pub enum Statement {
         materialized: bool,
         replace: bool,
         with_options: Vec<SqlOption>,
+        if_not_exists: bool,
     },
     /// `CREATE TABLE`
     CreateTable {
@@ -1050,8 +1051,12 @@ impl fmt::Display for Statement {
                 materialized,
                 replace,
                 with_options,
+                if_not_exists,
             } => {
                 write!(f, "CREATE")?;
+                if *if_not_exists {
+                    write!(f, " IF NOT EXISTS")?;
+                }
                 if *replace {
                     write!(f, " OR REPLACE")?;
                 }

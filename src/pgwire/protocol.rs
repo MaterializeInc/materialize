@@ -698,7 +698,7 @@ where
             ExecuteResponse::CreatedIndex { existed } => created!(existed, "42710", "index"),
             ExecuteResponse::CreatedSource { existed } => created!(existed, "42710", "source"),
             ExecuteResponse::CreatedSink { existed } => created!(existed, "42710", "sink"),
-            ExecuteResponse::CreatedView => command_complete!("CREATE VIEW"),
+            ExecuteResponse::CreatedView { existed } => created!(existed, "42710", "view"),
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),

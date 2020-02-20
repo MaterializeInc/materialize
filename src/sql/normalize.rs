@@ -188,6 +188,7 @@ pub fn create_statement(
             materialized,
             replace,
             with_options: _,
+            if_not_exists,
         } => {
             *name = allocate_name(name)?;
             for c in columns {
@@ -202,6 +203,7 @@ pub fn create_statement(
             }
             *materialized = false;
             *replace = false;
+            *if_not_exists = false;
         }
 
         Statement::CreateIndex {
