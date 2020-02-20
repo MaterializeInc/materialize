@@ -41,8 +41,6 @@ macro_rules! parser_err {
     };
 }
 
-mod datetime;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParserError {
     /// Original query (so we can easily print an error)
@@ -520,241 +518,30 @@ impl Parser {
     }
 
     fn parse_date(&mut self) -> Result<Value, ParserError> {
-        use std::convert::TryInto;
-
         let value = self.parse_literal_string()?;
-        let range = self.peek_prev_range();
-        let pdt = self.parse_timestamp_string(&value, range.clone(), false)?;
-
-        if let Err(e) = pdt.validate_datelike_ymd() {
-            return parser_err!(self, range, "Invalid DATE '{}': {}", value, e);
-        }
-
-        // pdt.hour, pdt.minute, pdt.second are all dropped, which is allowed by
-        // PostgreSQL.
-        match (pdt.year, pdt.month, pdt.day) {
-            (Some(year), Some(month), Some(day)) => {
-                let p_err = {
-                    |range: Range<usize>, e: std::num::TryFromIntError, field: &str| {
-                        self.error(
-                            range,
-                            format!("{} in date '{}' is invalid: {}", field, value, e),
-                        )
-                    }
-                };
-                if let Err(e) = pdt.validate_datelike_ymd() {
-                    return parser_err!(self, range, "INVALID DATE '{}'; {}", value, e);
-                }
-                let month: u8 = month.unit.try_into().expect("invalid month");
-                let day: u8 = day.unit.try_into().map_err(|e| {
-                    let range = range.clone();
-                    p_err(range, e, "Day")
-                })?;
-                Ok(Value::Date(
-                    value,
-                    ParsedDate {
-                        year: year.unit,
-                        month,
-                        day,
-                    },
-                ))
-            }
-            (_, _, _) => {
-                return parser_err!(
-                    self,
-                    range,
-                    "YEAR, MONTH, DAY are all required for DATE, got: '{}'",
-                    value
-                );
-            }
-        }
+        Ok(Value::Date(value))
     }
 
     fn parse_time(&mut self) -> Result<Value, ParserError> {
-        use std::convert::TryInto;
-
         let value = self.parse_literal_string()?;
-        let range = self.peek_prev_range();
-        let pdt = self.parse_time_string(&value, range.clone())?;
-
-        if let Err(e) = pdt.validate_timelike_hms() {
-            return parser_err!(self, range, "Invalid DATE '{}': {}", value, e);
-        }
-        let p_err = {
-            |range: Range<usize>, e: std::num::TryFromIntError, field: &str| {
-                self.error(
-                    range,
-                    format!("{} in date '{}' is invalid: {}", field, value, e),
-                )
-            }
-        };
-
-        let hour = match pdt.hour {
-            Some(hour) => hour.unit.try_into().map_err({
-                let range = range.clone();
-                |e| p_err(range, e, "Hour")
-            })?,
-            None => 0,
-        };
-
-        let minute = match pdt.minute {
-            Some(minute) => minute.unit.try_into().map_err({
-                let range = range.clone();
-                |e| p_err(range, e, "Minute")
-            })?,
-            None => 0,
-        };
-
-        let (second, nano) = match pdt.second {
-            Some(second) => {
-                let nano: u32 = second.fraction.try_into().map_err({
-                    let range = range.clone();
-                    |e| p_err(range, e, "Nanosecond")
-                })?;
-                let second: u8 = second.unit.try_into().map_err({
-                    let range = range;
-                    |e| p_err(range, e, "Minute")
-                })?;
-                (second, nano)
-            }
-            None => (0, 0),
-        };
-
-        Ok(Value::Time(
-            value,
-            ParsedTime {
-                hour,
-                minute,
-                second,
-                nano,
-            },
-        ))
+        Ok(Value::Time(value))
     }
 
     fn parse_timestamp(&mut self) -> Result<Expr, ParserError> {
         if self.parse_keyword("WITH") {
             self.expect_keywords(&["TIME", "ZONE"])?;
-            return Ok(Expr::Value(self.parse_timestamp_inner(true)?));
+            let value = self.parse_literal_string()?;
+            return Ok(Expr::Value(Value::TimestampTz(value)));
         } else if self.parse_keyword("WITHOUT") {
             self.expect_keywords(&["TIME", "ZONE"])?;
         }
-        Ok(Expr::Value(self.parse_timestamp_inner(false)?))
+        let value = self.parse_literal_string()?;
+        Ok(Expr::Value(Value::Timestamp(value)))
     }
 
     fn parse_timestamptz(&mut self) -> Result<Expr, ParserError> {
-        Ok(Expr::Value(self.parse_timestamp_inner(true)?))
-    }
-
-    fn parse_timestamp_inner(&mut self, parse_timezone: bool) -> Result<Value, ParserError> {
-        use std::convert::TryInto;
-
         let value = self.parse_literal_string()?;
-        let range = self.peek_prev_range();
-        let pdt = self.parse_timestamp_string(&value, range.clone(), parse_timezone)?;
-        match (
-            pdt.year,
-            pdt.month,
-            pdt.day,
-            pdt.hour,
-            pdt.minute,
-            pdt.second,
-            pdt.timezone_offset_second,
-        ) {
-            (Some(year), Some(month), Some(day), hour, minute, second, timezone_offset_second) => {
-                let p_err = {
-                    |range: Range<usize>, e: std::num::TryFromIntError, field: &str| {
-                        self.error(
-                            range,
-                            format!("{} in date '{}' is invalid: {}", field, value, e),
-                        )
-                    }
-                };
-
-                if let Err(e) = pdt.validate_datelike_ymd() {
-                    return parser_err!(self, range, "Invalid TIMESTAMP '{}'; {}", value, e);
-                }
-                let month: u8 = month.unit.try_into().expect("invalid month");
-                let day: u8 = day.unit.try_into().map_err(|e| {
-                    let range = range.clone();
-                    p_err(range, e, "Day")
-                })?;
-
-                let hour = match hour {
-                    Some(hour) => {
-                        let hour: u8 = hour.unit.try_into().map_err({
-                            let range = range.clone();
-                            |e| p_err(range, e, "Hour")
-                        })?;
-                        hour
-                    }
-                    None => 0,
-                };
-
-                let minute = match minute {
-                    Some(minute) => {
-                        let minute: u8 = minute.unit.try_into().map_err({
-                            let range = range.clone();
-                            |e| p_err(range, e, "Minute")
-                        })?;
-                        minute
-                    }
-                    None => 0,
-                };
-
-                let (second, nano) = match second {
-                    Some(second) => {
-                        let nano: u32 = second.fraction.try_into().map_err({
-                            let range = range.clone();
-                            |e| p_err(range, e, "Nanosecond")
-                        })?;
-                        let second: u8 = second.unit.try_into().map_err({
-                            let range = range;
-                            |e| p_err(range, e, "Minute")
-                        })?;
-
-                        (second, nano)
-                    }
-                    None => (0, 0),
-                };
-
-                if parse_timezone {
-                    return Ok(Value::TimestampTz(
-                        value,
-                        ParsedTimestamp {
-                            year: year.unit,
-                            month,
-                            day,
-                            hour,
-                            minute,
-                            second,
-                            nano,
-                            timezone_offset_second: timezone_offset_second.unwrap_or(0),
-                        },
-                    ));
-                }
-
-                Ok(Value::Timestamp(
-                    value,
-                    ParsedTimestamp {
-                        year: year.unit,
-                        month,
-                        day,
-                        hour,
-                        minute,
-                        second,
-                        nano,
-                        timezone_offset_second: 0,
-                    },
-                ))
-            }
-            _ => Err(self.error(
-                range,
-                format!(
-                    "timestamp is missing fields, year through day are all required, got: '{}'",
-                    value
-                ),
-            )),
-        }
+        Ok(Expr::Value(Value::TimestampTz(value)))
     }
 
     /// Parse an INTERVAL literal.
@@ -770,10 +557,9 @@ impl Parser {
     pub fn parse_literal_interval(&mut self) -> Result<Expr, ParserError> {
         // The first token in an interval is a string literal which specifies
         // the duration of the interval.
-        let raw_value = self.parse_literal_string()?;
-        let raw_range = self.peek_prev_range();
+        let value = self.parse_literal_string()?;
 
-        // Determine the range of TimeUnits , whether explicit (`INTERVAL ... DAY TO MINUTE`) or
+        // Determine the range of TimeUnits, whether explicit (`INTERVAL ... DAY TO MINUTE`) or
         // implicit (in which all date fields are eligible).
         let (precision_high, precision_low, fsec_max_precision) =
             match self.expect_one_of_keywords(&[
@@ -803,7 +589,7 @@ impl Parser {
                                 d_range.start..e_range.end,
                                 "Invalid field range in INTERVAL '{}' {} TO {}; the value in the \
                                  position of {} should be more significant than {}.",
-                                raw_value,
+                                value,
                                 d,
                                 e,
                                 d,
@@ -833,15 +619,8 @@ impl Parser {
                 Err(_) => (DateTimeField::Year, DateTimeField::Second, None),
             };
 
-        // Determine the date-time values expressed in `raw_value`. This should be done
-        // after determining the TimeUnit range so you can use `precision_low` in cases
-        // where `raw_value` is ambiguous (e.g. `INTERVAL '1'`) to annotate the desired
-        // TimeUnit (e.g. `INTERVAL '1' HOUR`).
-        let parsed = self.parse_interval_string(&raw_value, raw_range, precision_low)?;
-
         Ok(Expr::Value(Value::Interval(IntervalValue {
-            value: raw_value,
-            parsed,
+            value,
             precision_high,
             precision_low,
             fsec_max_precision,
@@ -968,129 +747,6 @@ impl Parser {
             // Can only happen if `get_next_precedence` got out of sync with this function
             panic!("No infix parser for token {:?}", tok)
         }
-    }
-
-    /// parse
-    ///
-    /// ```text
-    /// <unquoted interval string> ::=
-    ///   [ <sign> ] { <year-month literal> | <day-time literal> }
-    /// <year-month literal> ::=
-    ///     <years value> [ <minus sign> <months value> ]
-    ///   | <months value>
-    /// <day-time literal> ::=
-    ///     <day-time interval>
-    ///   | <time interval>
-    /// <day-time interval> ::=
-    ///   <days value> [ <space> <hours value> [ <colon> <minutes value>
-    ///       [ <colon> <seconds value> ] ] ]
-    /// <time interval> ::=
-    ///     <hours value> [ <colon> <minutes value> [ <colon> <seconds value> ] ]
-    ///   | <minutes value> [ <colon> <seconds value> ]
-    ///   | <seconds value>
-    /// ```
-    pub fn parse_interval_string(
-        &self,
-        value: &str,
-        range: Range<usize>,
-        ambiguous_resolver: DateTimeField,
-    ) -> Result<ParsedDateTime, ParserError> {
-        if value.is_empty() {
-            return parser_err!(self, range, "Interval date string is empty!");
-        }
-
-        datetime::build_parsed_datetime_interval(value, ambiguous_resolver)
-            .map_err(|e| self.error(range, e))
-    }
-
-    /// parse
-    ///
-    /// <time value> ::=
-    ///     <hours value> <colon> <minutes value> <colon> <seconds integer value>
-    ///     [ <period> [ <seconds fraction> ] ]
-    pub fn parse_time_string(
-        &self,
-        value: &str,
-        range: Range<usize>,
-    ) -> Result<ParsedDateTime, ParserError> {
-        if value.is_empty() {
-            return parser_err!(self, range, "Time string is empty!");
-        }
-
-        let pdt = datetime::build_parsed_datetime_time(value).map_err({
-            let range = range;
-            |e| self.error(range, e)
-        })?;
-
-        Ok(pdt)
-    }
-
-    /// parse
-    ///
-    /// ```test
-    /// <unquoted timestamp string> ::=
-    ///     <date value> <space> <time value> [ <time zone interval> ]
-    /// <date value> ::=
-    ///     <years value> <minus sign> <months value> <minus sign> <days value>
-    /// <time zone interval> ::=
-    ///     <sign> <hours value> <colon> <minutes value>
-    /// ```
-    pub fn parse_timestamp_string(
-        &self,
-        value: &str,
-        range: Range<usize>,
-        parse_timezone: bool,
-    ) -> Result<ParsedDateTime, ParserError> {
-        if value.is_empty() {
-            return parser_err!(self, range, "Timestamp string is empty!");
-        }
-
-        let (ts_string, tz_string) = datetime::split_timestamp_string(value);
-
-        if ts_string.is_empty() {
-            return parser_err!(
-                self,
-                range,
-                "Parsed timestamp string is empty! timestamp: {:} timezone: {:}",
-                ts_string,
-                tz_string
-            );
-        }
-        // Split timestamp into date and time components.
-        let ts_value_split = ts_string.trim().split_whitespace().collect::<Vec<&str>>();
-
-        if ts_value_split.len() > 2 {
-            return parser_err!(self, range, "Invalid TIMESTAMP '{}'; unknown format", value);
-        }
-
-        let mut pdt = datetime::build_parsed_datetime_date(ts_value_split[0]).map_err({
-            let range = range.clone();
-            |e| self.error(range, e)
-        })?;
-
-        // Only parse time-component of TIMESTAMP if present.
-        if ts_value_split.len() == 2 {
-            if pdt.hour.is_some() || pdt.minute.is_some() || pdt.second.is_some() {
-                return parser_err!(self, range, "Invalid TIMESTAMP '{}'; unknown format", value);
-            }
-            let time_pdt = self.parse_time_string(ts_value_split[1], range.clone())?;
-
-            if time_pdt.year.is_some() || time_pdt.month.is_some() || time_pdt.day.is_some() {
-                return parser_err!(self, range, "Invalid TIMESTAMP '{}'; unknown format", value);
-            }
-
-            pdt.hour = time_pdt.hour;
-            pdt.minute = time_pdt.minute;
-            pdt.second = time_pdt.second;
-        }
-        if !parse_timezone || tz_string.is_empty() {
-            return Ok(pdt);
-        }
-        pdt.timezone_offset_second = Some(
-            datetime::parse_timezone_offset_second(tz_string)
-                .map_err({ |e| self.error(range, e) })?,
-        );
-        Ok(pdt)
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator

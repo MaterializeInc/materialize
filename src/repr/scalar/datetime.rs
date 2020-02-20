@@ -1,176 +1,509 @@
 // Copyright Materialize, Inc. All rights reserved.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License in the LICENSE file at the
-// root of this repository, or online at
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-#![deny(missing_docs)]
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
 
-use crate::ast::{DateTimeFieldValue, ParsedDateTime};
-use crate::parser::DateTimeField;
-use log::warn;
-use std::str::FromStr;
+use std::time::Duration;
 
-/// Builds a ParsedDateTime from a DATE string (`value`).
-///
-/// # Arguments
-///
-/// * `value` is a SQL-formatted DATE string.
-pub(crate) fn build_parsed_datetime_date(value: &str) -> Result<ParsedDateTime, String> {
-    use TimeStrToken::*;
+use failure::{bail, ensure, format_err};
 
-    let mut pdt = ParsedDateTime::default();
+use super::Interval;
+use sql_parser::ast::DateTimeField;
 
-    let date_actual = tokenize_time_str(value)?;
+type Result<T> = std::result::Result<T, failure::Error>;
 
-    let mut date_actual = date_actual.iter().peekable();
-    // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
-    while let Some(Colon) = date_actual.peek() {
-        date_actual.next();
-    }
-
-    let date_expected = [
-        Num(0), // year
-        Dash,
-        Num(0), // month
-        Dash,
-        Num(0), // day
-    ];
-    let mut date_expected = date_expected.iter().peekable();
-
-    if let Err(e) = fill_pdt_from_tokens(
-        &mut pdt,
-        &mut date_actual,
-        &mut date_expected,
-        DateTimeField::Year,
-        1,
-    ) {
-        return Err(format!("Invalid DATE/TIME '{}'; {}", value, e));
-    }
-
-    Ok(pdt)
+/// Tracks a unit and a fraction from a parsed time-like string, e.g. INTERVAL
+/// '1.2' DAYS.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct DateTimeFieldValue {
+    /// Integer part of the value.
+    pub unit: i64,
+    /// Fractional part of value, padded to billions/has 9 digits of precision,
+    /// e.g. `.5` is represented as `500000000`.
+    pub fraction: i64,
 }
 
-/// Builds a ParsedDateTime from a TIME string (`value`).
-///
-/// # Arguments
-///
-/// * `value` is a SQL-formatted TIME string.
-pub(crate) fn build_parsed_datetime_time(value: &str) -> Result<ParsedDateTime, String> {
-    let mut pdt = ParsedDateTime::default();
-
-    let time_actual = tokenize_time_str(value)?;
-
-    match determine_format_w_datetimefield(&time_actual.clone(), value)? {
-        Some(TimePartFormat::SQLStandard(leading_field)) => {
-            fill_pdt_sql_standard(&time_actual, leading_field, value, &mut pdt)?
+impl Default for DateTimeFieldValue {
+    fn default() -> Self {
+        DateTimeFieldValue {
+            unit: 0,
+            fraction: 0,
         }
-        _ => return Err(format!("Invalid DATE/TIME '{}'; unknown format", value)),
     }
-
-    Ok(pdt)
 }
 
-/// Builds a ParsedDateTime from an interval string (`value`).
-///
-/// # Arguments
-///
-/// * `value` is a PostgreSQL-compatible interval string, e.g `INTERVAL 'value'`.
-/// * `ambiguous_resolver` identifies the DateTimeField of the final part
-///   if it's ambiguous, e.g. in `INTERVAL '1' MONTH` '1' is ambiguous as its
-///   DateTimeField, but MONTH resolves the ambiguity.
-pub(crate) fn build_parsed_datetime_interval(
-    value: &str,
-    ambiguous_resolver: DateTimeField,
-) -> Result<ParsedDateTime, String> {
-    use DateTimeField::*;
+impl DateTimeFieldValue {
+    /// Construct `DateTimeFieldValue { unit, fraction }`.
+    pub fn new(unit: i64, fraction: i64) -> Self {
+        DateTimeFieldValue { unit, fraction }
+    }
+}
 
-    let mut pdt = ParsedDateTime::default();
+/// All of the fields that can appear in a literal `DATE`, `TIME`, `TIMESTAMP`
+/// or `INTERVAL` string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParsedDateTime {
+    pub year: Option<DateTimeFieldValue>,
+    pub month: Option<DateTimeFieldValue>,
+    pub day: Option<DateTimeFieldValue>,
+    pub hour: Option<DateTimeFieldValue>,
+    pub minute: Option<DateTimeFieldValue>,
+    // second.fraction is equivalent to nanoseconds.
+    pub second: Option<DateTimeFieldValue>,
+    pub timezone_offset_second: Option<i64>,
+}
 
-    let mut value_parts = Vec::new();
+impl Default for ParsedDateTime {
+    fn default() -> Self {
+        ParsedDateTime {
+            year: None,
+            month: None,
+            day: None,
+            hour: None,
+            minute: None,
+            second: None,
+            timezone_offset_second: None,
+        }
+    }
+}
 
-    let value_split = value.trim().split_whitespace().collect::<Vec<&str>>();
-    for s in value_split {
-        value_parts.push(tokenize_time_str(s)?);
+impl ParsedDateTime {
+    /// Compute an Interval from an IntervalValue. This could be adapted
+    /// to `impl TryFrom<IntervalValue> for Interval` but is slightly more
+    /// ergononmic because it doesn't require exposing all of the private
+    /// functions this method calls.
+    ///
+    /// # Errors
+    /// - If any component overflows a parameter (i.e. i64).
+    pub fn compute_interval(&self) -> Result<Interval> {
+        use DateTimeField::*;
+        let mut months = 0i64;
+        let mut seconds = 0i64;
+        let mut nanos = 0i64;
+
+        // Add all DateTimeFields, from Year to Seconds.
+        self.add_field(Year, &mut months, &mut seconds, &mut nanos)?;
+
+        for field in Year.into_iter().take_while(|f| *f <= Second) {
+            self.add_field(field, &mut months, &mut seconds, &mut nanos)?;
+        }
+
+        // Handle negative seconds with positive nanos or vice versa.
+        if nanos < 0 && seconds > 0 {
+            nanos += 1_000_000_000_i64;
+            seconds -= 1;
+        } else if nanos > 0 && seconds < 0 {
+            nanos -= 1_000_000_000_i64;
+            seconds += 1;
+        }
+
+        Ok(Interval {
+            months,
+            duration: Duration::new(seconds.abs() as u64, nanos.abs() as u32),
+            is_positive_dur: seconds >= 0 && nanos >= 0,
+        })
+    }
+    /// Adds the appropriate values from self's ParsedDateTime to `months`,
+    /// `seconds`, and `nanos`. These fields are then appropriate to construct
+    /// std::time::Duration, once accounting for their sign.
+    ///
+    /// # Errors
+    /// - If any component overflows a parameter (i.e. i64).
+    fn add_field(
+        &self,
+        d: DateTimeField,
+        months: &mut i64,
+        seconds: &mut i64,
+        nanos: &mut i64,
+    ) -> Result<()> {
+        use DateTimeField::*;
+        match d {
+            Year => {
+                let (y, y_f) = match self.units_of(Year) {
+                    Some(y) => (y.unit, y.fraction),
+                    None => return Ok(()),
+                };
+                // months += y * 12
+                *months = y
+                    .checked_mul(12)
+                    .and_then(|y_m| months.checked_add(y_m))
+                    .ok_or_else(|| {
+                        format_err!(
+                            "Overflows maximum months; \
+                             cannot exceed {} months",
+                            std::i64::MAX
+                        )
+                    })?;
+
+                // months += y_f * 12 / 1_000_000_000
+                *months = y_f
+                    .checked_mul(12)
+                    .and_then(|y_f_m| months.checked_add(y_f_m / 1_000_000_000))
+                    .ok_or_else(|| {
+                        format_err!(
+                            "Overflows maximum months; \
+                             cannot exceed {} months",
+                            std::i64::MAX
+                        )
+                    })?;
+                Ok(())
+            }
+            Month => {
+                let (m, m_f) = match self.units_of(Month) {
+                    Some(m) => (m.unit, m.fraction),
+                    None => return Ok(()),
+                };
+
+                *months = m.checked_add(*months).ok_or_else(|| {
+                    format_err!(
+                        "Overflows maximum months; \
+                         cannot exceed {} months",
+                        std::i64::MAX
+                    )
+                })?;
+
+                let m_f_ns = m_f
+                    .checked_mul(30 * seconds_multiplier(Day))
+                    .ok_or_else(|| format_err!("Intermediate overflow in MONTH fraction"))?;
+
+                // seconds += m_f * 30 * seconds_multiplier(Day) / 1_000_000_000
+                *seconds = seconds.checked_add(m_f_ns / 1_000_000_000).ok_or_else(|| {
+                    format_err!(
+                        "Overflows maximum seconds; \
+                         cannot exceed {} seconds",
+                        std::i64::MAX
+                    )
+                })?;
+
+                *nanos += m_f_ns % 1_000_000_000;
+                Ok(())
+            }
+            dhms => {
+                let (t, t_f) = match self.units_of(dhms) {
+                    Some(t) => (t.unit, t.fraction),
+                    None => return Ok(()),
+                };
+
+                *seconds = t
+                    .checked_mul(seconds_multiplier(d))
+                    .and_then(|t_s| seconds.checked_add(t_s))
+                    .ok_or_else(|| {
+                        format_err!(
+                            "Overflows maximum seconds; \
+                             cannot exceed {} seconds",
+                            std::i64::MAX
+                        )
+                    })?;
+
+                let t_f_ns = t_f
+                    .checked_mul(seconds_multiplier(dhms))
+                    .ok_or_else(|| format_err!("Intermediate overflow in {} fraction", dhms))?;
+
+                // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000
+                *seconds = seconds.checked_add(t_f_ns / 1_000_000_000).ok_or_else(|| {
+                    format_err!(
+                        "Overflows maximum seconds; \
+                         cannot exceed {} seconds",
+                        std::i64::MAX
+                    )
+                })?;
+
+                *nanos += t_f_ns % 1_000_000_000;
+                Ok(())
+            }
+        }
     }
 
-    let mut value_parts = value_parts.iter().peekable();
+    /// Builds a ParsedDateTime from an interval string (`value`).
+    ///
+    /// # Arguments
+    ///
+    /// * `value` is a PostgreSQL-compatible interval string, e.g `INTERVAL 'value'`.
+    /// * `ambiguous_resolver` identifies the DateTimeField of the final part
+    ///   if it's ambiguous, e.g. in `INTERVAL '1' MONTH` '1' is ambiguous as its
+    ///   DateTimeField, but MONTH resolves the ambiguity.
+    pub fn build_parsed_datetime_interval(
+        value: &str,
+        ambiguous_resolver: DateTimeField,
+    ) -> Result<ParsedDateTime> {
+        use DateTimeField::*;
 
-    let mut annotated_parts = Vec::new();
+        let mut pdt = ParsedDateTime::default();
 
-    while let Some(part) = value_parts.next() {
-        let mut fmt = determine_format_w_datetimefield(&part, value)?;
-        // If you cannot determine the format of this part, try to infer its
-        // format.
-        if fmt.is_none() {
-            fmt = match value_parts.next() {
-                Some(next_part) => {
-                    match determine_format_w_datetimefield(&next_part, value)? {
-                        Some(TimePartFormat::SQLStandard(f)) => {
-                            match f {
-                                // Do not capture this token because expression
-                                // is going to fail.
-                                Year | Month | Day => None,
-                                // If following part is H:M:S, infer that this
-                                // part is Day. Because this part can use a
-                                // fraction, it should be parsed as PostgreSQL.
-                                _ => {
-                                    // We can capture these annotated tokens
-                                    // because expressions are commutative.
-                                    annotated_parts.push(AnnotatedIntervalPart {
-                                        fmt: TimePartFormat::SQLStandard(f),
-                                        tokens: next_part.clone(),
-                                    });
-                                    Some(TimePartFormat::PostgreSQL(Day))
+        let mut value_parts = Vec::new();
+
+        let value_split = value.trim().split_whitespace().collect::<Vec<&str>>();
+        for s in value_split {
+            value_parts.push(tokenize_time_str(s)?);
+        }
+
+        let mut value_parts = value_parts.iter().peekable();
+
+        let mut annotated_parts = Vec::new();
+
+        while let Some(part) = value_parts.next() {
+            let mut fmt = determine_format_w_datetimefield(&part)?;
+            // If you cannot determine the format of this part, try to infer its
+            // format.
+            if fmt.is_none() {
+                fmt = match value_parts.next() {
+                    Some(next_part) => {
+                        match determine_format_w_datetimefield(&next_part)? {
+                            Some(TimePartFormat::SqlStandard(f)) => {
+                                match f {
+                                    // Do not capture this token because expression
+                                    // is going to fail.
+                                    Year | Month | Day => None,
+                                    // If following part is H:M:S, infer that this
+                                    // part is Day. Because this part can use a
+                                    // fraction, it should be parsed as PostgreSQL.
+                                    _ => {
+                                        // We can capture these annotated tokens
+                                        // because expressions are commutative.
+                                        annotated_parts.push(AnnotatedIntervalPart {
+                                            fmt: TimePartFormat::SqlStandard(f),
+                                            tokens: next_part.clone(),
+                                        });
+                                        Some(TimePartFormat::PostgreSql(Day))
+                                    }
                                 }
                             }
+                            // None | Some(TimePartFormat::PostgreSQL(f))
+                            // If next_fmt is TimePartFormat::PostgreSQL, that
+                            // indicates that the following string was a TimeUnit,
+                            // e.g. `day`, and this is where those tokens get
+                            // consumed and propagated to their preceding numerical
+                            // value.
+                            next_fmt => next_fmt,
                         }
-                        // None | Some(TimePartFormat::PostgreSQL(f))
-                        // If next_fmt is TimePartFormat::PostgreSQL, that
-                        // indicates that the following string was a TimeUnit,
-                        // e.g. `day`, and this is where those tokens get
-                        // consumed and propagated to their preceding numerical
-                        // value.
-                        next_fmt => next_fmt,
                     }
+                    // Allow resolution of final part using ambiguous_resolver.
+                    None => Some(TimePartFormat::PostgreSql(ambiguous_resolver)),
                 }
-                // Allow resolution of final part using ambiguous_resolver.
-                None => Some(TimePartFormat::PostgreSQL(ambiguous_resolver)),
+            }
+            match fmt {
+                Some(fmt) => annotated_parts.push(AnnotatedIntervalPart {
+                    fmt,
+                    tokens: part.clone(),
+                }),
+                None => bail!(
+                    "Cannot determine format of all parts. Add \
+                     explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY"
+                ),
             }
         }
-        match fmt {
-            Some(fmt) => annotated_parts.push(AnnotatedIntervalPart {
-                fmt,
-                tokens: part.clone(),
-            }),
-            None => {
-                return Err(format!(
-                    "Invalid INTERVAL '{}': cannot determine format of all parts. Add \
-                     explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
-                    value
-                ))
+
+        for ap in annotated_parts {
+            match ap.fmt {
+                TimePartFormat::SqlStandard(f) => {
+                    fill_pdt_sql_standard(&ap.tokens, f, &mut pdt)?;
+                    pdt.check_interval_bounds(f)?;
+                }
+                TimePartFormat::PostgreSql(f) => fill_pdt_pg(&ap.tokens, f, &mut pdt)?,
             }
+        }
+
+        Ok(pdt)
+    }
+    /// Builds a ParsedDateTime from a DATE string (`value`).
+    ///
+    /// # Arguments
+    ///
+    /// * `value` is a SQL-formatted DATE string.
+    pub fn build_parsed_datetime_date(value: &str) -> Result<ParsedDateTime> {
+        use TimeStrToken::*;
+
+        let mut pdt = ParsedDateTime::default();
+
+        let date_actual = tokenize_time_str(value)?;
+
+        let mut date_actual = date_actual.iter().peekable();
+        // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
+        while let Some(Colon) = date_actual.peek() {
+            date_actual.next();
+        }
+
+        let date_expected = [
+            Num(0), // year
+            Dash,
+            Num(0), // month
+            Dash,
+            Num(0), // day
+        ];
+        let mut date_expected = date_expected.iter().peekable();
+
+        fill_pdt_from_tokens(
+            &mut pdt,
+            &mut date_actual,
+            &mut date_expected,
+            DateTimeField::Year,
+            1,
+        )?;
+
+        Ok(pdt)
+    }
+    /// Builds a ParsedDateTime from a TIME string (`value`).
+    ///
+    /// # Arguments
+    ///
+    /// * `value` is a SQL-formatted TIME string.
+    pub fn build_parsed_datetime_time(value: &str) -> Result<ParsedDateTime> {
+        let mut pdt = ParsedDateTime::default();
+
+        let time_actual = tokenize_time_str(value)?;
+
+        match determine_format_w_datetimefield(&time_actual.clone())? {
+            Some(TimePartFormat::SqlStandard(leading_field)) => {
+                fill_pdt_sql_standard(&time_actual, leading_field, &mut pdt)?
+            }
+            _ => bail!("Unknown format"),
+        }
+
+        Ok(pdt)
+    }
+    /// Write to the specified field of a ParsedDateTime iff it is currently set
+    /// to None; otherwise generate an error to propagate to the user.
+    pub fn write_field_iff_none(
+        &mut self,
+        f: DateTimeField,
+        u: Option<DateTimeFieldValue>,
+    ) -> Result<()> {
+        use DateTimeField::*;
+
+        match f {
+            Year if self.year.is_none() => {
+                self.year = u;
+            }
+            Month if self.month.is_none() => {
+                self.month = u;
+            }
+            Day if self.day.is_none() => {
+                self.day = u;
+            }
+            Hour if self.hour.is_none() => {
+                self.hour = u;
+            }
+            Minute if self.minute.is_none() => {
+                self.minute = u;
+            }
+            Second if self.second.is_none() => {
+                self.second = u;
+            }
+            _ => failure::bail!("{} field set twice", f),
+        }
+        Ok(())
+    }
+    pub fn check_datelike_bounds(&self) -> Result<()> {
+        if let Some(month) = self.month {
+            ensure!(
+                month.unit < 13 && month.unit > 0,
+                "MONTH must be (1, 12), got {}",
+                month.unit
+            );
+        }
+        if let Some(day) = self.day {
+            ensure!(
+                day.unit < 32 && day.unit > 0,
+                "DAY must be (1, 31), got {}",
+                day.unit
+            );
+        }
+        if let Some(hour) = self.hour {
+            ensure!(
+                hour.unit < 24 && hour.unit >= 0,
+                "HOUR must be (0, 23), got {}",
+                hour.unit
+            );
+        }
+        if let Some(minute) = self.minute {
+            ensure!(
+                minute.unit < 60 && minute.unit >= 0,
+                "MINUTE must be (0, 59), got {}",
+                minute.unit
+            );
+        }
+
+        if let Some(second) = self.second {
+            ensure!(
+                second.unit < 61 && second.unit >= 0,
+                "SECOND must be (0, 60), got {}",
+                second.unit
+            );
+            ensure!(
+                second.fraction < 1_000_000_001 && second.fraction >= 0,
+                "NANOSECOND must be (0, 1_000_000_000), got {}",
+                second.fraction
+            );
+        }
+
+        Ok(())
+    }
+    pub fn check_interval_bounds(&self, d: DateTimeField) -> Result<()> {
+        use DateTimeField::*;
+
+        match d {
+            Year | Month => {
+                if let Some(month) = self.month {
+                    ensure!(
+                        month.unit < 13 && month.unit > -13,
+                        "MONTH must be (-12, 12), got {}",
+                        month.unit
+                    );
+                }
+            }
+            Hour | Minute | Second => {
+                if let Some(minute) = self.minute {
+                    ensure!(
+                        minute.unit < 60 && minute.unit > -60,
+                        "MINUTE must be (-59, 59), got {}",
+                        minute.unit
+                    );
+                }
+                if let Some(second) = self.second {
+                    ensure!(
+                        second.unit < 61 && second.unit > -61,
+                        "SECOND must be (-60, 60), got {}",
+                        second.unit
+                    );
+                    ensure!(
+                        second.fraction < 1_000_000_001 && second.fraction > -1_000_000_001,
+                        "NANOSECOND must be (-1_000_000_000, 1_000_000_000), got {}",
+                        second.fraction
+                    );
+                }
+            }
+            Day => {}
+        }
+
+        Ok(())
+    }
+    /// Retrieve any value that we parsed out of the literal string for the
+    /// `field`.
+    fn units_of(&self, field: DateTimeField) -> Option<DateTimeFieldValue> {
+        match field {
+            DateTimeField::Year => self.year,
+            DateTimeField::Month => self.month,
+            DateTimeField::Day => self.day,
+            DateTimeField::Hour => self.hour,
+            DateTimeField::Minute => self.minute,
+            DateTimeField::Second => self.second,
         }
     }
+}
 
-    for ap in annotated_parts {
-        match ap.fmt {
-            TimePartFormat::SQLStandard(f) => {
-                fill_pdt_sql_standard(&ap.tokens, f, value, &mut pdt)?
-            }
-            TimePartFormat::PostgreSQL(f) => fill_pdt_pg(&ap.tokens, f, value, &mut pdt)?,
-        }
+/// Returns the number of seconds in a single unit of `field`.
+fn seconds_multiplier(field: DateTimeField) -> i64 {
+    match field {
+        DateTimeField::Day => 60 * 60 * 24,
+        DateTimeField::Hour => 60 * 60,
+        DateTimeField::Minute => 60,
+        DateTimeField::Second => 1,
+        _other => unreachable!("Do not call with a non-duration field"),
     }
-
-    Ok(pdt)
 }
 
 /// Fills a ParsedDateTime's fields when encountering SQL standard-style interval
@@ -186,32 +519,25 @@ pub(crate) fn build_parsed_datetime_interval(
 fn fill_pdt_sql_standard(
     v: &[TimeStrToken],
     leading_field: DateTimeField,
-    value: &str,
     mut pdt: &mut ParsedDateTime,
-) -> Result<(), String> {
+) -> Result<()> {
     use DateTimeField::*;
 
     // Ensure that no fields have been previously modified.
     match leading_field {
         Year | Month => {
             if pdt.year.is_some() || pdt.month.is_some() {
-                return Err(format!(
-                    "Invalid INTERVAL '{}': YEAR or MONTH field set twice",
-                    value
-                ));
+                bail!("YEAR or MONTH field set twice")
             }
         }
         Day => {
             if pdt.day.is_some() {
-                return Err(format!("Invalid INTERVAL '{}': DAY field set twice", value));
+                bail!("DAY field set twice",)
             }
         }
         Hour | Minute | Second => {
             if pdt.hour.is_some() || pdt.minute.is_some() || pdt.second.is_some() {
-                return Err(format!(
-                    "Invalid INTERVAL '{}': HOUR, MINUTE, SECOND field set twice",
-                    value
-                ));
+                bail!("HOUR, MINUTE, SECOND field set twice")
             }
         }
     }
@@ -222,10 +548,7 @@ fn fill_pdt_sql_standard(
 
     let sign = trim_interval_chars_return_sign(&mut actual);
 
-    if let Err(e) = fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, sign)
-    {
-        return Err(format!("Invalid INTERVAL '{}': {}", value, e));
-    }
+    fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, sign)?;
 
     // Do not allow any fields in the group to be modified afterward, and check
     // that values are valid. SQL standard-style interval parts do not allow
@@ -236,17 +559,8 @@ fn fill_pdt_sql_standard(
             if pdt.year.is_none() {
                 pdt.year = Some(DateTimeFieldValue::default());
             }
-            match pdt.month {
-                None => pdt.month = Some(DateTimeFieldValue::default()),
-                Some(m) => {
-                    if m.unit >= 12 {
-                        return Err(format!(
-                            "Invalid INTERVAL '{}': MONTH field out range; \
-                             must be < 12, have {}",
-                            value, m.unit
-                        ));
-                    }
-                }
+            if pdt.month.is_none() {
+                pdt.month = Some(DateTimeFieldValue::default());
             }
         }
         Day => {
@@ -258,31 +572,11 @@ fn fill_pdt_sql_standard(
             if pdt.hour.is_none() {
                 pdt.hour = Some(DateTimeFieldValue::default());
             }
-
-            match pdt.minute {
-                None => pdt.minute = Some(DateTimeFieldValue::default()),
-                Some(m) => {
-                    if m.unit >= 60 {
-                        return Err(format!(
-                            "Invalid INTERVAL '{}': MINUTE field out range; \
-                             must be < 60, have {}",
-                            value, m.unit
-                        ));
-                    }
-                }
+            if pdt.minute.is_none() {
+                pdt.minute = Some(DateTimeFieldValue::default());
             }
-
-            match pdt.second {
-                None => pdt.second = Some(DateTimeFieldValue::default()),
-                Some(s) => {
-                    if s.unit >= 60 {
-                        return Err(format!(
-                            "Invalid INTERVAL '{}': SECOND field out range; \
-                             must be < 60, have {}",
-                            value, s.unit
-                        ));
-                    }
-                }
+            if pdt.second.is_none() {
+                pdt.second = Some(DateTimeFieldValue::default());
             }
         }
     }
@@ -303,9 +597,8 @@ fn fill_pdt_sql_standard(
 fn fill_pdt_pg(
     tokens: &[TimeStrToken],
     time_unit: DateTimeField,
-    value: &str,
     mut pdt: &mut ParsedDateTime,
-) -> Result<(), String> {
+) -> Result<()> {
     use TimeStrToken::*;
 
     let mut actual = tokens.iter().peekable();
@@ -317,14 +610,12 @@ fn fill_pdt_pg(
 
     let sign = trim_interval_chars_return_sign(&mut actual);
 
-    if let Err(e) = fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, time_unit, sign) {
-        return Err(format!("Invalid INTERVAL '{}': {}", value, e));
-    }
+    fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, time_unit, sign)?;
 
     Ok(())
 }
 
-/// Fills the fields of `pdt` using the `actual` tokens, starting at `leading_field`
+/// Fills a ParsedDateTime's fields using the `actual` tokens, starting at `leading_field`
 /// and descending to less significant DateTimeFields.
 ///
 /// # Errors
@@ -340,7 +631,7 @@ fn fill_pdt_from_tokens(
     expected: &mut std::iter::Peekable<std::slice::Iter<'_, TimeStrToken>>,
     leading_field: DateTimeField,
     sign: i64,
-) -> Result<(), failure::Error> {
+) -> Result<()> {
     use TimeStrToken::*;
     let mut current_field = leading_field;
 
@@ -420,11 +711,6 @@ fn fill_pdt_from_tokens(
                     if width > precision {
                         // Trim n to its 9 most significant digits.
                         n /= 10_i64.pow(width - precision);
-                        warn!(
-                            "Trimming {} to 9 digits, the max precision permitted by decimal numerics \
-                             in timestamp, timestamptz, date, time, and interval strings.",
-                            n
-                        );
                     } else {
                         // Right-pad n with 0s.
                         n *= 10_i64.pow(precision - width);
@@ -495,8 +781,8 @@ fn fill_pdt_from_tokens(
 /// associated tokens w/r/t their respective syntax.
 #[derive(Debug, Eq, PartialEq, Clone)]
 enum TimePartFormat {
-    SQLStandard(DateTimeField),
-    PostgreSQL(DateTimeField),
+    SqlStandard(DateTimeField),
+    PostgreSql(DateTimeField),
 }
 
 /// AnnotatedIntervalPart contains the tokens to be parsed, as well as the format
@@ -512,10 +798,7 @@ struct AnnotatedIntervalPart {
 /// generate the string's semantics.
 ///
 /// Note that `toks` should _not_ contain space
-fn determine_format_w_datetimefield(
-    toks: &[TimeStrToken],
-    interval_str: &str,
-) -> Result<Option<TimePartFormat>, String> {
+fn determine_format_w_datetimefield(toks: &[TimeStrToken]) -> Result<Option<TimePartFormat>> {
     use DateTimeField::*;
     use TimePartFormat::*;
     use TimeStrToken::*;
@@ -537,13 +820,13 @@ fn determine_format_w_datetimefield(
             }
             match toks.peek() {
                 // Implies {Num.NumTimeUnit}
-                Some(TimeUnit(f)) => Ok(Some(PostgreSQL(*f))),
+                Some(TimeUnit(f)) => Ok(Some(PostgreSql(*f))),
                 // Implies {?}{?}{?}, ambiguous case.
                 _ => Ok(None),
             }
         }
         // Implies {Y-...}{}{}
-        Some(Dash) => Ok(Some(SQLStandard(Year))),
+        Some(Dash) => Ok(Some(SqlStandard(Year))),
         // Implies {}{}{?:...}
         Some(Colon) => {
             if let Some(Num(_)) = toks.peek() {
@@ -551,21 +834,15 @@ fn determine_format_w_datetimefield(
             }
             match toks.peek() {
                 // Implies {H:M:?...}
-                Some(Colon) | Some(Space) | None => Ok(Some(SQLStandard(Hour))),
+                Some(Colon) | Some(Space) | None => Ok(Some(SqlStandard(Hour))),
                 // Implies {M:S.NS}
-                Some(Dot) => Ok(Some(SQLStandard(Minute))),
-                _ => Err(format!(
-                    "Invalid date-time type string '{}': cannot determine format",
-                    interval_str,
-                )),
+                Some(Dot) => Ok(Some(SqlStandard(Minute))),
+                _ => bail!("Cannot determine format of all parts"),
             }
         }
         // Implies {Num}?{TimeUnit}
-        Some(TimeUnit(f)) => Ok(Some(PostgreSQL(*f))),
-        _ => Err(format!(
-            "Invalid date-time type string '{}': cannot determine format",
-            interval_str,
-        )),
+        Some(TimeUnit(f)) => Ok(Some(PostgreSql(*f))),
+        _ => bail!("Cannot determine format of all parts"),
     }
 }
 
@@ -675,31 +952,33 @@ pub(crate) enum TimeStrToken {
 /// - Any sequence of alphabetic characters cannot be cast into a DateTimeField.
 /// - Any sequence of numeric characters cannot be cast into an i64.
 /// - Any non-alpha numeric character cannot be cast into a TimeStrToken, e.g. `%`.
-pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, String> {
+pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>> {
+    use std::str::FromStr;
+
     let mut toks = vec![];
     let mut num_buf = String::with_capacity(4);
     let mut char_buf = String::with_capacity(7);
-    fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken, String> {
+    fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken> {
         Ok(TimeStrToken::Num(n.parse().map_err(|e| {
-            format!("Unable to parse value as a number at index {}: {}", idx, e)
+            format_err!("Unable to parse value as a number at index {}: {}", idx, e)
         })?))
     };
-    fn maybe_tokenize_num_buf(
-        n: &mut String,
-        i: usize,
-        t: &mut Vec<TimeStrToken>,
-    ) -> Result<(), String> {
+    fn maybe_tokenize_num_buf(n: &mut String, i: usize, t: &mut Vec<TimeStrToken>) -> Result<()> {
         if !n.is_empty() {
             t.push(parse_num(&n, i)?);
             n.clear();
         }
         Ok(())
     }
-    fn maybe_tokenize_char_buf(c: &mut String, t: &mut Vec<TimeStrToken>) -> Result<(), String> {
+    fn maybe_tokenize_char_buf(c: &mut String, t: &mut Vec<TimeStrToken>) -> Result<()> {
         if !c.is_empty() {
-            t.push(TimeStrToken::TimeUnit(DateTimeField::from_str(
-                &c.to_uppercase(),
-            )?));
+            let tu = match DateTimeField::from_str(&c.to_uppercase()) {
+                Ok(tu) => tu,
+                // DateTimeField::from_str's errors are String, but we
+                // need failure::Error, so cannot rely on ? for conversion.
+                Err(e) => bail!("{}", e),
+            };
+            t.push(TimeStrToken::TimeUnit(tu));
             c.clear();
         }
         Ok(())
@@ -707,10 +986,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, String
     let mut last_field_is_frac = false;
     for (i, chr) in value.chars().enumerate() {
         if !num_buf.is_empty() && !char_buf.is_empty() {
-            return Err(format!(
-                "Invalid string in time-like type '{}': could not tokenize",
-                value
-            ));
+            bail!("Could not tokenize")
         }
         match chr {
             '+' => {
@@ -747,12 +1023,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, String
                 maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
                 char_buf.push(chr)
             }
-            chr => {
-                return Err(format!(
-                    "Invalid character at offset {} in {}: {:?}",
-                    i, value, chr
-                ))
-            }
+            chr => bail!("Invalid character at offset {} in {}: {:?}", i, value, chr),
         }
     }
     if !num_buf.is_empty() {
@@ -764,17 +1035,12 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, String
             // Fractions only support 9 places of precision.
             let default_precision = 9;
             if chars > default_precision {
-                warn!(
-                    "Trimming {} to 9 digits, the max precision permitted by decimal numerics \
-                     in timestamp, timestamptz, date, time, and interval strings.",
-                    num_buf
-                );
                 num_buf = num_buf[..default_precision].to_string();
                 chars = default_precision;
             }
             let raw: i64 = num_buf
                 .parse()
-                .map_err(|e| format!("couldn't parse fraction {}: {}", num_buf, e))?;
+                .map_err(|e| format_err!("couldn't parse fraction {}: {}", num_buf, e))?;
             let multiplicand = 1_000_000_000 / 10_i64.pow(chars as u32);
 
             toks.push(TimeStrToken::Nanos(raw * multiplicand));
@@ -785,7 +1051,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>, String
     Ok(toks)
 }
 
-fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
+fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>> {
     let mut toks: Vec<TimeStrToken> = vec![];
     let mut num_buf = String::with_capacity(4);
     // If the timezone string has a colon, we need to parse all numbers naively.
@@ -799,7 +1065,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
         n: &str,
         split_nums: bool,
         idx: usize,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         if n.is_empty() {
             return Ok(());
         }
@@ -812,17 +1078,21 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
         };
 
         toks.push(TimeStrToken::Num(first.parse().map_err(|e| {
-                format!(
-                    "Error tokenizing timezone string: unable to parse value {} as a number at index {}: {}",
-                    first, idx, e
-                )
-            })?));
+            format_err!(
+                "Unable to tokenize value {} as a number at index {}: {}",
+                first,
+                idx,
+                e
+            )
+        })?));
 
         if let Some(second) = second {
             toks.push(TimeStrToken::Num(second.parse().map_err(|e| {
-                format!(
-                    "Error tokenizing timezone string: unable to parse value {} as a number at index {}: {}",
-                    second, idx, e
+                format_err!(
+                    "Unable to tokenize value {} as a number at index {}: {}",
+                    second,
+                    idx,
+                    e
                 )
             })?));
         }
@@ -863,19 +1133,19 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
                 toks.push(TimeStrToken::TzName(substring.to_string()));
                 return Ok(toks);
             }
-            chr => {
-                return Err(format!(
-                    "Error tokenizing timezone string ({}): invalid character {:?} at offset {}",
-                    value, chr, i
-                ))
-            }
+            chr => bail!(
+                "Error tokenizing timezone string ('{}'): invalid character {:?} at offset {}",
+                value,
+                chr,
+                i
+            ),
         }
     }
     parse_num(&mut toks, &num_buf, split_nums, 0)?;
     Ok(toks)
 }
 
-fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<i64, String> {
+fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<i64> {
     use TimeStrToken::*;
     let all_formats = [
         vec![Plus, Num(0), Colon, Num(0)],
@@ -908,42 +1178,52 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                 (Num(val), Num(_)) => {
                     let val = *val;
                     match (hour_offset, minute_offset) {
-                        (None, None) => if val <= 24 {
-                            hour_offset = Some(val as i64);
-                        } else {
-                            // We can return an error here because in all the
-                            // formats with numbers we require the first number
-                            // to be an hour and we require it to be <= 24
-                            return Err(format!(
-                                "Error parsing timezone string ({}): timezone hour invalid {}",
-                                value, val
-                            ));
+                        (None, None) => {
+                            if val <= 24 {
+                                hour_offset = Some(val as i64);
+                            } else {
+                                // We can return an error here because in all the
+                                // formats with numbers we require the first number
+                                // to be an hour and we require it to be <= 24
+                                bail!(
+                                    "Invalid timezone string ({}): timezone hour invalid {}",
+                                    value,
+                                    val
+                                )
+                            }
                         }
-                        (Some(_), None) => if val <= 60 {
-                            minute_offset = Some(val as i64);
-                        } else {
-                            return Err(format!(
-                                "Error parsing timezone string ({}): timezone minute invalid {}",
-                                value, val
-                            ));
-                        },
+                        (Some(_), None) => {
+                            if val <= 60 {
+                                minute_offset = Some(val as i64);
+                            } else {
+                                bail!(
+                                    "Invalid timezone string ({}): timezone minute invalid {}",
+                                    value,
+                                    val
+                                )
+                            }
+                        }
                         // We've already seen an hour and a minute so we should
                         // never see another number
-                        (Some(_), Some(_)) => return Err(format!(
-                            "Error parsing timezone string ({}): invalid value {} at token index {}", value,
-                            val, i
-                        )),
+                        (Some(_), Some(_)) => bail!(
+                            "Invalid timezone string ({}): invalid value {} at token index {}",
+                            value,
+                            val,
+                            i
+                        ),
                         (None, Some(_)) => unreachable!("parsed a minute before an hour!"),
                     }
                 }
                 (Zulu, Zulu) => return Ok(0 as i64),
                 (TzName(val), TzName(_)) => {
                     // For now, we don't support named timezones
-                    return Err(format!(
-                        "Error parsing timezone string ({}): named timezones are not supported. \
+                    bail!(
+                        "Invalid timezone string ({}): named timezones are not supported. \
                          Failed to parse {} at token index {}",
-                        value, val, i
-                    ));
+                        value,
+                        val,
+                        i
+                    )
                 }
                 (_, _) => {
                     // Theres a mismatch between this format and the actual
@@ -972,7 +1252,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
         }
     }
 
-    Err("It didnt work".into())
+    bail!("Cannot parse timezone offset {}", value)
 }
 
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
@@ -1003,13 +1283,12 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
                 return (first.trim(), second.trim());
             }
         }
-
         (value.trim(), "")
     } else {
         // We don't have a time, so the only formats available are YYY-mm-dd<tz>
         // or YYYY-MM-dd <tz> Numeric offset timezones need to be separated from
         // the ymd by a space
-        let cut = value.find(|c: char| (c == ' ') || c.is_ascii_alphabetic());
+        let cut = value.find(|c: char| c.is_ascii_alphabetic());
 
         if let Some(cut) = cut {
             let (first, second) = value.split_at(cut);
@@ -1020,7 +1299,7 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
     }
 }
 
-pub(crate) fn parse_timezone_offset_second(value: &str) -> Result<i64, String> {
+pub(crate) fn parse_timezone_offset_second(value: &str) -> Result<i64> {
     let toks = tokenize_timezone(value)?;
     Ok(build_timezone_offset_second(&toks, value)?)
 }
@@ -1028,7 +1307,6 @@ pub(crate) fn parse_timezone_offset_second(value: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::parser::*;
 
     #[test]
     fn test_expected_dur_like_tokens() {
@@ -1092,14 +1370,14 @@ mod test {
         use TimePartFormat::*;
 
         let test_cases = [
-            ("1-2 3", Some(SQLStandard(Year))),
-            ("4:5", Some(SQLStandard(Hour))),
-            ("4:5.6", Some(SQLStandard(Minute))),
-            ("-4:5.6", Some(SQLStandard(Minute))),
-            ("+4:5.6", Some(SQLStandard(Minute))),
-            ("year", Some(PostgreSQL(Year))),
-            ("4year", Some(PostgreSQL(Year))),
-            ("-4year", Some(PostgreSQL(Year))),
+            ("1-2 3", Some(SqlStandard(Year))),
+            ("4:5", Some(SqlStandard(Hour))),
+            ("4:5.6", Some(SqlStandard(Minute))),
+            ("-4:5.6", Some(SqlStandard(Minute))),
+            ("+4:5.6", Some(SqlStandard(Minute))),
+            ("year", Some(PostgreSql(Year))),
+            ("4year", Some(PostgreSql(Year))),
+            ("-4year", Some(PostgreSql(Year))),
             ("5", None),
             ("5.6", None),
             ("3 4:5:6.7", None),
@@ -1109,7 +1387,7 @@ mod test {
             let s = tokenize_time_str(test.0).unwrap();
 
             match (
-                determine_format_w_datetimefield(&s, test.0).unwrap(),
+                determine_format_w_datetimefield(&s).unwrap(),
                 test.1.as_ref(),
             ) {
                 (Some(a), Some(b)) => {
@@ -1131,23 +1409,14 @@ mod test {
     #[test]
     fn test_determine_format_w_datetimefield_error() {
         let test_cases = [
-            (
-                "1+2",
-                "Invalid date-time type string '1+2': cannot determine format",
-            ),
-            (
-                "1:2+3",
-                "Invalid date-time type string '1:2+3': cannot determine format",
-            ),
-            (
-                "1:1YEAR2",
-                "Invalid date-time type string '1:1YEAR2': cannot determine format",
-            ),
+            ("1+2", "Cannot determine format of all parts"),
+            ("1:2+3", "Cannot determine format of all parts"),
+            ("1:1YEAR2", "Cannot determine format of all parts"),
         ];
 
         for test in test_cases.iter() {
             let s = tokenize_time_str(test.0).unwrap();
-            match determine_format_w_datetimefield(&s, test.0) {
+            match determine_format_w_datetimefield(&s) {
                 Err(e) => assert_eq!(e.to_string(), test.1),
                 Ok(f) => panic!(
                     "Test passed when expected to fail: {}, generated {:?}",
@@ -1513,7 +1782,7 @@ mod test {
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
             let actual = tokenize_time_str(test.1).unwrap();
-            fill_pdt_pg(&actual, test.2, test.1, &mut pdt).unwrap();
+            fill_pdt_pg(&actual, test.2, &mut pdt).unwrap();
 
             assert_eq!(pdt, test.0);
         }
@@ -1527,28 +1796,25 @@ mod test {
             (
                 "1.2.",
                 Month,
-                "Invalid INTERVAL \'1.2.\': Invalid syntax at offset 3: \
-                 provided Dot but expected TimeUnit(Year)",
+                "Invalid syntax at offset 3: provided Dot but expected TimeUnit(Year)",
             ),
             (
                 "YEAR",
                 Year,
-                "Invalid INTERVAL \'YEAR\': Year must be preceeded \
-                 by a number, e.g. \'1Year\'",
+                "Year must be preceeded by a number, e.g. \'1Year\'",
             ),
             // Running into this error means that determine_format_w_datetimefield
             // failed.
             (
                 "1YEAR",
                 Month,
-                "Invalid INTERVAL \'1YEAR\': Invalid syntax at offset \
-                 3: provided Month but expected Year\'",
+                "Invalid syntax at offset 3: provided Month but expected Year\'",
             ),
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
             let actual = tokenize_time_str(test.0).unwrap();
-            match fill_pdt_pg(&actual, test.1, test.0, &mut pdt) {
+            match fill_pdt_pg(&actual, test.1, &mut pdt) {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(_) => panic!(
                     "Test passed when expected to fail, generated ParsedDateTime {:?}",
@@ -1682,7 +1948,7 @@ mod test {
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
             let actual = tokenize_time_str(test.1).unwrap();
-            fill_pdt_sql_standard(&actual, test.2, test.1, &mut pdt).unwrap();
+            fill_pdt_sql_standard(&actual, test.2, &mut pdt).unwrap();
 
             assert_eq!(pdt, test.0);
         }
@@ -1696,32 +1962,28 @@ mod test {
             (
                 "1.2",
                 Year,
-                "Invalid INTERVAL \'1.2\': Invalid syntax at \
-                 offset 1: provided Dot but expected Dash",
+                "Invalid syntax at offset 1: provided Dot but expected Dash",
             ),
             (
                 "1-2:3.4",
                 Minute,
-                "Invalid INTERVAL \'1-2:3.4\': Invalid syntax at \
-                 offset 1: provided Dash but expected Colon",
+                "Invalid syntax at offset 1: provided Dash but expected Colon",
             ),
             (
                 "1:2.2.",
                 Minute,
-                "Invalid INTERVAL \'1:2.2.\': Invalid syntax at \
-                 offset 5: provided Dot but expected None",
+                "Invalid syntax at offset 5: provided Dot but expected None",
             ),
             (
                 "1YEAR",
                 Year,
-                "Invalid INTERVAL \'1YEAR\': Invalid syntax at \
-                 offset 1: provided TimeUnit(Year) but expected Dash",
+                "Invalid syntax at offset 1: provided TimeUnit(Year) but expected Dash",
             ),
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
             let actual = tokenize_time_str(test.0).unwrap();
-            match fill_pdt_sql_standard(&actual, test.1, test.0, &mut pdt) {
+            match fill_pdt_sql_standard(&actual, test.1, &mut pdt) {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(_) => panic!(
                     "Test passed when expected to fail, generated ParsedDateTime {:?}",
@@ -1759,7 +2021,10 @@ mod test {
         );
 
         fn run_test_build_parsed_datetime_date(test: &str, res: ParsedDateTime) {
-            assert_eq!(build_parsed_datetime_date(test), Ok(res));
+            assert_eq!(
+                ParsedDateTime::build_parsed_datetime_date(test).unwrap(),
+                res
+            );
         }
     }
 
@@ -1812,7 +2077,10 @@ mod test {
         );
 
         fn run_test_build_parsed_datetime_time(test: &str, res: ParsedDateTime) {
-            assert_eq!(build_parsed_datetime_time(test), Ok(res));
+            assert_eq!(
+                ParsedDateTime::build_parsed_datetime_time(test).unwrap(),
+                res
+            );
         }
     }
 
@@ -2206,8 +2474,8 @@ mod test {
         ];
 
         for test in test_cases.iter() {
-            let actual = build_parsed_datetime_interval(test.1, test.2);
-            if actual != Ok(test.0.clone()) {
+            let actual = ParsedDateTime::build_parsed_datetime_interval(test.1, test.2).unwrap();
+            if actual != test.0 {
                 panic!(
                     "In test INTERVAL '{}' {}\n actual: {:?} \n expected: {:?}",
                     test.1, test.2, actual, test.0
@@ -2223,74 +2491,54 @@ mod test {
             (
                 "1 year 2 years",
                 Second,
-                "Invalid INTERVAL '1 year 2 years': YEAR field \
-                set twice",
+                "YEAR field set twice",
             ),
             (
                 "1-2 3-4",
                 Second,
-                "Invalid INTERVAL '1-2 3-4': YEAR or MONTH field \
-                set twice",
+                "YEAR or MONTH field set twice",
             ),
             (
                 "1-2 3 year",
                 Second,
-                "Invalid INTERVAL '1-2 3 year': YEAR field set twice",
+                "YEAR field set twice",
             ),
             (
                 "1-2 3",
                 Month,
-                "Invalid INTERVAL '1-2 3': MONTH field set twice",
+                "MONTH field set twice",
             ),
             (
                 "1-2 3:4 5",
                 Second,
-                "Invalid INTERVAL '1-2 3:4 5': SECOND field set twice",
+                "SECOND field set twice",
             ),
             (
                 "1:2:3.4 5-6 7",
                 Year,
-                "Invalid INTERVAL '1:2:3.4 5-6 7': YEAR field set twice",
+                "YEAR field set twice",
             ),
             (
                 "-:::::1.27",
                 Second,
-                "Invalid INTERVAL '-:::::1.27': Invalid syntax at \
+                "Invalid syntax at \
                 offset 7: provided Colon but expected None",
             ),
             (
                 "-1 ::.27",
                 Second,
-                "Invalid INTERVAL '-1 ::.27': cannot determine format of all parts. \
-                Add explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
-            ),
-            (
-                "100-13",
-                Second,
-                "Invalid INTERVAL '100-13': MONTH field out range; must be < 12, have 13",
-            ),
-            (
-                "100-11 366 250:61",
-                Second,
-                "Invalid INTERVAL '100-11 366 250:61': MINUTE field out range; \
-                must be < 60, have 61",
-            ),
-            (
-                "100-11 366 250:59:61",
-                Second,
-                "Invalid INTERVAL '100-11 366 250:59:61': SECOND field out range; \
-                must be < 60, have 61",
+                "Cannot determine format of all parts. Add explicit time components, e.g. \
+                INTERVAL '1 day' or INTERVAL '1' DAY",
             ),
             (
                 "1:2:3.4.5",
                 Second,
-                "Invalid INTERVAL '1:2:3.4.5': Invalid syntax at offset 7: provided \
-                Dot but expected None",
+                "Invalid syntax at offset 7: provided Dot but expected None",
             ),
             (
                 "1+2:3.4",
                 Second,
-                "Invalid date-time type string '1+2:3.4': cannot determine format",
+                "Cannot determine format of all parts",
             ),
             (
                 "1x2:3.4",
@@ -2305,29 +2553,28 @@ mod test {
             (
                 "1-2 hour",
                 Second,
-                "Invalid INTERVAL '1-2 hour': Hour must be preceeded by a number, e.g. '1Hour'",
+                "Hour must be preceeded by a number, e.g. '1Hour'",
             ),
             (
                 "1-2hour",
                 Second,
-                "Invalid INTERVAL '1-2hour': Invalid syntax at offset 3: provided TimeUnit(Hour) \
-                but expected Space",
+                "Invalid syntax at offset 3: provided TimeUnit(Hour) but expected Space",
             ),
             (
                 "1-2 3:4 5 second",
                 Second,
-                "Invalid INTERVAL '1-2 3:4 5 second': SECOND field set twice",
+                "SECOND field set twice",
             ),
             (
                 "1-2 5 second 3:4",
                 Second,
-                "Invalid INTERVAL '1-2 5 second 3:4': HOUR, MINUTE, SECOND field set twice",
+                "HOUR, MINUTE, SECOND field set twice",
             ),
             (
                 "1 2-3 4:5",
                 Day,
-                "Invalid INTERVAL '1 2-3 4:5': cannot determine format of all parts. Add \
-                explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
+                "Cannot determine format of all parts. Add explicit time components, e.g. \
+                INTERVAL '1 day' or INTERVAL '1' DAY",
             ),
             (
                 "9223372036854775808 months",
@@ -2351,7 +2598,7 @@ mod test {
             ),
         ];
         for test in test_cases.iter() {
-            match build_parsed_datetime_interval(test.0, test.1) {
+            match ParsedDateTime::build_parsed_datetime_interval(test.0, test.1) {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(pdt) => panic!(
                     "Test INTERVAL '{}' {} passed when expected to fail with {}, generated ParsedDateTime {:?}",
@@ -2527,6 +2774,303 @@ mod test {
                 Ok(t) => panic!("Test passed when expected to fail test case: {} parsed tz offset (seconds): {}", test, t),
                 Err(e) => println!("{}", e),
             }
+        }
+    }
+}
+
+#[test]
+fn test_parseddatetime_add_field() {
+    use DateTimeField::*;
+    let pdt_unit = ParsedDateTime {
+        year: Some(DateTimeFieldValue::new(1, 0)),
+        month: Some(DateTimeFieldValue::new(2, 0)),
+        day: Some(DateTimeFieldValue::new(2, 0)),
+        hour: Some(DateTimeFieldValue::new(3, 0)),
+        minute: Some(DateTimeFieldValue::new(4, 0)),
+        second: Some(DateTimeFieldValue::new(5, 0)),
+        ..Default::default()
+    };
+
+    let pdt_frac = ParsedDateTime {
+        year: Some(DateTimeFieldValue::new(1, 555_555_555)),
+        month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+        day: Some(DateTimeFieldValue::new(2, 555_555_555)),
+        hour: Some(DateTimeFieldValue::new(3, 555_555_555)),
+        minute: Some(DateTimeFieldValue::new(4, 555_555_555)),
+        second: Some(DateTimeFieldValue::new(5, 555_555_555)),
+        ..Default::default()
+    };
+
+    let pdt_frac_neg = ParsedDateTime {
+        year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+        month: Some(DateTimeFieldValue::new(-2, -555_555_555)),
+        day: Some(DateTimeFieldValue::new(-2, -555_555_555)),
+        hour: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+        minute: Some(DateTimeFieldValue::new(-4, -555_555_555)),
+        second: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+        ..Default::default()
+    };
+
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Year, (12, 0, 0));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Month, (2, 0, 0));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Day, (0, 2 * 60 * 60 * 24, 0));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Hour, (0, 3 * 60 * 60, 0));
+    run_test_parseddatetime_add_field(pdt_unit.clone(), Minute, (0, 4 * 60, 0));
+    run_test_parseddatetime_add_field(pdt_unit, Second, (0, 5, 0));
+    run_test_parseddatetime_add_field(pdt_frac.clone(), Year, (18, 0, 0));
+    run_test_parseddatetime_add_field(
+        pdt_frac.clone(),
+        Month,
+        (
+            2,
+            // 16 days 15:59:59.99856
+            16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59,
+            998_560_000,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac.clone(),
+        Day,
+        (
+            0,
+            // 2 days 13:19:59.999952
+            2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59,
+            999_952_000,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac.clone(),
+        Hour,
+        (
+            0,
+            // 03:33:19.999998
+            3 * 60 * 60 + 33 * 60 + 19,
+            999_998_000,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac.clone(),
+        Minute,
+        (
+            0,
+            // 00:04:33.333333
+            4 * 60 + 33,
+            333_333_300,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac,
+        Second,
+        (
+            0,
+            // 00:00:05.555556
+            5,
+            555_555_555,
+        ),
+    );
+    run_test_parseddatetime_add_field(pdt_frac_neg.clone(), Year, (-18, 0, 0));
+    run_test_parseddatetime_add_field(
+        pdt_frac_neg.clone(),
+        Month,
+        (
+            -2,
+            // -16 days -15:59:59.99856
+            -(16 * 60 * 60 * 24 + 15 * 60 * 60 + 59 * 60 + 59),
+            -998_560_000,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac_neg.clone(),
+        Day,
+        (
+            0,
+            // -2 days 13:19:59.999952
+            -(2 * 60 * 60 * 24 + 13 * 60 * 60 + 19 * 60 + 59),
+            -999_952_000,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac_neg.clone(),
+        Hour,
+        (
+            0,
+            // -03:33:19.999998
+            -(3 * 60 * 60 + 33 * 60 + 19),
+            -999_998_000,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac_neg.clone(),
+        Minute,
+        (
+            0,
+            // -00:04:33.333333
+            -(4 * 60 + 33),
+            -333_333_300,
+        ),
+    );
+    run_test_parseddatetime_add_field(
+        pdt_frac_neg,
+        Second,
+        (
+            0,
+            // -00:00:05.555556
+            -5,
+            -555_555_555,
+        ),
+    );
+
+    fn run_test_parseddatetime_add_field(
+        pdt: ParsedDateTime,
+        f: DateTimeField,
+        expected: (i64, i64, i64),
+    ) {
+        let mut res = (0, 0, 0);
+
+        pdt.add_field(f, &mut res.0, &mut res.1, &mut res.2)
+            .unwrap();
+
+        if res.0 != expected.0 || res.1 != expected.1 || res.2 != expected.2 {
+            panic!(
+                "test_parseddatetime_add_field failed \n actual: {:?} \n expected: {:?}",
+                res, expected
+            );
+        }
+    }
+}
+
+#[test]
+fn test_parseddatetime_compute_interval() {
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            year: Some(DateTimeFieldValue::new(1, 0)),
+            month: Some(DateTimeFieldValue::new(1, 0)),
+            ..Default::default()
+        },
+        Interval {
+            months: 13,
+            ..Default::default()
+        },
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            year: Some(DateTimeFieldValue::new(1, 0)),
+            month: Some(DateTimeFieldValue::new(-1, 0)),
+            ..Default::default()
+        },
+        Interval {
+            months: 11,
+            ..Default::default()
+        },
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            year: Some(DateTimeFieldValue::new(-1, 0)),
+            month: Some(DateTimeFieldValue::new(1, 0)),
+            ..Default::default()
+        },
+        Interval {
+            months: -11,
+            ..Default::default()
+        },
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            day: Some(DateTimeFieldValue::new(1, 0)),
+            hour: Some(DateTimeFieldValue::new(-2, 0)),
+            minute: Some(DateTimeFieldValue::new(-3, 0)),
+            second: Some(DateTimeFieldValue::new(-4, -500_000_000)),
+            ..Default::default()
+        },
+        // 21:56:55.5
+        Interval {
+            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            day: Some(DateTimeFieldValue::new(-1, 0)),
+            hour: Some(DateTimeFieldValue::new(2, 0)),
+            minute: Some(DateTimeFieldValue::new(3, 0)),
+            second: Some(DateTimeFieldValue::new(4, 500_000_000)),
+            ..Default::default()
+        },
+        // -21:56:55.5
+        Interval {
+            is_positive_dur: false,
+            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            day: Some(DateTimeFieldValue::new(1, 0)),
+            second: Some(DateTimeFieldValue::new(0, -270_000_000)),
+            ..Default::default()
+        },
+        // 23:59:59.73
+        Interval {
+            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
+            ..Default::default()
+        },
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            day: Some(DateTimeFieldValue::new(-1, 0)),
+            second: Some(DateTimeFieldValue::new(0, 270_000_000)),
+            ..Default::default()
+        },
+        // -23:59:59.73
+        Interval {
+            months: 0,
+            is_positive_dur: false,
+            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
+        },
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+            month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+            day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+            hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+            minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+            second: Some(DateTimeFieldValue::new(6, 555_555_555)),
+            ..Default::default()
+        },
+        // -1 year -4 months +13 days +07:07:53.220828
+        Interval {
+            months: -16,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 220_828_255),
+        },
+    );
+    run_test_parseddatetime_compute_interval(
+        ParsedDateTime {
+            year: Some(DateTimeFieldValue::new(-1, -555_555_555)),
+            month: Some(DateTimeFieldValue::new(2, 555_555_555)),
+            day: Some(DateTimeFieldValue::new(-3, -555_555_555)),
+            hour: Some(DateTimeFieldValue::new(4, 555_555_555)),
+            minute: Some(DateTimeFieldValue::new(-5, -555_555_555)),
+            second: Some(DateTimeFieldValue::new(6, 555_555_555)),
+            ..Default::default()
+        },
+        // -1 year -4 months +13 days +07:07:53.220828255
+        Interval {
+            months: -16,
+            is_positive_dur: true,
+            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 220_828_255),
+        },
+    );
+
+    fn run_test_parseddatetime_compute_interval(pdt: ParsedDateTime, expected: Interval) {
+        let actual = pdt.compute_interval().unwrap();
+
+        if actual != expected {
+            panic!(
+                "test_interval_compute_interval failed\n input {:?}\nactual {:?}\nexpected {:?}",
+                pdt, actual, expected
+            )
         }
     }
 }

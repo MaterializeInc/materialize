@@ -564,7 +564,7 @@ impl<'a> Iterator for DatumDictIter<'a> {
                 let key_tag = read_copy::<Tag>(self.data, &mut self.offset);
                 assert!(
                     key_tag == Tag::String,
-                    "Dict keys must be strings, got: {:?}",
+                    "Dict keys must be strings, got {:?}",
                     key_tag
                 );
                 let key = read_untagged_string(self.data, &mut self.offset);
