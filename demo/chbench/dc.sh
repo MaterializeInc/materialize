@@ -276,13 +276,13 @@ nuke_docker() {
 # Long-running load test
 load_test() {
     runv docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
-    runv docker-compose run peeker \
-         --queries loadtest
     runv docker-compose run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
         -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
         --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+    runv docker-compose run -d peeker \
+         --queries loadtest
 }
 
 # Generate changes for the demo
