@@ -14,8 +14,8 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZon
 use failure::{bail, format_err};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use sql_parser::ast::DateTimeField;
 
+use self::datetime::DateTimeField;
 use self::decimal::Significand;
 use crate::{ColumnType, DatumDict, DatumList};
 
@@ -1169,7 +1169,7 @@ mod test {
 
     #[test]
     fn test_interval_value_truncate_low_fields() {
-        use sql_parser::ast::DateTimeField::*;
+        use DateTimeField::*;
 
         let mut test_cases = [
             (Year, None, (321, 654_321, 321_000_000), (26 * 12, 0, 0)),
@@ -1237,7 +1237,7 @@ mod test {
 
     #[test]
     fn test_interval_value_truncate_high_fields() {
-        use sql_parser::ast::DateTimeField::*;
+        use DateTimeField::*;
 
         let mut test_cases = [
             (Year, (321, 654_321), (321, 654_321)),

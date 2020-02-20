@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
+use repr::datetime::DateTimeField;
 use repr::{strconv, Interval};
 
 #[test]
@@ -265,8 +268,7 @@ fn test_parse_interval_monthlike() {
 
 #[test]
 fn test_parse_interval_durationlike() {
-    use sql_parser::ast::DateTimeField::*;
-    use std::time::Duration;
+    use DateTimeField::*;
 
     run_test_parse_interval_durationlike(
         "10",
@@ -358,7 +360,7 @@ fn test_parse_interval_durationlike() {
     }
     fn run_test_parse_interval_durationlike_from_sql(
         s: &str,
-        d: sql_parser::ast::DateTimeField,
+        d: DateTimeField,
         expected: Interval,
     ) {
         let actual = strconv::parse_interval_w_disambiguator(s, d).unwrap();
@@ -368,8 +370,7 @@ fn test_parse_interval_durationlike() {
 
 #[test]
 fn test_parse_interval_full() {
-    use sql_parser::ast::DateTimeField::*;
-    use std::time::Duration;
+    use DateTimeField::*;
 
     run_test_parse_interval_full(
         "6-7 1 2:3:4.5",
@@ -439,11 +440,7 @@ fn test_parse_interval_full() {
         let actual = strconv::parse_interval(s).unwrap();
         assert_eq!(actual, expected);
     }
-    fn run_test_parse_interval_full_from_sql(
-        s: &str,
-        d: sql_parser::ast::DateTimeField,
-        expected: Interval,
-    ) {
+    fn run_test_parse_interval_full_from_sql(s: &str, d: DateTimeField, expected: Interval) {
         let actual = strconv::parse_interval_w_disambiguator(s, d).unwrap();
         assert_eq!(actual, expected);
     }

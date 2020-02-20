@@ -22,6 +22,8 @@
 
 use std::fmt;
 
+use repr::datetime::DateTimeField;
+
 use matches::assert_matches;
 use sql_parser::ast::*;
 use sql_parser::parser::*;

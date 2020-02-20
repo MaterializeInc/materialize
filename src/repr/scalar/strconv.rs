@@ -28,9 +28,8 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelik
 use failure::bail;
 
 use ore::fmt::FormatBuffer;
-use sql_parser::ast::DateTimeField;
 
-use crate::datetime::ParsedDateTime;
+use crate::datetime::{DateTimeField, ParsedDateTime};
 use crate::decimal::Decimal;
 use crate::jsonb::Jsonb;
 use crate::Interval;

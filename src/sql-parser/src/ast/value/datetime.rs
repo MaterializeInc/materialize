@@ -15,6 +15,8 @@
 
 use std::fmt;
 
+use repr::datetime::DateTimeField;
+
 use super::ValueError;
 
 /// An intermediate value for Intervals, which tracks all data from
@@ -45,120 +47,6 @@ impl Default for IntervalValue {
             precision_low: DateTimeField::Second,
             fsec_max_precision: None,
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub enum DateTimeField {
-    Year,
-    Month,
-    Day,
-    Hour,
-    Minute,
-    Second,
-}
-
-impl fmt::Display for DateTimeField {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self {
-            DateTimeField::Year => "YEAR",
-            DateTimeField::Month => "MONTH",
-            DateTimeField::Day => "DAY",
-            DateTimeField::Hour => "HOUR",
-            DateTimeField::Minute => "MINUTE",
-            DateTimeField::Second => "SECOND",
-        })
-    }
-}
-
-/// Iterate over `DateTimeField`s in descending significance
-impl IntoIterator for DateTimeField {
-    type Item = DateTimeField;
-    type IntoIter = DateTimeFieldIterator;
-    fn into_iter(self) -> DateTimeFieldIterator {
-        DateTimeFieldIterator(Some(self))
-    }
-}
-
-impl FromStr for DateTimeField {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_uppercase().as_ref() {
-            "YEAR" | "YEARS" | "Y" => Ok(Self::Year),
-            "MONTH" | "MONTHS" | "MON" | "MONS" => Ok(Self::Month),
-            "DAY" | "DAYS" | "D" => Ok(Self::Day),
-            "HOUR" | "HOURS" | "H" => Ok(Self::Hour),
-            "MINUTE" | "MINUTES" | "M" => Ok(Self::Minute),
-            "SECOND" | "SECONDS" | "S" => Ok(Self::Second),
-            _ => Err(format!("invalid DateTimeField: {}", s)),
-        }
-    }
-}
-
-impl DateTimeField {
-    /// Iterate the DateTimeField to the next value.
-    /// # Panics
-    /// - When called on Second
-    pub fn next_smallest(self) -> Self {
-        self.into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("Cannot get smaller DateTimeField than {}", self))
-    }
-    /// Iterate the DateTimeField to the prior value.
-    /// # Panics
-    /// - When called on Year
-    pub fn next_largest(self) -> Self {
-        self.into_iter()
-            .next_back()
-            .unwrap_or_else(|| panic!("Cannot get larger DateTimeField than {}", self))
-    }
-}
-
-/// An iterator over DateTimeFields
-///
-/// Always starts with the value smaller than the current one.
-///
-/// ```
-/// use sql_parser::ast::DateTimeField::*;
-/// let mut itr = Hour.into_iter();
-/// assert_eq!(itr.next(), Some(Minute));
-/// assert_eq!(itr.next(), Some(Second));
-/// assert_eq!(itr.next(), None);
-/// ```
-pub struct DateTimeFieldIterator(Option<DateTimeField>);
-
-/// Go through fields in descending significance order
-impl Iterator for DateTimeFieldIterator {
-    type Item = DateTimeField;
-    fn next(&mut self) -> Option<Self::Item> {
-        use DateTimeField::*;
-        self.0 = match self.0 {
-            Some(Year) => Some(Month),
-            Some(Month) => Some(Day),
-            Some(Day) => Some(Hour),
-            Some(Hour) => Some(Minute),
-            Some(Minute) => Some(Second),
-            Some(Second) => None,
-            None => None,
-        };
-        self.0.clone()
-    }
-}
-
-impl DoubleEndedIterator for DateTimeFieldIterator {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        use DateTimeField::*;
-        self.0 = match self.0 {
-            Some(Year) => None,
-            Some(Month) => Some(Year),
-            Some(Day) => Some(Month),
-            Some(Hour) => Some(Day),
-            Some(Minute) => Some(Hour),
-            Some(Second) => Some(Minute),
-            None => None,
-        };
-        self.0.clone()
     }
 }
 

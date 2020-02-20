@@ -49,6 +49,8 @@ pub mod visit_mut {
 use std::fmt;
 use std::str::FromStr;
 
+use repr::datetime::DateTimeField;
+
 pub use self::data_type::DataType;
 pub use self::ddl::{
     AlterTableOperation, ColumnDef, ColumnOption, ColumnOptionDef, TableConstraint,
@@ -58,7 +60,7 @@ pub use self::query::{
     Cte, Fetch, Join, JoinConstraint, JoinOperator, OrderByExpr, Query, Select, SelectItem,
     SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, Values,
 };
-pub use self::value::{DateTimeField, ExtractField, IntervalValue, Value};
+pub use self::value::{ExtractField, IntervalValue, Value};
 use std::path::PathBuf;
 
 struct DisplaySeparated<'a, T>
