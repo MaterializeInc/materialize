@@ -41,9 +41,9 @@ fn main() -> Result<()> {
     LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
         .target(Target::Stdout)
         .init();
-    info!("startup {}", Utc::now());
 
     let config = Args::from_cli()?;
+    info!("startup {}", Utc::now());
 
     // Launch metrics server.
     let runtime = tokio::runtime::Runtime::new().expect("creating tokio runtime failed");
