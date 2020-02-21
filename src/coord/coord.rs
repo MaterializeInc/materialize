@@ -346,6 +346,13 @@ where
     }
 
     pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
+        self.executor
+            .take()
+            .expect("serve called twice on coordinator")
+            .enter(|| self.serve_core(cmd_rx))
+    }
+
+    fn serve_core(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
         let (source_tx, source_rx) = std::sync::mpsc::channel();
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
         let _timestamper_thread = if let Some(config) = &self.timestamp_config {
@@ -362,164 +369,158 @@ where
             None
         };
 
-        self.executor
-            .take()
-            .expect("serve called twice on coordinator")
-            .enter(|| {
-                let streams: Vec<Box<dyn Stream<Item = Result<Message, comm::Error>> + Unpin>> = vec![
-                                        Box::new(
-                                            cmd_rx
-                                                .map(Message::Command)
-                                                .chain(stream::once(future::ready(Message::Shutdown)))
-                                                .map(Ok),
-                                        ),
-                                        Box::new(self.feedback_rx.take().unwrap().map_ok(Message::Worker)),
-                                    ];
+        let streams: Vec<Box<dyn Stream<Item = Result<Message, comm::Error>> + Unpin>> = vec![
+            Box::new(
+                cmd_rx
+                    .map(Message::Command)
+                    .chain(stream::once(future::ready(Message::Shutdown)))
+                    .map(Ok),
+            ),
+            Box::new(self.feedback_rx.take().unwrap().map_ok(Message::Worker)),
+        ];
 
-                let mut messages = stream::select_all(streams);
+        let mut messages = stream::select_all(streams);
 
-               while let Some(msg) = block_on(messages.next()) {
-                    // Check for timestamp updates
-                    while let Ok(update) = source_rx.try_recv() {
-                        match update {
-                            TimestampMessage::BatchedUpdate(timestamp, updates) => {
-                                for (id, offset) in updates {
-                                    broadcast(
-                                        &mut self.broadcast_tx,
-                                        SequencedCommand::AdvanceSourceTimestamp {
-                                            id,
-                                            timestamp,
-                                            offset,
-                                        },
-                                    );
-                                }
-                            }
-                            TimestampMessage::Update(id, timestamp, offset) => {
-                                broadcast(
-                                    &mut self.broadcast_tx,
-                                    SequencedCommand::AdvanceSourceTimestamp {
-                                        id,
-                                        timestamp,
-                                        offset,
-                                    },
-                                );
-                            },
-                            _ => {}
+        while let Some(msg) = block_on(messages.next()) {
+            // Check for timestamp updates
+            while let Ok(update) = source_rx.try_recv() {
+                match update {
+                    TimestampMessage::BatchedUpdate(timestamp, updates) => {
+                        for (id, offset) in updates {
+                            broadcast(
+                                &mut self.broadcast_tx,
+                                SequencedCommand::AdvanceSourceTimestamp {
+                                    id,
+                                    timestamp,
+                                    offset,
+                                },
+                            );
                         }
                     }
+                    TimestampMessage::Update(id, timestamp, offset) => {
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::AdvanceSourceTimestamp {
+                                id,
+                                timestamp,
+                                offset,
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            }
 
-                    match msg.expect("coordinator message receiver failed") {
-                        Message::Command(Command::Startup {
-                            session,
-                            tx,
-                        }) => {
-                            let mut messages = vec![];
-                            if self.catalog.database_resolver(session.database()).is_err() {
-                                messages.push(StartupMessage::UnknownSessionDatabase);
-                            }
-                            let _ = tx.send(Response { result: Ok(messages), session });
-                        }
-                        Message::Command(Command::Execute {
-                            portal_name,
-                            session,
-                            conn_id,
-                            tx,
-                        }) => {
-                            let result = self.handle_begin_execute(session, portal_name, tx);
-                            match result {
-                                MaybeFuture::Immediate(val) => {
-                                    let (mut session, tx, result) = val.unwrap();
-                                    let result = result.and_then(|plan| {
-                                        self.sequence_plan(&mut session, plan, conn_id)
-                                    });
-                                    let _ = tx.send(Response { result, session });
-                                }
-                                MaybeFuture::Future(fut) => {
-                                    let (self_tx, self_rx) = futures::channel::oneshot::channel();
-                                    let self_rx = stream::once(self_rx.map(|res| res.unwrap()));
-                                    messages.push(Box::new(self_rx));
-                                    let fut = async move {
-                                        let (session, tx, result) = fut.await;
-                                        self_tx
-                                            .send(Ok(Message::PlanReady(
-                                                session, tx, result, conn_id,
-                                            )))
-                                            .map_err(|_e| "(comm error)")
-                                            .expect("Unexpected coordinator communication failure");
-                                    };
-                                    tokio::spawn(fut);
-                                }
-                            }
-                        }
-
-                        Message::PlanReady(mut session, tx, result, conn_id) => {
+            match msg.expect("coordinator message receiver failed") {
+                Message::Command(Command::Startup { session, tx }) => {
+                    let mut messages = vec![];
+                    if self.catalog.database_resolver(session.database()).is_err() {
+                        messages.push(StartupMessage::UnknownSessionDatabase);
+                    }
+                    let _ = tx.send(Response {
+                        result: Ok(messages),
+                        session,
+                    });
+                }
+                Message::Command(Command::Execute {
+                    portal_name,
+                    session,
+                    conn_id,
+                    tx,
+                }) => {
+                    let result = self.handle_begin_execute(session, portal_name, tx);
+                    match result {
+                        MaybeFuture::Immediate(val) => {
+                            let (mut session, tx, result) = val.unwrap();
                             let result = result
                                 .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
-
                             let _ = tx.send(Response { result, session });
                         }
-
-                        Message::Command(Command::Parse {
-                            name,
-                            sql,
-                            mut session,
-                            tx,
-                        }) => {
-                            let result = self.handle_parse(&mut session, name, sql);
-                            let _ = tx.send(Response { result, session });
-                        }
-
-                        Message::Command(Command::CancelRequest { conn_id }) => {
-                            self.sequence_cancel(conn_id);
-                        }
-
-                        Message::Command(Command::DumpCatalog { tx }) => {
-                            let _ = tx.send(self.catalog.dump());
-                        }
-
-                        Message::Shutdown => {
-                            ts_tx.send(TimestampMessage::Shutdown).unwrap();
-                            self.shutdown();
-                            break;
-                        }
-
-                        Message::Worker(WorkerFeedbackWithMeta {
-                            worker_id: _,
-                            message: WorkerFeedback::FrontierUppers(updates),
-                        }) => {
-                            for (name, changes) in updates {
-                                self.update_upper(&name, changes);
-                            }
-                            self.maintenance();
-                        }
-
-                        Message::Worker(WorkerFeedbackWithMeta {
-                            worker_id: _,
-                            message: WorkerFeedback::DroppedSource(source_id)}) => {
-                            // Notify timestamping thread that source has been dropped
-                            ts_tx
-                                .send(TimestampMessage::DropInstance(source_id))
-                                .expect("Failed to send Drop Instance notice to timestamper");
-                        },
-                        Message::Worker(WorkerFeedbackWithMeta {
-                                            worker_id: _,
-                                            message: WorkerFeedback::CreateSource(source_id,sc,consistency)}) => {
-                            ts_tx
-                                .send(TimestampMessage::Add(source_id, sc, consistency))
-                                .expect("Failed to send CREATE Instance notice to timestamper");
+                        MaybeFuture::Future(fut) => {
+                            let (self_tx, self_rx) = futures::channel::oneshot::channel();
+                            let self_rx = stream::once(self_rx.map(|res| res.unwrap()));
+                            messages.push(Box::new(self_rx));
+                            let fut = async move {
+                                let (session, tx, result) = fut.await;
+                                self_tx
+                                    .send(Ok(Message::PlanReady(session, tx, result, conn_id)))
+                                    .map_err(|_e| "(comm error)")
+                                    .expect("Unexpected coordinator communication failure");
+                            };
+                            tokio::spawn(fut);
                         }
                     }
                 }
 
-                // Cleanly drain any pending messages from the worker before shutting
-                // down.
-                while let Some(msg) = block_on(messages.next()) {
-                    match msg.expect("coordinator message receiver failed") {
-                        Message::Command(_) | Message::Shutdown => unreachable!(),
-                        Message::Worker(_) | Message::PlanReady(_, _, _, _) => (),
-                   }
+                Message::PlanReady(mut session, tx, result, conn_id) => {
+                    let result =
+                        result.and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
+
+                    let _ = tx.send(Response { result, session });
                 }
-            });
+
+                Message::Command(Command::Parse {
+                    name,
+                    sql,
+                    mut session,
+                    tx,
+                }) => {
+                    let result = self.handle_parse(&mut session, name, sql);
+                    let _ = tx.send(Response { result, session });
+                }
+
+                Message::Command(Command::CancelRequest { conn_id }) => {
+                    self.sequence_cancel(conn_id);
+                }
+
+                Message::Command(Command::DumpCatalog { tx }) => {
+                    let _ = tx.send(self.catalog.dump());
+                }
+
+                Message::Shutdown => {
+                    ts_tx.send(TimestampMessage::Shutdown).unwrap();
+                    self.shutdown();
+                    break;
+                }
+
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id: _,
+                    message: WorkerFeedback::FrontierUppers(updates),
+                }) => {
+                    for (name, changes) in updates {
+                        self.update_upper(&name, changes);
+                    }
+                    self.maintenance();
+                }
+
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id: _,
+                    message: WorkerFeedback::DroppedSource(source_id),
+                }) => {
+                    // Notify timestamping thread that source has been dropped
+                    ts_tx
+                        .send(TimestampMessage::DropInstance(source_id))
+                        .expect("Failed to send Drop Instance notice to timestamper");
+                }
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id: _,
+                    message: WorkerFeedback::CreateSource(source_id, sc, consistency),
+                }) => {
+                    ts_tx
+                        .send(TimestampMessage::Add(source_id, sc, consistency))
+                        .expect("Failed to send CREATE Instance notice to timestamper");
+                }
+            }
+        }
+
+        // Cleanly drain any pending messages from the worker before shutting
+        // down.
+        while let Some(msg) = block_on(messages.next()) {
+            match msg.expect("coordinator message receiver failed") {
+                Message::Command(_) | Message::Shutdown => unreachable!(),
+                Message::Worker(_) | Message::PlanReady(_, _, _, _) => (),
+            }
+        }
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
