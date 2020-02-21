@@ -67,6 +67,18 @@ main() {
                 usage
             fi
             restart "$@" ;;
+        web)
+            local page="${1:-_}" && shift
+            case "$page" in
+                grafana) runv open http://localhost:3000/d/mz;;
+                metabase) runv open http://localhost:3030;;
+                kafka) runv open http://localhost:9021;;
+                *)
+                    echo "$(uw ERROR:) Unexpected 'web' argument: $(uw "$page")"
+                    usage
+                    ;;
+            esac
+            ;;
         *) usage ;;
     esac
 }
@@ -110,6 +122,9 @@ Possible COMMANDs:
     `us load-test \[--up\]`     Run a long-running load test, modify this file to change parameters
                               With --up: also run `uo :init:` and start all dependencies
     `us demo-load`            Generate a lot of changes to be used in the demo
+
+ Helpers:
+    `us web \(grafana\|metabase\|kafka\)`    Open service page in a web browser
 
  Danger Zone:
 
