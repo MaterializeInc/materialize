@@ -1,0 +1,33 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+version: '3.7'
+services:
+  healthcheck:
+    build: metabase-healthcheck
+    depends_on: [metabase]
+  metabase:
+    image: materialize/metabase:v0.0.5
+    depends_on: [materialized]
+  materialized:
+    image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
+    command: --logging-granularity=10ms
+    depends_on: [kafka]
+    ulimits:
+      nofile:
+        soft: "65536"
+        hard: "65536"
+  zookeeper:
+    image: zookeeper:3.4.13
+  kafka:
+    image: wurstmeister/kafka:2.12-2.2.0
+    environment:
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_HOST_NAME=kafka
+    depends_on: [zookeeper]

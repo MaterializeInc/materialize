@@ -45,6 +45,9 @@ use coord::ExecuteResponse;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::jsonb::Jsonb;
+use repr::strconv::{
+    format_date, format_interval, format_time, format_timestamp, format_timestamptz,
+};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use sql::{Session, Statement};
 use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -333,11 +336,6 @@ fn format_row(
                 (Type::Text, Datum::Int32(i)) => format!("{}", i),
                 (Type::Text, Datum::Int64(i)) => format!("{}", i),
                 (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
-                (Type::Text, Datum::Date(d)) => d.to_string(),
-                (Type::Text, Datum::Time(t)) => t.to_string(),
-                (Type::Text, Datum::Timestamp(d)) => d.to_string(),
-                (Type::Text, Datum::TimestampTz(d)) => d.to_string(),
-                (Type::Text, Datum::Interval(iv)) => iv.to_string(),
                 // Bytes are printed as text iff they are valid UTF-8. This
                 // seems guaranteed to confuse everyone, but it is required for
                 // compliance with the CockroachDB sqllogictest runner. [0]
@@ -347,6 +345,18 @@ fn format_row(
                     Ok(s) => s.to_owned(),
                     Err(_) => format!("{:?}", buf),
                 },
+                (Type::Text, ..) => {
+                    let mut buf = String::new();
+                    match datum {
+                        Datum::Date(d) => format_date(&mut buf, d),
+                        Datum::Time(t) => format_time(&mut buf, t),
+                        Datum::Timestamp(d) => format_timestamp(&mut buf, d),
+                        Datum::TimestampTz(d) => format_timestamptz(&mut buf, d),
+                        Datum::Interval(iv) => format_interval(&mut buf, iv),
+                        other => panic!("Don't know how to format {:?}", (slt_typ, other)),
+                    }
+                    buf
+                }
                 other => panic!("Don't know how to format {:?}", other),
             }
         }

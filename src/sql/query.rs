@@ -32,8 +32,8 @@ use failure::{bail, ensure, format_err, ResultExt};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, ExtractField, Function, Ident, JoinConstraint, JoinOperator,
-    ObjectName, ParsedDate, ParsedTime, ParsedTimestamp, Query, Select, SelectItem, SetExpr,
-    SetOperator, TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, TableAlias, TableFactor,
+    TableWithJoins, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -41,7 +41,7 @@ use ::expr::{DateTruncTo, Id};
 use catalog::names::PartialName;
 use dataflow_types::RowSetFinishing;
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
+use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
@@ -2016,7 +2016,7 @@ fn plan_function<'a>(
             "replace" => {
                 if sql_func.args.len() != 3 {
                     bail!(
-                        "replace expects exactly three arguments, got: {:?}",
+                        "replace expects exactly three arguments, got {:?}",
                         sql_func.args.len()
                     )
                 }
@@ -2857,84 +2857,21 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
         },
-        Value::Date(_, ParsedDate { year, month, day }) => (
-            Datum::from_ymd(
-                (*year)
-                    .try_into()
-                    .map_err(|e| format_err!("Year is too large {}: {}", year, e))?,
-                *month,
-                *day,
-            )?,
-            ScalarType::Date,
-        ),
-        Value::Timestamp(
-            _,
-            ParsedTimestamp {
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-                nano,
-                ..
-            },
-        ) => (
-            Datum::from_ymd_hms_nano(
-                (*year)
-                    .try_into()
-                    .map_err(|e| format_err!("Year is too large {}: {}", year, e))?,
-                *month,
-                *day,
-                *hour,
-                *minute,
-                *second,
-                *nano,
-            )?,
+        Value::Date(d) => (Datum::Date(strconv::parse_date(d)?), ScalarType::Date),
+        Value::Timestamp(ts) => (
+            Datum::Timestamp(strconv::parse_timestamp(ts)?),
             ScalarType::Timestamp,
         ),
-        Value::TimestampTz(
-            _,
-            ParsedTimestamp {
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second,
-                nano,
-                timezone_offset_second,
-            },
-        ) => (
-            Datum::from_ymd_hms_nano_tz_offset(
-                (*year)
-                    .try_into()
-                    .map_err(|e| format_err!("Year is too large {}: {}", year, e))?,
-                *month,
-                *day,
-                *hour,
-                *minute,
-                *second,
-                *nano,
-                *timezone_offset_second,
-            )?,
+        Value::TimestampTz(ts) => (
+            Datum::TimestampTz(strconv::parse_timestamptz(ts)?),
             ScalarType::TimestampTz,
         ),
-        Value::Time(
-            _,
-            ParsedTime {
-                hour,
-                minute,
-                second,
-                nano,
-            },
-        ) => (
-            Datum::from_hms_nano(*hour, *minute, *second, *nano)?,
-            ScalarType::Time,
-        ),
+        Value::Time(t) => (Datum::Time(strconv::parse_time(t)?), ScalarType::Time),
         Value::Interval(iv) => {
-            let i = iv.compute_interval()?;
-            (Datum::Interval(i.into()), ScalarType::Interval)
+            let mut i = strconv::parse_interval_w_disambiguator(&iv.value, iv.precision_low)?;
+            i.truncate_high_fields(iv.precision_high);
+            i.truncate_low_fields(iv.precision_low, iv.fsec_max_precision)?;
+            (Datum::Interval(i), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Unknown),
         Value::Array(_) => bail!("ARRAY literals are not supported: {}", l.to_string()),
@@ -3189,6 +3126,7 @@ where
         (String, Float64) => expr.call_unary(CastStringToFloat64),
         (String, Decimal(_, s)) => expr.call_unary(CastStringToDecimal(s)),
         (String, Date) => expr.call_unary(CastStringToDate),
+        (String, Time) => expr.call_unary(CastStringToTime),
         (String, Timestamp) => expr.call_unary(CastStringToTimestamp),
         (String, TimestampTz) => expr.call_unary(CastStringToTimestampTz),
         (String, Interval) => expr.call_unary(CastStringToInterval),
@@ -3322,6 +3260,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
             ScalarType::Decimal(precision as u8, scale as u8)
         }
         DataType::Date => ScalarType::Date,
+        DataType::Time => ScalarType::Time,
         DataType::Timestamp => ScalarType::Timestamp,
         DataType::TimestampTz => ScalarType::TimestampTz,
         DataType::Interval => ScalarType::Interval,
@@ -3332,7 +3271,6 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         | other @ DataType::Blob(_)
         | other @ DataType::Clob(_)
         | other @ DataType::Regclass
-        | other @ DataType::Time
         | other @ DataType::TimeTz
         | other @ DataType::Uuid
         | other @ DataType::Varbinary(_) => bail!("Unexpected SQL type: {:?}", other),

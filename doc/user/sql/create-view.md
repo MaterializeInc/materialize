@@ -102,7 +102,7 @@ This view is useful only in as much as it is easier to type
 
 However, it's important to note that you could only `SELECT` from this view:
 
-- In the definition of [`CREATE MATERIALIZED VIEW`](../create-materialized-view) statements.
+- In the definition of [`CREATE MATERIALIZED VIEW`](../create-materialized-view) or [`CREATE VIEW`](../create-view) statements.
 - If `region`, `user`, and `purchase` had access to materialized data (i.e.
   indexes) directly or transitively.
 

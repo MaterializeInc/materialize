@@ -11,14 +11,15 @@ use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-use failure::format_err;
+use failure::{bail, format_err};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use sql_parser::ast::Interval as SqlInterval;
 
+use self::datetime::DateTimeField;
 use self::decimal::Significand;
 use crate::{ColumnType, DatumDict, DatumList};
 
+pub mod datetime;
 pub mod decimal;
 pub mod jsonb;
 pub mod regex;
@@ -421,12 +422,6 @@ impl From<chrono::Duration> for Datum<'static> {
     }
 }
 
-impl From<SqlInterval> for Datum<'static> {
-    fn from(other: SqlInterval) -> Datum<'static> {
-        Datum::Interval(other.into())
-    }
-}
-
 impl From<Interval> for Datum<'static> {
     fn from(other: Interval) -> Datum<'static> {
         Datum::Interval(other)
@@ -728,7 +723,9 @@ impl fmt::Display for ColumnType {
     }
 }
 
-/// Inlined from [`sqlparser::ast::Interval`] so that we can impl deserialize, ord
+/// An interval of time meant to express SQL intervals.
+///
+/// Obtained by parsing an `INTERVAL '<value>' <unit> [TO <precision>]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
 pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
@@ -802,15 +799,98 @@ impl Interval {
         let ns = f64::from(self.duration.subsec_nanos()) / 1e9;
         s + ns
     }
+
+    /// Truncate the "head" of the interval, removing all time units greater than `f`.
+    pub fn truncate_high_fields(&mut self, f: DateTimeField) {
+        use std::time::Duration;
+        match f {
+            DateTimeField::Year => {}
+            DateTimeField::Month => self.months %= 12,
+            DateTimeField::Day => self.months = 0,
+            hms => {
+                self.months = 0;
+                self.duration = Duration::new(
+                    self.duration.as_secs() % seconds_multiplier(hms.next_largest()),
+                    self.duration.subsec_nanos(),
+                );
+            }
+        }
+    }
+
+    /// Truncate the "tail" of the interval, removing all time units less than `f`.
+    /// # Arguments
+    /// - `f`: Round the interval down to the specified time unit.
+    /// - `fsec_max_precision`: If `Some(x)`, keep only `x` places of nanosecond precision.
+    ///    Must be `(0,6)`.
+    ///
+    /// # Errors
+    /// - If `fsec_max_precision` is not None or within (0,6).
+    pub fn truncate_low_fields(
+        &mut self,
+        f: DateTimeField,
+        fsec_max_precision: Option<u64>,
+    ) -> Result<(), failure::Error> {
+        use std::time::Duration;
+        use DateTimeField::*;
+        match f {
+            Year => {
+                self.months -= self.months % 12;
+                self.duration = Duration::new(0, 0);
+            }
+            Month => {
+                self.duration = Duration::new(0, 0);
+            }
+            // Round nanoseconds.
+            Second => {
+                let default_precision = 6;
+                let precision = match fsec_max_precision {
+                    Some(p) => p,
+                    None => default_precision,
+                };
+
+                if precision > default_precision {
+                    bail!(
+                        "SECOND precision must be (0, 6), have SECOND({})",
+                        precision
+                    )
+                }
+
+                let mut nanos = self.duration.subsec_nanos();
+
+                // Check if value should round up to nearest fractional place.
+                let remainder = nanos % 10_u32.pow(9 - precision as u32);
+                if remainder / 10_u32.pow(8 - precision as u32) > 4 {
+                    nanos += 10_u32.pow(9 - precision as u32);
+                }
+
+                self.duration = Duration::new(self.duration.as_secs(), nanos - remainder);
+            }
+            dhm => {
+                println!("self.duration.as_secs() {}", self.duration.as_secs());
+                println!("seconds_multiplier(dhm) {}", seconds_multiplier(dhm));
+                println!(
+                    "self.duration.as_secs() / seconds_multiplier(dhm) {}",
+                    self.duration.as_secs() - (self.duration.as_secs() % seconds_multiplier(dhm))
+                );
+                self.duration = Duration::new(
+                    self.duration.as_secs() - self.duration.as_secs() % (seconds_multiplier(dhm)),
+                    0,
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
-impl From<SqlInterval> for Interval {
-    fn from(other: SqlInterval) -> Interval {
-        Interval {
-            months: other.months,
-            duration: other.duration,
-            is_positive_dur: other.is_positive_dur,
-        }
+/// Returns the number of seconds in a single unit of `field`.
+fn seconds_multiplier(field: DateTimeField) -> u64 {
+    use DateTimeField::*;
+    match field {
+        Day => 60 * 60 * 24,
+        Hour => 60 * 60,
+        Minute => 60,
+        Second => 1,
+        _other => unreachable!("Do not call with a non-duration field"),
     }
 }
 
@@ -1085,5 +1165,109 @@ mod test {
             "-2 years -2 months -00:45:00"
         );
         assert_eq!(&mon_dur(-26, false, 6), "-2 years -2 months -00:00:06");
+    }
+
+    #[test]
+    fn test_interval_value_truncate_low_fields() {
+        use DateTimeField::*;
+
+        let mut test_cases = [
+            (Year, None, (321, 654_321, 321_000_000), (26 * 12, 0, 0)),
+            (Month, None, (321, 654_321, 321_000_000), (321, 0, 0)),
+            (
+                Day,
+                None,
+                (321, 654_321, 321_000_000),
+                (321, 7 * 60 * 60 * 24, 0), // months: 321, duration: 604800s, is_positive_dur: true
+            ),
+            (
+                Hour,
+                None,
+                (321, 654_321, 321_000_000),
+                (321, 181 * 60 * 60, 0),
+            ),
+            (
+                Minute,
+                None,
+                (321, 654_321, 321_000_000),
+                (321, 10905 * 60, 0),
+            ),
+            (
+                Second,
+                None,
+                (321, 654_321, 321_000_000),
+                (321, 654_321, 321_000_000),
+            ),
+            (
+                Second,
+                Some(1),
+                (321, 654_321, 321_000_000),
+                (321, 654_321, 300_000_000),
+            ),
+            (
+                Second,
+                Some(0),
+                (321, 654_321, 321_000_000),
+                (321, 654_321, 0),
+            ),
+        ];
+
+        for test in test_cases.iter_mut() {
+            let mut i = Interval {
+                months: (test.2).0,
+                duration: std::time::Duration::new((test.2).1, (test.2).2),
+                is_positive_dur: true,
+            };
+            let j = Interval {
+                months: (test.3).0,
+                duration: std::time::Duration::new((test.3).1, (test.3).2),
+                is_positive_dur: true,
+            };
+
+            i.truncate_low_fields(test.0, test.1).unwrap();
+
+            if i != j {
+                panic!(
+                "test_interval_value_truncate_low_fields failed on {} \n actual: {:?} \n expected: {:?}",
+                test.0, i, j
+            );
+            }
+        }
+    }
+
+    #[test]
+    fn test_interval_value_truncate_high_fields() {
+        use DateTimeField::*;
+
+        let mut test_cases = [
+            (Year, (321, 654_321), (321, 654_321)),
+            (Month, (321, 654_321), (9, 654_321)),
+            (Day, (321, 654_321), (0, 654_321)),
+            (Hour, (321, 654_321), (0, 654_321 % (60 * 60 * 24))),
+            (Minute, (321, 654_321), (0, 654_321 % (60 * 60))),
+            (Second, (321, 654_321), (0, 654_321 % 60)),
+        ];
+
+        for test in test_cases.iter_mut() {
+            let mut i = Interval {
+                months: (test.1).0,
+                duration: std::time::Duration::new((test.1).1 as u64, 123),
+                is_positive_dur: true,
+            };
+            let j = Interval {
+                months: (test.2).0,
+                duration: std::time::Duration::new((test.2).1 as u64, 123),
+                is_positive_dur: true,
+            };
+
+            i.truncate_high_fields(test.0);
+
+            if i != j {
+                panic!(
+                "test_interval_value_truncate_high_fields failed on {} \n actual: {:?} \n expected: {:?}",
+                test.0, i, j
+            );
+            }
+        }
     }
 }

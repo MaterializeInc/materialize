@@ -13,4 +13,7 @@
   | sort_by(.name)
   | .[]
   | select(.manifest_path | startswith($pwd))
-  | "<tr class='module-item'><td><a href='\(.name | @uri)/index.html' class='mod'>\(.name | @html)</a></td><td>\(.description | @html)</td></tr>"
+  | .description as $desc
+  | .targets[]
+  | select(.kind | contains(["lib"]))
+  | "<tr class='module-item'><td><a href='\(.name | gsub("-"; "_") | @uri)/index.html' class='mod'>\(.name | @html)</a></td><td>\($desc | @html)</td></tr>"

@@ -142,7 +142,7 @@ Materialize expects each source to use to one Kafka topic, which is&mdash;in
     ```sql
     CREATE SOURCE server_source FROM FILE '/Users/sean/server.log'...
     ```
-- All data in file sources are treated as [`string`](./data-types/string).
+- All data in file sources are treated as [`string`](../types/string).
 
 ## Format details
 

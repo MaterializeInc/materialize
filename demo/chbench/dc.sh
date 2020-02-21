@@ -37,11 +37,6 @@ main() {
                 initialize_warehouse
             elif [[ $1 = :minimal-connected: || $1 = :mc: ]]; then
                 bring_up_source_data
-            elif [[ $1 = :load: ]]; then
-                bring_up_source_data
-                bring_up_introspection
-                dc_up peeker
-                load_test
             else
                 dc_up "$@"
             fi ;;
@@ -59,7 +54,8 @@ main() {
             fi
             dc_logs "$@" ;;
         nuke) nuke_docker ;;
-        load-test) load_test;;
+        clean-load-test) clean_load_test;;
+        load-test) load_test "$@";;
         demo-load) demo_load;;
         run)
             if [[ $# -eq 0 ]]; then
@@ -88,14 +84,11 @@ Possible COMMANDs:
     `us up \[SERVICE..\]`           With args: Start the list of services
                              With no args: Start the cluster, bringing up introspection and
                              metabase but no load generators.
-                             `uw WARNING:` you must still perform the 'chbench gen' step from the
-                             README at least once before we have any source chbench data.
+                             `uw WARNING:` you must perform the 'up :init:' step exactly once
                                Special args:
                                  `uo :init:` -- one-time setup that must be run before
                                  performing anything else or after running 'nuke'
                                  `uo :demo:` -- Set things up for a demo
-                                 `uo :load:` -- bring up everything and then start the
-                                 peek-metrics and load-test containers
                                  `uo :minimal-connected:`/`uo :mc:` -- bring up just mysql and
                                  kafka containers with no grafana.
     `us down \[SERVICE..\]`         With args: Stop the list of services, without removing them
@@ -108,10 +101,15 @@ Possible COMMANDs:
                                     connected and running
     `us restart \(SERVICE\|all\)`         Restart either SERVICE or all services. This preserves data in
                                     volumes (kafka, debezium, etc)
-    `us load-test`                     Run a long-running load test, modify this file to change parameters
-    `us demo-load`                     Generate a lot of changes to be used in the demo
     `us logs SERVICE \[NUM LINES..\]`    Equivalent of 'docker-compose logs SERVICE'. To print a limited
                                     number of log messages, enter the number after the SERVICE.
+
+ Load test commands:
+    `us clean-load-test`      Nuke and then run a long-running load test.
+                              One-stop shop, nothing else needs to be run.
+    `us load-test \[--up\]`     Run a long-running load test, modify this file to change parameters
+                              With --up: also run `uo :init:` and start all dependencies
+    `us demo-load`            Generate a lot of changes to be used in the demo
 
  Danger Zone:
 
@@ -128,7 +126,7 @@ Possible COMMANDs:
 # Default: start everything
 bring_up() {
     bring_up_source_data
-    echo "materialize and ingstion should be running fine, bringing up introspection and metabase"
+    echo "materialize and ingestion should be running fine, bringing up introspection and metabase"
     bring_up_introspection
     bring_up_metabase
 }
@@ -142,8 +140,9 @@ bring_up_source_data() {
         fi
     done
     dc_up materialized mysql
-    echo "Waiting for mysql to come up"
-    sleep 5
+    dc_run_wait_cmd \
+            mysql \
+            mysqlcli mysql --host=mysql --port=3306 --user=root --password=debezium -e 'select 1'
     runv docker-compose logs --tail 5 materialized
     runv docker-compose logs --tail 5 mysql
     dc_up connector
@@ -160,13 +159,13 @@ bring_up_metabase() {
     dc_up metabase
 }
 
-
 # Create source data and tables for MYSQL
 initialize_warehouse() {
     if ! (docker ps | grep chbench_mysql >/dev/null); then
         dc_up mysql
-        echo "sleeping for awhile to allow mysql to come up"
-        sleep 15
+        dc_run_wait_cmd \
+            mysql \
+            mysqlcli mysql --host=mysql --port=3306 --user=root --password=debezium -e 'select 1'
     fi
     runv docker-compose run chbench gen --warehouses=1
 }
@@ -246,6 +245,32 @@ dc_is_running() {
     ( dc_chbench_containers | grep -E "chbench_${1}" ) || true
 }
 
+dc_ensure_stays_up() {
+    local container=$1
+    local seconds="${2-5}"
+    echo -n "ensuring $container is staying up "
+    for i in $(seq "$seconds" 1); do
+        sleep 1
+        if [[ -z $(dc_is_running "$container") ]]; then
+            echo
+            uw "$container is not running!"
+            exit 1
+        fi
+        echo -n "$i "
+    done
+    echo
+}
+
+dc_run_wait_cmd() {
+    local service=$1 && shift
+    echo -n "Waiting for $service to be up"
+    while ! docker-compose run "$@" >/dev/null 2>&1; do
+        echo -n '.'
+        sleep 0.2
+    done
+    echo " ok"
+}
+
 # Get all the container names that belong to chbench
 dc_chbench_containers() {
     ( docker ps --format '{{.Names}}' | grep '^chbench' ) || true
@@ -273,29 +298,49 @@ nuke_docker() {
     runv docker volume prune -f
 }
 
+clean_load_test() {
+    echo "$(uw WARNING:) nuking everything docker"
+    for i in {5..1}; do
+        echo -n "$i "
+        sleep 1
+    done
+    echo "💥"
+    nuke_docker
+    load_test --up
+}
+
 # Long-running load test
 load_test() {
-    runv docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
-    runv docker-compose run peeker \
-         --queries loadtest
-    runv docker-compose run -d chbench run \
+    if [[ "${1:-}" = --up ]]; then
+        initialize_warehouse
+        bring_up_source_data
+        bring_up_introspection
+    fi
+    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
         -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
         --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+    dc_ensure_stays_up chbench 20
+    dc_logs chbench
+    dc_run -d peeker \
+         --queries loadtest
+    dc_ensure_stays_up peeker
+    dc_status
 }
 
 # Generate changes for the demo
 demo_load() {
-    runv docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
-    runv docker-compose run -d chbench run \
+    dc_run docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
         --peek-conns=0 --flush-every=30 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
         --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
         --config-file-path=/etc/chbenchmark/mz-default.cfg \
 	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
-    dc_run peeker --only-initialize --queries q01,q02,q17,q22
+    dc_run -d peeker --only-initialize --queries q01,q02,q17,q22
 }
 
 main "$@"

@@ -20,11 +20,10 @@
 
 use std::fmt;
 
+use repr::datetime::DateTimeField;
+
 mod datetime;
-pub use datetime::{
-    DateTimeField, DateTimeFieldValue, ExtractField, Interval, IntervalValue, ParsedDate,
-    ParsedDateTime, ParsedTime, ParsedTimestamp,
-};
+pub use datetime::{ExtractField, IntervalValue};
 
 #[derive(Debug)]
 pub struct ValueError(String);
@@ -49,13 +48,13 @@ pub enum Value {
     /// Boolean value true or false
     Boolean(bool),
     /// `DATE '...'` literals
-    Date(String, ParsedDate),
+    Date(String),
     /// `TIME '...'` literals
-    Time(String, ParsedTime),
+    Time(String),
     /// `TIMESTAMP '...'` literals
-    Timestamp(String, ParsedTimestamp),
+    Timestamp(String),
     /// `TIMESTAMP WITH TIME ZONE` literals
-    TimestampTz(String, ParsedTimestamp),
+    TimestampTz(String),
     /// INTERVAL literals, roughly in the following format:
     ///
     /// ```text
@@ -77,16 +76,15 @@ impl fmt::Display for Value {
             Value::SingleQuotedString(v) => write!(f, "'{}'", escape_single_quote_string(v)),
             Value::HexStringLiteral(v) => write!(f, "X'{}'", v),
             Value::Boolean(v) => write!(f, "{}", v),
-            Value::Date(v, _) => write!(f, "DATE '{}'", escape_single_quote_string(v)),
-            Value::Time(v, _) => write!(f, "TIME '{}'", escape_single_quote_string(v)),
-            Value::Timestamp(v, _) => write!(f, "TIMESTAMP '{}'", escape_single_quote_string(v)),
-            Value::TimestampTz(v, _) => write!(
+            Value::Date(v) => write!(f, "DATE '{}'", escape_single_quote_string(v)),
+            Value::Time(v) => write!(f, "TIME '{}'", escape_single_quote_string(v)),
+            Value::Timestamp(v) => write!(f, "TIMESTAMP '{}'", escape_single_quote_string(v)),
+            Value::TimestampTz(v) => write!(
                 f,
                 "TIMESTAMP WITH TIME ZONE '{}'",
                 escape_single_quote_string(v)
             ),
             Value::Interval(IntervalValue {
-                parsed: _,
                 value,
                 precision_high: _,
                 precision_low: _,
@@ -98,7 +96,6 @@ impl fmt::Display for Value {
                 fsec_max_precision
             ),
             Value::Interval(IntervalValue {
-                parsed: _,
                 value,
                 precision_high,
                 precision_low,
@@ -161,16 +158,6 @@ pub fn escape_single_quote_string(s: &str) -> EscapeSingleQuoteString<'_> {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[test]
-    fn interval_values() {
-        let mut iv = IntervalValue::default();
-        iv.parsed.year = None;
-        match iv.compute_interval() {
-            Ok(_) => {}
-            Err(e) => panic!("should not error: {:?}", e),
-        }
-    }
 
     #[test]
     fn iterate_datetimefield() {

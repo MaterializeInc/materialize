@@ -113,6 +113,17 @@ steps:
           run: billing-demo
     if: $CHANGED_RUST
 
+  - id: metabase-demo
+    label: "metabase-demo"
+    depends_on: build
+    timeout_in_minutes: 10
+    plugins:
+      - MaterializeInc/uid#master: ~
+      - docker-compose#v3.0.3:
+          config: ci/test/metabase-demo.compose.yml
+          run: healthcheck
+    if: $CHANGED_RUST
+
   - id: full-sqllogictest
     label: ":bulb: :bulb: Full SQL logic tests"
     depends_on: build
@@ -126,7 +137,7 @@ steps:
 
   - id: deploy
     label: ":rocket: Deploy"
-    depends_on: [lint-fast, lint-slow, cargo-test, testdrive, streaming-demo, short-sqllogictest]
+    depends_on: [lint-fast, lint-slow, cargo-test, testdrive, streaming-demo, metabase-demo, short-sqllogictest]
     trigger: deploy
     async: true
     branches: "master v*.*"

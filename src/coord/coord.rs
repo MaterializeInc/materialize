@@ -17,7 +17,6 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::iter;
 use std::path::Path;
 use std::thread;
@@ -123,7 +122,6 @@ where
         };
 
         let catalog_path = if let Some(data_directory) = config.data_directory {
-            fs::create_dir_all(data_directory)?;
             Some(data_directory.join("catalog"))
         } else {
             None

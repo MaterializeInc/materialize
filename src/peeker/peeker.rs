@@ -35,59 +35,35 @@ static METRICS_PORT: u16 = 16875;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
 
-lazy_static! {
-    static ref HISTOGRAM_UNLABELED: HistogramVec = register_histogram_vec!(
-        "mz_client_peek_seconds",
-        "how long peeks took",
-        &["query"],
-        vec![
-            0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
-            0.500, 1.0
-        ],
-        expose_decumulated => true
-    )
-    .expect("can create histogram");
-    static ref ERRORS_UNLABELED: CounterVec = register_counter_vec!(
-        "mz_client_error_count",
-        "number of errors encountered",
-        &["query"]
-    )
-    .expect("can create histogram");
-}
-
 fn main() -> Result<()> {
     ore::panic::set_abort_on_panic();
 
     LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
         .target(Target::Stdout)
         .init();
-    info!("startup {}", Utc::now());
 
     let config = Args::from_cli()?;
+    info!("startup {}", Utc::now());
 
     // Launch metrics server.
     let runtime = tokio::runtime::Runtime::new().expect("creating tokio runtime failed");
     runtime.spawn(serve_metrics());
 
-    let mut init_result = initialize(&config);
+    let init_result = initialize(&config);
     // Start peek timing loop. This should never return.
     if config.only_initialize {
-        let mut counter = 6;
-        while let Err(_) = init_result {
-            counter -= 1;
-            if counter <= 0 {
+        match init_result {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                error!("{}", e);
                 process::exit(1);
             }
-            warn!("init error, retry in 10 seconds ({} remaining)", counter);
-            thread::sleep(Duration::from_secs(10));
-            init_result = initialize(&config);
         }
     } else {
         let _ = init_result;
         measure_peek_times(&config);
         unreachable!()
     }
-    Ok(())
 }
 
 fn measure_peek_times(config: &Args) {
@@ -106,23 +82,6 @@ fn measure_peek_times(config: &Args) {
     );
     for pthread in peek_threads {
         pthread.join().unwrap();
-    }
-}
-
-fn initialize(config: &Args) -> Result<()> {
-    let mut postgres_client = create_postgres_client(&config.materialized_url);
-    initialize_sources(&mut postgres_client, &config.config.sources)
-        .expect("need to have sources for anything else to work");
-    let mut errors = 0;
-    for group in config.config.queries_in_declaration_order() {
-        if !try_initialize(&mut postgres_client, group) {
-            errors += 1;
-        }
-    }
-    if errors == 0 {
-        Ok(())
-    } else {
-        Err(format!("There were {} errors initializing query groups", errors).into())
     }
 }
 
@@ -193,13 +152,7 @@ fn spawn_query_thread(mz_url: String, query_group: QueryGroup) -> Vec<JoinHandle
     qs
 }
 
-fn prom_error(query_name: &str) {
-    ERRORS_UNLABELED.with_label_values(&[&query_name]).inc()
-}
-
-fn get_baseline_backoff() -> Duration {
-    Duration::from_millis(250)
-}
+// Initialization
 
 fn create_postgres_client(mz_url: &str) -> Client {
     let mut backoff = get_baseline_backoff();
@@ -211,13 +164,36 @@ fn create_postgres_client(mz_url: &str) -> Client {
     }
 }
 
-fn print_error_and_backoff(backoff: &mut Duration, context: &str, error_message: String) {
-    warn!(
-        "for {}: {}. Sleeping for {:#?}",
-        context, error_message, *backoff
-    );
-    thread::sleep(*backoff);
-    *backoff = min(*backoff * 2, MAX_BACKOFF);
+fn initialize(config: &Args) -> Result<()> {
+    let mut counter = 6;
+    let mut init_result = init_inner(&config);
+    while let Err(e) = init_result {
+        counter -= 1;
+        if counter <= 0 {
+            return Err(format!("unable to initialize: {}", e).into());
+        }
+        warn!("init error, retry in 10 seconds ({} remaining)", counter);
+        thread::sleep(Duration::from_secs(10));
+        init_result = initialize(&config);
+    }
+    Ok(())
+}
+
+fn init_inner(config: &Args) -> Result<()> {
+    let mut postgres_client = create_postgres_client(&config.materialized_url);
+    initialize_sources(&mut postgres_client, &config.config.sources)
+        .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
+    let mut errors = 0;
+    for group in config.config.queries_in_declaration_order() {
+        if !try_initialize(&mut postgres_client, group) {
+            errors += 1;
+        }
+    }
+    if errors == 0 {
+        Ok(())
+    } else {
+        Err(format!("There were {} errors initializing query groups", errors).into())
+    }
 }
 
 fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
@@ -305,6 +281,28 @@ fn try_initialize(client: &mut Client, query_group: &QueryGroup) -> bool {
     success
 }
 
+// prometheus items
+
+lazy_static! {
+    static ref HISTOGRAM_UNLABELED: HistogramVec = register_histogram_vec!(
+        "mz_client_peek_seconds",
+        "how long peeks took",
+        &["query"],
+        vec![
+            0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
+            0.500, 1.0
+        ],
+        expose_decumulated => true
+    )
+    .expect("can create histogram");
+    static ref ERRORS_UNLABELED: CounterVec = register_counter_vec!(
+        "mz_client_error_count",
+        "number of errors encountered",
+        &["query"]
+    )
+    .expect("can create histogram");
+}
+
 async fn serve_metrics() -> Result<()> {
     info!("serving prometheus metrics on port {}", METRICS_PORT);
     let addr = ([0, 0, 0, 0], METRICS_PORT).into();
@@ -327,4 +325,23 @@ async fn serve_metrics() -> Result<()> {
     });
     Server::bind(&addr).serve(make_service).await?;
     Ok(())
+}
+
+// error helpers
+
+fn prom_error(query_name: &str) {
+    ERRORS_UNLABELED.with_label_values(&[&query_name]).inc()
+}
+
+fn get_baseline_backoff() -> Duration {
+    Duration::from_millis(250)
+}
+
+fn print_error_and_backoff(backoff: &mut Duration, context: &str, error_message: String) {
+    warn!(
+        "for {}: {}. Sleeping for {:#?}",
+        context, error_message, *backoff
+    );
+    thread::sleep(*backoff);
+    *backoff = min(*backoff * 2, MAX_BACKOFF);
 }

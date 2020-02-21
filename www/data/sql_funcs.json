@@ -80,7 +80,7 @@
     },
     {
         "type": "Numbers",
-        "description": "Number functions take number-like arguments, e.g. [`int`](../types/int), [`float`](../types/float), [`decimal`](../decimal).",
+        "description": "Number functions take number-like arguments, e.g. [`int`](../types/int), [`float`](../types/float), [`numeric`](../types/numeric).",
         "functions": [
             {
                 "signature": "abs(x: N) -> N",

@@ -3007,7 +3007,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_regex",
- "sql-parser",
 ]
 
 [[package]]
@@ -3458,6 +3457,7 @@ dependencies = [
  "failure",
  "log",
  "matches",
+ "repr",
 ]
 
 [[package]]

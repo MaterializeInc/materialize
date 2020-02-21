@@ -338,6 +338,13 @@ fn cast_string_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn cast_string_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
+    match strconv::parse_time(a.unwrap_str()) {
+        Ok(t) => Datum::Time(t),
+        Err(_) => Datum::Null,
+    }
+}
+
 fn cast_string_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     match strconv::parse_timestamp(a.unwrap_str()) {
         Ok(ts) => Datum::Timestamp(ts),
@@ -1890,6 +1897,7 @@ pub enum UnaryFunc {
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToDate,
+    CastStringToTime,
     CastStringToTimestamp,
     CastStringToTimestampTz,
     CastStringToInterval,
@@ -2008,6 +2016,7 @@ impl UnaryFunc {
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
             UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
             UnaryFunc::CastStringToDate => cast_string_to_date(a),
+            UnaryFunc::CastStringToTime => cast_string_to_time(a),
             UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
             UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
@@ -2132,6 +2141,7 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale)).nullable(true)
             }
             CastStringToDate => ColumnType::new(ScalarType::Date).nullable(true),
+            CastStringToTime => ColumnType::new(ScalarType::Time).nullable(true),
             CastStringToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             CastStringToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
             CastStringToInterval => ColumnType::new(ScalarType::Interval).nullable(true),
@@ -2345,6 +2355,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
+            UnaryFunc::CastStringToTime => f.write_str("strtotime"),
             UnaryFunc::CastStringToTimestamp => f.write_str("strtots"),
             UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),
             UnaryFunc::CastStringToInterval => f.write_str("strtoiv"),

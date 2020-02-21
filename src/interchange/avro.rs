@@ -132,7 +132,7 @@ fn validate_schema_1(schema: &Schema) -> Result<RelationDesc> {
                 column_names,
             ))
         }
-        _ => bail!("row schemas must be records, got: {:?}", schema),
+        _ => bail!("row schemas must be records, got {:?}", schema),
     }
 }
 

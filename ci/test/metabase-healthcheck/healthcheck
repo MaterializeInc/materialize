@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Point of this test: Assert Metabase and related containers
+# can run.
+#   - If we see a successful curl, Metabase is up and working!
+#   - If we don't see a successful curl, Buildkite will time out
+#     and fail this test.
+
+while ! curl -fsSI metabase:3000; do
+    echo "Failed to curl metabase:3000. Sleeping..."
+    sleep 15
+done
+
+echo "Successfully pinged Metabase!"

@@ -16,7 +16,7 @@ aliases:
 
 Field | Use
 ------|-----
-_item&lowbar;ref_ | The name of the item whose columns you want to view. These can be [sources](../create-sources) or views (either [materialized](../create-materialized-view) or [non-materialized](../create-view)).
+_item&lowbar;ref_ | The name of the item whose columns you want to view. These can be [sources](../create-source) or views (either [materialized](../create-materialized-view) or [non-materialized](../create-view)).
 
 ## Details
 

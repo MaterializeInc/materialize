@@ -61,7 +61,7 @@ You can [cast](../../functions/cast) `jsonb` to:
 
 - [`string`](../string) (stringifies `jsonb`)
 - [`float`](../string)
-- [`bool`](../bool)
+- [`bool`](../boolean)
 
 #### To `jsonb`
 

@@ -163,7 +163,7 @@ REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<pat
 ```
 
 While you can find more details about this statement in [`CREATE
-SOURCES`](../../sql/create-sources), here's an explanation of the arguments:
+SOURCES`](../../sql/create-source), here's an explanation of the arguments:
 
 Argument | Function
 ---------|---------
