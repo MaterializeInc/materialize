@@ -127,7 +127,9 @@ services:
   chbench:
     init: true
     image: materialize/chbenchmark:latest
-    depends_on: [mysql]
+    # NOTE: we really don't want to add a depends_on, because that causes docker-compose
+    # to _restart_ the items that this is depending on, which may blow away all the old
+    # state.
     volumes:
       - chbench-gen:/gen
   chbench-init:
@@ -221,11 +223,9 @@ services:
       - ./prometheus-sql-exporter/mysql/sql_exporter.yml:/config/sql_exporter.yml
       - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
   peeker:
+    # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     image: materialize/peeker:latest
     init: true
-    depends_on:
-      - materialized
-      - connector
     # run peeker using 'dc.sh run peeker' to adjust which queries are peeked,
     # and see /src/peeker/config.toml for a list of queries
     command: --queries q01,q02,q17
