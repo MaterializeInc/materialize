@@ -109,134 +109,139 @@ where
     C: comm::Connection,
 {
     pub fn new(config: Config<C>) -> Result<Self, failure::Error> {
-        let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
+        config.executor.enter(|| {
+            let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
 
-        let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
-            Some(
-                config
-                    .executor
-                    .enter(|| block_on(symbiosis::Postgres::open_and_erase(symbiosis_url)))?,
-            )
-        } else {
-            None
-        };
+            let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
+                Some(block_on(symbiosis::Postgres::open_and_erase(
+                    symbiosis_url,
+                ))?)
+            } else {
+                None
+            };
 
-        let catalog_path = if let Some(data_directory) = config.data_directory {
-            Some(data_directory.join("catalog"))
-        } else {
-            None
-        };
+            let catalog_path = if let Some(data_directory) = config.data_directory {
+                Some(data_directory.join("catalog"))
+            } else {
+                None
+            };
 
-        let mut optimizer = Optimizer::default();
+            let mut optimizer = Optimizer::default();
 
-        let catalog_path = catalog_path.as_deref();
-        let catalog = if let Some(logging_config) = config.logging {
-            Catalog::open::<SqlSerializer, _>(catalog_path, |catalog| {
-                for log_src in logging_config.active_logs() {
-                    let view_name = FullName {
-                        database: DatabaseSpecifier::Ambient,
-                        schema: "mz_catalog".into(),
-                        item: log_src.name().into(),
-                    };
-                    let index_name = format!("{}_primary_idx", log_src.name());
-                    catalog.insert_item(
-                        log_src.id(),
-                        FullName {
+            let catalog_path = catalog_path.as_deref();
+            let catalog = if let Some(logging_config) = config.logging {
+                Catalog::open::<SqlSerializer, _>(catalog_path, |catalog| {
+                    for log_src in logging_config.active_logs() {
+                        let view_name = FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: "mz_catalog".into(),
                             item: log_src.name().into(),
-                        },
-                        CatalogItem::Source(catalog::Source {
-                            create_sql: "TODO".to_string(),
-                            connector: dataflow_types::SourceConnector::Local,
-                            desc: log_src.schema(),
-                        }),
-                    );
-                    catalog.insert_item(
-                        log_src.index_id(),
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: "mz_catalog".into(),
-                            item: index_name.clone(),
-                        },
-                        CatalogItem::Index(catalog::Index {
-                            on: log_src.id(),
-                            keys: log_src
-                                .index_by()
-                                .into_iter()
-                                .map(ScalarExpr::Column)
-                                .collect(),
-                            create_sql: index_sql(
-                                index_name,
-                                view_name,
-                                &log_src.schema(),
-                                &log_src.index_by(),
-                            ),
-                            eval_env: EvalEnv::default(),
-                        }),
-                    );
-                }
-
-                for log_view in logging_config.active_views() {
-                    let params = Params {
-                        datums: Row::pack(&[]),
-                        types: vec![],
-                    };
-                    let stmt = sql::parse(log_view.sql.to_owned())
-                        .expect("failed to parse bootstrap sql")
-                        .into_element();
-                    match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
-                        MaybeFuture::Immediate(Some(Ok(Plan::CreateView {
-                            name: _,
-                            view,
-                            replace,
-                            materialize,
-                        }))) => {
-                            assert!(replace.is_none());
-                            assert!(materialize);
-                            let eval_env = EvalEnv::default();
-                            let view = catalog::View {
-                                create_sql: view.create_sql,
-                                expr: optimizer.optimize(view.expr, catalog.indexes(), &eval_env),
-                                eval_env,
-                                desc: view.desc,
-                            };
-                            let view_name = FullName {
+                        };
+                        let index_name = format!("{}_primary_idx", log_src.name());
+                        catalog.insert_item(
+                            log_src.id(),
+                            FullName {
                                 database: DatabaseSpecifier::Ambient,
                                 schema: "mz_catalog".into(),
-                                item: log_view.name.into(),
-                            };
-                            let index_name = format!("{}_primary_idx", log_view.name);
-                            let index = auto_generate_view_idx(
-                                index_name.clone(),
-                                view_name.clone(),
-                                &view,
-                                log_view.id,
-                            );
-                            catalog.insert_item(log_view.id, view_name, CatalogItem::View(view));
-                            catalog.insert_item(
-                                log_view.index_id,
-                                FullName {
+                                item: log_src.name().into(),
+                            },
+                            CatalogItem::Source(catalog::Source {
+                                create_sql: "TODO".to_string(),
+                                connector: dataflow_types::SourceConnector::Local,
+                                desc: log_src.schema(),
+                            }),
+                        );
+                        catalog.insert_item(
+                            log_src.index_id(),
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "mz_catalog".into(),
+                                item: index_name.clone(),
+                            },
+                            CatalogItem::Index(catalog::Index {
+                                on: log_src.id(),
+                                keys: log_src
+                                    .index_by()
+                                    .into_iter()
+                                    .map(ScalarExpr::Column)
+                                    .collect(),
+                                create_sql: index_sql(
+                                    index_name,
+                                    view_name,
+                                    &log_src.schema(),
+                                    &log_src.index_by(),
+                                ),
+                                eval_env: EvalEnv::default(),
+                            }),
+                        );
+                    }
+
+                    for log_view in logging_config.active_views() {
+                        let params = Params {
+                            datums: Row::pack(&[]),
+                            types: vec![],
+                        };
+                        let stmt = sql::parse(log_view.sql.to_owned())
+                            .expect("failed to parse bootstrap sql")
+                            .into_element();
+                        match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
+                            MaybeFuture::Immediate(Some(Ok(Plan::CreateView {
+                                name: _,
+                                view,
+                                replace,
+                                materialize,
+                            }))) => {
+                                assert!(replace.is_none());
+                                assert!(materialize);
+                                let eval_env = EvalEnv::default();
+                                let view = catalog::View {
+                                    create_sql: view.create_sql,
+                                    expr: optimizer.optimize(
+                                        view.expr,
+                                        catalog.indexes(),
+                                        &eval_env,
+                                    ),
+                                    eval_env,
+                                    desc: view.desc,
+                                };
+                                let view_name = FullName {
                                     database: DatabaseSpecifier::Ambient,
                                     schema: "mz_catalog".into(),
-                                    item: index_name,
-                                },
-                                CatalogItem::Index(index),
-                            );
+                                    item: log_view.name.into(),
+                                };
+                                let index_name = format!("{}_primary_idx", log_view.name);
+                                let index = auto_generate_view_idx(
+                                    index_name.clone(),
+                                    view_name.clone(),
+                                    &view,
+                                    log_view.id,
+                                );
+                                catalog.insert_item(
+                                    log_view.id,
+                                    view_name,
+                                    CatalogItem::View(view),
+                                );
+                                catalog.insert_item(
+                                    log_view.index_id,
+                                    FullName {
+                                        database: DatabaseSpecifier::Ambient,
+                                        schema: "mz_catalog".into(),
+                                        item: index_name,
+                                    },
+                                    CatalogItem::Index(index),
+                                );
+                            }
+                            err => panic!(
+                                "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
+                                log_view.sql, err
+                            ),
                         }
-                        err => panic!(
-                            "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
-                            log_view.sql, err
-                        ),
                     }
-                }
-            })?
-        } else {
-            Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
-        };
+                })?
+            } else {
+                Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
+            };
 
-        let executor = config.executor;
-        executor.enter(move || {
             let logging = config.logging;
             let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
             broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
