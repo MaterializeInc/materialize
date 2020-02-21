@@ -76,7 +76,7 @@ cat > target/doc/index.html <<EOF
     <!--[if lte IE 8]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]-->
     <nav class="sidebar">
         <div class="sidebar-menu">&#9776;</div>
-        <a href='index.html'><img src='rust-logo.png' alt='logo' width='100'></a>
+        <a href='index.html'><div class='logo-container'><img src='rust-logo.png' alt='logo'></div></a>
         <p class='location'>Home</p>
         <div class="sidebar-elems">
         </div>
@@ -127,7 +127,7 @@ EOF
 # links to the root of whatever crate you happen to be looking at.
 cat >> target/doc/main.js <<EOF
 ;
-var el = document.querySelector("img[alt=logo]").parentNode;
+var el = document.querySelector("img[alt=logo]").closest("a");
 if (el.href != "index.html") {
     el.href = "../index.html";
 }
