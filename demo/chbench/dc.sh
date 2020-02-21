@@ -208,6 +208,7 @@ dc_stop() {
             runv docker-compose stop "$1"
             return
         else
+            echo "No running container"
             return
         fi
     fi
@@ -324,6 +325,14 @@ clean_load_test() {
     load_test --up
 }
 
+# Purges Kafka topic and restarts Materialize/peeker
+drop_kafka_topics() {
+    dc_stop chbench
+    dc_stop materialized peeker
+    runv docker exec -it chbench_kafka_1 kafka-topics --delete --bootstrap-server localhost:9092 --topic "mysql.tpcch.*" || true
+    dc_up materialized
+}
+
 # Long-running load test
 load_test() {
     if [[ "${1:-}" = --up ]]; then
@@ -331,6 +340,7 @@ load_test() {
         bring_up_source_data
         bring_up_introspection
     fi
+    drop_kafka_topics
     dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
     dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
@@ -347,7 +357,7 @@ load_test() {
 
 # Generate changes for the demo
 demo_load() {
-    dc_run docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    drop_kafka_topics
     dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
         --peek-conns=0 --flush-every=30 \
