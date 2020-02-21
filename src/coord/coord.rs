@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use failure::bail;
 use futures::executor::block_on;
-use futures::future::FutureExt;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -42,7 +41,6 @@ use dataflow_types::{
 };
 use expr::transform::Optimizer;
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr, SourceInstanceId};
-use futures::Stream;
 use ore::thread::JoinHandleExt;
 use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
@@ -58,7 +56,12 @@ type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
-    PlanReady(Session, ClientTx, Result<Plan, failure::Error>, u32),
+    PlanReady {
+        conn_id: u32,
+        session: Session,
+        tx: ClientTx,
+        result: Result<Plan, failure::Error>,
+    },
     Shutdown,
 }
 
@@ -369,17 +372,20 @@ where
             None
         };
 
-        let streams: Vec<Box<dyn Stream<Item = Result<Message, comm::Error>> + Unpin>> = vec![
-            Box::new(
-                cmd_rx
-                    .map(Message::Command)
-                    .chain(stream::once(future::ready(Message::Shutdown)))
-                    .map(Ok),
-            ),
-            Box::new(self.feedback_rx.take().unwrap().map_ok(Message::Worker)),
-        ];
+        let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
 
-        let mut messages = stream::select_all(streams);
+        let cmd_stream = cmd_rx
+            .map(Message::Command)
+            .chain(stream::once(future::ready(Message::Shutdown)))
+            .map(Ok);
+
+        let feedback_stream = self.feedback_rx.take().unwrap().map_ok(Message::Worker);
+
+        let mut messages = stream::select_all(vec![
+            internal_cmd_stream.boxed(),
+            feedback_stream.boxed(),
+            cmd_stream.boxed(),
+        ]);
 
         while let Some(msg) = block_on(messages.next()) {
             // Check for timestamp updates
@@ -437,22 +443,28 @@ where
                             let _ = tx.send(Response { result, session });
                         }
                         MaybeFuture::Future(fut) => {
-                            let (self_tx, self_rx) = futures::channel::oneshot::channel();
-                            let self_rx = stream::once(self_rx.map(|res| res.unwrap()));
-                            messages.push(Box::new(self_rx));
-                            let fut = async move {
+                            let mut internal_cmd_tx = internal_cmd_tx.clone();
+                            tokio::spawn(async move {
                                 let (session, tx, result) = fut.await;
-                                self_tx
-                                    .send(Ok(Message::PlanReady(session, tx, result, conn_id)))
-                                    .map_err(|_e| "(comm error)")
-                                    .expect("Unexpected coordinator communication failure");
-                            };
-                            tokio::spawn(fut);
+                                let _ = internal_cmd_tx
+                                    .send(Ok(Message::PlanReady {
+                                        session,
+                                        tx,
+                                        result,
+                                        conn_id,
+                                    }))
+                                    .await;
+                            });
                         }
                     }
                 }
 
-                Message::PlanReady(mut session, tx, result, conn_id) => {
+                Message::PlanReady {
+                    mut session,
+                    tx,
+                    result,
+                    conn_id,
+                } => {
                     let result =
                         result.and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
 
@@ -515,10 +527,11 @@ where
 
         // Cleanly drain any pending messages from the worker before shutting
         // down.
+        drop(internal_cmd_tx);
         while let Some(msg) = block_on(messages.next()) {
             match msg.expect("coordinator message receiver failed") {
                 Message::Command(_) | Message::Shutdown => unreachable!(),
-                Message::Worker(_) | Message::PlanReady(_, _, _, _) => (),
+                Message::Worker(_) | Message::PlanReady { .. } => (),
             }
         }
     }
