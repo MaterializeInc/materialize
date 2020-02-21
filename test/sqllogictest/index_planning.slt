@@ -44,19 +44,18 @@ this
 statement ok
 create index foo_idx on foo(a);
 
-#TODO (wangandi) (materialize#616): uncomment these tests when FilterEqualLiteral is enabled
-
-#query T multiline
-#explain plan for select b, c from foo where a = 5
-#----
-#Project {
-#  outputs: [1, 2],
-#  Join {
-#    variables: [[(0, 0), (1, 0)]],
-#    ArrangeBy { keys: [[#0]], Get { foo (u1) } },
-#    Constant [[5]]
-#  }
-#}
+query T multiline
+explain plan for select b, c from foo where a = 5
+----
+Project {
+  outputs: [1, 2],
+  Join {
+    variables: [[(0, 0), (1, 0)]],
+    implementation: DeltaQuery,
+    ArrangeBy { keys: [[#0]], Get { materialize.public.foo (u1) } },
+    ArrangeBy { keys: [[#0]], Constant [[5]] }
+  }
+}
 
 query TR
 select b, c from foo where a = 5
@@ -64,20 +63,21 @@ select b, c from foo where a = 5
 this
 -4.400
 
-#query T multiline
-#explain plan for select b, c from foo where a = 5 and b = 'this'
-#----
-#Project {
-#  outputs: [1, 2],
-#  Filter {
-#    predicates: [#1 = "this"],
-#    Join {
-#      variables: [[(0, 0), (1, 0)]],
-#      ArrangeBy { keys: [[#0]], Get { foo (u1) } },
-#      Constant [[5]],
-#    }
-#  }
-#}
+query T multiline
+explain plan for select b, c from foo where a = 5 and b = 'this'
+----
+Project {
+  outputs: [1, 2],
+  Filter {
+    predicates: [#1 = "this"],
+    Join {
+      variables: [[(0, 0), (1, 0)]],
+      implementation: DeltaQuery,
+      ArrangeBy { keys: [[#0]], Get { materialize.public.foo (u1) } },
+      ArrangeBy { keys: [[#0]], Constant [[5]] }
+    }
+  }
+}
 
 query TR
 select b, c from foo where a = 5
@@ -91,26 +91,41 @@ create index foo_idx2 on foo(b, a);
 statement ok
 create index foo_idx3 on foo(b);
 
-#query T multiline
-#explain plan for select b, c from foo where a = 5 and b = 'this'
-#----
-#Project {
-#  outputs: [1, 2],
-#  Join {
-#    variables: [[(0, 1), (1, 0)], [(0, 0), (1, 1)]],
-#    ArrangeBy { keys: [[#1, #0]], Get { foo (u1) } },
-#    Constant [["this", 5]],
-#  }
-#}
+query T multiline
+explain plan for select b, c from foo where a = 5 and b = 'this'
+----
+Project {
+  outputs: [1, 2],
+  Join {
+    variables: [[(0, 0), (1, 1)], [(0, 1), (1, 0)]],
+    implementation: DeltaQuery,
+    ArrangeBy {
+      keys: [[#1, #0]],
+      Get { materialize.public.foo (u1) }
+    },
+    ArrangeBy { keys: [[#0, #1]], Constant [["this", 5]] }
+  }
+}
 
-#TODO (wangandi) (materialize#616): uncomment these tests when FilterEqualLiteral is enabled
-#think about what the desired plan is when
-#statement ok
-#create index bar_idx on bar(a)
-#
-#query T multiline
-#explain plan for select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
-#----
+statement ok
+create index bar_idx on bar(a)
+
+query T multiline
+explain plan for select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+----
+Project {
+  outputs: [0 .. 2, 5, 6],
+  Join {
+    variables: [[(0, 0), (2, 0)], [(1, 0), (2, 1)]],
+    implementation: DifferentialLinear,
+    Get { materialize.public.bar (u3) },
+    ArrangeBy { keys: [[]], Constant [["this"]] },
+    ArrangeBy {
+      keys: [[#1, #0]],
+      Get { materialize.public.foo (u1) }
+    }
+  }
+}
 
 query ITRTR
 select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
@@ -120,3 +135,24 @@ this
 -4.400
 still
 0.000
+
+query T multiline
+explain plan for select b from foo where a = 5 and c < 10
+----
+Project {
+  outputs: [1],
+  Filter {
+    predicates: [#2 < 100dec],
+    Join {
+      variables: [[(0, 0), (1, 0)]],
+      implementation: DeltaQuery,
+      ArrangeBy { keys: [[#0]], Get { materialize.public.foo (u1) } },
+      ArrangeBy { keys: [[#0]], Constant [[5]] }
+    }
+  }
+}
+
+query T
+select b from foo where a = 5 and c < 10
+----
+this
