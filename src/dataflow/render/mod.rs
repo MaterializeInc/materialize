@@ -160,7 +160,23 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 read_from_kafka,
                             )
                         }
-                        ExternalSourceConnector::Kinesis(_c) => unreachable!(),
+                        ExternalSourceConnector::Kinesis(c) => {
+                            // Distribute read responsibility among workers.
+                            use differential_dataflow::hashable::Hashable;
+                            let hash = src_id.hashed() as usize;
+                            let read_from_kinesis = hash % worker_peers == worker_index;
+                            source::kinesis(
+                                region,
+                                format!("kinesis-{}-{}", first_export_id, source_number),
+                                c,
+                                uid,
+                                advance_timestamp,
+                                timestamp_histories.clone(),
+                                timestamp_channel.clone(),
+                                consistency,
+                                read_from_kinesis,
+                            )
+                        }
                         ExternalSourceConnector::File(c) => {
                             let read_style = if worker_index != 0 {
                                 FileReadStyle::None

@@ -1003,7 +1003,7 @@ fn handle_create_dataflow_pure(
                         _ => bail!("Kinesis sources only support data as bytes"),
                     };
 
-                    let source = Source {
+                    Source {
                         create_sql: "<filled in later>".into(),
                         connector: SourceConnector::External {
                             connector: ExternalSourceConnector::Kinesis(KinesisSourceConnector {
@@ -1017,13 +1017,7 @@ fn handle_create_dataflow_pure(
                             consistency: Consistency::RealTime,
                         },
                         desc,
-                    };
-                    dbg!(&source);
-
-                    // todo@jldlaughlin: Actually return the source when implemented!
-                    // We can bail gracefully in the planning stage (here),
-                    // but can't once we actually try to build a dataflow.
-                    bail!("Kinesis sources are not yet implemented")
+                    }
                 }
                 Connector::File { path, with_options } => {
                     let mut with_options: HashMap<_, _> = with_options

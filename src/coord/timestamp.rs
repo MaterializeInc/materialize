@@ -22,11 +22,19 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 
+use rusoto_core::{HttpClient, Region};
+use rusoto_credential::StaticProvider;
+use rusoto_kinesis::Consumer as KinesisConsumer;
+use rusoto_kinesis::{
+    Kinesis, KinesisClient, RegisterStreamConsumerInput, RegisterStreamConsumerOutput
+};
+
 use dataflow_types::{
     Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
     KinesisSourceConnector,
 };
 
+use chrono::Utc;
 use log::{error, info};
 
 pub struct TimestampConfig {
@@ -87,7 +95,10 @@ struct ByoKafkaConnector {
 }
 
 /// Data consumer for Kinesis source with RT consistency
-struct RtKinesisConnector {}
+#[allow(dead_code)]
+struct RtKinesisConnector {
+    consumer: KinesisConsumer,
+}
 
 /// Data consumer stub for Kinesis source with BYO consistency
 struct ByoKinesisConnector {}
@@ -416,10 +427,29 @@ impl Timestamper {
     fn create_rt_kinesis_connector(
         &self,
         _id: SourceInstanceId,
-        _kinc: KinesisSourceConnector,
+        kinc: KinesisSourceConnector,
     ) -> RtKinesisConnector {
-        error!("Timestamping is unsupported for kinesis sources");
-        RtKinesisConnector {}
+        let provider = StaticProvider::new(kinc.access_key, kinc.secret_access_key, None, None);
+
+        // todo@jldlaughlin: Use HttpClient::new_with_config() to support a TLS-enabled client
+        let request_dispatcher = HttpClient::new().unwrap();
+        let r: Region = kinc
+            .region
+            .parse()
+            .expect(format!("Failed to parse AWS region: {}", kinc.region).as_ref());
+        let client = KinesisClient::new_with(request_dispatcher, provider, r);
+
+        // Each consumer name must be unique within a stream.
+        // todo@jldlaughlin: Add a random string at the end, too?
+        let register_input = RegisterStreamConsumerInput {
+            consumer_name: format!("materialize-consumer-{}", Utc::now().timestamp()),
+            stream_arn: kinc.arn.clone(),
+        };
+        let consumer = match client.register_stream_consumer(register_input).sync() {
+            Ok(RegisterStreamConsumerOutput { consumer }) => consumer,
+            Err(e) => panic!(format!("Failed to register stream consumer: {:#?}", e)),
+        };
+        RtKinesisConnector { consumer }
     }
 
     /// Creates a BYO connector
