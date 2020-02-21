@@ -26,7 +26,7 @@ use rusoto_core::{HttpClient, Region};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::Consumer as KinesisConsumer;
 use rusoto_kinesis::{
-    Kinesis, KinesisClient, RegisterStreamConsumerInput, RegisterStreamConsumerOutput
+    Kinesis, KinesisClient, RegisterStreamConsumerInput, RegisterStreamConsumerOutput,
 };
 
 use dataflow_types::{
@@ -429,21 +429,26 @@ impl Timestamper {
         _id: SourceInstanceId,
         kinc: KinesisSourceConnector,
     ) -> RtKinesisConnector {
-        let provider = StaticProvider::new(kinc.access_key, kinc.secret_access_key, None, None);
+        let provider = StaticProvider::new(
+            kinc.access_key.clone(),
+            kinc.secret_access_key.clone(),
+            None,
+            None,
+        );
 
         // todo@jldlaughlin: Use HttpClient::new_with_config() to support a TLS-enabled client
         let request_dispatcher = HttpClient::new().unwrap();
         let r: Region = kinc
             .region
             .parse()
-            .expect(format!("Failed to parse AWS region: {}", kinc.region).as_ref());
+            .unwrap_or_else(|_| panic!("Failed to parse AWS region: {}", kinc.region));
         let client = KinesisClient::new_with(request_dispatcher, provider, r);
 
         // Each consumer name must be unique within a stream.
         // todo@jldlaughlin: Add a random string at the end, too?
         let register_input = RegisterStreamConsumerInput {
             consumer_name: format!("materialize-consumer-{}", Utc::now().timestamp()),
-            stream_arn: kinc.arn.clone(),
+            stream_arn: kinc.arn,
         };
         let consumer = match client.register_stream_consumer(register_input).sync() {
             Ok(RegisterStreamConsumerOutput { consumer }) => consumer,

@@ -48,7 +48,7 @@ where
     // todo@jldlaughlin: Actually read from the Kinesis stream!
     // Right now, this code will create a Kinesis source and immediately
     // give up all its capabilities -- rendering it "Done".
-    let (stream, _capability) = source(id, ts, scope, &name.clone(), move |_info| {
+    let (stream, _capability) = source(id, ts, scope, &name, move |_info| {
         move |_cap, _output| SourceStatus::Done
     });
     (stream, None)
