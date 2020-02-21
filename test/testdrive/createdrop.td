@@ -196,6 +196,8 @@ unknown catalog item 'nonexistent'
 ! DROP SOURCE nonexistent
 unknown catalog item 'nonexistent'
 
+# todo@jldlaughlin: Add a MATERIALIZED VIEW on top of this
+# source and drop it. Depends on #2103.
 > CREATE SOURCE f
   FROM KINESIS ARN 'fake_arn'
   WITH (access_key = 'fake_access_key', secret_access_key = 'fake_secret_access_key', region = 'us-east-2')
