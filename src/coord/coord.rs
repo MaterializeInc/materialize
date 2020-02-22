@@ -41,8 +41,8 @@ use dataflow_types::{
 };
 use expr::transform::Optimizer;
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr, SourceInstanceId};
+use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
-use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
@@ -56,11 +56,12 @@ type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
-    PlanReady {
+    StatementReady {
         conn_id: u32,
         session: Session,
         tx: ClientTx,
-        result: Result<Plan, failure::Error>,
+        result: Result<sql::Statement, failure::Error>,
+        params: Params,
     },
     Shutdown,
 }
@@ -188,12 +189,12 @@ where
                             .expect("failed to parse bootstrap sql")
                             .into_element();
                         match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
-                            MaybeFuture::Immediate(Some(Ok(Plan::CreateView {
+                            Ok(Plan::CreateView {
                                 name: _,
                                 view,
                                 replace,
                                 materialize,
-                            }))) => {
+                            }) => {
                                 assert!(replace.is_none());
                                 assert!(materialize);
                                 let eval_env = EvalEnv::default();
@@ -434,40 +435,66 @@ where
                     conn_id,
                     tx,
                 }) => {
-                    let result = self.handle_begin_execute(session, portal_name, tx);
-                    match result {
-                        MaybeFuture::Immediate(val) => {
-                            let (mut session, tx, result) = val.unwrap();
-                            let result = result
-                                .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
-                            let _ = tx.send(Response { result, session });
+                    let result = session
+                        .get_portal(&portal_name)
+                        .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))
+                        .and_then(|portal| {
+                            session
+                                .get_prepared_statement(&portal.statement_name)
+                                .ok_or_else(|| failure::format_err!(
+                                    "statement for portal does not exist portal={:?} statement={:?}",
+                                    portal_name,
+                                    portal.statement_name
+                                ))
+                                .map(|ps| (portal, ps))
+                        });
+                    let (portal, prepared) = match result {
+                        Ok((portal, prepared)) => (portal, prepared),
+                        Err(e) => {
+                            let _ = tx.send(Response {
+                                result: Err(e),
+                                session,
+                            });
+                            return;
                         }
-                        MaybeFuture::Future(fut) => {
+                    };
+                    match prepared.sql() {
+                        Some(stmt) => {
                             let mut internal_cmd_tx = internal_cmd_tx.clone();
+                            let stmt = stmt.clone();
+                            let params = portal.parameters.clone();
                             tokio::spawn(async move {
-                                let (session, tx, result) = fut.await;
+                                let result = sql::purify(stmt).await;
                                 let _ = internal_cmd_tx
-                                    .send(Ok(Message::PlanReady {
+                                    .send(Ok(Message::StatementReady {
                                         session,
                                         tx,
                                         result,
                                         conn_id,
+                                        params,
                                     }))
                                     .await;
+                            });
+                        }
+                        None => {
+                            let _ = tx.send(Response {
+                                result: Ok(ExecuteResponse::EmptyQuery),
+                                session,
                             });
                         }
                     }
                 }
 
-                Message::PlanReady {
+                Message::StatementReady {
+                    conn_id,
                     mut session,
                     tx,
                     result,
-                    conn_id,
+                    params,
                 } => {
-                    let result =
-                        result.and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
-
+                    let result = result
+                        .and_then(|stmt| self.handle_statement(&session, stmt, &params))
+                        .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -531,7 +558,7 @@ where
         while let Some(msg) = block_on(messages.next()) {
             match msg.expect("coordinator message receiver failed") {
                 Message::Command(_) | Message::Shutdown => unreachable!(),
-                Message::Worker(_) | Message::PlanReady { .. } => (),
+                Message::Worker(_) | Message::StatementReady { .. } => (),
             }
         }
     }
@@ -1772,58 +1799,22 @@ where
         session: &Session,
         stmt: sql::Statement,
         params: &sql::Params,
-    ) -> MaybeFuture<'static, Result<sql::Plan, failure::Error>> {
+    ) -> Result<sql::Plan, failure::Error> {
         let plan_result = sql::plan(&self.catalog, session, stmt.clone(), params);
         // Try Postgres if we realize synchronously that we failed.
-        if let MaybeFuture::Immediate(Some(Err(err))) = plan_result {
+        if let Err(err) = plan_result {
             match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
                     block_on(postgres.execute(&self.catalog, session, &stmt))
                 }
                 _ => Err(err),
             }
-            .into()
         // Otherwise, just return the future.
         // Nothing that we do asynchronously could
         // possibly work in Postgres anyway, so don't bother
         // piping through the logic to try in symbiosis mode in this case.
         } else {
             plan_result
-        }
-    }
-
-    fn handle_begin_execute(
-        &mut self,
-        session: Session,
-        portal_name: String,
-        tx: ClientTx,
-    ) -> MaybeFuture<'static, (Session, ClientTx, Result<Plan, failure::Error>)> {
-        let res = session
-            .get_portal(&portal_name)
-            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))
-            .and_then(|portal| {
-                session
-                    .get_prepared_statement(&portal.statement_name)
-                    .ok_or_else(|| {
-                        failure::format_err!(
-                            "statement for portal does not exist portal={:?} statement={:?}",
-                            portal_name,
-                            portal.statement_name
-                        )
-                    })
-                    .map(|ps| (portal, ps))
-            });
-        let (portal, prepared) = match res {
-            Ok((portal, prepared)) => (portal, prepared),
-            Err(e) => {
-                return (session, tx, Err(e)).into();
-            }
-        };
-        match prepared.sql() {
-            Some(stmt) => self
-                .handle_statement(&session, stmt.clone(), &portal.parameters)
-                .map(|res| (session, tx, res)),
-            None => (session, tx, Ok(Plan::EmptyQuery)).into(),
         }
     }
 
