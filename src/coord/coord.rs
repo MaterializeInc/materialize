@@ -48,14 +48,19 @@ use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
 
 use crate::persistence::SqlSerializer;
-use crate::timestamp::{TimestampChannel, TimestampConfig, TimestampMessage, Timestamper};
+use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::{Command, ExecuteResponse, Response, StartupMessage};
 
 type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 
-enum Message {
+pub enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
+    AdvanceSourceTimestamp {
+        id: SourceInstanceId,
+        timestamp: u64,
+        offset: i64,
+    },
     StatementReady {
         conn_id: u32,
         session: Session,
@@ -357,30 +362,29 @@ where
     }
 
     fn serve_core(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
-        let (source_tx, source_rx) = std::sync::mpsc::channel();
+        let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
+
+        let cmd_stream = cmd_rx
+            .map(Message::Command)
+            .chain(stream::once(future::ready(Message::Shutdown)));
+
+        let feedback_stream = self.feedback_rx.take().unwrap().map(|r| match r {
+            Ok(m) => Message::Worker(m),
+            Err(e) => panic!("coordinator feedback receiver failed: {}", e),
+        });
+
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
         let _timestamper_thread = if let Some(config) = &self.timestamp_config {
             let mut timestamper = Timestamper::new(
                 config,
                 self.catalog.storage_handle(),
-                TimestampChannel {
-                    sender: source_tx,
-                    receiver: ts_rx,
-                },
+                internal_cmd_tx.clone(),
+                ts_rx,
             );
             Some(thread::spawn(move || timestamper.update()).join_on_drop())
         } else {
             None
         };
-
-        let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
-
-        let cmd_stream = cmd_rx
-            .map(Message::Command)
-            .chain(stream::once(future::ready(Message::Shutdown)))
-            .map(Ok);
-
-        let feedback_stream = self.feedback_rx.take().unwrap().map_ok(Message::Worker);
 
         let mut messages = stream::select_all(vec![
             internal_cmd_stream.boxed(),
@@ -389,36 +393,7 @@ where
         ]);
 
         while let Some(msg) = block_on(messages.next()) {
-            // Check for timestamp updates
-            while let Ok(update) = source_rx.try_recv() {
-                match update {
-                    TimestampMessage::BatchedUpdate(timestamp, updates) => {
-                        for (id, offset) in updates {
-                            broadcast(
-                                &mut self.broadcast_tx,
-                                SequencedCommand::AdvanceSourceTimestamp {
-                                    id,
-                                    timestamp,
-                                    offset,
-                                },
-                            );
-                        }
-                    }
-                    TimestampMessage::Update(id, timestamp, offset) => {
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::AdvanceSourceTimestamp {
-                                id,
-                                timestamp,
-                                offset,
-                            },
-                        );
-                    }
-                    _ => {}
-                }
-            }
-
-            match msg.expect("coordinator message receiver failed") {
+            match msg {
                 Message::Command(Command::Startup { session, tx }) => {
                     let mut messages = vec![];
                     if self.catalog.database_resolver(session.database()).is_err() {
@@ -466,13 +441,13 @@ where
                             tokio::spawn(async move {
                                 let result = sql::purify(stmt).await;
                                 let _ = internal_cmd_tx
-                                    .send(Ok(Message::StatementReady {
+                                    .send(Message::StatementReady {
                                         session,
                                         tx,
                                         result,
                                         conn_id,
                                         params,
-                                    }))
+                                    })
                                     .await;
                             });
                         }
@@ -516,12 +491,6 @@ where
                     let _ = tx.send(self.catalog.dump());
                 }
 
-                Message::Shutdown => {
-                    ts_tx.send(TimestampMessage::Shutdown).unwrap();
-                    self.shutdown();
-                    break;
-                }
-
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
                     message: WorkerFeedback::FrontierUppers(updates),
@@ -549,18 +518,34 @@ where
                         .send(TimestampMessage::Add(source_id, sc, consistency))
                         .expect("Failed to send CREATE Instance notice to timestamper");
                 }
+
+                Message::AdvanceSourceTimestamp {
+                    id,
+                    timestamp,
+                    offset,
+                } => {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AdvanceSourceTimestamp {
+                            id,
+                            timestamp,
+                            offset,
+                        },
+                    );
+                }
+
+                Message::Shutdown => {
+                    ts_tx.send(TimestampMessage::Shutdown).unwrap();
+                    self.shutdown();
+                    break;
+                }
             }
         }
 
         // Cleanly drain any pending messages from the worker before shutting
         // down.
         drop(internal_cmd_tx);
-        while let Some(msg) = block_on(messages.next()) {
-            match msg.expect("coordinator message receiver failed") {
-                Message::Command(_) | Message::Shutdown => unreachable!(),
-                Message::Worker(_) | Message::StatementReady { .. } => (),
-            }
-        }
+        while let Some(_) = block_on(messages.next()) {}
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
