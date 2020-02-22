@@ -21,7 +21,7 @@ use std::task::{Context, Poll};
 use futures::future::{Either, FutureExt, MapOk, TryFuture, TryFutureExt};
 use futures::sink::Sink;
 use futures::stream::{
-    Fuse, FuturesUnordered, Stream, StreamExt, StreamFuture, TryStream, TryStreamExt,
+    self, Fuse, FuturesUnordered, Stream, StreamExt, StreamFuture, TryStream, TryStreamExt,
 };
 use futures::{io, ready};
 
@@ -268,6 +268,35 @@ where
             }
         }
     }
+}
+
+/// Merges streams together, yielding items as they become available.
+///
+/// Like [`stream::select_all`], except that ready items from earlier streams
+/// are preferred to later streams. For example, all ready items from the first
+/// stream in `streams` will be yielded before moving on to the second stream in
+/// `streams. This can cause starvation, so use with care.
+pub fn select_all_biased<S>(mut streams: Vec<S>) -> impl Stream<Item = S::Item>
+where
+    S: Stream + Unpin,
+{
+    stream::poll_fn(move |cx| {
+        let mut i = 0;
+        while i < streams.len() {
+            match streams[i].poll_next_unpin(cx) {
+                Poll::Ready(Some(v)) => return Poll::Ready(Some(v)),
+                Poll::Ready(None) => {
+                    streams.remove(i);
+                }
+                Poll::Pending => i += 1,
+            }
+        }
+        if streams.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    })
 }
 
 /// The future returned by [`StreamExt::try_recv`].

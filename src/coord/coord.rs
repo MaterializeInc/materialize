@@ -386,7 +386,10 @@ where
             None
         };
 
-        let mut messages = stream::select_all(vec![
+        let mut messages = ore::future::select_all_biased(vec![
+            // Order matters here. We want to drain internal commands
+            // (`internal_cmd_stream` and `feedback_stream`) before processing
+            // external commands (`cmd_stream`).
             internal_cmd_stream.boxed(),
             feedback_stream.boxed(),
             cmd_stream.boxed(),
