@@ -317,3 +317,205 @@ query TTT
 SELECT 1.1::text, 1.1::float::text, 1.1::double::text
 ----
 1.1  1.1  1.1
+
+query R
+SELECT round(CAST (1.5678 AS float))
+----
+2
+
+query R
+SELECT round(CAST (-1.4678 AS float))
+----
+-1
+
+query R
+SELECT round(CAST (1.5678 AS double precision))
+----
+2
+
+query R
+SELECT round(CAST (-1.4678 AS double precision))
+----
+-1
+
+statement ok
+CREATE TABLE nums (
+  n integer
+)
+
+statement ok
+INSERT INTO nums VALUES (4)
+
+query R
+SELECT round(1.5678, CAST ((SELECT n FROM nums) AS integer))
+----
+1.5678
+
+statement ok
+DELETE FROM nums
+
+query R
+SELECT floor(1.5678)
+----
+1.0000
+
+query R
+SELECT round(1.5678, 3)
+----
+1.5680
+
+query R
+SELECT round(1.5678, 2)
+----
+1.5700
+
+query R
+SELECT round(1.5678, 1)
+----
+1.6000
+
+query R
+SELECT round(1.5678, 0)
+----
+2.0000
+
+query R
+SELECT round(1.5678, 7)
+----
+1.5678
+
+query R
+SELECT round(515, 0)
+----
+515
+
+query R
+SELECT round(515, 1)
+----
+515
+
+query R
+SELECT round(515, -1)
+----
+520
+
+query R
+SELECT round(515, -2)
+----
+500
+
+query RRR
+SELECT round(CAST (515 AS decimal), -3), round(515, -3), round(CAST (515 AS decimal(4, 0)), -3)
+----
+1000  1000  1000
+
+query R
+SELECT round(748.58, -4)
+----
+0.00
+
+query RR
+SELECT round(123.9994, 3), round(123.9995, 3)
+----
+123.9990  124.0000
+
+query RR
+SELECT round(123.4545, 2), round(123.45, -2)
+----
+123.4500  100.00
+
+query R
+SELECT round(150.75, 0)
+----
+151.00
+
+query R
+SELECT round(NULL)
+----
+NULL
+
+query R
+SELECT round(NULL, 2)
+----
+NULL
+
+query R
+SELECT round(1.567, NULL)
+----
+NULL
+
+query R
+SELECT round(NULL, NULL)
+----
+NULL
+
+statement ok
+INSERT INTO nums VALUES (NULL)
+
+query R
+SELECT round((SELECT * FROM nums))
+----
+NULL
+
+query R
+SELECT round((SELECT * FROM nums), 2)
+----
+NULL
+
+query R
+SELECT round(2, (SELECT * FROM nums))
+----
+NULL
+
+query R
+SELECT round((SELECT * FROM nums), (SELECT * FROM nums))
+----
+NULL
+
+statement ok
+DROP TABLE nums
+
+statement ok
+CREATE TABLE nums (
+  n float
+)
+
+statement ok
+INSERT INTO nums VALUES (NULL)
+
+query R
+SELECT round((SELECT * FROM nums));
+----
+NULL
+
+query error first round argument has non-integer type Float64
+SELECT round((SELECT * FROM nums), 2)
+
+query error first round argument has non-integer type Float64
+SELECT round((SELECT * FROM nums), (SELECT * FROM nums))
+
+query error second round argument has non-integer type Float64
+SELECT round(5.0, (SELECT * FROM nums))
+
+query R
+SELECT round(5.0, CAST ((SELECT * FROM nums) AS integer))
+----
+NULL
+
+query error first round argument has non-integer type Float64
+SELECT round(CAST (5.0 AS double precision), 3)
+
+query error first round argument has non-integer type Float64
+SELECT round(CAST (5.0 AS float), 3)
+
+query error first round argument has non-integer type Bool
+SELECT round(true, 3)
+
+query error round argument has non-numeric type Bool
+SELECT round(true)
+
+query error first round argument has non-integer type Float64
+SELECT round(CAST (5.0 AS float), 3.0)
+
+query error first round argument has non-integer type Float64
+SELECT round(CAST (5.0 AS float), CAST (3.0 AS float))

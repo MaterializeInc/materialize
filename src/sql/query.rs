@@ -1836,6 +1836,42 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "round" => {
+                if sql_func.args.is_empty() || sql_func.args.len() > 2 {
+                    bail!(
+                        "round expects 1 or 2 arguments, got {}",
+                        sql_func.args.len()
+                    );
+                }
+
+                if sql_func.args.len() == 1 {
+                    // When there is only one argument, the argument can be
+                    // any numeric type, with integers promoted to decimals.
+                    let expr1 = plan_expr(ecx, &sql_func.args[0], None)?;
+                    let expr1 = promote_number_floatdec(ecx, "round argument", expr1)?;
+                    Ok(match ecx.column_type(&expr1).scalar_type {
+                        ScalarType::Float32 => expr1.call_unary(UnaryFunc::RoundFloat32),
+                        ScalarType::Float64 => expr1.call_unary(UnaryFunc::RoundFloat64),
+                        ScalarType::Decimal(_, s) => {
+                            let zero = ScalarExpr::literal(
+                                Datum::Int64(0),
+                                ColumnType::new(ScalarType::Int64),
+                            );
+                            expr1.call_binary(zero, BinaryFunc::RoundDecimal(s))
+                        }
+                        _ => unreachable!(),
+                    })
+                } else {
+                    // When there are two arguments, the first argument has to
+                    // be a decimal.
+                    let expr1 = plan_expr(ecx, &sql_func.args[0], None)?;
+                    let (expr1, scale) = promote_int_decimal(ecx, "first round argument", expr1)?;
+                    let expr2 = plan_expr(ecx, &sql_func.args[1], None)?;
+                    let expr2 = promote_int_int64(ecx, "second round argument", expr2)?;
+                    Ok(expr1.call_binary(expr2, BinaryFunc::RoundDecimal(scale)))
+                }
+            }
+
             "length" => {
                 if sql_func.args.is_empty() || sql_func.args.len() > 2 {
                     bail!(
@@ -3146,6 +3182,25 @@ where
         }
     };
     Ok(expr)
+}
+
+fn promote_int_decimal<'a, S>(
+    ecx: &ExprContext<'a>,
+    name: S,
+    expr: ScalarExpr,
+) -> Result<(ScalarExpr, u8), failure::Error>
+where
+    S: fmt::Display + Copy,
+{
+    match ecx.column_type(&expr).scalar_type {
+        ScalarType::Decimal(_, s) => Ok((expr, s)),
+        ScalarType::Unknown | ScalarType::Int32 | ScalarType::Int64 => {
+            let scale = 0;
+            let expr = plan_cast_internal(ecx, name, expr, ScalarType::Decimal(0, scale))?;
+            Ok((expr, scale))
+        }
+        other => bail!("{} has non-integer type {:?}", name, other),
+    }
 }
 
 fn promote_number_floatdec<'a, S>(

@@ -606,6 +606,20 @@ fn floor_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
     Datum::from(decimal.with_scale(scale).floor().significand())
 }
 
+fn round_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_float32().round())
+}
+
+fn round_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_float64().round())
+}
+
+fn round_decimal<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
+    let round_to = b.unwrap_int64();
+    let decimal = a.unwrap_decimal().with_scale(a_scale);
+    Datum::from(decimal.round(round_to).significand())
+}
+
 fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let inverse = match b {
         Datum::Interval(i) => {
@@ -1515,6 +1529,7 @@ pub enum BinaryFunc {
     ModFloat32,
     ModFloat64,
     ModDecimal,
+    RoundDecimal(u8),
     Eq,
     NotEq,
     Lt,
@@ -1657,6 +1672,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbContainsJsonb => jsonb_contains_jsonb(a, b),
             BinaryFunc::JsonbDeleteInt64 => jsonb_delete_int64(a, b, temp_storage),
             BinaryFunc::JsonbDeleteString => jsonb_delete_string(a, b, temp_storage),
+            BinaryFunc::RoundDecimal(scale) => round_decimal(a, b, *scale),
         }
     }
 
@@ -1747,6 +1763,14 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             },
+
+            RoundDecimal(scale) => {
+                match input1_type.scalar_type {
+                    ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
+                    _ => unreachable!(),
+                }
+                ColumnType::new(input1_type.scalar_type).nullable(in_nullable)
+            }
 
             AddTimestampInterval
             | SubTimestampInterval
@@ -1842,6 +1866,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbContainsJsonb => f.write_str("b<@"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("b-int64"),
             BinaryFunc::JsonbDeleteString => f.write_str("b-string"),
+            BinaryFunc::RoundDecimal(_) => f.write_str("b-rounddec"),
         }
     }
 }
@@ -1963,6 +1988,8 @@ pub enum UnaryFunc {
     JsonbTypeof,
     JsonbStripNulls,
     JsonbPretty,
+    RoundFloat32,
+    RoundFloat64,
 }
 
 impl UnaryFunc {
@@ -2100,6 +2127,8 @@ impl UnaryFunc {
             UnaryFunc::JsonbTypeof => jsonb_typeof(a),
             UnaryFunc::JsonbStripNulls => jsonb_strip_nulls(a, temp_storage),
             UnaryFunc::JsonbPretty => jsonb_pretty(a, temp_storage),
+            UnaryFunc::RoundFloat32 => round_float32(a),
+            UnaryFunc::RoundFloat64 => round_float64(a),
         }
     }
 
@@ -2210,10 +2239,10 @@ impl UnaryFunc {
             CastJsonbToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
             CastJsonbToBool => ColumnType::new(ScalarType::Bool).nullable(true),
 
-            CeilFloat32 | FloorFloat32 => {
+            CeilFloat32 | FloorFloat32 | RoundFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
             }
-            CeilFloat64 | FloorFloat64 => {
+            CeilFloat64 | FloorFloat64 | RoundFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
             CeilDecimal(scale) | FloorDecimal(scale) => {
@@ -2425,6 +2454,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),
             UnaryFunc::JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
             UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
+            UnaryFunc::RoundFloat32 => f.write_str("roundf32"),
+            UnaryFunc::RoundFloat64 => f.write_str("roundf64"),
         }
     }
 }

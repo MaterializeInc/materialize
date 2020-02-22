@@ -354,6 +354,43 @@ impl Decimal {
             scale: self.scale,
         }
     }
+
+    /// Round a decimal number
+    ///
+    /// ```
+    /// use repr::decimal::Decimal;
+    ///
+    /// let d: Decimal = "100.11".parse().unwrap();
+    /// assert_eq!(&d.round(1).to_string(), "100.10");
+    ///
+    /// let d: Decimal = "99.0".parse().unwrap();
+    /// assert_eq!(&d.round(2).to_string(), "99.0");
+    ///
+    /// let nd: Decimal = "-40.1".parse().unwrap();
+    /// assert_eq!(nd.round(0).to_string(), "-40.0");
+    ///
+    /// let d: Decimal = "55.5555".parse().unwrap();
+    /// assert_eq!(d.round(-2).to_string(), "100.0000");
+    ///
+    /// let d: Decimal = "55.5555".parse().unwrap();
+    /// assert_eq!(d.round(-3).to_string(), "0.0000");
+    /// ```
+    pub fn round(&self, new_scale: i64) -> Decimal {
+        let significand = {
+            if new_scale <= self.scale as i64 {
+                let scale = self.scale as i64 - new_scale;
+                let factor = 10_i128.pow(scale as u32);
+                let new_significand = rounding_downscale(self.significand, scale as usize) * factor;
+                new_significand
+            } else {
+                self.significand
+            }
+        };
+        Decimal {
+            significand,
+            scale: self.scale,
+        }
+    }
 }
 
 impl FromStr for Decimal {
