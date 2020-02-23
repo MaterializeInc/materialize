@@ -485,11 +485,13 @@ where
                     }
                 }
             }
-            block_on(feedback_tx.send(WorkerFeedbackWithMeta {
-                worker_id: self.inner.index(),
-                message: WorkerFeedback::FrontierUppers(progress),
-            }))
-            .unwrap();
+            if !progress.is_empty() {
+                block_on(feedback_tx.send(WorkerFeedbackWithMeta {
+                    worker_id: self.inner.index(),
+                    message: WorkerFeedback::FrontierUppers(progress),
+                }))
+                .unwrap();
+            }
         }
     }
 
