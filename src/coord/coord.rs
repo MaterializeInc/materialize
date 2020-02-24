@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use failure::bail;
 use futures::executor::block_on;
-use futures::future::FutureExt;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -42,23 +41,33 @@ use dataflow_types::{
 };
 use expr::transform::Optimizer;
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr, SourceInstanceId};
-use futures::Stream;
+use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
-use ore::{collections::CollectionExt, future::MaybeFuture};
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
 
 use crate::persistence::SqlSerializer;
-use crate::timestamp::{TimestampChannel, TimestampConfig, TimestampMessage, Timestamper};
+use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::{Command, ExecuteResponse, Response, StartupMessage};
 
 type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 
-enum Message {
+pub enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
-    PlanReady(Session, ClientTx, Result<Plan, failure::Error>, u32),
+    AdvanceSourceTimestamp {
+        id: SourceInstanceId,
+        timestamp: u64,
+        offset: i64,
+    },
+    StatementReady {
+        conn_id: u32,
+        session: Session,
+        tx: ClientTx,
+        result: Result<sql::Statement, failure::Error>,
+        params: Params,
+    },
     Shutdown,
 }
 
@@ -109,134 +118,139 @@ where
     C: comm::Connection,
 {
     pub fn new(config: Config<C>) -> Result<Self, failure::Error> {
-        let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
+        config.executor.enter(|| {
+            let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
 
-        let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
-            Some(
-                config
-                    .executor
-                    .enter(|| block_on(symbiosis::Postgres::open_and_erase(symbiosis_url)))?,
-            )
-        } else {
-            None
-        };
+            let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
+                Some(block_on(symbiosis::Postgres::open_and_erase(
+                    symbiosis_url,
+                ))?)
+            } else {
+                None
+            };
 
-        let catalog_path = if let Some(data_directory) = config.data_directory {
-            Some(data_directory.join("catalog"))
-        } else {
-            None
-        };
+            let catalog_path = if let Some(data_directory) = config.data_directory {
+                Some(data_directory.join("catalog"))
+            } else {
+                None
+            };
 
-        let mut optimizer = Optimizer::default();
+            let mut optimizer = Optimizer::default();
 
-        let catalog_path = catalog_path.as_deref();
-        let catalog = if let Some(logging_config) = config.logging {
-            Catalog::open::<SqlSerializer, _>(catalog_path, |catalog| {
-                for log_src in logging_config.active_logs() {
-                    let view_name = FullName {
-                        database: DatabaseSpecifier::Ambient,
-                        schema: "mz_catalog".into(),
-                        item: log_src.name().into(),
-                    };
-                    let index_name = format!("{}_primary_idx", log_src.name());
-                    catalog.insert_item(
-                        log_src.id(),
-                        FullName {
+            let catalog_path = catalog_path.as_deref();
+            let catalog = if let Some(logging_config) = config.logging {
+                Catalog::open::<SqlSerializer, _>(catalog_path, |catalog| {
+                    for log_src in logging_config.active_logs() {
+                        let view_name = FullName {
                             database: DatabaseSpecifier::Ambient,
                             schema: "mz_catalog".into(),
                             item: log_src.name().into(),
-                        },
-                        CatalogItem::Source(catalog::Source {
-                            create_sql: "TODO".to_string(),
-                            connector: dataflow_types::SourceConnector::Local,
-                            desc: log_src.schema(),
-                        }),
-                    );
-                    catalog.insert_item(
-                        log_src.index_id(),
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: "mz_catalog".into(),
-                            item: index_name.clone(),
-                        },
-                        CatalogItem::Index(catalog::Index {
-                            on: log_src.id(),
-                            keys: log_src
-                                .index_by()
-                                .into_iter()
-                                .map(ScalarExpr::Column)
-                                .collect(),
-                            create_sql: index_sql(
-                                index_name,
-                                view_name,
-                                &log_src.schema(),
-                                &log_src.index_by(),
-                            ),
-                            eval_env: EvalEnv::default(),
-                        }),
-                    );
-                }
-
-                for log_view in logging_config.active_views() {
-                    let params = Params {
-                        datums: Row::pack(&[]),
-                        types: vec![],
-                    };
-                    let stmt = sql::parse(log_view.sql.to_owned())
-                        .expect("failed to parse bootstrap sql")
-                        .into_element();
-                    match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
-                        MaybeFuture::Immediate(Some(Ok(Plan::CreateView {
-                            name: _,
-                            view,
-                            replace,
-                            materialize,
-                        }))) => {
-                            assert!(replace.is_none());
-                            assert!(materialize);
-                            let eval_env = EvalEnv::default();
-                            let view = catalog::View {
-                                create_sql: view.create_sql,
-                                expr: optimizer.optimize(view.expr, catalog.indexes(), &eval_env),
-                                eval_env,
-                                desc: view.desc,
-                            };
-                            let view_name = FullName {
+                        };
+                        let index_name = format!("{}_primary_idx", log_src.name());
+                        catalog.insert_item(
+                            log_src.id(),
+                            FullName {
                                 database: DatabaseSpecifier::Ambient,
                                 schema: "mz_catalog".into(),
-                                item: log_view.name.into(),
-                            };
-                            let index_name = format!("{}_primary_idx", log_view.name);
-                            let index = auto_generate_view_idx(
-                                index_name.clone(),
-                                view_name.clone(),
-                                &view,
-                                log_view.id,
-                            );
-                            catalog.insert_item(log_view.id, view_name, CatalogItem::View(view));
-                            catalog.insert_item(
-                                log_view.index_id,
-                                FullName {
+                                item: log_src.name().into(),
+                            },
+                            CatalogItem::Source(catalog::Source {
+                                create_sql: "TODO".to_string(),
+                                connector: dataflow_types::SourceConnector::Local,
+                                desc: log_src.schema(),
+                            }),
+                        );
+                        catalog.insert_item(
+                            log_src.index_id(),
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "mz_catalog".into(),
+                                item: index_name.clone(),
+                            },
+                            CatalogItem::Index(catalog::Index {
+                                on: log_src.id(),
+                                keys: log_src
+                                    .index_by()
+                                    .into_iter()
+                                    .map(ScalarExpr::Column)
+                                    .collect(),
+                                create_sql: index_sql(
+                                    index_name,
+                                    view_name,
+                                    &log_src.schema(),
+                                    &log_src.index_by(),
+                                ),
+                                eval_env: EvalEnv::default(),
+                            }),
+                        );
+                    }
+
+                    for log_view in logging_config.active_views() {
+                        let params = Params {
+                            datums: Row::pack(&[]),
+                            types: vec![],
+                        };
+                        let stmt = sql::parse(log_view.sql.to_owned())
+                            .expect("failed to parse bootstrap sql")
+                            .into_element();
+                        match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
+                            Ok(Plan::CreateView {
+                                name: _,
+                                view,
+                                replace,
+                                materialize,
+                            }) => {
+                                assert!(replace.is_none());
+                                assert!(materialize);
+                                let eval_env = EvalEnv::default();
+                                let view = catalog::View {
+                                    create_sql: view.create_sql,
+                                    expr: optimizer.optimize(
+                                        view.expr,
+                                        catalog.indexes(),
+                                        &eval_env,
+                                    ),
+                                    eval_env,
+                                    desc: view.desc,
+                                };
+                                let view_name = FullName {
                                     database: DatabaseSpecifier::Ambient,
                                     schema: "mz_catalog".into(),
-                                    item: index_name,
-                                },
-                                CatalogItem::Index(index),
-                            );
+                                    item: log_view.name.into(),
+                                };
+                                let index_name = format!("{}_primary_idx", log_view.name);
+                                let index = auto_generate_view_idx(
+                                    index_name.clone(),
+                                    view_name.clone(),
+                                    &view,
+                                    log_view.id,
+                                );
+                                catalog.insert_item(
+                                    log_view.id,
+                                    view_name,
+                                    CatalogItem::View(view),
+                                );
+                                catalog.insert_item(
+                                    log_view.index_id,
+                                    FullName {
+                                        database: DatabaseSpecifier::Ambient,
+                                        schema: "mz_catalog".into(),
+                                        item: index_name,
+                                    },
+                                    CatalogItem::Index(index),
+                                );
+                            }
+                            err => panic!(
+                                "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
+                                log_view.sql, err
+                            ),
                         }
-                        err => panic!(
-                            "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
-                            log_view.sql, err
-                        ),
                     }
-                }
-            })?
-        } else {
-            Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
-        };
+                })?
+            } else {
+                Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
+            };
 
-        let executor = config.executor;
-        executor.enter(move || {
             let logging = config.logging;
             let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
             broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
@@ -341,180 +355,200 @@ where
     }
 
     pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
-        let (source_tx, source_rx) = std::sync::mpsc::channel();
+        self.executor
+            .take()
+            .expect("serve called twice on coordinator")
+            .enter(|| self.serve_core(cmd_rx))
+    }
+
+    fn serve_core(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
+        let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
+
+        let cmd_stream = cmd_rx
+            .map(Message::Command)
+            .chain(stream::once(future::ready(Message::Shutdown)));
+
+        let feedback_stream = self.feedback_rx.take().unwrap().map(|r| match r {
+            Ok(m) => Message::Worker(m),
+            Err(e) => panic!("coordinator feedback receiver failed: {}", e),
+        });
+
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
         let _timestamper_thread = if let Some(config) = &self.timestamp_config {
             let mut timestamper = Timestamper::new(
                 config,
                 self.catalog.storage_handle(),
-                TimestampChannel {
-                    sender: source_tx,
-                    receiver: ts_rx,
-                },
+                internal_cmd_tx.clone(),
+                ts_rx,
             );
             Some(thread::spawn(move || timestamper.update()).join_on_drop())
         } else {
             None
         };
 
-        self.executor
-            .take()
-            .expect("serve called twice on coordinator")
-            .enter(|| {
-                let streams: Vec<Box<dyn Stream<Item = Result<Message, comm::Error>> + Unpin>> = vec![
-                                        Box::new(
-                                            cmd_rx
-                                                .map(Message::Command)
-                                                .chain(stream::once(future::ready(Message::Shutdown)))
-                                                .map(Ok),
-                                        ),
-                                        Box::new(self.feedback_rx.take().unwrap().map_ok(Message::Worker)),
-                                    ];
+        let mut messages = ore::future::select_all_biased(vec![
+            // Order matters here. We want to drain internal commands
+            // (`internal_cmd_stream` and `feedback_stream`) before processing
+            // external commands (`cmd_stream`).
+            internal_cmd_stream.boxed(),
+            feedback_stream.boxed(),
+            cmd_stream.boxed(),
+        ]);
 
-                let mut messages = stream::select_all(streams);
-
-               while let Some(msg) = block_on(messages.next()) {
-                    // Check for timestamp updates
-                    while let Ok(update) = source_rx.try_recv() {
-                        match update {
-                            TimestampMessage::BatchedUpdate(timestamp, updates) => {
-                                for (id, offset) in updates {
-                                    broadcast(
-                                        &mut self.broadcast_tx,
-                                        SequencedCommand::AdvanceSourceTimestamp {
-                                            id,
-                                            timestamp,
-                                            offset,
-                                        },
-                                    );
-                                }
-                            }
-                            TimestampMessage::Update(id, timestamp, offset) => {
-                                broadcast(
-                                    &mut self.broadcast_tx,
-                                    SequencedCommand::AdvanceSourceTimestamp {
-                                        id,
-                                        timestamp,
-                                        offset,
-                                    },
-                                );
-                            },
-                            _ => {}
+        while let Some(msg) = block_on(messages.next()) {
+            match msg {
+                Message::Command(Command::Startup { session, tx }) => {
+                    let mut messages = vec![];
+                    if self.catalog.database_resolver(session.database()).is_err() {
+                        messages.push(StartupMessage::UnknownSessionDatabase);
+                    }
+                    let _ = tx.send(Response {
+                        result: Ok(messages),
+                        session,
+                    });
+                }
+                Message::Command(Command::Execute {
+                    portal_name,
+                    session,
+                    conn_id,
+                    tx,
+                }) => {
+                    let result = session
+                        .get_portal(&portal_name)
+                        .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))
+                        .and_then(|portal| {
+                            session
+                                .get_prepared_statement(&portal.statement_name)
+                                .ok_or_else(|| failure::format_err!(
+                                    "statement for portal does not exist portal={:?} statement={:?}",
+                                    portal_name,
+                                    portal.statement_name
+                                ))
+                                .map(|ps| (portal, ps))
+                        });
+                    let (portal, prepared) = match result {
+                        Ok((portal, prepared)) => (portal, prepared),
+                        Err(e) => {
+                            let _ = tx.send(Response {
+                                result: Err(e),
+                                session,
+                            });
+                            return;
+                        }
+                    };
+                    match prepared.sql() {
+                        Some(stmt) => {
+                            let mut internal_cmd_tx = internal_cmd_tx.clone();
+                            let stmt = stmt.clone();
+                            let params = portal.parameters.clone();
+                            tokio::spawn(async move {
+                                let result = sql::purify(stmt).await;
+                                let _ = internal_cmd_tx
+                                    .send(Message::StatementReady {
+                                        session,
+                                        tx,
+                                        result,
+                                        conn_id,
+                                        params,
+                                    })
+                                    .await;
+                            });
+                        }
+                        None => {
+                            let _ = tx.send(Response {
+                                result: Ok(ExecuteResponse::EmptyQuery),
+                                session,
+                            });
                         }
                     }
+                }
 
-                    match msg.expect("coordinator message receiver failed") {
-                        Message::Command(Command::Startup {
-                            session,
-                            tx,
-                        }) => {
-                            let mut messages = vec![];
-                            if self.catalog.database_resolver(session.database()).is_err() {
-                                messages.push(StartupMessage::UnknownSessionDatabase);
-                            }
-                            let _ = tx.send(Response { result: Ok(messages), session });
-                        }
-                        Message::Command(Command::Execute {
-                            portal_name,
-                            session,
-                            conn_id,
-                            tx,
-                        }) => {
-                            let result = self.handle_begin_execute(session, portal_name, tx);
-                            match result {
-                                MaybeFuture::Immediate(val) => {
-                                    let (mut session, tx, result) = val.unwrap();
-                                    let result = result.and_then(|plan| {
-                                        self.sequence_plan(&mut session, plan, conn_id)
-                                    });
-                                    let _ = tx.send(Response { result, session });
-                                }
-                                MaybeFuture::Future(fut) => {
-                                    let (self_tx, self_rx) = futures::channel::oneshot::channel();
-                                    let self_rx = stream::once(self_rx.map(|res| res.unwrap()));
-                                    messages.push(Box::new(self_rx));
-                                    let fut = async move {
-                                        let (session, tx, result) = fut.await;
-                                        self_tx
-                                            .send(Ok(Message::PlanReady(
-                                                session, tx, result, conn_id,
-                                            )))
-                                            .map_err(|_e| "(comm error)")
-                                            .expect("Unexpected coordinator communication failure");
-                                    };
-                                    tokio::spawn(fut);
-                                }
-                            }
-                        }
+                Message::StatementReady {
+                    conn_id,
+                    mut session,
+                    tx,
+                    result,
+                    params,
+                } => {
+                    let result = result
+                        .and_then(|stmt| self.handle_statement(&session, stmt, &params))
+                        .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
+                    let _ = tx.send(Response { result, session });
+                }
 
-                        Message::PlanReady(mut session, tx, result, conn_id) => {
-                            let result = result
-                                .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
+                Message::Command(Command::Parse {
+                    name,
+                    sql,
+                    mut session,
+                    tx,
+                }) => {
+                    let result = self.handle_parse(&mut session, name, sql);
+                    let _ = tx.send(Response { result, session });
+                }
 
-                            let _ = tx.send(Response { result, session });
-                        }
+                Message::Command(Command::CancelRequest { conn_id }) => {
+                    self.sequence_cancel(conn_id);
+                }
 
-                        Message::Command(Command::Parse {
-                            name,
-                            sql,
-                            mut session,
-                            tx,
-                        }) => {
-                            let result = self.handle_parse(&mut session, name, sql);
-                            let _ = tx.send(Response { result, session });
-                        }
+                Message::Command(Command::DumpCatalog { tx }) => {
+                    let _ = tx.send(self.catalog.dump());
+                }
 
-                        Message::Command(Command::CancelRequest { conn_id }) => {
-                            self.sequence_cancel(conn_id);
-                        }
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id: _,
+                    message: WorkerFeedback::FrontierUppers(updates),
+                }) => {
+                    for (name, changes) in updates {
+                        self.update_upper(&name, changes);
+                    }
+                    self.maintenance();
+                }
 
-                        Message::Command(Command::DumpCatalog { tx }) => {
-                            let _ = tx.send(self.catalog.dump());
-                        }
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id: _,
+                    message: WorkerFeedback::DroppedSource(source_id),
+                }) => {
+                    // Notify timestamping thread that source has been dropped
+                    ts_tx
+                        .send(TimestampMessage::DropInstance(source_id))
+                        .expect("Failed to send Drop Instance notice to timestamper");
+                }
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id: _,
+                    message: WorkerFeedback::CreateSource(source_id, sc, consistency),
+                }) => {
+                    ts_tx
+                        .send(TimestampMessage::Add(source_id, sc, consistency))
+                        .expect("Failed to send CREATE Instance notice to timestamper");
+                }
 
-                        Message::Shutdown => {
-                            ts_tx.send(TimestampMessage::Shutdown).unwrap();
-                            self.shutdown();
-                            break;
-                        }
-
-                        Message::Worker(WorkerFeedbackWithMeta {
-                            worker_id: _,
-                            message: WorkerFeedback::FrontierUppers(updates),
-                        }) => {
-                            for (name, changes) in updates {
-                                self.update_upper(&name, changes);
-                            }
-                            self.maintenance();
-                        }
-
-                        Message::Worker(WorkerFeedbackWithMeta {
-                            worker_id: _,
-                            message: WorkerFeedback::DroppedSource(source_id)}) => {
-                            // Notify timestamping thread that source has been dropped
-                            ts_tx
-                                .send(TimestampMessage::DropInstance(source_id))
-                                .expect("Failed to send Drop Instance notice to timestamper");
+                Message::AdvanceSourceTimestamp {
+                    id,
+                    timestamp,
+                    offset,
+                } => {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AdvanceSourceTimestamp {
+                            id,
+                            timestamp,
+                            offset,
                         },
-                        Message::Worker(WorkerFeedbackWithMeta {
-                                            worker_id: _,
-                                            message: WorkerFeedback::CreateSource(source_id,sc,consistency)}) => {
-                            ts_tx
-                                .send(TimestampMessage::Add(source_id, sc, consistency))
-                                .expect("Failed to send CREATE Instance notice to timestamper");
-                        }
-                    }
+                    );
                 }
 
-                // Cleanly drain any pending messages from the worker before shutting
-                // down.
-                while let Some(msg) = block_on(messages.next()) {
-                    match msg.expect("coordinator message receiver failed") {
-                        Message::Command(_) | Message::Shutdown => unreachable!(),
-                        Message::Worker(_) | Message::PlanReady(_, _, _, _) => (),
-                   }
+                Message::Shutdown => {
+                    ts_tx.send(TimestampMessage::Shutdown).unwrap();
+                    self.shutdown();
+                    break;
                 }
-            });
+            }
+        }
+
+        // Cleanly drain any pending messages from the worker before shutting
+        // down.
+        drop(internal_cmd_tx);
+        while let Some(_) = block_on(messages.next()) {}
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
@@ -1753,58 +1787,22 @@ where
         session: &Session,
         stmt: sql::Statement,
         params: &sql::Params,
-    ) -> MaybeFuture<'static, Result<sql::Plan, failure::Error>> {
+    ) -> Result<sql::Plan, failure::Error> {
         let plan_result = sql::plan(&self.catalog, session, stmt.clone(), params);
         // Try Postgres if we realize synchronously that we failed.
-        if let MaybeFuture::Immediate(Some(Err(err))) = plan_result {
+        if let Err(err) = plan_result {
             match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
                     block_on(postgres.execute(&self.catalog, session, &stmt))
                 }
                 _ => Err(err),
             }
-            .into()
         // Otherwise, just return the future.
         // Nothing that we do asynchronously could
         // possibly work in Postgres anyway, so don't bother
         // piping through the logic to try in symbiosis mode in this case.
         } else {
             plan_result
-        }
-    }
-
-    fn handle_begin_execute(
-        &mut self,
-        session: Session,
-        portal_name: String,
-        tx: ClientTx,
-    ) -> MaybeFuture<'static, (Session, ClientTx, Result<Plan, failure::Error>)> {
-        let res = session
-            .get_portal(&portal_name)
-            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))
-            .and_then(|portal| {
-                session
-                    .get_prepared_statement(&portal.statement_name)
-                    .ok_or_else(|| {
-                        failure::format_err!(
-                            "statement for portal does not exist portal={:?} statement={:?}",
-                            portal_name,
-                            portal.statement_name
-                        )
-                    })
-                    .map(|ps| (portal, ps))
-            });
-        let (portal, prepared) = match res {
-            Ok((portal, prepared)) => (portal, prepared),
-            Err(e) => {
-                return (session, tx, Err(e)).into();
-            }
-        };
-        match prepared.sql() {
-            Some(stmt) => self
-                .handle_statement(&session, stmt.clone(), &portal.parameters)
-                .map(|res| (session, tx, res)),
-            None => (session, tx, Ok(Plan::EmptyQuery)).into(),
         }
     }
 

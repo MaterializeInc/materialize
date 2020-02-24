@@ -30,7 +30,6 @@ use dataflow_types::{
 use expr::GlobalId;
 use interchange::{avro, protobuf};
 use ore::collections::CollectionExt;
-use ore::future::MaybeFuture;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
@@ -199,13 +198,14 @@ pub fn describe_statement(
     })
 }
 
-fn handle_sync_statement(
+pub fn handle_statement(
+    catalog: &Catalog,
+    session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
-    scx: &StatementContext,
 ) -> Result<Plan, failure::Error> {
+    let scx = &StatementContext { catalog, session };
     match stmt {
-        Statement::CreateSource { .. } => unreachable!(),
         Statement::Tail { name } => handle_tail(scx, name),
         Statement::StartTransaction { .. } => handle_start_transaction(),
         Statement::Commit { .. } => handle_commit_transaction(),
@@ -218,6 +218,7 @@ fn handle_sync_statement(
             name,
             if_not_exists,
         } => handle_create_schema(scx, name, if_not_exists),
+        Statement::CreateSource { .. } => handle_create_source(scx, stmt),
         Statement::CreateView { .. } => handle_create_view(scx, stmt, params),
         Statement::CreateSink { .. } => handle_create_sink(scx, stmt),
         Statement::CreateIndex { .. } => handle_create_index(scx, stmt),
@@ -260,23 +261,6 @@ fn handle_sync_statement(
         Statement::Explain { stage, query } => handle_explain(scx, stage, *query, params),
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
-    }
-}
-
-/// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
-pub fn handle_statement(
-    catalog: &Catalog,
-    session: &dyn PlanSession,
-    stmt: Statement,
-    params: &Params,
-) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
-    let scx = &StatementContext { catalog, session };
-    match stmt {
-        Statement::CreateSource { .. } => {
-            let session = session.to_owned();
-            MaybeFuture::Future(Box::pin(handle_create_dataflow(stmt, session)))
-        }
-        _ => handle_sync_statement(stmt, params, &scx).into(),
     }
 }
 
@@ -836,13 +820,7 @@ fn handle_create_view(
     })
 }
 
-/// Remove dependencies on external state: inline schemas in files,
-/// fetch schemas from registries, and so on, so that we can generate a
-/// fully-specified `create-sql` to persist in the catalog.
-///
-/// The `Statement` returned from this function should be able to be planned
-/// without any asynchronicity or non-determinism.
-async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Error> {
+pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Error> {
     if let Statement::CreateSource {
         connector, format, ..
     } = &mut stmt
@@ -900,10 +878,7 @@ async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Err
     Ok(stmt)
 }
 
-fn handle_create_dataflow_pure(
-    stmt: Statement,
-    session: Box<dyn PlanSession + Send>,
-) -> Result<Plan, failure::Error> {
+fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     match &stmt {
         Statement::CreateSource {
             name,
@@ -1150,14 +1125,6 @@ fn handle_create_dataflow_pure(
                 Connector::AvroOcf { .. } => bail!("Avro object files are not yet supported."),
             };
 
-            // TODO(benesch): figure out how to get the actual catalog in here.
-            // Likely need to return a non-async func that takes the session and
-            // catalog.
-            let catalog = Catalog::dummy();
-            let scx = StatementContext {
-                catalog: &catalog,
-                session: &*session,
-            };
             let if_not_exists = *if_not_exists;
             let materialized = *materialized;
             let name = scx.allocate_name(normalize::object_name(name.clone())?);
@@ -1171,14 +1138,6 @@ fn handle_create_dataflow_pure(
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
-}
-
-async fn handle_create_dataflow(
-    stmt: Statement,
-    session: Box<dyn PlanSession + Send>,
-) -> Result<Plan, failure::Error> {
-    let stmt = purify_statement(stmt).await?;
-    handle_create_dataflow_pure(stmt, session)
 }
 
 fn handle_drop_database(

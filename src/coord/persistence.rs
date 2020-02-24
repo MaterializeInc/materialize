@@ -19,7 +19,6 @@ use catalog::{Catalog, CatalogItemSerializer, Index, Sink, Source, View};
 use expr::transform::Optimizer;
 use failure::bail;
 use ore::collections::CollectionExt;
-use ore::future::MaybeFuture;
 use repr::Row;
 use sql::{Params, Plan};
 
@@ -93,26 +92,7 @@ impl CatalogItemSerializer for SqlSerializer {
             types: vec![],
         };
         let stmt = sql::parse(create_sql)?.into_element();
-        let plan = match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
-            MaybeFuture::Immediate(Some(Ok(plan))) => plan,
-            MaybeFuture::Immediate(Some(Err(e))) => return Err(e),
-            MaybeFuture::Immediate(None) => unreachable!(),
-            MaybeFuture::Future(f) => futures::executor::block_on(async {
-                // TODO(benesch): the whole point of MaybeFuture is to indicate
-                // when a maybe-asynchronous task is ready immediately, and yet
-                // here we find ourselves polling the future variant because we
-                // humans know statically that it is ready immediately, even
-                // though Rust does not. Rework so that the type system can
-                // enforce this invariant.
-                use std::task::Poll;
-                match futures::poll!(f) {
-                    Poll::Ready(res) => res,
-                    Poll::Pending => {
-                        bail!("catalog entry inappropriately depends on external state")
-                    }
-                }
-            })?,
-        };
+        let plan = sql::plan(catalog, &sql::InternalSession, stmt, &params)?;
         Ok(match plan {
             Plan::CreateSource { source, .. } => catalog::CatalogItem::Source(Source {
                 create_sql: source.create_sql,
