@@ -27,24 +27,21 @@ interval_end    YES text
 interval_start  YES text
 records         YES jsonb
 
-# TODO: these should be fully json
-> SELECT * FROM billing WHERE id = 1
+> SELECT * FROM billing
+0 0                   0                   []
 1 2020-01-01_00:00:00 2020-01-01_00:00:09 []
-
-> SELECT id, interval_end, interval_start FROM billing WHERE id = 2
-2 2020-01-01_00:00:19 2020-01-01_00:00:10
-
-> SELECT records->0->'value', records->1->'value' FROM billing WHERE id = 2
-25.0 125.0
+2 2020-01-01_00:00:10 2020-01-01_00:00:19 "[{\"interval_end\":\"2020-01-01_00:00:15\",\"interval_start\":\"2020-01-01_00:00:10\",\"measurements\":[{\"measured_value\":5.0,\"resource\":\"CPU\"},{\"measured_value\":128.0,\"resource\":\"MEM\"}],\"meter\":\"user\",\"value\":25.0},{\"interval_end\":\"2020-01-01_00:00:19\",\"interval_start\":\"2020-01-01_00:00:16\",\"measurements\":[{\"measured_value\":13.0,\"resource\":\"CPU\"},{\"measured_value\":256.0,\"resource\":\"MEM\"}],\"meter\":\"user\",\"value\":125.0}]"
 
 > SELECT
+    records->0->'value',
     records->0->'measurements'->0->'measured_value',
-    records->1->'measurements'->1->'measured_value'
-  FROM billing WHERE id = 2
-5.0 256.0
-
-> SELECT records->0->>'meter', records->1->>'meter' FROM billing WHERE id = 2
-user user
+    records->0->>'meter',
+    records->1->'value',
+    records->1->'measurements'->1->'measured_value',
+    records->1->>'meter'
+  FROM billing
+  WHERE id = 2
+25.0  5.0  user  125.0  256.0  user
 
 # Do some destructuring over the nested records
 
