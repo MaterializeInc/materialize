@@ -2766,6 +2766,7 @@ fn parse_create_view() {
             materialized,
             replace,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
@@ -2773,6 +2774,7 @@ fn parse_create_view() {
             assert!(!materialized);
             assert!(!replace);
             assert_eq!(with_options, vec![]);
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -2821,6 +2823,7 @@ fn parse_create_view_with_columns() {
             query,
             materialized,
             replace,
+            if_not_exists,
         } => {
             assert_eq!("v", name.to_string());
             assert_eq!(columns, vec![Ident::new("has"), Ident::new("cols")]);
@@ -2828,6 +2831,7 @@ fn parse_create_view_with_columns() {
             assert_eq!("SELECT 1, 2", query.to_string());
             assert!(!materialized);
             assert!(!replace);
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -2844,6 +2848,7 @@ fn parse_create_materialized_view() {
             materialized,
             replace,
             with_options,
+            if_not_exists,
         } => {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
@@ -2851,6 +2856,7 @@ fn parse_create_materialized_view() {
             assert!(materialized);
             assert!(!replace);
             assert_eq!(with_options, vec![]);
+            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
