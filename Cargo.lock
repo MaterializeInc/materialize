@@ -1715,7 +1715,9 @@ dependencies = [
  "postgres",
  "pretty_assertions",
  "prometheus",
+ "rlimit",
  "serde_json",
+ "sysctl",
  "tempfile",
  "tokio",
  "tokio-postgres",
@@ -2962,6 +2964,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 
 [[package]]
+name = "rlimit"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6d26e65e82a1e2628c5f209ec12f4508fa50e644bd2f264138e60129d61eae8"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "rusoto_core"
 version = "0.43.0-beta.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3526,6 +3538,19 @@ dependencies = [
  "quote 1.0.2",
  "syn 1.0.11",
  "unicode-xid 0.2.0",
+]
+
+[[package]]
+name = "sysctl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0501f0d0c2aa64b419abff97c209f4b82c4e67caa63e8dc5b222ecc1b574cb5c"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "failure",
+ "libc",
+ "walkdir",
 ]
 
 [[package]]

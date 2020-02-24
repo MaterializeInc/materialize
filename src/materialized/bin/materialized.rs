@@ -31,6 +31,7 @@ use std::thread;
 use backtrace::Backtrace;
 use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
+use log::{trace, warn};
 use once_cell::sync::OnceCell;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -191,6 +192,8 @@ fn run() -> Result<(), failure::Error> {
         }
     }
 
+    adjust_rlimits();
+
     // Inform the user about what they are using, and how to contact us.
     beta_splash();
 
@@ -287,4 +290,74 @@ to improve both our software and your queries! Please reach out at:
 =======================================================================
 "
     );
+}
+
+/// Attempts to increase the soft nofile rlimit to the maximum possible value.
+fn adjust_rlimits() {
+    // getrlimit/setrlimit can have surprisingly different behavior across
+    // platforms, even with the rlimit wrapper crate that we use. This function
+    // is chattier than normal at the trace log level in an attempt to ease
+    // debugging of such differences.
+
+    let (soft, hard) = match rlimit::Resource::NOFILE.get() {
+        Ok(limits) => limits,
+        Err(e) => {
+            trace!("unable to read initial nofile rlimit: {}", e);
+            return;
+        }
+    };
+    trace!("initial nofile rlimit: ({}, {})", soft, hard);
+
+    #[cfg(target_os = "macos")]
+    let hard = {
+        use std::cmp;
+        use sysctl::Sysctl;
+
+        // On macOS, getrlimit by default reports that the hard limit is
+        // unlimited, but there is usually a stricter hard limit discoverable
+        // via sysctl. Failing to discover this secret stricter hard limit will
+        // cause the call to setrlimit below to fail.
+        let res = sysctl::Ctl::new("kern.maxfilesperproc")
+            .and_then(|ctl| ctl.value())
+            .map_err(|e| e.to_string())
+            .and_then(|v| match v {
+                sysctl::CtlValue::Int(v) => Ok(v as u64),
+                o => Err(format!("unexpected sysctl value type: {:?}", o)),
+            });
+        match res {
+            Ok(v) => {
+                trace!("sysctl kern.maxfilesperproc hard limit: {}", v);
+                cmp::min(v, hard)
+            }
+            Err(e) => {
+                trace!("error while reading sysctl: {}", e);
+                hard
+            }
+        }
+    };
+
+    trace!("attempting to adjust nofile rlimit to ({0}, {0})", hard);
+    if let Err(e) = rlimit::Resource::NOFILE.set(hard, hard) {
+        trace!("error adjusting nofile rlimit: {}", e);
+        return;
+    }
+
+    // Check whether getrlimit reflects the limit we installed with setrlimit.
+    // Some platforms will silently ignore invalid values in setrlimit.
+    let (soft, hard) = match rlimit::Resource::NOFILE.get() {
+        Ok(limits) => limits,
+        Err(e) => {
+            trace!("unable to read adjusted nofile rlimit: {}", e);
+            return;
+        }
+    };
+    trace!("adjusted nofile rlimit: ({}, {})", soft, hard);
+
+    const RECOMMENDED_SOFT_LIMIT: u64 = 1024;
+    if soft < RECOMMENDED_SOFT_LIMIT {
+        warn!(
+            "soft nofile rlimit ({}) is dangerously low; at least {} is recommended",
+            soft, RECOMMENDED_SOFT_LIMIT
+        )
+    }
 }
