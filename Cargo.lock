@@ -2107,9 +2107,9 @@ dependencies = [
 
 [[package]]
 name = "parse_duration"
-version = "2.0.1"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8441f290d495b20da3a5051192fe4d51cc21872614a09d2642484e6895496e43"
+checksum = "dc8d8324ba4f571dbac55dea78c76f72681fcc488b51a9ee7ddb10263e7e92ae"
 dependencies = [
  "lazy_static 1.4.0",
  "num",
