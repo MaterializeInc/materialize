@@ -81,10 +81,10 @@ pinned to the correct version. Reach out to @jamii for more information.
 
 ### Confluent CLI
 
-As of Sep 23, 2019 you can run:
+As of Sep 24, 2020 you can run:
 
 ```shell
-curl -L https://cnfl.io/cli | sh -s -- -b /usr/local/bin
+curl -L --http1.1 https://cnfl.io/cli | sh -s -- -b /usr/local/bin
 ```
 
 However, if this ever stops working, check out these great docs on the
