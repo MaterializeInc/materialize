@@ -195,3 +195,13 @@ unknown catalog item 'nonexistent'
 
 ! DROP SOURCE nonexistent
 unknown catalog item 'nonexistent'
+
+# Test CREATE VIEW IF NOT EXISTS
+> CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
+
+! CREATE MATERIALIZED VIEW test1 AS SELECT 42 AS a
+catalog item 'test1' already exists
+
+> CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
+
+> DROP VIEW test1
