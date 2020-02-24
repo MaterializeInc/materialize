@@ -2790,6 +2790,15 @@ fn parse_create_or_replace_view() {
 }
 
 #[test]
+fn parse_create_view_if_not_exists() {
+    let sql = "CREATE VIEW IF NOT EXISTS v AS SELECT 1";
+    match verified_stmt(sql) {
+        Statement::CreateView { if_not_exists, .. } => assert!(if_not_exists),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn parse_create_view_with_options() {
     let sql = "CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1";
     match verified_stmt(sql) {
@@ -2857,6 +2866,22 @@ fn parse_create_materialized_view() {
             assert!(!replace);
             assert_eq!(with_options, vec![]);
             assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_materialized_view_if_not_exists() {
+    let sql = "CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar";
+    match verified_stmt(sql) {
+        Statement::CreateView {
+            name,
+            if_not_exists,
+            ..
+        } => {
+            assert_eq!("myschema.myview", name.to_string());
+            assert!(if_not_exists);
         }
         _ => unreachable!(),
     }

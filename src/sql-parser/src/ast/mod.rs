@@ -1054,9 +1054,6 @@ impl fmt::Display for Statement {
                 if_not_exists,
             } => {
                 write!(f, "CREATE")?;
-                if *if_not_exists {
-                    write!(f, " IF NOT EXISTS")?;
-                }
                 if *replace {
                     write!(f, " OR REPLACE")?;
                 }
@@ -1064,7 +1061,13 @@ impl fmt::Display for Statement {
                     write!(f, " MATERIALIZED")?;
                 }
 
-                write!(f, " VIEW {}", name)?;
+                write!(f, " VIEW")?;
+
+                if *if_not_exists {
+                    write!(f, " IF NOT EXISTS")?;
+                }
+
+                write!(f, " {}", name)?;
 
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
