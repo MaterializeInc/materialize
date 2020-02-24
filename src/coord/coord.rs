@@ -145,65 +145,11 @@ where
                             database: DatabaseSpecifier::Ambient,
                             schema: "mz_catalog".into(),
                             item: log_src.name().into(),
-                        },
-                        CatalogItem::Source(catalog::Source {
-                            create_sql: "TODO".to_string(),
-                            connector: dataflow_types::SourceConnector::Local,
-                            desc: log_src.schema(),
-                        }),
-                    );
-                    catalog.insert_item(
-                        log_src.index_id(),
-                        FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: "mz_catalog".into(),
-                            item: index_name.clone(),
-                        },
-                        CatalogItem::Index(catalog::Index {
-                            on: log_src.id(),
-                            keys: log_src
-                                .index_by()
-                                .into_iter()
-                                .map(ScalarExpr::Column)
-                                .collect(),
-                            create_sql: index_sql(
-                                index_name,
-                                view_name,
-                                &log_src.schema(),
-                                &log_src.index_by(),
-                            ),
-                            eval_env: EvalEnv::default(),
-                        }),
-                    );
-                }
-
-                for log_view in logging_config.active_views() {
-                    let params = Params {
-                        datums: Row::pack(&[]),
-                        types: vec![],
-                    };
-                    let stmt = sql::parse(log_view.sql.to_owned())
-                        .expect("failed to parse bootstrap sql")
-                        .into_element();
-                    match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
-                        MaybeFuture::Immediate(Some(Ok(Plan::CreateView {
-                            name: _,
-                            view,
-                            replace,
-                            materialize,
-                            if_not_exists,
-                        }))) => {
-                            assert!(replace.is_none());
-                            assert!(materialize);
-                            assert!(!if_not_exists);
-                            let eval_env = EvalEnv::default();
-                            let view = catalog::View {
-                                create_sql: view.create_sql,
-                                expr: optimizer.optimize(view.expr, catalog.indexes(), &eval_env),
-                                eval_env,
-                                desc: view.desc,
-                            };
-                            let view_name = FullName {
+                        };
+                        let index_name = format!("{}_primary_idx", log_src.name());
+                        catalog.insert_item(
+                            log_src.id(),
+                            FullName {
                                 database: DatabaseSpecifier::Ambient,
                                 schema: "mz_catalog".into(),
                                 item: log_src.name().into(),
@@ -253,8 +199,10 @@ where
                                 view,
                                 replace,
                                 materialize,
+                                if_not_exists,
                             }) => {
                                 assert!(replace.is_none());
+                                assert!(!if_not_exists);
                                 assert!(materialize);
                                 let eval_env = EvalEnv::default();
                                 let view = catalog::View {
