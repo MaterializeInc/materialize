@@ -370,7 +370,12 @@ cannot drop materialize.public.v3: still depended upon by catalog item 'material
 cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
 
 # Succeeds even though it's dependent on.
-> CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 1;
+> CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 2 as b;
+
+> SELECT * FROM test1;
+?column?
+-----------
+1
 
 > DROP VIEW test2;
 
