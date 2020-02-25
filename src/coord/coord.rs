@@ -199,8 +199,10 @@ where
                                 view,
                                 replace,
                                 materialize,
+                                if_not_exists,
                             }) => {
                                 assert!(replace.is_none());
+                                assert!(!if_not_exists);
                                 assert!(materialize);
                                 let eval_env = EvalEnv::default();
                                 let view = catalog::View {
@@ -760,6 +762,7 @@ where
                 view,
                 replace,
                 materialize,
+                if_not_exists,
             } => {
                 let mut ops = vec![];
                 if let Some(id) = replace {
@@ -799,19 +802,24 @@ where
                 } else {
                     (None, None)
                 };
-                self.catalog_transact(ops)?;
-                self.insert_view(view_id, &view);
-                if materialize {
-                    let mut dataflow = DataflowDesc::new(name.to_string());
-                    self.build_view_collection(&view_id, &view, &mut dataflow);
-                    self.build_arrangement(
-                        &index_id.unwrap(),
-                        index.unwrap(),
-                        view.desc.typ().clone(),
-                        dataflow,
-                    );
+                match self.catalog_transact(ops) {
+                    Ok(()) => {
+                        self.insert_view(view_id, &view);
+                        if materialize {
+                            let mut dataflow = DataflowDesc::new(name.to_string());
+                            self.build_view_collection(&view_id, &view, &mut dataflow);
+                            self.build_arrangement(
+                                &index_id.unwrap(),
+                                index.unwrap(),
+                                view.desc.typ().clone(),
+                                dataflow,
+                            );
+                        }
+                        Ok(ExecuteResponse::CreatedView { existed: false })
+                    }
+                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+                    Err(err) => Err(err),
                 }
-                Ok(ExecuteResponse::CreatedView)
             }
 
             Plan::CreateIndex {

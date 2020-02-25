@@ -1331,6 +1331,8 @@ impl Parser {
         };
         let materialized = self.parse_keyword("MATERIALIZED");
         self.expect_keyword("VIEW")?;
+        let if_not_exists = !replace && self.parse_if_not_exists()?;
+
         // Many dialects support `OR REPLACE` | `OR ALTER` right after `CREATE`, but we don't (yet).
         // ANSI SQL and Postgres support RECURSIVE here, but we don't support it either.
         let name = self.parse_object_name()?;
@@ -1346,6 +1348,7 @@ impl Parser {
             materialized,
             replace,
             with_options,
+            if_not_exists,
         })
     }
 

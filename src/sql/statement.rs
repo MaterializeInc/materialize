@@ -757,7 +757,8 @@ fn handle_create_view(
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, columns, query, materialized, replace, with_options) = match &mut stmt {
+    let (name, columns, query, materialized, replace, with_options, if_not_exists) = match &mut stmt
+    {
         Statement::CreateView {
             name,
             columns,
@@ -765,7 +766,16 @@ fn handle_create_view(
             materialized,
             replace,
             with_options,
-        } => (name, columns, query, materialized, replace, with_options),
+            if_not_exists,
+        } => (
+            name,
+            columns,
+            query,
+            materialized,
+            replace,
+            with_options,
+            if_not_exists,
+        ),
         _ => unreachable!(),
     };
     if !with_options.is_empty() {
@@ -808,6 +818,7 @@ fn handle_create_view(
         }
     }
     let materialize = *materialized; // Normalize for `raw_sql` below.
+    let if_not_exists = *if_not_exists;
     Ok(Plan::CreateView {
         name,
         view: View {
@@ -817,6 +828,7 @@ fn handle_create_view(
         },
         replace,
         materialize,
+        if_not_exists,
     })
 }
 

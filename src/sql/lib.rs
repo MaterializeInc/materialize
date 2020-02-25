@@ -69,6 +69,7 @@ pub enum Plan {
         replace: Option<GlobalId>,
         /// whether we should auto-materialize the view
         materialize: bool,
+        if_not_exists: bool,
     },
     CreateIndex {
         name: FullName,
