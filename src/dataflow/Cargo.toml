@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-avro-rs = {path = "../../../avro-rs" }
+avro-rs = { git = "https://github.com/umanwizard/avro-rs.git", branch = "async" }
 bincode = "1.2.1"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }

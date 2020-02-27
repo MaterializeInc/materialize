@@ -130,6 +130,7 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 [[package]]
 name = "avro-rs"
 version = "0.6.5"
+source = "git+https://github.com/umanwizard/avro-rs.git?branch=async#b2a857eb1b970517828c628aee431e3d07487bf4"
 dependencies = [
  "chrono",
  "digest",
