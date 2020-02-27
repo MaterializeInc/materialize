@@ -20,9 +20,9 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use avro_rs::Schema;
 use avro_rs::types::Value;
+use avro_rs::Schema;
+use chrono::{DateTime, Utc};
 
 pub mod util;
 
@@ -162,11 +162,14 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     let fetch_avro_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(brennan): use a blocking SELECT when that exists.
         thread::sleep(Duration::from_secs(1));
-        Ok(
-            client.
-                query(&*format!("SELECT * FROM {} ORDER BY mz_obj_no", source),
-                &[])?.into_iter()
-                .map(|row| (row.get(0), row.get(1), row.get(2))).collect::<Vec<(f64, f64, i64)>>())
+        Ok(client
+            .query(
+                &*format!("SELECT * FROM {} ORDER BY mz_obj_no", source),
+                &[],
+            )?
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect::<Vec<(f64, f64, i64)>>())
     };
 
     let append = |file: &mut File, data| -> Result<_, Box<dyn Error>> {
@@ -182,7 +185,8 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     let static_path = Path::join(temp_dir.path(), "static.csv");
     let dynamic_path = Path::join(temp_dir.path(), "dynamic.csv");
     let avro_path = Path::join(temp_dir.path(), "dynamic.avro");
-    let avro_schema = serde_json::from_str(r#"
+    let avro_schema = serde_json::from_str(
+        r#"
     {
      "type": "record",
      "name": "cpx",
@@ -191,7 +195,8 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
          {"name": "re", "type": "double"}
      ]
     }
-    "#)?;
+    "#,
+    )?;
     let avro_schema = Schema::parse(&avro_schema)?;
     let mut dynamic_file = File::create(&dynamic_path)?;
     let mut avro_writer = avro_rs::Writer::new(&avro_schema, File::create(&avro_path)?);
@@ -246,7 +251,13 @@ New York,NY,10004
     );
 
     fn get_record(i: i32) -> Value {
-        Value::Record(vec![("im".to_owned(), Value::Double(i as f64)), ("re".to_owned(), Value::Double((i as f64) * std::f64::consts::PI))])
+        Value::Record(vec![
+            ("im".to_owned(), Value::Double(i as f64)),
+            (
+                "re".to_owned(),
+                Value::Double((i as f64) * std::f64::consts::PI),
+            ),
+        ])
     }
 
     for i in 0..100 {
@@ -260,11 +271,13 @@ New York,NY,10004
         avro_path.display()
     ))?;
     client.batch_execute(
-        "CREATE MATERIALIZED VIEW dynamic_ocf AS SELECT * FROM dynamic_ocf_source"
+        "CREATE MATERIALIZED VIEW dynamic_ocf AS SELECT * FROM dynamic_ocf_source",
     )?;
     assert_eq!(
         fetch_avro_rows(&mut client, "dynamic_ocf")?,
-        (0..100).map(|i| (i as f64, (i as f64) * std::f64::consts::PI, i + 1)).collect::<Vec<_>>()
+        (0..100)
+            .map(|i| (i as f64, (i as f64) * std::f64::consts::PI, i + 1))
+            .collect::<Vec<_>>()
     );
 
     for i in 100..150 {
@@ -275,7 +288,9 @@ New York,NY,10004
 
     assert_eq!(
         fetch_avro_rows(&mut client, "dynamic_ocf")?,
-        (0..150).map(|i| (i as f64, (i as f64) * std::f64::consts::PI, i + 1)).collect::<Vec<_>>()
+        (0..150)
+            .map(|i| (i as f64, (i as f64) * std::f64::consts::PI, i + 1))
+            .collect::<Vec<_>>()
     );
 
     // Test the TAIL SQL command on the tailed file source. This is end-to-end
