@@ -149,7 +149,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     let (stream, capability) = if let ExternalSourceConnector::AvroOcf(c) =
                         connector
                     {
-                        let read_style = if worker_index != 0 {
+                        // Distribute read responsibility among workers.
+                        use differential_dataflow::hashable::Hashable;
+                        let hash = src_id.hashed() as usize;
+
+                        let read_style = if worker_index != (hash % worker_peers) {
                             FileReadStyle::None
                         } else if c.tail {
                             FileReadStyle::TailFollowFd
