@@ -1045,7 +1045,6 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut desc = encoding.desc(envelope)?;
             desc.add_cols(external_connector.metadata_columns());
 
-
             let if_not_exists = *if_not_exists;
             let materialized = *materialized;
             let name = scx.allocate_name(normalize::object_name(name.clone())?);

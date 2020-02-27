@@ -342,8 +342,13 @@ impl DataEncoding {
             DataEncoding::AvroOcf { schema } => {
                 avro::validate_value_schema(&*schema, envelope == Envelope::Debezium)?
             }
-            DataEncoding::Avro(AvroEncoding { value_schema, key_schema, .. }) => {
-                let mut desc = avro::validate_value_schema(value_schema, envelope == Envelope::Debezium)?;
+            DataEncoding::Avro(AvroEncoding {
+                value_schema,
+                key_schema,
+                ..
+            }) => {
+                let mut desc =
+                    avro::validate_value_schema(value_schema, envelope == Envelope::Debezium)?;
                 if let Some(key_schema) = key_schema {
                     let keys = avro::validate_key_schema(key_schema, &desc)?;
                     desc = desc.add_keys(keys);
