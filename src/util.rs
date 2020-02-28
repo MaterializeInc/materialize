@@ -1,5 +1,5 @@
 use std::i64;
-use std::sync::{Once, ONCE_INIT};
+use std::sync::Once;
 
 use failure::{Error, Fail};
 use serde_json::{Map, Value};
@@ -10,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 /// data, whose length field might be interpreted as enourmous.
 /// See max_allocation_bytes to change this limit.
 pub static mut MAX_ALLOCATION_BYTES: usize = 512 * 1024 * 1024;
-static MAX_ALLOCATION_BYTES_ONCE: Once = ONCE_INIT;
+static MAX_ALLOCATION_BYTES_ONCE: Once = Once::new();
 
 /// Describes errors happened trying to allocate too many bytes
 #[derive(Fail, Debug)]

@@ -59,8 +59,8 @@ impl FromStr for Codec {
 
 impl Codec {
     /// Compress a stream of bytes in-place.
-    pub fn compress(&self, stream: &mut Vec<u8>) -> Result<(), Error> {
-        match *self {
+    pub fn compress(self, stream: &mut Vec<u8>) -> Result<(), Error> {
+        match self {
             Codec::Null => (),
             Codec::Deflate => {
                 let mut encoder = Encoder::new(Vec::new());
@@ -87,8 +87,8 @@ impl Codec {
     }
 
     /// Decompress a stream of bytes in-place.
-    pub fn decompress(&self, stream: &mut Vec<u8>) -> Result<(), Error> {
-        match *self {
+    pub fn decompress(self, stream: &mut Vec<u8>) -> Result<(), Error> {
+        match self {
             Codec::Null => (),
             Codec::Deflate => {
                 let mut decoded = Vec::new();

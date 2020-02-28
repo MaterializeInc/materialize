@@ -365,15 +365,13 @@ impl UnionSchema {
         let mut vindex = HashMap::new();
         for (i, schema) in schemas.iter().enumerate() {
             if let Schema::Union(_) = schema {
-                Err(ParseSchemaError::new(
-                    "Unions may not directly contain a union",
-                ))?;
+                return Err(
+                    ParseSchemaError::new("Unions may not directly contain a union").into(),
+                );
             }
             let kind = SchemaKind::from(schema);
             if vindex.insert(kind, i).is_some() {
-                Err(ParseSchemaError::new(
-                    "Unions cannot contain duplicate types",
-                ))?;
+                return Err(ParseSchemaError::new("Unions cannot contain duplicate types").into());
             }
         }
         Ok(UnionSchema {
@@ -595,30 +593,27 @@ impl Schema {
         let scale = complex.get("scale").and_then(|v| v.as_i64()).unwrap_or(0);
 
         if scale < 0 {
-            Err(ParseSchemaError::new(
-                "Decimal scale must be greater than zero",
-            ))?;
+            return Err(ParseSchemaError::new("Decimal scale must be greater than zero").into());
         }
 
         if precision < 0 {
-            Err(ParseSchemaError::new(
-                "Decimal precision must be greater than zero",
-            ))?;
+            return Err(
+                ParseSchemaError::new("Decimal precision must be greater than zero").into(),
+            );
         }
 
         if scale > precision {
-            Err(ParseSchemaError::new(
-                "Decimal scale is greater than precision",
-            ))?;
+            return Err(ParseSchemaError::new("Decimal scale is greater than precision").into());
         }
 
         if let Some(fixed_size) = fixed_size {
             let max = ((2_usize.pow((8 * fixed_size - 1) as u32) - 1) as f64).log10() as usize;
             if precision as usize > max {
-                Err(ParseSchemaError::new(format!(
+                return Err(ParseSchemaError::new(format!(
                     "Decimal precision {} requires more than {} bytes of space",
                     precision, fixed_size,
-                )))?
+                ))
+                .into());
             }
         }
 
