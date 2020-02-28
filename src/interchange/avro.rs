@@ -394,7 +394,7 @@ impl Decoder {
         if magic != 0 {
             bail!(
                 "wrong avro serialization magic: expected 0, got {}",
-                bytes[0]
+                magic
             );
         }
 
