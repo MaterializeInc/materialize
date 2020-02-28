@@ -162,7 +162,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         };
                         let reader_schema = match &encoding {
                             DataEncoding::AvroOcf { schema } => schema,
-                            _ => unreachable!("Internal error: Avro OCF schema should have already been resolved.\nEncoding is: {:?}", encoding)
+                            _ => unreachable!("Internal error: \
+                                              Avro OCF schema should have already been resolved.\n\
+                                              Encoding is: {:?}", encoding)
                         };
                         let reader_schema = Schema::parse_str(reader_schema).unwrap();
                         let ctor = |file| {
