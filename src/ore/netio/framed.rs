@@ -29,3 +29,5 @@ impl Display for FrameTooBig {
         f.write_str("frame size too big")
     }
 }
+
+impl Error for FrameTooBig { }
