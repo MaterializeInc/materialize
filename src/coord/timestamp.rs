@@ -35,7 +35,6 @@ use expr::SourceInstanceId;
 
 use crate::coord;
 use chrono::Utc;
-use log::{error, info};
 
 pub struct TimestampConfig {
     pub frequency: Duration,
