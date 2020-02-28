@@ -1478,11 +1478,20 @@ Constant [[665]]"#
 /// Describe a join implementation in dataflow.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum JoinImplementation {
-    /// Perform a sequence of binary differential dataflow joins, in the order and
-    /// with the keys specified by the argument.
+    /// Perform a sequence of binary differential dataflow joins.
+    ///
+    /// The first argument indicates the index of the starting collection, and
+    /// the sequence that follows lists other relation indexes, and the key for
+    /// the arrangement we should use when joining it in.
+    ///
+    /// Each collection index should occur exactly once, either in the first
+    /// position or somewhere in the list.
     Differential(usize, Vec<(usize, Vec<ScalarExpr>)>),
-    /// Perform independent delta query dataflows for each input, with each joined
-    /// in the order and with the keys specified in its respective vector.
+    /// Perform independent delta query dataflows for each input.
+    ///
+    /// The argument is a sequence of plans, for the input collections in order.
+    /// Each plan starts from the corresponding index, and then in sequence joins
+    /// against collections identified by index and with the specified arrangement key.
     DeltaQuery(Vec<Vec<(usize, Vec<ScalarExpr>)>>),
     /// No implementation yet selected.
     Unimplemented,
