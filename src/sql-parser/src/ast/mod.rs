@@ -781,10 +781,9 @@ pub enum Statement {
         name: ObjectName,
         columns: Vec<Ident>,
         query: Box<Query>,
+        if_exists: IfExistsBehavior,
         materialized: bool,
-        replace: bool,
         with_options: Vec<SqlOption>,
-        if_not_exists: bool,
     },
     /// `CREATE TABLE`
     CreateTable {
@@ -1049,12 +1048,11 @@ impl fmt::Display for Statement {
                 columns,
                 query,
                 materialized,
-                replace,
+                if_exists,
                 with_options,
-                if_not_exists,
             } => {
                 write!(f, "CREATE")?;
-                if *replace {
+                if *if_exists == IfExistsBehavior::Replace {
                     write!(f, " OR REPLACE")?;
                 }
                 if *materialized {
@@ -1063,7 +1061,7 @@ impl fmt::Display for Statement {
 
                 write!(f, " VIEW")?;
 
-                if *if_not_exists {
+                if *if_exists == IfExistsBehavior::Skip {
                     write!(f, " IF NOT EXISTS")?;
                 }
 
@@ -1424,4 +1422,11 @@ impl fmt::Display for SetVariableValue {
             Literal(literal) => write!(f, "{}", literal),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IfExistsBehavior {
+    Error,
+    Skip,
+    Replace,
 }

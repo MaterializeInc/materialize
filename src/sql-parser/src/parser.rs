@@ -1323,15 +1323,17 @@ impl Parser {
     }
 
     pub fn parse_create_view(&mut self) -> Result<Statement, ParserError> {
-        let replace = if self.parse_keyword("OR") {
+        let mut if_exists = if self.parse_keyword("OR") {
             self.expect_keyword("REPLACE")?;
-            true
+            IfExistsBehavior::Replace
         } else {
-            false
+            IfExistsBehavior::Error
         };
         let materialized = self.parse_keyword("MATERIALIZED");
         self.expect_keyword("VIEW")?;
-        let if_not_exists = !replace && self.parse_if_not_exists()?;
+        if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
+            if_exists = IfExistsBehavior::Skip;
+        }
 
         // Many dialects support `OR REPLACE` | `OR ALTER` right after `CREATE`, but we don't (yet).
         // ANSI SQL and Postgres support RECURSIVE here, but we don't support it either.
@@ -1346,9 +1348,8 @@ impl Parser {
             columns,
             query,
             materialized,
-            replace,
+            if_exists,
             with_options,
-            if_not_exists,
         })
     }
 
