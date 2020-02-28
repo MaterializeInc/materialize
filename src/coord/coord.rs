@@ -109,7 +109,7 @@ where
     /// to associate each new instance of a source with a unique instance id (iid)
     local_input_time: Timestamp,
     log: bool,
-    executor: Option<tokio::runtime::Handle>,
+    executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
 }
 
@@ -269,7 +269,7 @@ where
                 active_tails: HashMap::new(),
                 local_input_time: 1,
                 log: config.logging.is_some(),
-                executor: Some(config.executor.clone()),
+                executor: config.executor.clone(),
                 timestamp_config: config.timestamp,
                 feedback_rx: Some(rx),
             };
@@ -357,10 +357,7 @@ where
     }
 
     pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
-        self.executor
-            .take()
-            .expect("serve called twice on coordinator")
-            .enter(|| self.serve_core(cmd_rx))
+        self.executor.clone().enter(|| self.serve_core(cmd_rx))
     }
 
     fn serve_core(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
@@ -383,7 +380,8 @@ where
                 internal_cmd_tx.clone(),
                 ts_rx,
             );
-            Some(thread::spawn(move || timestamper.update()).join_on_drop())
+            let executor = self.executor.clone();
+            Some(thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop())
         } else {
             None
         };

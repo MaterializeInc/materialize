@@ -60,6 +60,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7b8a9123b8027467bce0099fe556c628a53c8d83df0507084c31e9ba2e39aff"
 
 [[package]]
+name = "arrayref"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4c527152e37cf757a3f78aae5a06fbeefdb07ccc535c980a3208ee3060dd544"
+
+[[package]]
 name = "arrayvec"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -230,6 +236,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d155346769a6855b86399e9bc3814ab343cd3d62c7e985113d46a0ec3c281fd"
 
 [[package]]
+name = "blake2b_simd"
+version = "0.5.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8fb2d74254a3a0b5cac33ac9f8ed0e44aa50378d9dbb2e5d83bd21ed1dc2c8a"
+dependencies = [
+ "arrayref",
+ "arrayvec 0.5.1",
+ "constant_time_eq",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -357,7 +374,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "serde",
- "time",
+ "time 0.1.42",
 ]
 
 [[package]]
@@ -437,6 +454,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "constant_time_eq"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
+
+[[package]]
 name = "coord"
 version = "0.1.0"
 dependencies = [
@@ -454,6 +477,9 @@ dependencies = [
  "pgrepr",
  "rdkafka",
  "repr",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kinesis",
  "rusqlite",
  "serde",
  "serde_json",
@@ -777,6 +803,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f47366984d3ad862010e22c7ce81a7dbcaebbdfb37241a620f8b6596ee135c"
 dependencies = [
  "generic-array 0.12.0",
+]
+
+[[package]]
+name = "dirs"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fd78930633bd1c6e35c4b42b1df7b0cbc6bc191146e512bb3bedf243fcc3901"
+dependencies = [
+ "libc",
+ "redox_users",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -1361,7 +1398,7 @@ dependencies = [
  "log",
  "net2",
  "pin-project",
- "time",
+ "time 0.1.42",
  "tokio",
  "tower-service",
  "want",
@@ -2805,6 +2842,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
+name = "redox_users"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dc1887cbcd764cc066e2c08681a5615433ac3de9752838a9ec114613b118575"
+dependencies = [
+ "getrandom",
+ "redox_syscall",
+ "rust-argon2",
+]
+
+[[package]]
 name = "regex"
 version = "1.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2887,7 +2935,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "time",
+ "time 0.1.42",
  "tokio",
  "tokio-tls",
  "url",
@@ -2904,6 +2952,94 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 
 [[package]]
+name = "rusoto_core"
+version = "0.43.0-beta.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "492ae34e8ba20e0521e028e19fc90a5650c2668b622b2220986de811bfe44f1e"
+dependencies = [
+ "async-trait",
+ "base64 0.11.0",
+ "bytes",
+ "futures",
+ "hmac",
+ "http",
+ "hyper",
+ "hyper-tls",
+ "lazy_static 1.4.0",
+ "log",
+ "md5",
+ "percent-encoding",
+ "pin-project",
+ "rusoto_credential",
+ "rusoto_signature",
+ "rustc_version",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "xml-rs",
+]
+
+[[package]]
+name = "rusoto_credential"
+version = "0.43.0-beta.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c981690595b685c0df4c8f695cbe2e3ed4cd7269bcbcf1e5db2e8e5afc043cfb"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dirs",
+ "futures",
+ "hyper",
+ "pin-project",
+ "regex",
+ "serde",
+ "serde_json",
+ "shlex",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "rusoto_kinesis"
+version = "0.43.0-beta.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2918e2eb0b9f724a019fafa1dcbc6f8ed0c0c3732ef9f8dedbe4de7f9b8b5ab0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rusoto_signature"
+version = "0.43.0-beta.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1692e8e8c4e1edfa5269fe12ca5806504dcac485ca337e386e201fe6fdd22d5"
+dependencies = [
+ "base64 0.11.0",
+ "bytes",
+ "futures",
+ "hex",
+ "hmac",
+ "http",
+ "hyper",
+ "log",
+ "md5",
+ "percent-encoding",
+ "pin-project",
+ "rusoto_credential",
+ "rustc_version",
+ "serde",
+ "sha2",
+ "time 0.2.7",
+ "tokio",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2915,7 +3051,19 @@ dependencies = [
  "libsqlite3-sys",
  "lru-cache",
  "memchr",
- "time",
+ "time 0.1.42",
+]
+
+[[package]]
+name = "rust-argon2"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "416f5109bdd413cec4f04c029297838e7604c993f8d1483b1d438f23bdc3eb35"
+dependencies = [
+ "base64 0.11.0",
+ "blake2b_simd",
+ "constant_time_eq",
+ "crossbeam-utils 0.6.6",
 ]
 
 [[package]]
@@ -3113,6 +3261,12 @@ checksum = "ae75d0445b5d3778c9da3d1f840faa16d0627c8607f78a74daf69e5b988c39a1"
 dependencies = [
  "lazy_static 1.4.0",
 ]
+
+[[package]]
+name = "shlex"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fdf1b9db47230893d76faad238fd6097fd6d6a9245cd7a4d90dbd639536bbd2"
 
 [[package]]
 name = "signal-hook-registry"
@@ -3476,6 +3630,40 @@ dependencies = [
  "libc",
  "redox_syscall",
  "winapi 0.3.8",
+]
+
+[[package]]
+name = "time"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3043ac959c44dccc548a57417876c8fe241502aed69d880efc91166c02717a93"
+dependencies = [
+ "libc",
+ "rustversion",
+ "time-macros",
+ "winapi 0.3.8",
+]
+
+[[package]]
+name = "time-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae9b6e9f095bc105e183e3cd493d72579be3181ad4004fceb01adbe9eecab2d"
+dependencies = [
+ "proc-macro-hack",
+ "time-macros-impl",
+]
+
+[[package]]
+name = "time-macros-impl"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e987cfe0537f575b5fc99909de6185f6c19c3ad8889e2275e686a873d0869ba1"
+dependencies = [
+ "proc-macro-hack",
+ "proc-macro2 1.0.7",
+ "quote 1.0.2",
+ "syn 1.0.11",
 ]
 
 [[package]]
@@ -4058,3 +4246,15 @@ dependencies = [
  "winapi 0.2.8",
  "winapi-build",
 ]
+
+[[package]]
+name = "xml-rs"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
+
+[[package]]
+name = "zeroize"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cbac2ed2ba24cc90f5e06485ac8c7c1e5449fe8911aef4d8877218af021a5b8"

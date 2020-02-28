@@ -13,10 +13,18 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use chrono::Utc;
+use futures::executor::block_on;
 use log::{error, info};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
+use rusoto_core::{HttpClient, Region};
+use rusoto_credential::StaticProvider;
+use rusoto_kinesis::Consumer as KinesisConsumer;
+use rusoto_kinesis::{
+    Kinesis, KinesisClient, RegisterStreamConsumerInput, RegisterStreamConsumerOutput,
+};
 use rusqlite::{params, NO_PARAMS};
 
 use catalog::sql::SqlVal;
@@ -79,7 +87,10 @@ struct ByoKafkaConnector {
 }
 
 /// Data consumer for Kinesis source with RT consistency
-struct RtKinesisConnector {}
+#[allow(dead_code)]
+struct RtKinesisConnector {
+    consumer: KinesisConsumer,
+}
 
 /// Data consumer stub for Kinesis source with BYO consistency
 struct ByoKinesisConnector {}
@@ -354,9 +365,9 @@ impl Timestamper {
                 last_offset,
             },
             ExternalSourceConnector::Kinesis(kinc) => RtTimestampConsumer {
-                connector: RtTimestampConnector::Kinesis(
+                connector: RtTimestampConnector::Kinesis(block_on(
                     self.create_rt_kinesis_connector(id, kinc),
-                ),
+                )),
                 last_offset,
             },
         }
@@ -405,13 +416,38 @@ impl Timestamper {
         RtFileConnector {}
     }
 
-    fn create_rt_kinesis_connector(
+    async fn create_rt_kinesis_connector(
         &self,
         _id: SourceInstanceId,
-        _kinc: KinesisSourceConnector,
+        kinc: KinesisSourceConnector,
     ) -> RtKinesisConnector {
-        error!("Timestamping is unsupported for kinesis sources");
-        RtKinesisConnector {}
+        let provider = StaticProvider::new(
+            kinc.access_key.clone(),
+            kinc.secret_access_key.clone(),
+            None,
+            None,
+        );
+
+        // todo@jldlaughlin: Use HttpClient::new_with_config() to support a TLS-enabled client
+        let request_dispatcher = HttpClient::new().unwrap();
+        let r: Region = kinc
+            .region
+            .parse()
+            .unwrap_or_else(|_| panic!("Failed to parse AWS region: {}", kinc.region));
+        let client = KinesisClient::new_with(request_dispatcher, provider, r);
+
+        // Each consumer name must be unique within a stream.
+        // todo@jldlaughlin: Add a random string at the end, too?
+        let register_input = RegisterStreamConsumerInput {
+            consumer_name: format!("materialize-rt-kinesis-{}", Utc::now().timestamp()),
+            stream_arn: kinc.arn,
+        };
+
+        let consumer = match client.register_stream_consumer(register_input).await {
+            Ok(RegisterStreamConsumerOutput { consumer }) => consumer,
+            Err(e) => panic!(format!("Failed to register stream consumer: {:#?}", e)),
+        };
+        RtKinesisConnector { consumer }
     }
 
     /// Creates a BYO connector

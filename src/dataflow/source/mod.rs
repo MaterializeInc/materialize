@@ -17,11 +17,13 @@ use crate::server::TimestampChanges;
 
 mod file;
 mod kafka;
+mod kinesis;
 mod util;
 
 use expr::SourceInstanceId;
 pub use file::{file, FileReadStyle};
 pub use kafka::kafka;
+pub use kinesis::kinesis;
 
 // A `SourceToken` indicates interest in a source. When the `SourceToken` is
 // dropped, its associated source will be stopped.
