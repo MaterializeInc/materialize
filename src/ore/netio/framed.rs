@@ -26,12 +26,8 @@ impl Debug for FrameTooBig {
 
 impl Display for FrameTooBig {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.write_str(self.description())
+        f.write_str("frame size too big")
     }
 }
 
-impl Error for FrameTooBig {
-    fn description(&self) -> &str {
-        "frame size too big"
-    }
-}
+impl Error for FrameTooBig {}
