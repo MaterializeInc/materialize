@@ -13,7 +13,7 @@ use crate::schema::Schema;
 use crate::types::Value;
 use crate::util::{self, DecodeError};
 use crate::Codec;
-use futures::stream::unfold;
+use futures::stream::try_unfold;
 use futures::Stream;
 
 // Internal Block reader.
@@ -248,22 +248,8 @@ impl<'a, R: AsyncRead + Unpin + Send + 'a> Reader<'a, R> {
     }
 
     pub fn into_stream(self) -> impl Stream<Item = Result<Value, Error>> + Unpin + 'a {
-        Box::pin(unfold((self, false), |(mut r, mut errored)| {
-            async move {
-                if errored {
-                    None
-                } else {
-                    match r.read_next().await {
-                        Ok(Some(val)) => Some(Ok(val)),
-                        Ok(None) => None,
-                        Err(e) => {
-                            errored = true;
-                            Some(Err(e))
-                        }
-                    }
-                }
-                .map(|v| (v, (r, errored)))
-            }
+        Box::pin(try_unfold(self, |mut r| {
+            async { Ok(r.read_next().await?.map(|v| (v, r))) }
         }))
     }
 }
