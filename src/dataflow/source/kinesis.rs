@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::server::{TimestampChanges, TimestampHistories};
-use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
 use timely::dataflow::{Scope, Stream};
+
+use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
+use expr::SourceInstanceId;
 
 use super::util::source;
 use super::{SourceStatus, SourceToken};
-use expr::SourceInstanceId;
+use crate::server::{TimestampChanges, TimestampHistories};
 
 #[allow(clippy::too_many_arguments)]
 pub fn kinesis<G>(
@@ -48,8 +49,13 @@ where
     // todo@jldlaughlin: Actually read from the Kinesis stream!
     // Right now, this code will create a Kinesis source and immediately
     // give up all its capabilities -- rendering it "Done".
-    let (stream, _capability) = source(id, ts, scope, &name, move |_info| {
+    let (stream, capability) = source(id, ts, scope, &name, move |_info| {
         move |_cap, _output| SourceStatus::Done
     });
-    (stream, None)
+
+    if read_kinesis {
+        (stream, Some(capability))
+    } else {
+        (stream, None)
+    }
 }

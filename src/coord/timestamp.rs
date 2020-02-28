@@ -13,18 +13,19 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use chrono::Utc;
+use futures::executor::block_on;
 use log::{error, info};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
-use rusqlite::{params, NO_PARAMS};
-
 use rusoto_core::{HttpClient, Region};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::Consumer as KinesisConsumer;
 use rusoto_kinesis::{
     Kinesis, KinesisClient, RegisterStreamConsumerInput, RegisterStreamConsumerOutput,
 };
+use rusqlite::{params, NO_PARAMS};
 
 use catalog::sql::SqlVal;
 use dataflow_types::{
@@ -34,7 +35,6 @@ use dataflow_types::{
 use expr::SourceInstanceId;
 
 use crate::coord;
-use chrono::Utc;
 
 pub struct TimestampConfig {
     pub frequency: Duration,
@@ -365,9 +365,9 @@ impl Timestamper {
                 last_offset,
             },
             ExternalSourceConnector::Kinesis(kinc) => RtTimestampConsumer {
-                connector: RtTimestampConnector::Kinesis(
+                connector: RtTimestampConnector::Kinesis(block_on(
                     self.create_rt_kinesis_connector(id, kinc),
-                ),
+                )),
                 last_offset,
             },
         }
@@ -416,7 +416,7 @@ impl Timestamper {
         RtFileConnector {}
     }
 
-    fn create_rt_kinesis_connector(
+    async fn create_rt_kinesis_connector(
         &self,
         _id: SourceInstanceId,
         kinc: KinesisSourceConnector,
@@ -439,10 +439,11 @@ impl Timestamper {
         // Each consumer name must be unique within a stream.
         // todo@jldlaughlin: Add a random string at the end, too?
         let register_input = RegisterStreamConsumerInput {
-            consumer_name: format!("materialize-consumer-{}", Utc::now().timestamp()),
+            consumer_name: format!("materialize-rt-kinesis-{}", Utc::now().timestamp()),
             stream_arn: kinc.arn,
         };
-        let consumer = match client.register_stream_consumer(register_input).sync() {
+
+        let consumer = match client.register_stream_consumer(register_input).await {
             Ok(RegisterStreamConsumerOutput { consumer }) => consumer,
             Err(e) => panic!(format!("Failed to register stream consumer: {:#?}", e)),
         };
