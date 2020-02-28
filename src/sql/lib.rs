@@ -15,7 +15,6 @@ use ::expr::GlobalId;
 use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::{Catalog, CatalogEntry};
 use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnector, SourceConnector};
-use ore::future::MaybeFuture;
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
@@ -70,6 +69,7 @@ pub enum Plan {
         replace: Option<GlobalId>,
         /// whether we should auto-materialize the view
         materialize: bool,
+        if_not_exists: bool,
     },
     CreateIndex {
         name: FullName,
@@ -166,7 +166,7 @@ pub enum MutationKind {
 }
 
 /// A vector of values to which parameter references should be bound.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Params {
     pub datums: Row,
     pub types: Vec<ScalarType>,
@@ -177,13 +177,27 @@ pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
     Ok(SqlParser::parse_sql(sql)?)
 }
 
-/// Produces a [`Plan`] from a [`Statement`].
+/// Removes dependencies on external state from `stmt`: inlining schemas in
+/// files, fetching schemas from registries, and so on. The [`Statement`]
+/// returned from this function will be valid to pass to `Plan`.
+///
+/// Note that purification is asynchronous, and may take an unboundedly long
+/// time to complete.
+pub async fn purify(stmt: Statement) -> Result<Statement, failure::Error> {
+    statement::purify_statement(stmt).await
+}
+
+/// Produces a [`Plan`] from the purified statement `stmt`.
+///
+/// Planning is a pure, synchronous function and so requires that the provided
+/// `stmt` does does not depend on any external state. To purify a statement,
+/// use [`purify`].
 pub fn plan(
     catalog: &Catalog,
     session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
-) -> MaybeFuture<'static, Result<Plan, failure::Error>> {
+) -> Result<Plan, failure::Error> {
     statement::handle_statement(catalog, session, stmt, params)
 }
 

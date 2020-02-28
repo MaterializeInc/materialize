@@ -7,20 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use rusqlite::{params, NO_PARAMS};
-
 use std::collections::HashMap;
 use std::str;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use catalog::sql::SqlVal;
-use expr::SourceInstanceId;
-
+use log::{error, info};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
+use rusqlite::{params, NO_PARAMS};
 
 use rusoto_core::{HttpClient, Region};
 use rusoto_credential::StaticProvider;
@@ -29,13 +26,16 @@ use rusoto_kinesis::{
     Kinesis, KinesisClient, RegisterStreamConsumerInput, RegisterStreamConsumerOutput,
 };
 
+use catalog::sql::SqlVal;
 use dataflow_types::{
     Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
     KinesisSourceConnector,
 };
+use expr::SourceInstanceId;
 
 use chrono::Utc;
 use log::{error, info};
+use crate::coord;
 
 pub struct TimestampConfig {
     pub frequency: Duration,
@@ -46,14 +46,7 @@ pub struct TimestampConfig {
 pub enum TimestampMessage {
     Add(SourceInstanceId, ExternalSourceConnector, Consistency),
     DropInstance(SourceInstanceId),
-    BatchedUpdate(u64, Vec<(SourceInstanceId, i64)>),
-    Update(SourceInstanceId, u64, i64),
     Shutdown,
-}
-
-pub struct TimestampChannel {
-    pub sender: std::sync::mpsc::Sender<TimestampMessage>,
-    pub receiver: std::sync::mpsc::Receiver<TimestampMessage>,
 }
 
 /// Timestamp consumer: wrapper around source consumers that stores necessary information
@@ -174,19 +167,6 @@ fn byo_extract_ts_update(
     updates
 }
 
-fn byo_notify_coordinator(
-    id: SourceInstanceId,
-    updates: Vec<(u64, i64)>,
-    coord_channel: &TimestampChannel,
-) {
-    for (ts, offset) in updates {
-        coord_channel
-            .sender
-            .send(TimestampMessage::Update(id, ts, offset))
-            .expect("Failed to send update to coordinator");
-    }
-}
-
 /// Polls a message from a Kafka Source
 fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Option<Vec<u8>> {
     if let Some(result) = consumer.poll(Duration::from_millis(60)) {
@@ -218,8 +198,8 @@ pub struct Timestamper {
     // Connection to the underlying SQL lite instance
     storage: Arc<Mutex<catalog::sql::Connection>>,
 
-    // Channel with coordinator
-    coord_channel: TimestampChannel,
+    tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
+    rx: std::sync::mpsc::Receiver<TimestampMessage>,
 
     // Last Timestamp (necessary because not necessarily increasing otherwise)
     current_timestamp: u64,
@@ -235,7 +215,8 @@ impl Timestamper {
     pub fn new(
         config: &TimestampConfig,
         storage: Arc<Mutex<catalog::sql::Connection>>,
-        channel: TimestampChannel,
+        tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
+        rx: std::sync::mpsc::Receiver<TimestampMessage>,
     ) -> Self {
         // Recover existing data by running max on the timestamp count. This will ensure that
         // there will never be two duplicate entries and that there is a continuous stream
@@ -263,7 +244,8 @@ impl Timestamper {
             rt_sources: HashMap::new(),
             byo_sources: HashMap::new(),
             storage,
-            coord_channel: channel,
+            tx,
+            rx,
             current_timestamp: max_ts,
             timestamp_frequency: config.frequency,
             max_increment_size: config.max_size,
@@ -294,7 +276,15 @@ impl Timestamper {
         let watermarks = self.rt_query_sources();
         self.rt_generate_next_timestamp();
         self.rt_persist_timestamp(&watermarks);
-        self.rt_notify_coordinator(watermarks);
+        for (id, offset) in watermarks {
+            self.tx
+                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                    id,
+                    timestamp: self.current_timestamp,
+                    offset,
+                })
+                .expect("Failed to send timestamp update to coordinator");
+        }
     }
 
     /// Updates list of timestamp sources based on coordinator information. If using
@@ -305,7 +295,7 @@ impl Timestamper {
     fn update_sources(&mut self) -> bool {
         // First check if there are some new source that we should
         // start checking
-        while let Ok(update) = self.coord_channel.receiver.try_recv() {
+        while let Ok(update) = self.rx.try_recv() {
             match update {
                 TimestampMessage::Add(id, sc, consistency) => {
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
@@ -336,9 +326,6 @@ impl Timestamper {
                     self.byo_sources.remove(&id);
                 }
                 TimestampMessage::Shutdown => return true,
-                _ => {
-                    // this should never happen
-                }
             }
         }
         false
@@ -349,10 +336,16 @@ impl Timestamper {
         for (id, byo_consumer) in &mut self.byo_sources {
             // Get the next set of messages from the Consistency topic
             let messages = byo_query_source(byo_consumer, self.max_increment_size);
-            // Extract the timestamp updates for this topic only
-            let ts_updates = byo_extract_ts_update(byo_consumer, messages);
             // Notify coordinator of updates
-            byo_notify_coordinator(id.clone(), ts_updates, &self.coord_channel);
+            for (timestamp, offset) in byo_extract_ts_update(byo_consumer, messages) {
+                self.tx
+                    .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                        id: *id,
+                        timestamp,
+                        offset,
+                    })
+                    .expect("Failed to send update to coordinator");
+            }
         }
     }
 
@@ -576,15 +569,18 @@ impl Timestamper {
 
         let mut max_offset = 0;
         for row in ts_updates {
-            let (ts, offset) = row.expect("Failed to parse SQL result");
+            let (timestamp, offset) = row.expect("Failed to parse SQL result");
             max_offset = if offset > max_offset {
                 offset
             } else {
                 max_offset
             };
-            self.coord_channel
-                .sender
-                .send(TimestampMessage::Update(id, ts, offset))
+            self.tx
+                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                    id,
+                    timestamp,
+                    offset,
+                })
                 .expect("Failed to send timestamp update to coordinator");
         }
         max_offset
@@ -657,19 +653,6 @@ impl Timestamper {
                 std::thread::sleep(Duration::from_secs(1));
             }
         }
-    }
-
-    /// Notify coordinator of a batch of timestamp updates, all with the same timestamp
-    /// Used in real-time timestamping logic, where a set of sources get assigned the same
-    /// timestamp
-    fn rt_notify_coordinator(&self, ts_updates: Vec<(SourceInstanceId, i64)>) {
-        self.coord_channel
-            .sender
-            .send(TimestampMessage::BatchedUpdate(
-                self.current_timestamp,
-                ts_updates,
-            ))
-            .expect("Failed to send timestamp update to coordinator");
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.

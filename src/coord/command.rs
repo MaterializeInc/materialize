@@ -86,7 +86,9 @@ pub enum ExecuteResponse {
     CreatedTable {
         existed: bool,
     },
-    CreatedView,
+    CreatedView {
+        existed: bool,
+    },
     Deleted(usize),
     DroppedDatabase,
     DroppedSchema,
@@ -142,7 +144,9 @@ impl fmt::Debug for ExecuteResponse {
                 "ExecuteResponse::CreatedTable {{ existed: {} }}",
                 existed
             ),
-            ExecuteResponse::CreatedView => f.write_str("ExecuteResponse::CreatedView"),
+            ExecuteResponse::CreatedView { existed } => {
+                write!(f, "ExecuteResponse::CreatedView {{ existed: {} }}", existed)
+            }
             ExecuteResponse::Deleted(n) => write!(f, "ExecuteResponse::Deleted({})", n),
             ExecuteResponse::DroppedDatabase => f.write_str("ExecuteResponse::DroppedDatabase"),
             ExecuteResponse::DroppedSchema => f.write_str("ExecuteResponse::DroppedSchema"),

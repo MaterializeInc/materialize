@@ -19,6 +19,7 @@ use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
+use prometheus::{register_int_counter, IntCounter};
 use tokio::io;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -29,6 +30,16 @@ use crate::message::{
     BackendMessage, EncryptionType, FrontendMessage, TransactionStatus, VERSION_CANCEL,
     VERSION_GSSENC, VERSION_SSL,
 };
+
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref BYTES_SENT: IntCounter = register_int_counter!(
+        "mz_pg_sent_bytes",
+        "total number of bytes sent to clients from pgwire"
+    )
+    .unwrap();
+}
 
 #[derive(Debug)]
 enum CodecError {
@@ -267,6 +278,8 @@ impl Encoder for Codec {
         // Overwrite length placeholder with true length.
         let len = dst.len() - start_len;
         NetworkEndian::write_u32(&mut dst[start_len..start_len + 4], len as u32);
+        // TODO: consider finding some way to not do this per-row
+        BYTES_SENT.inc_by(len as i64);
 
         Ok(())
     }

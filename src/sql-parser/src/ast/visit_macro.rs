@@ -427,8 +427,9 @@ macro_rules! make_visitor {
                 materialized: bool,
                 replace: bool,
                 with_options: &'ast $($mut)* [SqlOption],
+                if_not_exists: bool,
             ) {
-                visit_create_view(self, name, columns, query, materialized, replace, with_options)
+                visit_create_view(self, name, columns, query, materialized, replace, with_options, if_not_exists)
             }
 
             fn visit_create_index(
@@ -687,7 +688,8 @@ macro_rules! make_visitor {
                     materialized,
                     replace,
                     with_options,
-                } => visitor.visit_create_view(name, columns, query, *materialized, *replace, with_options),
+                    if_not_exists,
+                } => visitor.visit_create_view(name, columns, query, *materialized, *replace, with_options, *if_not_exists),
                 Statement::CreateIndex {
                     name,
                     on_name,
@@ -1457,6 +1459,7 @@ macro_rules! make_visitor {
             _materialized: bool,
             _replace: bool,
             with_options: &'ast $($mut)* [SqlOption],
+            _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             for column in columns {

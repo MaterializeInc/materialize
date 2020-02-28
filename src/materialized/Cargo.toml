@@ -1,7 +1,7 @@
 [package]
 name = "materialized"
 description = "Streaming SQL materialized views."
-version = "0.1.0"
+version = "0.1.1"
 edition = "2018"
 publish = false
 default-run = "materialized"
@@ -32,7 +32,7 @@ lazy_static = "1.4.0"
 log = "0.4.8"
 once_cell = "1.3.1"
 ore = { path = "../ore" }
-parse_duration = "2.0.1"
+parse_duration = "2.1.0"
 pgwire = { path = "../pgwire" }
 prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
 tempfile = "3.1"

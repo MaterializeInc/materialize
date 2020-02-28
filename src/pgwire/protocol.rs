@@ -19,7 +19,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::{debug, trace};
-use prometheus::register_histogram_vec;
+use prometheus::{register_histogram_vec, register_int_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 use tokio_util::codec::Framed;
@@ -65,6 +65,11 @@ lazy_static! {
         &["command", "status"],
         ore::stats::HISTOGRAM_BUCKETS.to_vec(),
         expose_decumulated => true
+    )
+    .unwrap();
+    static ref ROWS_RETURNED: prometheus::IntCounter = register_int_counter!(
+        "mz_pg_sent_rows",
+        "total number of rows sent to clients from pgwire"
     )
     .unwrap();
 }
@@ -693,7 +698,7 @@ where
             ExecuteResponse::CreatedIndex { existed } => created!(existed, "42710", "index"),
             ExecuteResponse::CreatedSource { existed } => created!(existed, "42710", "source"),
             ExecuteResponse::CreatedSink { existed } => created!(existed, "42710", "sink"),
-            ExecuteResponse::CreatedView => command_complete!("CREATE VIEW"),
+            ExecuteResponse::CreatedView { existed } => created!(existed, "42710", "view"),
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
@@ -770,20 +775,26 @@ where
             .expect("valid portal name for send rows");
         let formats: Arc<Vec<pgrepr::Format>> = Arc::new(portal.result_formats.clone());
 
-        self.send_all(
-            if max_rows > 0 && (max_rows as usize) < rows.len() {
-                rows.drain(..max_rows as usize)
-            } else {
-                rows.drain(..)
-            }
-            .map(move |row| {
-                BackendMessage::DataRow(
-                    pgrepr::values_from_row(row, row_desc.typ()),
-                    formats.clone(),
-                )
-            }),
-        )
-        .await?;
+        let mut row_count = 0u32;
+        {
+            let row_count = &mut row_count;
+            self.send_all(
+                if max_rows > 0 && (max_rows as usize) < rows.len() {
+                    rows.drain(..max_rows as usize)
+                } else {
+                    rows.drain(..)
+                }
+                .map(move |row| {
+                    *row_count += 1;
+                    BackendMessage::DataRow(
+                        pgrepr::values_from_row(row, row_desc.typ()),
+                        formats.clone(),
+                    )
+                }),
+            )
+            .await?;
+        }
+        ROWS_RETURNED.inc_by(i64::from(row_count));
 
         if rows.is_empty() {
             self.send(BackendMessage::CommandComplete {

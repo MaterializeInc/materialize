@@ -392,10 +392,7 @@ impl Decoder {
         bytes = &bytes[5..];
 
         if magic != 0 {
-            bail!(
-                "wrong avro serialization magic: expected 0, got {}",
-                bytes[0]
-            );
+            bail!("wrong avro serialization magic: expected 0, got {}", magic);
         }
 
         let (writer_schema, reader_schema) = match &mut self.writer_schemas {

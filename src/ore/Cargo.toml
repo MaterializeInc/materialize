@@ -14,11 +14,11 @@ failure = "0.1.6"
 fallible-iterator = "0.2.0"
 futures = "0.3"
 lazy_static = "1.4.0"
-libc = "0.2.66"
+libc = "0.2.67"
 log = "0.4.8"
 smallvec = "1.2"
 tokio = { version = "0.2", features = ["io-util", "rt-threaded", "tcp"] }
 tracing-subscriber = "0.2.1"
 
 [dev-dependencies]
-crossbeam = "0.7.2"
+crossbeam = "0.7.3"

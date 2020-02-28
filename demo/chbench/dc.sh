@@ -67,6 +67,18 @@ main() {
                 usage
             fi
             restart "$@" ;;
+        web)
+            local page="${1:-_}" && shift
+            case "$page" in
+                grafana) runv open http://localhost:3000/d/mz;;
+                metabase) runv open http://localhost:3030;;
+                kafka) runv open http://localhost:9021;;
+                *)
+                    echo "$(uw ERROR:) Unexpected 'web' argument: $(uw "$page")"
+                    usage
+                    ;;
+            esac
+            ;;
         *) usage ;;
     esac
 }
@@ -110,6 +122,9 @@ Possible COMMANDs:
     `us load-test \[--up\]`     Run a long-running load test, modify this file to change parameters
                               With --up: also run `uo :init:` and start all dependencies
     `us demo-load`            Generate a lot of changes to be used in the demo
+
+ Helpers:
+    `us web \(grafana\|metabase\|kafka\)`    Open service page in a web browser
 
  Danger Zone:
 
@@ -193,6 +208,7 @@ dc_stop() {
             runv docker-compose stop "$1"
             return
         else
+            echo "No running container"
             return
         fi
     fi
@@ -309,6 +325,14 @@ clean_load_test() {
     load_test --up
 }
 
+# Purges Kafka topic and restarts Materialize/peeker
+drop_kafka_topics() {
+    dc_stop chbench
+    dc_stop materialized peeker
+    runv docker exec -it chbench_kafka_1 kafka-topics --delete --bootstrap-server localhost:9092 --topic "mysql.tpcch.*" || true
+    dc_up materialized
+}
+
 # Long-running load test
 load_test() {
     if [[ "${1:-}" = --up ]]; then
@@ -316,6 +340,7 @@ load_test() {
         bring_up_source_data
         bring_up_introspection
     fi
+    drop_kafka_topics
     dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
     dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
@@ -332,7 +357,7 @@ load_test() {
 
 # Generate changes for the demo
 demo_load() {
-    dc_run docker-compose run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    drop_kafka_topics
     dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
         --peek-conns=0 --flush-every=30 \

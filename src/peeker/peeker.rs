@@ -22,8 +22,8 @@ use hyper::{Body, Response, Server};
 use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
 use postgres::Client;
-use prometheus::{register_counter_vec, register_histogram_vec};
-use prometheus::{CounterVec, Encoder, HistogramVec};
+use prometheus::{register_histogram_vec, register_int_counter_vec};
+use prometheus::{Encoder, HistogramVec, IntCounterVec};
 
 use crate::args::{Args, QueryGroup, Source};
 
@@ -101,7 +101,8 @@ fn spawn_query_thread(mz_url: String, query_group: QueryGroup) -> Vec<JoinHandle
                         .prepare(&format!("SELECT * FROM {}", q.name))
                         .expect("should be able to prepare a query");
                     let hist = HISTOGRAM_UNLABELED.with_label_values(&[&q.name]);
-                    (stmt, q.name.clone(), hist)
+                    let rows_counter = ROWS_UNLABELED.with_label_values(&[&q.name]);
+                    (stmt, q.name.clone(), hist, rows_counter)
                 })
                 .collect::<Vec<_>>();
             let mut backoff = get_baseline_backoff();
@@ -110,14 +111,15 @@ fn spawn_query_thread(mz_url: String, query_group: QueryGroup) -> Vec<JoinHandle
             let mut err_count = 0u64;
             let mut last_log = Instant::now();
             loop {
-                for (select, q_name, hist) in &selects {
+                for (select, q_name, hist, rows_counter) in &selects {
                     let timer = hist.start_timer();
                     let query_result = postgres_client.query(select, &[]);
 
                     match query_result {
-                        Ok(_) => {
+                        Ok(r) => {
+                            drop(timer);
                             counter += 1;
-                            drop(timer)
+                            rows_counter.inc_by(r.len() as i64)
                         }
                         Err(err) => {
                             timer.stop_and_discard();
@@ -295,12 +297,18 @@ lazy_static! {
         expose_decumulated => true
     )
     .expect("can create histogram");
-    static ref ERRORS_UNLABELED: CounterVec = register_counter_vec!(
+    static ref ERRORS_UNLABELED: IntCounterVec = register_int_counter_vec!(
         "mz_client_error_count",
         "number of errors encountered",
         &["query"]
     )
     .expect("can create histogram");
+    static ref ROWS_UNLABELED: IntCounterVec = register_int_counter_vec!(
+        "mz_client_pg_rows_total",
+        "number of rows received",
+        &["query"]
+    )
+    .unwrap();
 }
 
 async fn serve_metrics() -> Result<()> {

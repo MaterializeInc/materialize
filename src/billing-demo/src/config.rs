@@ -9,7 +9,6 @@
 
 use std::time::Duration;
 
-use parse_duration::parse as parse_duration;
 use structopt::StructOpt;
 
 pub static KAFKA_SOURCE_NAME: &str = "billing_source";
@@ -29,7 +28,7 @@ pub struct Args {
     pub message_count: usize,
 
     /// Amount of time to sleep between messages, e.g. 2ms
-    #[structopt(long, parse(try_from_str = parse_duration))]
+    #[structopt(long, parse(try_from_str = parse_duration::parse))]
     pub message_sleep: Option<Duration>,
 
     /// The kafka host
