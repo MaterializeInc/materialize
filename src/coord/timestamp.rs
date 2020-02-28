@@ -33,9 +33,9 @@ use dataflow_types::{
 };
 use expr::SourceInstanceId;
 
+use crate::coord;
 use chrono::Utc;
 use log::{error, info};
-use crate::coord;
 
 pub struct TimestampConfig {
     pub frequency: Duration,
