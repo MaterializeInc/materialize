@@ -3196,7 +3196,7 @@ dependencies = [
  "base64 0.11.0",
  "blake2b_simd",
  "constant_time_eq",
- "crossbeam-utils",
+ "crossbeam-utils 0.6.6",
 ]
 
 [[package]]
@@ -3915,7 +3915,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca6df436c42b0c3330a82d855d2ef017cd793090ad550a6bc2184f4b933532ab"
 dependencies = [
- "crossbeam-utils",
+ "crossbeam-utils 0.6.6",
  "futures 0.1.29",
 ]
 
@@ -3980,7 +3980,7 @@ version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "382d90f43fa31caebe5d3bc6cfd854963394fff3b8cb59d5146607aaae7e7e43"
 dependencies = [
- "crossbeam-queue",
+ "crossbeam-queue 0.1.2",
  "futures 0.1.29",
  "lazy_static 1.4.0",
  "libc",
@@ -3999,7 +3999,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6732fe6b53c8d11178dcb77ac6d9682af27fc6d4cb87789449152e5377377146"
 dependencies = [
- "crossbeam-utils",
+ "crossbeam-utils 0.6.6",
  "futures 0.1.29",
  "lazy_static 1.4.0",
  "log",
@@ -4074,8 +4074,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0c32ffea4827978e9aa392d2f743d973c1dfa3730a2ed3f22ce1e6984da848c"
 dependencies = [
  "crossbeam-deque 0.7.1",
- "crossbeam-queue",
- "crossbeam-utils",
+ "crossbeam-queue 0.1.2",
+ "crossbeam-utils 0.6.6",
  "futures 0.1.29",
  "lazy_static 1.4.0",
  "log",
@@ -4090,7 +4090,7 @@ version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1739638e364e558128461fc1ad84d997702c8e31c2e6b18fb99842268199e827"
 dependencies = [
- "crossbeam-utils",
+ "crossbeam-utils 0.6.6",
  "futures 0.1.29",
  "slab",
  "tokio-executor",
