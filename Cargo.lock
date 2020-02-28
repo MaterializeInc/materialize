@@ -130,7 +130,7 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 [[package]]
 name = "avro-rs"
 version = "0.6.5"
-source = "git+https://github.com/umanwizard/avro-rs.git?branch=async#b2a857eb1b970517828c628aee431e3d07487bf4"
+source = "git+https://github.com/MaterializeInc/avro-rs.git#f83e5a76dccd78e5e0d71d8cbbbb682375fc85b5"
 dependencies = [
  "chrono",
  "digest",
@@ -142,20 +142,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "avro-rs"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bbe285d473a84df9f7fc25668d3ef50430eab208eeb5c635d323f5d30ebefbd"
-dependencies = [
- "digest",
- "failure",
- "libflate",
- "rand 0.4.6",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -726,7 +712,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
- "avro-rs 0.6.5",
+ "avro-rs",
  "bincode",
  "ccsr",
  "comm",
@@ -1496,7 +1482,7 @@ checksum = "6c346c299e3fe8ef94dc10c2c0253d858a69aac1245157a3bf4125915d528caf"
 name = "interchange"
 version = "0.1.0"
 dependencies = [
- "avro-rs 0.6.5",
+ "avro-rs",
  "base64 0.11.0",
  "byteorder",
  "ccsr",
@@ -1705,7 +1691,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 name = "materialized"
 version = "0.1.1"
 dependencies = [
- "avro-rs 0.6.5",
+ "avro-rs",
  "backtrace",
  "chrono",
  "comm",
@@ -3357,7 +3343,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sql"
 version = "0.1.0"
 dependencies = [
- "avro-rs 0.7.0",
+ "avro-rs",
  "catalog",
  "ccsr",
  "chrono",
@@ -3577,7 +3563,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "atty",
- "avro-rs 0.6.5",
+ "avro-rs",
  "backoff",
  "byteorder",
  "ccsr",

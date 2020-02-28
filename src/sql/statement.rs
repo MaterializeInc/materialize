@@ -863,13 +863,10 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
             match connector {
                 Connector::AvroOcf { path, .. } => {
                     let path = path.clone();
-                    let schema =
-                        tokio::task::spawn_blocking(move || -> Result<_, failure::Error> {
-                            let f = std::fs::File::open(path)?;
-                            Ok(avro_rs::Reader::new(f)?.writer_schema().clone())
-                        })
-                        .await??;
-                    let schema = serde_json::to_string(&schema).unwrap();
+                    let f = tokio::fs::File::open(path).await?;
+                    let r = avro_rs::Reader::new(f).await?;
+                    let schema = r.writer_schema();
+                    let schema = serde_json::to_string(schema).unwrap();
                     *format = Some(Format::AvroOcf { schema })
                 }
                 _ => bail!("Source format must be specified"),

@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-avro-rs = "0.7"
+avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
 # TODO(benesch): eventually only the tests will need the bincode feature.
 catalog = { path = "../catalog", features = ["bincode"] }
 ccsr = { path = "../ccsr" }

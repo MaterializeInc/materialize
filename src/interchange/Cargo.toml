@@ -14,7 +14,7 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-avro-rs = { git = "https://github.com/umanwizard/avro-rs.git", branch = "async" }
+avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
 byteorder = "1.3"
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
