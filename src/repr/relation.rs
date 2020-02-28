@@ -175,6 +175,24 @@ impl RelationDesc {
         RelationDesc { typ, names }
     }
 
+    pub fn from_cols(cols: Vec<(ColumnType, Option<String>)>) -> RelationDesc {
+        Self::new(
+            RelationType::new(cols.iter().map(|(typ, _)| typ.clone()).collect()),
+            cols.into_iter().map(|(_, name)| name),
+        )
+    }
+
+    pub fn add_cols<I, N>(&mut self, cols: I)
+    where
+        I: IntoIterator<Item = (ColumnType, Option<N>)>,
+        N: Into<ColumnName>,
+    {
+        for (typ, name) in cols.into_iter() {
+            self.typ.column_types.push(typ);
+            self.names.push(name.map(Into::into));
+        }
+    }
+
     /// Adds a new named, nonnullable column with the specified type.
     pub fn add_column(mut self, name: impl Into<ColumnName>, scalar_type: ScalarType) -> Self {
         self.typ.column_types.push(ColumnType::new(scalar_type));

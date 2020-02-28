@@ -360,12 +360,13 @@ macro_rules! make_visitor {
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
                 connector: &'ast $($mut)* Connector,
+                with_options: &'ast $($mut)* [SqlOption],
                 format: Option<&'ast $($mut)* Format>,
                 envelope: &'ast $($mut)* Envelope,
                 if_not_exists: bool,
                 materialized: bool,
             ) {
-                visit_create_source(self, name, connector, format, envelope, if_not_exists, materialized)
+                visit_create_source(self, name, connector, with_options, format, envelope, if_not_exists, materialized)
             }
 
             fn visit_connector(
@@ -668,11 +669,12 @@ macro_rules! make_visitor {
                 Statement::CreateSource {
                     name,
                     connector,
+                    with_options,
                     format,
                     envelope,
                     if_not_exists,
                     materialized,
-                } => visitor.visit_create_source(name, connector, format.as_auto_ref(), envelope, *if_not_exists, *materialized),
+                } => visitor.visit_create_source(name, connector, with_options, format.as_auto_ref(), envelope, *if_not_exists, *materialized),
                 Statement::CreateSink {
                     name,
                     from,
@@ -1323,6 +1325,7 @@ macro_rules! make_visitor {
             visitor: &mut V,
             name: &'ast $($mut)* ObjectName,
             connector: &'ast $($mut)* Connector,
+            with_options: &'ast $($mut)* [SqlOption],
             format: Option<&'ast $($mut)* Format>,
             envelope: &'ast $($mut)* Envelope,
             _if_not_exists: bool,
@@ -1330,6 +1333,9 @@ macro_rules! make_visitor {
         ) {
             visitor.visit_object_name(name);
             visitor.visit_connector(connector);
+            for option in with_options {
+                visitor.visit_option(option);
+            }
             if let Some(format) = format {
                 visitor.visit_format(format);
             }
@@ -1341,24 +1347,15 @@ macro_rules! make_visitor {
             connector: &'ast $($mut)* Connector,
         ) {
             match connector {
-                Connector::File { path, with_options } | Connector::AvroOcf { path, with_options } => {
+                Connector::File { path } | Connector::AvroOcf { path } => {
                     visitor.visit_literal_string(path);
-                    for option in with_options {
-                        visitor.visit_option(option);
-                    }
                 }
-                Connector::Kafka { broker, topic, with_options } => {
+                Connector::Kafka { broker, topic } => {
                     visitor.visit_literal_string(broker);
                     visitor.visit_literal_string(topic);
-                    for option in with_options {
-                        visitor.visit_option(option);
-                    }
                 }
-                Connector::Kinesis { arn, with_options } => {
+                Connector::Kinesis { arn } => {
                     visitor.visit_literal_string(arn);
-                    for option in with_options {
-                        visitor.visit_option(option);
-                    }
                 }
             }
         }
@@ -1375,6 +1372,7 @@ macro_rules! make_visitor {
                     visitor.visit_literal_string(message_name);
                     visitor.visit_schema(schema);
                 },
+                AvroOcf { .. } => unreachable!(),
                 Regex(regex) => visitor.visit_literal_string(regex),
             }
         }

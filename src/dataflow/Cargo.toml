@@ -9,6 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
+avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
 bincode = "1.2.1"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
@@ -17,8 +18,10 @@ dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
+failure = "0.1"
 futures = "0.3"
 interchange = { path = "../interchange" }
+itertools = "0.8"
 lazy_static = "1.4"
 log = "0.4"
 notify = "4.0"

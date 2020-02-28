@@ -159,6 +159,7 @@ pub fn create_statement(
         Statement::CreateSource {
             name,
             connector: _,
+            with_options: _,
             format: _,
             envelope: _,
             if_not_exists,

@@ -130,16 +130,18 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 [[package]]
 name = "avro-rs"
 version = "0.6.5"
-source = "git+https://github.com/MaterializeInc/avro-rs.git#dd965e4560ae0c600a52acc2e250ffad891355fc"
+source = "git+https://github.com/MaterializeInc/avro-rs.git#f83e5a76dccd78e5e0d71d8cbbbb682375fc85b5"
 dependencies = [
  "chrono",
  "digest",
  "failure",
+ "futures",
  "libflate",
  "log",
  "rand 0.4.6",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -710,6 +712,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
+ "avro-rs",
  "bincode",
  "ccsr",
  "comm",
@@ -718,8 +721,10 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "expr",
+ "failure",
  "futures",
  "interchange",
+ "itertools",
  "lazy_static 1.4.0",
  "log",
  "notify",
@@ -754,6 +759,8 @@ version = "0.1.0"
 dependencies = [
  "comm",
  "expr",
+ "failure",
+ "interchange",
  "pdqselect",
  "pretty_assertions",
  "regex",
@@ -1482,6 +1489,7 @@ dependencies = [
  "chrono",
  "criterion",
  "failure",
+ "futures",
  "num-traits",
  "ordered-float",
  "ore",
@@ -1683,6 +1691,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 name = "materialized"
 version = "0.1.1"
 dependencies = [
+ "avro-rs",
  "backtrace",
  "chrono",
  "comm",
@@ -1706,6 +1715,7 @@ dependencies = [
  "postgres",
  "pretty_assertions",
  "prometheus",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-postgres",
@@ -3333,6 +3343,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sql"
 version = "0.1.0"
 dependencies = [
+ "avro-rs",
  "catalog",
  "ccsr",
  "chrono",
@@ -3347,6 +3358,7 @@ dependencies = [
  "pretty_assertions",
  "regex",
  "repr",
+ "serde_json",
  "sql-parser",
  "tokio",
  "unicase",

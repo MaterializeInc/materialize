@@ -114,7 +114,7 @@ impl Action for VerifyAction {
                                 ));
                             }
                             actual_messages.push(
-                                avro_rs::from_avro_datum(&schema, &mut bytes, None)
+                                block_on(avro_rs::from_avro_datum(&schema, &mut bytes, None))
                                     .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?,
                             );
                         }

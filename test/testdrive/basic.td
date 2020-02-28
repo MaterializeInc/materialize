@@ -500,6 +500,32 @@ a  b
 -4 0
 -2 -1
 
+$ set schema={
+     "type": "record",
+     "name": "cpx",
+     "fields": [
+       {"name": "a", "type": "long"},
+       {"name": "b", "type": "long"}
+     ]
+   }
+
+$ kafka-ingest format=avro topic=non-dbz-data schema=${schema} timestamp=1
+{"a": 1, "b": 2}
+{"a": 2, "b": 3}
+
+> CREATE SOURCE non_dbz_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE NONE;
+
+> CREATE MATERIALIZED VIEW test9 AS SELECT * FROM non_dbz_data;
+
+> SELECT * FROM test9
+a b
+---
+1 2
+2 3
+
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 

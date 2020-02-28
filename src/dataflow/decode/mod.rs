@@ -18,7 +18,7 @@ use timely::dataflow::{
     Scope, Stream,
 };
 
-use dataflow_types::{DataEncoding, Diff, Timestamp};
+use dataflow_types::{DataEncoding, Diff, Envelope, Timestamp};
 use repr::Datum;
 use repr::Row;
 
@@ -30,8 +30,13 @@ mod regex;
 use self::csv::csv;
 use self::regex::regex as regex_fn;
 use avro::avro;
+use avro_rs::types::Value;
+use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
+
+use log::error;
 use protobuf::protobuf;
 use std::iter;
+use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 
 make_static_metric! {
     struct EventsRead: IntCounter {
@@ -50,55 +55,118 @@ lazy_static! {
     static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
 }
 
-fn raw<G>(stream: &Stream<G, (Vec<u8>, Option<i64>)>) -> Stream<G, (Row, Timestamp, Diff)>
+/// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
+/// and each time is the current Timely timestamp.
+fn pass_through<G, Data, P>(
+    stream: &Stream<G, Data>,
+    name: &str,
+    pact: P,
+) -> Stream<G, (Data, Timestamp, Diff)>
+where
+    G: Scope<Timestamp = Timestamp>,
+    Data: timely::Data,
+    P: ParallelizationContract<Timestamp, Data>,
+{
+    stream.unary(pact, name, move |_, _| {
+        move |input, output| {
+            input.for_each(|cap, data| {
+                let mut v = Vec::new();
+                data.swap(&mut v);
+                let mut session = output.session(&cap);
+                session.give_iterator(v.into_iter().map(|payload| (payload, *cap.time(), 1)));
+            });
+        }
+    })
+}
+
+pub fn decode_avro_values<G>(
+    stream: &Stream<G, (Value, Option<i64>)>,
+    envelope: Envelope,
+) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    stream.unary(
-        Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
-        "RawBytes",
-        move |_, _| {
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for (payload, line_no) in data.iter() {
-                        session.give((
-                            Row::pack(
-                                iter::once(Datum::from(payload.as_slice()))
-                                    .chain(line_no.map(Datum::from)),
-                            ),
-                            *cap.time(),
-                            1,
-                        ));
-                    }
-                });
+    // TODO(brennan) -- If this ends up being a bottleneck,
+    // refactor the avro `Reader` to separate reading from decoding,
+    // so that we can spread the decoding among all the workers.
+    // See #2133
+    pass_through(stream, "AvroValues", Pipeline).flat_map(move |((value, index), r, d)| {
+        let diffs = match envelope {
+            Envelope::None => extract_row(value, false, index.map(Datum::from)).map(|r| DiffPair {
+                before: None,
+                after: r,
+            }),
+            Envelope::Debezium => extract_debezium_slow(value),
+        }
+        .unwrap_or_else(|e| {
+            // TODO(#489): Handle this in a better way,
+            // once runtime error handling exists.
+            error!("Failed to extract avro row: {}", e);
+            DiffPair {
+                before: None,
+                after: None,
             }
-        },
-    )
+        });
+
+        diffs
+            .before
+            .into_iter()
+            .chain(diffs.after.into_iter())
+            .map(move |row| (row, r, d))
+    })
 }
 
 pub fn decode<G>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     encoding: DataEncoding,
     name: &str,
+    envelope: Envelope,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    match encoding {
-        DataEncoding::Csv(enc) => csv(stream, enc.n_cols, enc.delimiter),
-        DataEncoding::Avro(enc) => avro(stream, &enc.raw_schema, enc.schema_registry_url),
-        DataEncoding::Regex { regex } => regex_fn(stream, regex, name),
-        DataEncoding::Protobuf(enc) => protobuf(stream, &enc.descriptors, &enc.message_name),
-        DataEncoding::Bytes => raw(stream),
-        DataEncoding::Text => raw(stream).map(|(row, r, d)| {
-            let datums = row.unpack();
+    match (encoding, envelope) {
+        (DataEncoding::Csv(enc), Envelope::None) => csv(stream, enc.n_cols, enc.delimiter),
+        (DataEncoding::Avro(enc), envelope) => avro(
+            stream,
+            &enc.value_schema,
+            enc.schema_registry_url,
+            envelope == Envelope::Debezium,
+        ),
+        (DataEncoding::AvroOcf { .. }, _) => {
+            unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
+        }
+        (_, Envelope::Debezium) => unreachable!(
+            "Internal error: A non-Avro Debezium-envelope source should not have been created."
+        ),
+        (DataEncoding::Regex { regex }, Envelope::None) => regex_fn(stream, regex, name),
+        (DataEncoding::Protobuf(enc), Envelope::None) => {
+            protobuf(stream, &enc.descriptors, &enc.message_name)
+        }
+        (DataEncoding::Bytes, Envelope::None) => pass_through(
+            stream,
+            "RawBytes",
+            Exchange::new(|payload: &(Vec<u8>, Option<i64>)| payload.0.hashed()),
+        )
+        .map(|((payload, line_no), r, d)| {
             (
                 Row::pack(
-                    iter::once(Datum::from(
-                        std::str::from_utf8(datums[0].unwrap_bytes()).ok(),
-                    ))
-                    .chain(iter::once(datums[1])),
+                    iter::once(Datum::from(payload.as_slice())).chain(line_no.map(Datum::from)),
+                ),
+                r,
+                d,
+            )
+        }),
+        (DataEncoding::Text, Envelope::None) => pass_through(
+            stream,
+            "Text",
+            Exchange::new(|payload: &(Vec<u8>, Option<i64>)| payload.0.hashed()),
+        )
+        .map(|((payload, line_no), r, d)| {
+            (
+                Row::pack(
+                    iter::once(Datum::from(std::str::from_utf8(&payload).ok()))
+                        .chain(line_no.map(Datum::from)),
                 ),
                 r,
                 d,

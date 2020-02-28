@@ -17,6 +17,7 @@ name = "materialized"
 path = "bin/materialized.rs"
 
 [dependencies]
+avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
 backtrace = { version = "0.3.44", features = ["coresymbolication"] }
 comm = { path = "../comm" }
 compile-time-run = "0.2.8"
@@ -35,6 +36,7 @@ ore = { path = "../ore" }
 parse_duration = "2.1.0"
 pgwire = { path = "../pgwire" }
 prometheus = { git = "https://github.com/quodlibetor/rust-prometheus.git", branch = "include-unaggregated", default-features = false, features = ["process"] }
+serde_json = "1"
 tempfile = "3.1"
 tokio = "0.2"
 tracing = "0.1.12"
