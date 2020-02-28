@@ -30,4 +30,4 @@ impl Display for FrameTooBig {
     }
 }
 
-impl Error for FrameTooBig { }
+impl Error for FrameTooBig {}
