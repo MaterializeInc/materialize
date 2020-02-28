@@ -33,8 +33,8 @@ use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, CsrSeed, Format, Ident, ObjectName, ObjectType, Query, SetVariableValue,
-    ShowStatementFilter, Stage, Statement, Value,
+    AvroSchema, Connector, CsrSeed, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, Query,
+    SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
 };
 
 use crate::expr::like::build_like_regex_from_string;
@@ -757,32 +757,22 @@ fn handle_create_view(
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, columns, query, materialized, replace, with_options, if_not_exists) = match &mut stmt
-    {
+    let (name, columns, query, materialized, if_exists, with_options) = match &mut stmt {
         Statement::CreateView {
             name,
             columns,
             query,
             materialized,
-            replace,
+            if_exists,
             with_options,
-            if_not_exists,
-        } => (
-            name,
-            columns,
-            query,
-            materialized,
-            replace,
-            with_options,
-            if_not_exists,
-        ),
+        } => (name, columns, query, materialized, if_exists, with_options),
         _ => unreachable!(),
     };
     if !with_options.is_empty() {
         bail!("WITH options are not yet supported");
     }
     let name = scx.allocate_name(normalize::object_name(name.to_owned())?);
-    let replace = if *replace {
+    let replace = if *if_exists == IfExistsBehavior::Replace {
         let if_exists = true;
         let cascade = false;
         handle_drop_item(scx, ObjectType::View, if_exists, &name, cascade)?
@@ -818,7 +808,7 @@ fn handle_create_view(
         }
     }
     let materialize = *materialized; // Normalize for `raw_sql` below.
-    let if_not_exists = *if_not_exists;
+    let if_not_exists = *if_exists == IfExistsBehavior::Skip;
     Ok(Plan::CreateView {
         name,
         view: View {

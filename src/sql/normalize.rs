@@ -13,7 +13,7 @@ use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use ore::collections::CollectionExt;
 use repr::ColumnName;
 use sql_parser::ast::visit_mut::VisitMut;
-use sql_parser::ast::{Expr, Function, Ident, ObjectName, Statement, TableAlias};
+use sql_parser::ast::{Expr, Function, Ident, IfExistsBehavior, ObjectName, Statement, TableAlias};
 
 use crate::statement::StatementContext;
 
@@ -186,9 +186,8 @@ pub fn create_statement(
             columns,
             query,
             materialized,
-            replace,
+            if_exists,
             with_options: _,
-            if_not_exists,
         } => {
             *name = allocate_name(name)?;
             for c in columns {
@@ -202,8 +201,7 @@ pub fn create_statement(
                 }
             }
             *materialized = false;
-            *replace = false;
-            *if_not_exists = false;
+            *if_exists = IfExistsBehavior::Error;
         }
 
         Statement::CreateIndex {

@@ -2764,17 +2764,15 @@ fn parse_create_view() {
             columns,
             query,
             materialized,
-            replace,
+            if_exists,
             with_options,
-            if_not_exists,
         } => {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
             assert_eq!("SELECT foo FROM bar", query.to_string());
             assert!(!materialized);
-            assert!(!replace);
+            assert_eq!(if_exists, IfExistsBehavior::Error);
             assert_eq!(with_options, vec![]);
-            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -2784,7 +2782,7 @@ fn parse_create_view() {
 fn parse_create_or_replace_view() {
     let sql = "CREATE OR REPLACE VIEW v AS SELECT 1";
     match verified_stmt(sql) {
-        Statement::CreateView { replace, .. } => assert!(replace),
+        Statement::CreateView { if_exists, .. } => assert_eq!(if_exists, IfExistsBehavior::Replace),
         _ => unreachable!(),
     }
 }
@@ -2793,9 +2791,21 @@ fn parse_create_or_replace_view() {
 fn parse_create_view_if_not_exists() {
     let sql = "CREATE VIEW IF NOT EXISTS v AS SELECT 1";
     match verified_stmt(sql) {
-        Statement::CreateView { if_not_exists, .. } => assert!(if_not_exists),
+        Statement::CreateView { if_exists, .. } => assert_eq!(if_exists, IfExistsBehavior::Skip),
         _ => unreachable!(),
     }
+}
+
+#[test]
+fn parse_create_or_replace_view_if_not_exists() {
+    let res = parse_sql_statements("CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1");
+    assert_eq!(
+        res.unwrap_err().to_string(),
+        "Parse error:
+CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1
+                          ^^^
+Expected AS, found: NOT"
+    );
 }
 
 #[test]
@@ -2831,16 +2841,14 @@ fn parse_create_view_with_columns() {
             with_options,
             query,
             materialized,
-            replace,
-            if_not_exists,
+            if_exists,
         } => {
             assert_eq!("v", name.to_string());
             assert_eq!(columns, vec![Ident::new("has"), Ident::new("cols")]);
             assert_eq!(with_options, vec![]);
             assert_eq!("SELECT 1, 2", query.to_string());
             assert!(!materialized);
-            assert!(!replace);
-            assert!(!if_not_exists);
+            assert_eq!(if_exists, IfExistsBehavior::Error);
         }
         _ => unreachable!(),
     }
@@ -2855,17 +2863,15 @@ fn parse_create_materialized_view() {
             columns,
             query,
             materialized,
-            replace,
+            if_exists,
             with_options,
-            if_not_exists,
         } => {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
             assert_eq!("SELECT foo FROM bar", query.to_string());
             assert!(materialized);
-            assert!(!replace);
+            assert_eq!(if_exists, IfExistsBehavior::Error);
             assert_eq!(with_options, vec![]);
-            assert!(!if_not_exists);
         }
         _ => unreachable!(),
     }
@@ -2876,12 +2882,10 @@ fn parse_create_materialized_view_if_not_exists() {
     let sql = "CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar";
     match verified_stmt(sql) {
         Statement::CreateView {
-            name,
-            if_not_exists,
-            ..
+            name, if_exists, ..
         } => {
             assert_eq!("myschema.myview", name.to_string());
-            assert!(if_not_exists);
+            assert_eq!(if_exists, IfExistsBehavior::Skip);
         }
         _ => unreachable!(),
     }
