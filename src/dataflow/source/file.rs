@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt::Display;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -33,8 +34,6 @@ use dataflow_types::Timestamp;
 
 use crate::source::util::source;
 use crate::source::{SourceStatus, SourceToken};
-
-use std::fmt::Display;
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {

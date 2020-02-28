@@ -366,6 +366,9 @@ where
     }
 }
 
+/// Extract a debezium-format Avro object by parsing it fully,
+/// i.e., when the record isn't laid out such that we can extract the `before` and
+/// `after` fields without decoding the entire record.
 pub fn extract_debezium_slow(v: Value) -> Result<DiffPair> {
     let mut before = None;
     let mut after = None;
@@ -417,6 +420,7 @@ impl fmt::Debug for Decoder {
     }
 }
 
+// TODO (#2133) -- Avro coding can probably be made significantly faster.
 impl Decoder {
     /// Creates a new `Decoder`
     ///

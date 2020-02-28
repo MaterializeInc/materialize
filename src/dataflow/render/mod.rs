@@ -152,14 +152,17 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         // Distribute read responsibility among workers.
                         use differential_dataflow::hashable::Hashable;
                         let hash = src_id.hashed() as usize;
-
-                        let read_style = if worker_index != (hash % worker_peers) {
-                            FileReadStyle::None
-                        } else if c.tail {
-                            FileReadStyle::TailFollowFd
+                        let should_read = hash % worker_peers == worker_index;
+                        let read_style = if should_read {
+                            if c.tail {
+                                FileReadStyle::TailFollowFd
+                            } else {
+                                FileReadStyle::ReadOnce
+                            }
                         } else {
-                            FileReadStyle::ReadOnce
+                            FileReadStyle::None
                         };
+
                         let reader_schema = match &encoding {
                             DataEncoding::AvroOcf { schema } => schema,
                             _ => unreachable!("Internal error: \
@@ -217,13 +220,20 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 )
                             }
                             ExternalSourceConnector::File(c) => {
-                                let read_style = if worker_index != 0 {
-                                    FileReadStyle::None
-                                } else if c.tail {
-                                    FileReadStyle::TailFollowFd
+                                // Distribute read responsibility among workers.
+                                use differential_dataflow::hashable::Hashable;
+                                let hash = src_id.hashed() as usize;
+                                let should_read = hash % worker_peers == worker_index;
+                                let read_style = if should_read {
+                                    if c.tail {
+                                        FileReadStyle::TailFollowFd
+                                    } else {
+                                        FileReadStyle::ReadOnce
+                                    }
                                 } else {
-                                    FileReadStyle::ReadOnce
+                                    FileReadStyle::None
                                 };
+
                                 let ctor = |file| {
                                     futures::future::ok(
                                         FramedRead::new(file, LinesCodec::new())

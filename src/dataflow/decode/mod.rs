@@ -55,6 +55,8 @@ lazy_static! {
     static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
 }
 
+/// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
+/// and each time is the current Timely timestamp.
 fn pass_through<G, Data, P>(
     stream: &Stream<G, Data>,
     name: &str,
@@ -65,21 +67,16 @@ where
     Data: timely::Data,
     P: ParallelizationContract<Timestamp, Data>,
 {
-    stream.unary(
-        pact,
-        //Exchange::new(|x: &Data| x.hashed()),
-        name,
-        move |_, _| {
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    let mut v = Vec::new();
-                    data.swap(&mut v);
-                    let mut session = output.session(&cap);
-                    session.give_iterator(v.into_iter().map(|payload| (payload, *cap.time(), 1)));
-                });
-            }
-        },
-    )
+    stream.unary(pact, name, move |_, _| {
+        move |input, output| {
+            input.for_each(|cap, data| {
+                let mut v = Vec::new();
+                data.swap(&mut v);
+                let mut session = output.session(&cap);
+                session.give_iterator(v.into_iter().map(|payload| (payload, *cap.time(), 1)));
+            });
+        }
+    })
 }
 
 pub fn decode_avro_values<G>(
@@ -92,6 +89,7 @@ where
     // TODO(brennan) -- If this ends up being a bottleneck,
     // refactor the avro `Reader` to separate reading from decoding,
     // so that we can spread the decoding among all the workers.
+    // See #2133
     pass_through(stream, "AvroValues", Pipeline).flat_map(move |((value, index), r, d)| {
         let diffs = match envelope {
             Envelope::None => extract_row(value, false, index.map(Datum::from)).map(|r| DiffPair {
@@ -101,6 +99,8 @@ where
             Envelope::Debezium => extract_debezium_slow(value),
         }
         .unwrap_or_else(|e| {
+            // TODO(#489): Handle this in a better way,
+            // once runtime error handling exists.
             error!("Failed to extract avro row: {}", e);
             DiffPair {
                 before: None,
