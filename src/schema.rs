@@ -1311,5 +1311,4 @@ mod tests {
             format!("{}", schema.fingerprint::<Md5>())
         );
     }
-
 }

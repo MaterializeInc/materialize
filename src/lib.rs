@@ -235,6 +235,7 @@
 //! codec:
 //!
 //! ```
+//!
 //! use avro_rs::Reader;
 //! # use avro_rs::Schema;
 //! # use avro_rs::types::Record;
@@ -259,7 +260,7 @@
 //! # writer.flush().unwrap();
 //! # let input = writer.into_inner();
 //! // reader creation can fail in case the input to read from is not Avro-compatible or malformed
-//! let reader = Reader::new(&input[..]).unwrap();
+//! let reader = futures::executor::block_on(Reader::new(&input[..])).unwrap();
 //! ```
 //!
 //! In case, instead, we want to specify a different (but compatible) reader schema from the schema
@@ -304,7 +305,7 @@
 //! let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
 //!
 //! // reader creation can fail in case the input to read from is not Avro-compatible or malformed
-//! let reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
+//! let reader = futures::executor::block_on(Reader::with_schema(&reader_schema, &input[..])).unwrap();
 //! ```
 //!
 //! The library will also automatically perform schema resolution while reading the data.
@@ -325,6 +326,8 @@
 //! We can just read directly instances of `Value` out of the `Reader` iterator:
 //!
 //! ```
+//! use futures::stream::StreamExt;
+//!
 //! # use avro_rs::Schema;
 //! # use avro_rs::types::Record;
 //! # use avro_rs::Writer;
@@ -349,10 +352,10 @@
 //! # writer.append(record).unwrap();
 //! # writer.flush().unwrap();
 //! # let input = writer.into_inner();
-//! let reader = Reader::new(&input[..]).unwrap();
+//! let mut reader = futures::executor::block_on(Reader::new(&input[..])).unwrap().into_stream();
 //!
 //! // value is a Result  of an Avro Value in case the read operation fails
-//! for value in reader {
+//! while let Some(value) = futures::executor::block_on(reader.next()) {
 //!     println!("{:?}", value.unwrap());
 //! }
 //!
@@ -364,6 +367,7 @@
 //! read the data into:
 //!
 //! ```
+//! use futures::stream::StreamExt;
 //! # use avro_rs::Schema;
 //! # use avro_rs::Writer;
 //! # use serde::{Deserialize, Serialize};
@@ -397,10 +401,10 @@
 //! # writer.append_ser(test).unwrap();
 //! # writer.flush().unwrap();
 //! # let input = writer.into_inner();
-//! let reader = Reader::new(&input[..]).unwrap();
+//! let mut reader = futures::executor::block_on(Reader::new(&input[..])).unwrap().into_stream();
 //!
 //! // value is a Result in case the read operation fails
-//! for value in reader {
+//! while let Some(value) = futures::executor::block_on(reader.next()) {
 //!     println!("{:?}", from_value::<Test>(&value.unwrap()));
 //! }
 //! # }
@@ -412,6 +416,7 @@
 //! quick reference of the library interface:
 //!
 //! ```
+//! use futures::stream::StreamExt;
 //! use avro_rs::{Codec, Reader, Schema, Writer, from_value, types::Record};
 //! use failure::Error;
 //! use serde::{Deserialize, Serialize};
@@ -456,10 +461,10 @@
 //!     writer.flush()?;
 //!
 //!     let input = writer.into_inner();
-//!     let reader = Reader::with_schema(&schema, &input[..])?;
+//!     let mut reader = futures::executor::block_on(Reader::with_schema(&schema, &input[..]))?.into_stream();
 //!
-//!     for record in reader {
-//!         println!("{:?}", from_value::<Test>(&record?));
+//!     while let Some(value) = futures::executor::block_on(reader.next()) {
+//!         println!("{:?}", from_value::<Test>(&value?));
 //!     }
 //!     Ok(())
 //! }
@@ -493,9 +498,11 @@ mod tests {
     use crate::schema::Schema;
     use crate::types::{Record, Value};
 
+    use futures::stream::StreamExt;
+
     //TODO: move where it fits better
-    #[test]
-    fn test_enum_default() {
+    #[tokio::test]
+    async fn test_enum_default() {
         let writer_raw_schema = r#"
             {
                 "type": "record",
@@ -534,21 +541,24 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
+        let mut reader = Reader::with_schema(&reader_schema, &input[..])
+            .await
+            .unwrap()
+            .into_stream();
         assert_eq!(
-            reader.next().unwrap().unwrap(),
+            reader.next().await.unwrap().unwrap(),
             Value::Record(vec![
                 ("a".to_string(), Value::Long(27)),
                 ("b".to_string(), Value::String("foo".to_string())),
                 ("c".to_string(), Value::Enum(1, "spades".to_string())),
             ])
         );
-        assert!(reader.next().is_none());
+        assert!(reader.next().await.is_none());
     }
 
     //TODO: move where it fits better
-    #[test]
-    fn test_enum_string_value() {
+    #[tokio::test]
+    async fn test_enum_string_value() {
         let raw_schema = r#"
             {
                 "type": "record",
@@ -577,21 +587,24 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&schema, &input[..]).unwrap();
+        let mut reader = Reader::with_schema(&schema, &input[..])
+            .await
+            .unwrap()
+            .into_stream();
         assert_eq!(
-            reader.next().unwrap().unwrap(),
+            reader.next().await.unwrap().unwrap(),
             Value::Record(vec![
                 ("a".to_string(), Value::Long(27)),
                 ("b".to_string(), Value::String("foo".to_string())),
                 ("c".to_string(), Value::Enum(2, "clubs".to_string())),
             ])
         );
-        assert!(reader.next().is_none());
+        assert!(reader.next().await.is_none());
     }
 
     //TODO: move where it fits better
-    #[test]
-    fn test_enum_resolution() {
+    #[tokio::test]
+    async fn test_enum_resolution() {
         let writer_raw_schema = r#"
             {
                 "type": "record",
@@ -640,14 +653,17 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
-        assert!(reader.next().unwrap().is_err());
-        assert!(reader.next().is_none());
+        let mut reader = Reader::with_schema(&reader_schema, &input[..])
+            .await
+            .unwrap()
+            .into_stream();
+        assert!(reader.next().await.unwrap().is_err());
+        assert!(reader.next().await.is_none());
     }
 
     //TODO: move where it fits better
-    #[test]
-    fn test_enum_no_reader_schema() {
+    #[tokio::test]
+    async fn test_enum_no_reader_schema() {
         let writer_raw_schema = r#"
             {
                 "type": "record",
@@ -676,9 +692,9 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::new(&input[..]).unwrap();
+        let mut reader = Reader::new(&input[..]).await.unwrap().into_stream();
         assert_eq!(
-            reader.next().unwrap().unwrap(),
+            reader.next().await.unwrap().unwrap(),
             Value::Record(vec![
                 ("a".to_string(), Value::Long(27)),
                 ("b".to_string(), Value::String("foo".to_string())),
@@ -686,8 +702,8 @@ mod tests {
             ])
         );
     }
-    #[test]
-    fn test_datetime_value() {
+    #[tokio::test]
+    async fn test_datetime_value() {
         let writer_raw_schema = r#"{
         "type": "record",
         "name": "dttest",
@@ -708,15 +724,15 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::new(&input[..]).unwrap();
+        let mut reader = Reader::new(&input[..]).await.unwrap().into_stream();
         assert_eq!(
-            reader.next().unwrap().unwrap(),
+            reader.next().await.unwrap().unwrap(),
             Value::Record(vec![("a".to_string(), Value::Timestamp(dt)),])
         );
     }
 
-    #[test]
-    fn test_illformed_length() {
+    #[tokio::test]
+    async fn test_illformed_length() {
         let raw_schema = r#"
             {
                 "type": "record",
@@ -733,7 +749,7 @@ mod tests {
         // Would allocated 18446744073709551605 bytes
         let illformed: &[u8] = &[0x3e, 0x15, 0xff, 0x1f, 0x15, 0xff];
 
-        let value = from_avro_datum(&schema, &mut &illformed[..], None);
+        let value = from_avro_datum(&schema, &mut &illformed[..], None).await;
         assert!(value.is_err());
     }
 }
