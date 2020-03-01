@@ -33,10 +33,6 @@ services:
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
-    ulimits:
-      nofile:
-        soft: "65536"
-        hard: "65536"
   zookeeper:
     image: zookeeper:3.4.13
   kafka:

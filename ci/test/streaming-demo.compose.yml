@@ -27,10 +27,6 @@ services:
       - db-data:/share/billing-demo/data
     command: --logging-granularity=10ms
     depends_on: [kafka]
-    ulimits:
-      nofile:
-        soft: "65536"
-        hard: "65536"
   zookeeper:
     image: zookeeper:3.4.13
   kafka:
