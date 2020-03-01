@@ -231,17 +231,14 @@ fn start_server(runtime: &Runtime, status_code: StatusCode, body: &'static str) 
     let addr = runtime.enter(|| {
         let incoming = AddrIncoming::bind(&([127, 0, 0, 1], 0).into()).unwrap();
         let addr = incoming.local_addr();
-        let server = Server::builder(incoming).serve(service::make_service_fn(move |_conn| {
-            async move {
-                Ok::<_, hyper::Error>(service::service_fn(move |_req| {
-                    async move {
-                        Response::builder()
-                            .status(status_code)
-                            .body(Body::from(body))
-                    }
+        let server =
+            Server::builder(incoming).serve(service::make_service_fn(move |_conn| async move {
+                Ok::<_, hyper::Error>(service::service_fn(move |_req| async move {
+                    Response::builder()
+                        .status(status_code)
+                        .body(Body::from(body))
                 }))
-            }
-        }));
+            }));
         tokio::spawn(async {
             match server.await {
                 Ok(()) => (),

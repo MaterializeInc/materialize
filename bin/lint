@@ -60,6 +60,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)go\.sum$' \
     -e '(^|/)Cargo\.toml$' \
     -e '^Cargo\.lock$' \
+    -e '^deny\.toml$' \
     -e '^netlify.toml$' \
     -e '^rust-toolchain$' \
     -e '^rustfmt.toml$' \

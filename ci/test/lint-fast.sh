@@ -18,6 +18,7 @@ set -euo pipefail
 ci_init
 
 ci_try bin/lint
-ci_try cargo fmt -- --check
+ci_try cargo --locked fmt -- --check
+ci_try cargo --locked deny check
 
 ci_status_report

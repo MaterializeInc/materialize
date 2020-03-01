@@ -1,0 +1,48 @@
+[bans]
+multiple-versions = "deny"
+skip = [
+    # TODO(benesch): remove all of these duplicated dependencies.
+    { name = "autocfg", version = "0.1.4" },
+    { name = "base64", version = "0.8.0" },
+    { name = "generic-array", version = "0.12.0" },
+    { name = "lazy_static", version = "0.2.11" },
+    { name = "miow", version = "0.2.1" },
+    { name = "proc-macro2", version = "0.4.30" },
+    { name = "quote", version = "0.6.12" },
+    { name = "rand_chacha", version = "0.1.1" },
+    { name = "rand_core", version = "0.3.1" },
+    { name = "rand_core", version = "0.4.0" },
+    { name = "rand_pcg", version = "0.1.2" },
+    { name = "rand_hc", version = "0.1.0" },
+    { name = "rand", version = "0.4.6" },
+    { name = "rand", version = "0.6.5" },
+    { name = "syn", version = "0.15.44" },
+    { name = "time", version = "0.1.42" },
+    { name = "unicode-xid", version = "0.1.0" },
+    { name = "uuid", version = "0.6.5" },
+    { name = "version_check", version = "0.1.5" },
+    { name = "winapi", version = "0.2.8" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "CC0-1.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Zlib",
+]
+private = { ignore = true }
+
+[sources]
+unknown-git = "deny"
+unknown-registry = "deny"
+allow-git = [
+    "https://github.com/MaterializeInc/avro-rs.git",
+    "https://github.com/MaterializeInc/rust-prometheus.git",
+    "https://github.com/MaterializeInc/serde-protobuf.git",
+    "https://github.com/TimelyDataflow/timely-dataflow",
+    "https://github.com/TimelyDataflow/differential-dataflow.git",
+]
