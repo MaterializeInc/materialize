@@ -31,7 +31,7 @@ use std::thread;
 use backtrace::Backtrace;
 use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
-use log::{trace, warn};
+use log::trace;
 use once_cell::sync::OnceCell;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -304,6 +304,8 @@ fn adjust_rlimits() {
     // platforms, even with the rlimit wrapper crate that we use. This function
     // is chattier than normal at the trace log level in an attempt to ease
     // debugging of such differences.
+
+    use log::warn;
 
     let (soft, hard) = match rlimit::Resource::NOFILE.get() {
         Ok(limits) => limits,
