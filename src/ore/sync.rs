@@ -36,9 +36,9 @@ use std::sync::Mutex;
 ///     }
 /// }
 ///
-/// let stderr: Box<io::Write + Send> = Box::new(io::stderr());
+/// let stderr: Box<dyn io::Write + Send> = Box::new(io::stderr());
 /// let lottery = Lottery::new(stderr, || Box::new(Discarder));
-/// crossbeam::thread::scope(|thread_scope| {
+/// crossbeam_utils::thread::scope(|thread_scope| {
 ///     (0..5)
 ///         .into_iter()
 ///         .map(|_| {
@@ -86,7 +86,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crossbeam::thread;
+    use crossbeam_utils::thread;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
