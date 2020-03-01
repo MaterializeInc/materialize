@@ -292,6 +292,12 @@ to improve both our software and your queries! Please reach out at:
     );
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
+fn adjust_rlimits() {
+    trace!("rlimit crate does not support this OS; not adjusting nofile limit");
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
 /// Attempts to increase the soft nofile rlimit to the maximum possible value.
 fn adjust_rlimits() {
     // getrlimit/setrlimit can have surprisingly different behavior across
