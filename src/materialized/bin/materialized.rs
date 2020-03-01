@@ -31,7 +31,7 @@ use std::thread;
 use backtrace::Backtrace;
 use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
-use log::{trace, warn};
+use log::trace;
 use once_cell::sync::OnceCell;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -292,12 +292,20 @@ to improve both our software and your queries! Please reach out at:
     );
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
+fn adjust_rlimits() {
+    trace!("rlimit crate does not support this OS; not adjusting nofile limit");
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
 /// Attempts to increase the soft nofile rlimit to the maximum possible value.
 fn adjust_rlimits() {
     // getrlimit/setrlimit can have surprisingly different behavior across
     // platforms, even with the rlimit wrapper crate that we use. This function
     // is chattier than normal at the trace log level in an attempt to ease
     // debugging of such differences.
+
+    use log::warn;
 
     let (soft, hard) = match rlimit::Resource::NOFILE.get() {
         Ok(limits) => limits,
