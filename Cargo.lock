@@ -67,15 +67,6 @@ checksum = "a4c527152e37cf757a3f78aae5a06fbeefdb07ccc535c980a3208ee3060dd544"
 
 [[package]]
 name = "arrayvec"
-version = "0.4.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92c7fb76bc8826a8b33b4ee5bb07a247a81e76764ab4d55e8f73e3a4d8808c71"
-dependencies = [
- "nodrop",
-]
-
-[[package]]
-name = "arrayvec"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cff77d8686867eceff3105329d4698d96c2391c176d5d03adc90c7389162b5b8"
@@ -244,7 +235,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8fb2d74254a3a0b5cac33ac9f8ed0e44aa50378d9dbb2e5d83bd21ed1dc2c8a"
 dependencies = [
  "arrayref",
- "arrayvec 0.5.1",
+ "arrayvec",
  "constant_time_eq",
 ]
 
@@ -520,9 +511,9 @@ dependencies = [
 
 [[package]]
 name = "criterion"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "938703e165481c8d612ea3479ac8342e5615185db37765162e762ec3523e2fc6"
+checksum = "1fc755679c12bda8e5523a71e4d654b6bf2e14bd838dfc48cde6559a05caf7d1"
 dependencies = [
  "atty",
  "cast",
@@ -532,10 +523,10 @@ dependencies = [
  "itertools",
  "lazy_static 1.4.0",
  "num-traits",
- "rand_core 0.5.1",
- "rand_os 0.2.1",
- "rand_xoshiro",
+ "oorandom",
+ "plotters",
  "rayon",
+ "regex",
  "serde",
  "serde_derive",
  "serde_json",
@@ -545,9 +536,9 @@ dependencies = [
 
 [[package]]
 name = "criterion-plot"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eccdc6ce8bbe352ca89025bee672aa6d24f4eb8c53e3a8b5d1bc58011da072a2"
+checksum = "a01e15e0ea58e8234f96146b1f91fa9d0e4dd7a38da93ff7a75d42c0b9d3a545"
 dependencies = [
  "cast",
  "itertools",
@@ -555,35 +546,38 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.6.3"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05e44b8cf3e1a625844d1750e1f7820da46044ff6d28f4d43e455ba3e5bb2c13"
+checksum = "9f02af974daeee82218205558e51ec8768b48cf524bd01d550abe5573a608285"
 dependencies = [
  "crossbeam-epoch",
- "crossbeam-utils 0.6.6",
+ "crossbeam-utils 0.7.2",
+ "maybe-uninit",
 ]
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.7.2"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fedcd6772e37f3da2a9af9bf12ebe046c0dfe657992377b4df982a2b54cd37a9"
+checksum = "058ed274caafc1f60c4997b5fc07bf7dc7cca454af7c6e81edffe5f33f70dace"
 dependencies = [
- "arrayvec 0.4.10",
+ "autocfg 1.0.0",
  "cfg-if",
- "crossbeam-utils 0.6.6",
+ "crossbeam-utils 0.7.2",
  "lazy_static 1.4.0",
+ "maybe-uninit",
  "memoffset",
  "scopeguard",
 ]
 
 [[package]]
 name = "crossbeam-queue"
-version = "0.1.2"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c979cd6cfe72335896575c6b5688da489e420d36a27a0b9eb0c73db574b4a4b"
+checksum = "c695eeca1e7173472a32221542ae469b3e9aac3a4fc81f7696bcad82029493db"
 dependencies = [
- "crossbeam-utils 0.6.6",
+ "cfg-if",
+ "crossbeam-utils 0.7.2",
 ]
 
 [[package]]
@@ -1831,12 +1825,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodrop"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f9667ddcc6cc8a43afc9b7917599d7216aa09c463919ea32c59ed6cac8bc945"
-
-[[package]]
 name = "nom"
 version = "4.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1983,6 +1971,12 @@ name = "once_cell"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1c601810575c99596d4afc46f78a678c80105117c379eb3650cf99b8a21ce5b"
+
+[[package]]
+name = "oorandom"
+version = "11.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebcec7c9c2a95cacc7cd0ecb89d8a8454eca13906f6deb55258ffff0adeb9405"
 
 [[package]]
 name = "opaque-debug"
@@ -2234,6 +2228,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "676e8eb2b1b4c9043511a9b7bea0915320d7e502b0a079fb03f9635a5252b18c"
 
 [[package]]
+name = "plotters"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e3bb8da247d27ae212529352020f3e5ee16e83c0c258061d27b08ab92675eeb"
+dependencies = [
+ "js-sys",
+ "num-traits",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "postgres"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2321,7 +2327,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1891757f8427ce41706957fde1fec1b86aee3e335bd50320257705061507a24c"
 dependencies = [
- "arrayvec 0.5.1",
+ "arrayvec",
  "typed-arena",
 ]
 
@@ -2551,7 +2557,7 @@ dependencies = [
  "rand_hc 0.1.0",
  "rand_isaac",
  "rand_jitter",
- "rand_os 0.1.3",
+ "rand_os",
  "rand_pcg 0.1.2",
  "rand_xorshift",
  "winapi 0.3.8",
@@ -2677,16 +2683,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_os"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddb525a78d3a0b0e05b6fe0f7df14d7a4dc957944c7b403911ba5a0f1c694967"
-dependencies = [
- "getrandom",
- "rand_core 0.5.1",
-]
-
-[[package]]
 name = "rand_pcg"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2716,19 +2712,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_xoshiro"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e18c91676f670f6f0312764c759405f13afb98d5d73819840cf72a518487bff"
-dependencies = [
- "rand_core 0.5.1",
-]
-
-[[package]]
 name = "rayon"
-version = "1.1.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4b0186e22767d5b9738a05eab7c6ac90b15db17e5b5f9bd87976dd7d89a10a4"
+checksum = "db6ce3297f9c85e16621bb8cca38a06779ffc31bb8184e1be4bed2be4678a098"
 dependencies = [
  "crossbeam-deque",
  "either",
@@ -2737,13 +2724,13 @@ dependencies = [
 
 [[package]]
 name = "rayon-core"
-version = "1.5.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebbe0df8435ac0c397d467b6cad6d25543d06e8a019ef3f6af3c384597515bd2"
+checksum = "08a89b46efaf957e52b18062fb2f4660f8b8a4dde1807ca002690868ef2c85a9"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-queue",
- "crossbeam-utils 0.6.6",
+ "crossbeam-utils 0.7.2",
  "lazy_static 1.4.0",
  "num_cpus",
 ]
