@@ -172,12 +172,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 ),
                             };
                             let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                            let ctor = |file| {
-                                async move {
-                                    avro_rs::Reader::with_schema_owned(reader_schema, file)
-                                        .await
-                                        .map(|r| r.into_stream())
-                                }
+                            let ctor = |file| async move {
+                                avro_rs::Reader::with_schema_owned(reader_schema, file)
+                                    .await
+                                    .map(|r| r.into_stream())
                             };
                             let (source, capability) = source::file(
                                 src_id,

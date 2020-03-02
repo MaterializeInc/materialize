@@ -65,7 +65,8 @@ RUN mkdir rust \
     && case $RUST_COMPONENTS in *miri*) PATH=$PATH:/root/.cargo/bin cargo miri setup && mv /root/.cargo/bin/xargo /usr/local/bin/xargo;; esac \
     && rm -rf /rust
 
-RUN cargo install --quiet --root /usr cargo-deb
+RUN cargo install --root /usr/local cargo-deb cargo-deny
+
 RUN gem install gemfury
 
 # TODO(benesch): why is this required now with nightly?

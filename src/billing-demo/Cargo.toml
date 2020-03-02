@@ -4,6 +4,7 @@ description = "Microservice demo using Materialize to power a real-time billing 
 version = "0.1.0"
 authors = ["Brandon W Maister <bwm@materialize.io>"]
 edition = "2018"
+publish = false
 
 [dependencies]
 anyhow = "1.0.26"

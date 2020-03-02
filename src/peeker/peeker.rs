@@ -315,21 +315,17 @@ async fn serve_metrics() -> Result<()> {
     info!("serving prometheus metrics on port {}", METRICS_PORT);
     let addr = ([0, 0, 0, 0], METRICS_PORT).into();
 
-    let make_service = make_service_fn(|_conn| {
-        async {
-            Ok::<_, Infallible>(service_fn(|_req| {
-                async {
-                    let metrics = prometheus::gather();
-                    let encoder = prometheus::TextEncoder::new();
-                    let mut buffer = Vec::new();
+    let make_service = make_service_fn(|_conn| async {
+        Ok::<_, Infallible>(service_fn(|_req| async {
+            let metrics = prometheus::gather();
+            let encoder = prometheus::TextEncoder::new();
+            let mut buffer = Vec::new();
 
-                    encoder
-                        .encode(&metrics, &mut buffer)
-                        .unwrap_or_else(|e| error!("error gathering metrics: {}", e));
-                    Ok::<_, Infallible>(Response::new(Body::from(buffer)))
-                }
-            }))
-        }
+            encoder
+                .encode(&metrics, &mut buffer)
+                .unwrap_or_else(|e| error!("error gathering metrics: {}", e));
+            Ok::<_, Infallible>(Response::new(Body::from(buffer)))
+        }))
     });
     Server::bind(&addr).serve(make_service).await?;
     Ok(())
