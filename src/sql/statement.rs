@@ -865,6 +865,8 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                     let path = path.clone();
                     let f = tokio::fs::File::open(path).await?;
                     let r = avro_rs::Reader::new(f).await?;
+                    // TODO(brennan) -- make sure avro-rs can handle schemas with backreferences here.
+                    // (i.e., we may need to add the logic from `fn munge` to there...)
                     let schema = r.writer_schema();
                     let schema = serde_json::to_string(schema).unwrap();
                     *format = Some(Format::AvroOcf { schema })
