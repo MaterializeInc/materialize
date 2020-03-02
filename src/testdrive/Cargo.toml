@@ -44,7 +44,7 @@ termcolor = "1.1.0"
 tokio = "0.2"
 
 [build-dependencies]
-protoc-rust = "2.8"
+protoc-rust = "2.10"
 
 [dev-dependencies]
 assert_cmd = "0.12.0"
