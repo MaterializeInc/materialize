@@ -551,7 +551,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f02af974daeee82218205558e51ec8768b48cf524bd01d550abe5573a608285"
 dependencies = [
  "crossbeam-epoch",
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "maybe-uninit",
 ]
 
@@ -563,7 +563,7 @@ checksum = "058ed274caafc1f60c4997b5fc07bf7dc7cca454af7c6e81edffe5f33f70dace"
 dependencies = [
  "autocfg 1.0.0",
  "cfg-if",
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "lazy_static 1.4.0",
  "maybe-uninit",
  "memoffset",
@@ -577,17 +577,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c695eeca1e7173472a32221542ae469b3e9aac3a4fc81f7696bcad82029493db"
 dependencies = [
  "cfg-if",
- "crossbeam-utils 0.7.2",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04973fa96e96579258a5091af6003abde64af786b860f18622b82e026cca60e6"
-dependencies = [
- "cfg-if",
- "lazy_static 1.4.0",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -634,16 +624,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctor"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b4c17619643c1252b5f690084b82639dd7fac141c57c8e77a00e0148132092c"
-dependencies = [
- "quote 0.6.12",
- "syn 0.15.44",
-]
-
-[[package]]
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
@@ -665,7 +645,6 @@ dependencies = [
  "notify",
  "ore",
  "pdqselect",
- "pretty_assertions",
  "prometheus",
  "prometheus-static-metric",
  "rdkafka",
@@ -697,7 +676,6 @@ dependencies = [
  "failure",
  "interchange",
  "pdqselect",
- "pretty_assertions",
  "regex",
  "repr",
  "serde",
@@ -1407,7 +1385,6 @@ dependencies = [
  "num-traits",
  "ordered-float",
  "ore",
- "pretty_assertions",
  "protobuf",
  "protoc",
  "protoc-rust",
@@ -1627,7 +1604,6 @@ dependencies = [
  "parse_duration",
  "pgwire",
  "postgres",
- "pretty_assertions",
  "prometheus",
  "rlimit",
  "serde_json",
@@ -2011,7 +1987,7 @@ name = "ore"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "failure",
  "fallible-iterator",
  "futures",
@@ -2021,15 +1997,6 @@ dependencies = [
  "smallvec",
  "tokio",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "output_vt100"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53cdc5b785b7a58c5aad8216b3dfa114df64b0b06ae6e1501cef91df2fbdf8f9"
-dependencies = [
- "winapi 0.3.8",
 ]
 
 [[package]]
@@ -2301,18 +2268,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pretty_assertions"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f81e1644e1b54f5a68959a29aa86cde704219254669da328ecfdf6a1f09d427"
-dependencies = [
- "ansi_term",
- "ctor",
- "difference",
- "output_vt100",
-]
-
-[[package]]
 name = "proc-macro-crate"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2366,15 +2321,6 @@ checksum = "369a6ed065f249a159e06c45752c780bda2fb53c995718f9e484d08daa9eb42e"
 
 [[package]]
 name = "proc-macro2"
-version = "0.3.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b06e2f335f48d24442b35a19df506a835fb3547bc3c06ef27340da9acf5cae7"
-dependencies = [
- "unicode-xid 0.1.0",
-]
-
-[[package]]
-name = "proc-macro2"
 version = "0.4.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf3d2011ab5c909338f7887f4fc896d35932e29146c12c8d01da6b22a80ba759"
@@ -2408,7 +2354,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/quodlibetor/rust-prometheus.git?branch=include-unaggregated#bc77eb596f12408eb92b1bef822df10a2ac7b8d5"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#abe40499265a0ed0242a10924e4946eb7b3634f4"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -2421,14 +2367,13 @@ dependencies = [
 
 [[package]]
 name = "prometheus-static-metric"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1baa57413523cff73783204f73299a3f602ebcf51a5e64752b32bc1b3c376013"
+version = "0.3.0"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#abe40499265a0ed0242a10924e4946eb7b3634f4"
 dependencies = [
  "lazy_static 1.4.0",
- "proc-macro2 0.3.8",
- "quote 0.5.2",
- "syn 0.13.11",
+ "proc-macro2 1.0.7",
+ "quote 1.0.2",
+ "syn 1.0.11",
 ]
 
 [[package]]
@@ -2472,15 +2417,6 @@ name = "quick-error"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9274b940887ce9addde99c4eee6b5c44cc494b182b97e73dc8ffdcb3397fd3f0"
-
-[[package]]
-name = "quote"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9949cfe66888ffe1d53e6ec9d9f3b70714083854be20fd5e271b232a017401e8"
-dependencies = [
- "proc-macro2 0.3.8",
-]
 
 [[package]]
 name = "quote"
@@ -2698,7 +2634,7 @@ checksum = "08a89b46efaf957e52b18062fb2f4660f8b8a4dde1807ca002690868ef2c85a9"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-queue",
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "lazy_static 1.4.0",
  "num_cpus",
 ]
@@ -2749,9 +2685,9 @@ checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
 name = "redox_users"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dc1887cbcd764cc066e2c08681a5615433ac3de9752838a9ec114613b118575"
+checksum = "09b23093265f8d200fa7b4c2c76297f47e681c655f6f1285a8780d6a022f7431"
 dependencies = [
  "getrandom",
  "redox_syscall",
@@ -2972,14 +2908,14 @@ dependencies = [
 
 [[package]]
 name = "rust-argon2"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "416f5109bdd413cec4f04c029297838e7604c993f8d1483b1d438f23bdc3eb35"
+checksum = "2bc8af4bda8e1ff4932523b94d3dd20ee30a87232323eda55903ffd71d2fb017"
 dependencies = [
  "base64 0.11.0",
  "blake2b_simd",
  "constant_time_eq",
- "crossbeam-utils 0.6.6",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -3252,7 +3188,6 @@ dependencies = [
  "itertools",
  "ore",
  "pgrepr",
- "pretty_assertions",
  "regex",
  "repr",
  "serde_json",
@@ -3367,17 +3302,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "whoami",
-]
-
-[[package]]
-name = "syn"
-version = "0.13.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14f9bf6292f3a61d2c716723fdb789a41bbe104168e6f496dc6497e531ea1b9b"
-dependencies = [
- "proc-macro2 0.3.8",
- "quote 0.5.2",
- "unicode-xid 0.1.0",
 ]
 
 [[package]]

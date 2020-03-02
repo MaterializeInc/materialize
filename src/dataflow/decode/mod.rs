@@ -39,7 +39,7 @@ use std::iter;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 
 make_static_metric! {
-    struct EventsRead: IntCounter {
+    pub struct EventsRead: IntCounter {
         "format" => { avro, csv, protobuf },
         "status" => { success, error }
     }
