@@ -15,7 +15,7 @@ use rand::distributions::Distribution;
 use rand::seq::SliceRandom;
 use rand::Rng;
 use rand_distr::Normal;
-use uuid_b64::UuidB64;
+use uuid::Uuid;
 
 use crate::gen::billing::{Batch, Record, ResourceInfo};
 
@@ -50,7 +50,7 @@ fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
 /// In particular this will have somewhat sensible values for all fields, and
 /// will be the next time slice after `state.last_time`, incrementing `last_time` to now
 pub fn random_batch(rng: &mut impl Rng, state: &mut RecordState) -> Batch {
-    let id = UuidB64::new();
+    let id = Uuid::new_v4();
 
     let dur_val = rng.gen_range(15, 1_000);
     let dur = chrono::Duration::seconds(dur_val);
@@ -98,7 +98,7 @@ fn random_record(rng: &mut impl Rng, start_at: DateTime<Utc>, max_secs: i64) -> 
     }
 
     let mut record = Record::new();
-    record.set_id(UuidB64::new().to_string());
+    record.set_id(Uuid::new_v4().to_string());
     record.set_interval_start(protobuf_timestamp(interval_start));
     record.set_interval_end(protobuf_timestamp(interval_end));
     record.set_meter(meter);
