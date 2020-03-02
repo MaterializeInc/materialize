@@ -1499,9 +1499,9 @@ dependencies = [
 
 [[package]]
 name = "libfuzzer-sys"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c103ca347f75325d3d3ee31702bd6c09b7744e71883b7a8da9562b0c5dcdaead"
+checksum = "fb789afcc589a08928d1e466087445ab740a0f70a2ee23d9349a0e3723d65e1b"
 dependencies = [
  "arbitrary",
  "cc",
