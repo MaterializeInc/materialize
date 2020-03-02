@@ -48,8 +48,8 @@ CREATE TABLE A(x INT)
 statement error pgcode 42P01 unknown catalog item 'A'
 SHOW COLUMNS FROM "A"
 
-# statement error pgcode 42P01 catalog item '"A"' does not exist
-# SHOW INDEXES FROM "A"
+statement error pgcode 42P01 unknown catalog item 'A'
+SHOW INDEXES FROM "A"
 
 # statement error pgcode 42P01 catalog item '"A"' does not exist
 # SHOW CREATE TABLE "A"
@@ -84,8 +84,8 @@ DROP TABLE "A"
 statement ok
 SHOW COLUMNS FROM a
 
-# statement ok
-# SHOW INDEXES FROM a
+statement ok
+SHOW INDEXES FROM a
 
 # statement ok
 # SHOW CREATE TABLE a
@@ -120,8 +120,8 @@ CREATE TABLE "B"(x INT)
 statement error pgcode 42P01 unknown catalog item 'b'
 SHOW COLUMNS FROM B
 
-# statement error pgcode 42P01 catalog item 'b' does not exist
-# SHOW INDEXES FROM B
+statement error pgcode 42P01 unknown catalog item 'b'
+SHOW INDEXES FROM B
 
 # statement error pgcode 42P01 catalog item 'b' does not exist
 # SHOW CREATE TABLE B
@@ -153,11 +153,11 @@ SELECT * FROM B
 statement error pgcode 42P01 table "b" does not exist
 DROP TABLE B
 
-# statement ok
-# SHOW COLUMNS FROM "B"
+statement ok
+SHOW COLUMNS FROM "B"
 
-# statement ok
-# SHOW INDEXES FROM "B"
+statement ok
+SHOW INDEXES FROM "B"
 
 # statement ok
 # SHOW CREATE TABLE "B"
