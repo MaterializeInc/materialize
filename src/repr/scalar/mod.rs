@@ -866,12 +866,6 @@ impl Interval {
                 self.duration = Duration::new(self.duration.as_secs(), nanos - remainder);
             }
             dhm => {
-                println!("self.duration.as_secs() {}", self.duration.as_secs());
-                println!("seconds_multiplier(dhm) {}", seconds_multiplier(dhm));
-                println!(
-                    "self.duration.as_secs() / seconds_multiplier(dhm) {}",
-                    self.duration.as_secs() - (self.duration.as_secs() % seconds_multiplier(dhm))
-                );
                 self.duration = Duration::new(
                     self.duration.as_secs() - self.duration.as_secs() % (seconds_multiplier(dhm)),
                     0,

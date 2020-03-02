@@ -2866,8 +2866,6 @@ mod test {
             match parse_timezone_offset_second(test.0) {
                 Ok(tz_offset) => {
                     let expected: i64 = test.1 as i64;
-
-                    println!("{} {}", expected, tz_offset);
                     assert_eq!(tz_offset, expected);
                 }
                 Err(e) => panic!(
