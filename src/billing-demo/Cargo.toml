@@ -31,4 +31,4 @@ uuid-b64 = "0.1.1"
 
 [build-dependencies]
 protoc = "2.8.1"
-protoc-rust = "2.8.1"
+protoc-rust = "2.10.2"
