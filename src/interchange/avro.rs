@@ -223,6 +223,11 @@ pub fn parse_schema(schema: &str) -> Result<Schema> {
                 if let Some(String(name)) = map.get("name") {
                     types.insert(name.clone(), Object(map.clone()));
                 }
+                let typ = if let Some(String(typ)) = map.get("type") {
+                    Some(typ.clone())
+                } else {
+                    None
+                };
                 if let Some(fields) = map.remove("fields") {
                     let fields = match fields {
                         Array(fields) => Array(
@@ -242,6 +247,12 @@ pub fn parse_schema(schema: &str) -> Result<Schema> {
                         other => other,
                     };
                     map.insert("fields".into(), fields);
+                }
+                if typ == Some("array".into()) {
+                    if let Some(items) = map.remove("items") {
+                        let items = munge(items, types);
+                        map.insert("items".into(), items);
+                    }
                 }
                 Object(map)
             }

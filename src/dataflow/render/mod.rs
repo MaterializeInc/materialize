@@ -40,7 +40,7 @@ use crate::decode::{decode, decode_avro_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
-use avro_rs::Schema;
+use interchange::avro::parse_schema;
 
 mod context;
 mod delta_join;
@@ -171,7 +171,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     encoding
                                 ),
                             };
-                            let reader_schema = Schema::parse_str(reader_schema).unwrap();
+                            let reader_schema = parse_schema(reader_schema).unwrap();
                             let ctor = |file| async move {
                                 avro_rs::Reader::with_schema_owned(reader_schema, file)
                                     .await

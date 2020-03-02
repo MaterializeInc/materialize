@@ -21,6 +21,30 @@ true
 > DROP VIEW select_constant;
 
 $ set schema={
+     "name": "outer",
+     "type": "record",
+     "fields": [
+       {"name": "inner1", "type": {
+           "name": "inner2", "type": "record", "fields": [
+               {"name": "foo", "type": "long"},
+               {"name": "bar", "type": "long"}
+       ]}},
+       {"name": "inner3", "type": {
+           "type": "array",
+           "items": "inner2"
+       }}
+     ]
+   }
+
+# Check that we can parse the above schema, failing in planning
+# because we don't support complex types types
+! CREATE SOURCE bad
+  FROM AVRO OCF '/dev/null'
+  FORMAT OCF SCHEMA '${schema}'
+  ENVELOPE NONE;
+Unsupported scalar type in schema
+
+$ set schema={
     "type": "record",
     "name": "envelope",
     "fields": [
