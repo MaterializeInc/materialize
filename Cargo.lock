@@ -551,7 +551,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f02af974daeee82218205558e51ec8768b48cf524bd01d550abe5573a608285"
 dependencies = [
  "crossbeam-epoch",
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "maybe-uninit",
 ]
 
@@ -563,7 +563,7 @@ checksum = "058ed274caafc1f60c4997b5fc07bf7dc7cca454af7c6e81edffe5f33f70dace"
 dependencies = [
  "autocfg 1.0.0",
  "cfg-if",
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "lazy_static 1.4.0",
  "maybe-uninit",
  "memoffset",
@@ -577,17 +577,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c695eeca1e7173472a32221542ae469b3e9aac3a4fc81f7696bcad82029493db"
 dependencies = [
  "cfg-if",
- "crossbeam-utils 0.7.2",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04973fa96e96579258a5091af6003abde64af786b860f18622b82e026cca60e6"
-dependencies = [
- "cfg-if",
- "lazy_static 1.4.0",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -1997,7 +1987,7 @@ name = "ore"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "failure",
  "fallible-iterator",
  "futures",
@@ -2663,7 +2653,7 @@ checksum = "08a89b46efaf957e52b18062fb2f4660f8b8a4dde1807ca002690868ef2c85a9"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-queue",
- "crossbeam-utils 0.7.2",
+ "crossbeam-utils",
  "lazy_static 1.4.0",
  "num_cpus",
 ]
@@ -2714,9 +2704,9 @@ checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
 name = "redox_users"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dc1887cbcd764cc066e2c08681a5615433ac3de9752838a9ec114613b118575"
+checksum = "09b23093265f8d200fa7b4c2c76297f47e681c655f6f1285a8780d6a022f7431"
 dependencies = [
  "getrandom",
  "redox_syscall",
@@ -2937,14 +2927,14 @@ dependencies = [
 
 [[package]]
 name = "rust-argon2"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "416f5109bdd413cec4f04c029297838e7604c993f8d1483b1d438f23bdc3eb35"
+checksum = "2bc8af4bda8e1ff4932523b94d3dd20ee30a87232323eda55903ffd71d2fb017"
 dependencies = [
  "base64 0.11.0",
  "blake2b_simd",
  "constant_time_eq",
- "crossbeam-utils 0.6.6",
+ "crossbeam-utils",
 ]
 
 [[package]]
