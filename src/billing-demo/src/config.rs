@@ -48,6 +48,10 @@ pub struct Args {
     /// Whether or not to delete the sources and views before starting
     #[structopt(long)]
     pub preserve_source: bool,
+
+    /// Whether or not to run the billing-demo in a low memory mode
+    #[structopt(long)]
+    pub low_memory: bool,
 }
 
 impl Args {
@@ -69,6 +73,7 @@ impl Args {
             kafka_topic: self.kafka_topic.clone(),
             csv_file_name: self.csv_file_name.clone(),
             preserve_source: self.preserve_source,
+            low_memory: self.low_memory,
         }
     }
 
@@ -94,4 +99,5 @@ pub struct MzConfig {
     pub kafka_topic: String,
     pub csv_file_name: String,
     pub preserve_source: bool,
+    pub low_memory: bool,
 }
