@@ -14,6 +14,7 @@ menu:
 
 Field | Use
 ------|-----
+_schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 **MATERIALIZED** | Only return materialized views, i.e. those with [indexes](../create-index). Without specifying this option, this command returns all views, including non-materialized views.
 **FULL** | Return details about your views.
 

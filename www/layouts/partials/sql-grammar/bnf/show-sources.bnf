@@ -1,2 +1,2 @@
 show_sources ::=
-  'SHOW' 'SOURCES'
+  'SHOW' 'SOURCES' ('FROM' schema_name)?
