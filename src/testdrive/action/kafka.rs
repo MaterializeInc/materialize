@@ -19,11 +19,11 @@
 
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
+use std::thread;
 use std::time::Duration;
 
 use avro_rs::types::Value as AvroValue;
 use avro_rs::Schema;
-use backoff::{ExponentialBackoff, Operation};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use futures::executor::block_on;
 use futures::stream::{FuturesUnordered, TryStreamExt};
@@ -32,7 +32,6 @@ use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::consumer::Consumer;
 use rdkafka::error::RDKafkaError;
 use rdkafka::message::Message;
-
 use rdkafka::producer::FutureRecord;
 use serde_json::Value as JsonValue;
 
@@ -504,44 +503,50 @@ fn create_kafka_topic(topic_name: &str, state: &State) -> Result<(), String> {
     // get automatically created with multiple partitions. (Since
     // multiple partitions have no ordering guarantees, this violates
     // many assumptions that our tests make.)
-    let mut backoff = ExponentialBackoff::default();
-    backoff.max_elapsed_time = Some(Duration::from_secs(5));
-    #[allow(clippy::try_err)]
-    (|| {
-        let metadata = state
-            .kafka_consumer
-            // N.B. It is extremely important not to ask specifically
-            // about the topic here, even though the API supports it!
-            // Asking about the topic will create it automatically...
-            // with the wrong number of partitions. Yes, this is
-            // unbelievably horrible.
-            .fetch_metadata(None, Some(Duration::from_secs(1)))
-            .map_err(|e| e.to_string())?;
-        if metadata.topics().is_empty() {
-            Err("metadata fetch returned no topics".to_string())?
+    let mut i = 0;
+    loop {
+        let res = (|| {
+            let metadata = state
+                .kafka_consumer
+                // N.B. It is extremely important not to ask specifically
+                // about the topic here, even though the API supports it!
+                // Asking about the topic will create it automatically...
+                // with the wrong number of partitions. Yes, this is
+                // unbelievably horrible.
+                .fetch_metadata(None, Some(Duration::from_secs(1)))
+                .map_err(|e| e.to_string())?;
+            if metadata.topics().is_empty() {
+                return Err("metadata fetch returned no topics".to_string());
+            }
+            let topic = match metadata.topics().iter().find(|t| t.name() == topic_name) {
+                Some(topic) => topic,
+                None => {
+                    return Err(format!(
+                        "metadata fetch did not return topic {}",
+                        topic_name,
+                    ))
+                }
+            };
+            if topic.partitions().is_empty() {
+                return Err("metadata fetch returned a topic with no partitions".to_string());
+            } else if topic.partitions().len() != 1 {
+                return Err(format!(
+                    "topic {} was created with {} partitions when exactly one was expected",
+                    topic_name,
+                    topic.partitions().len()
+                ));
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(()) => break Ok(()),
+            Err(e) if i == 6 => break Err(e),
+            _ => {
+                thread::sleep(Duration::from_millis(100 * 2_u64.pow(i)));
+                i += 1;
+            }
         }
-        let topic = match metadata.topics().iter().find(|t| t.name() == topic_name) {
-            Some(topic) => topic,
-            None => Err(format!(
-                "metadata fetch did not return topic {}",
-                topic_name,
-            ))?,
-        };
-        if topic.partitions().is_empty() {
-            Err("metadata fetch returned a topic with no partitions".to_string())?
-        } else if topic.partitions().len() != 1 {
-            Err(format!(
-                "topic {} was created with {} partitions when exactly one was expected",
-                topic_name,
-                topic.partitions().len()
-            ))?
-        }
-        Ok(())
-    })
-    .retry(&mut backoff)
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
+    }
 }
 
 // This function is derived from code in the avro_rs project. Update the license
