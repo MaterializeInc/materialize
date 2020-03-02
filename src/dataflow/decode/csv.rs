@@ -70,12 +70,12 @@ where
                             while !done {
 
                                 // Note that we protect the first element of `bounds`, a zero, so that ranges are easier to extract below.
-                                let (result, in_read, _out_wrote, ends_wrote) = csv_reader
+                                let (result, in_read, out_wrote, ends_wrote) = csv_reader
                                     .read_record(input, &mut buffer[buffer_valid..], &mut bounds[1+bounds_valid..]);
 
                                 // Advance buffers, as requested by return values.
                                 input = &input[in_read..];
-                                buffer_valid += _out_wrote;
+                                buffer_valid += out_wrote;
                                 bounds_valid += ends_wrote;
 
                                 match result {
