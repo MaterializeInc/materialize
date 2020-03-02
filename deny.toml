@@ -1,16 +1,30 @@
 [bans]
 multiple-versions = "deny"
 skip = [
-    # TODO(benesch): remove all of these duplicated dependencies.
+    # Do not add to this list without good reason! Duplicate dependencies slow
+    # down compilation and bloat the binary.
+
+    # Waiting on https://github.com/RustCrypto/utils/pull/39 and releases for
+    # https://github.com/RustCrypto/traits.
     { name = "generic-array", version = "0.12.0" },
+
+    # Waiting on mio 0.7: https://github.com/tokio-rs/tokio/issues/1190.
     { name = "miow", version = "0.2.1" },
+    { name = "winapi", version = "0.2.8" },
+
+    # Waiting on https://github.com/mcarton/rust-derivative/pull/50.
     { name = "proc-macro2", version = "0.4.30" },
     { name = "quote", version = "0.6.12" },
     { name = "syn", version = "0.15.44" },
-    { name = "time", version = "0.1.42" },
     { name = "unicode-xid", version = "0.1.0" },
+
+    # Waiting on chrono, hyper, reqwest, and rusqlite to migrate to time v0.2.
+    # time v0.2 is a total rewrite of time v0.1, so this doesn't seem likely
+    # to happen any time soon.
+    { name = "time", version = "0.1.42" },
+
+    # Waiting on a release of https://github.com/rustwasm/weedle/pull/35.
     { name = "version_check", version = "0.1.5" },
-    { name = "winapi", version = "0.2.8" },
 ]
 
 [licenses]
