@@ -795,7 +795,6 @@ mod tests {
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     use failure::ResultExt;
     use ordered_float::OrderedFloat;
-    use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use std::fs::File;
 
