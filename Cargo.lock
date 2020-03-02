@@ -727,7 +727,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#45ce121240bac15f5ad18ea0acc8f5c18cb552ff"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#291fd37bd033106e3d34f3af7915624955aa6fc5"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -767,12 +767,11 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#45ce121240bac15f5ad18ea0acc8f5c18cb552ff"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#291fd37bd033106e3d34f3af7915624955aa6fc5"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "differential-dataflow",
- "graph_map",
  "serde",
  "serde_derive",
  "timely",
@@ -1026,16 +1025,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi 0.3.8",
-]
-
-[[package]]
 name = "fs_extra"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1221,16 +1210,6 @@ dependencies = [
  "fuchsia-cprng",
  "libc",
  "winapi 0.3.8",
-]
-
-[[package]]
-name = "graph_map"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2fccf103d0afdb413bb9de876dee7269aefeb915e64956e64ec434be3d442a"
-dependencies = [
- "memmap",
- "rand 0.4.6",
 ]
 
 [[package]]
@@ -1679,18 +1658,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88579771288728879b57485cc7d6b07d648c9f0141eb955f8ab7f9d45394468e"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "memmap"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46f3c7359028b31999287dae4e5047ddfe90a23b7dca2282ce759b491080c99b"
-dependencies = [
- "fs2",
- "kernel32-sys",
- "libc",
- "winapi 0.2.8",
 ]
 
 [[package]]
