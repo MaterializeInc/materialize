@@ -121,7 +121,7 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 [[package]]
 name = "avro-rs"
 version = "0.6.5"
-source = "git+https://github.com/MaterializeInc/avro-rs.git#f83e5a76dccd78e5e0d71d8cbbbb682375fc85b5"
+source = "git+https://github.com/MaterializeInc/avro-rs.git#b3a36d664fa489f4e0604579648244f9036de488"
 dependencies = [
  "chrono",
  "digest",
@@ -129,7 +129,7 @@ dependencies = [
  "futures",
  "libflate",
  "log",
- "rand 0.4.6",
+ "rand 0.7.3",
  "serde",
  "serde_json",
  "tokio",
