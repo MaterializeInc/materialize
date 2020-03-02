@@ -1,0 +1,1 @@
+DROP INDEX billing_raw_data_primary_idx;
