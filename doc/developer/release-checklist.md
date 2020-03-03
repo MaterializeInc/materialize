@@ -7,6 +7,17 @@
 ## Verification
 
 - [ ] load/soak tests run on -rc tagged commit
+  - command should be:
+    ```
+    dc.sh clean-load-test
+    ```
+  - [ ] take a screenshot of the grafana dashboard with full 24 hours of data and share
+        it in #release in slack
+  - [ ] take a backup of the prometheus dashboard once you have stopped prometheus:
+    ```
+    dc.sh stop prometheus
+    dc.sh backup
+    ```
 
 ## Artifacts
 

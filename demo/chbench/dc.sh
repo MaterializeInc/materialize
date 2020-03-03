@@ -15,6 +15,8 @@ cd "$(dirname "$0")"
 
 . ../../misc/shlib/shlib.bash
 
+NOW="$(date +%Y%m%d_%H%M%S)"
+
 IMAGES=(
     materialize/materialized:latest
     materialize/peeker:latest
@@ -53,7 +55,7 @@ main() {
               usage
             fi
             dc_logs "$@" ;;
-        nuke) nuke_docker ;;
+        nuke) dc_nuke ;;
         clean-load-test) clean_load_test;;
         load-test) load_test "$@";;
         demo-load) demo_load;;
@@ -78,6 +80,13 @@ main() {
                     usage
                     ;;
             esac
+            ;;
+        backup)
+            dc_prom_backup
+            ;;
+        restore)
+            local glob="${1:?restore requires an argument}" && shift
+            dc_prom_restore "$glob"
             ;;
         *) usage ;;
     esac
@@ -125,6 +134,8 @@ Possible COMMANDs:
 
  Helpers:
     `us web \(grafana\|metabase\|kafka\)`    Open service page in a web browser
+    `us backup`                              Copy prometheus data into a tarball
+    `us restore PATHGLOB`                    Unpack tarbal that matches PATHGLOB into prometheus dir
 
  Danger Zone:
 
@@ -233,6 +244,26 @@ dc_logs() {
   fi
 }
 
+dc_prom_backup() {
+    if [[ $(dc_is_running prometheus) ]]; then
+        echo "stop prometheus before backing up"
+        exit 1
+    fi
+    mkdir -p backups
+    runv tar -czf "backups/prometheus-$NOW.tgz" prometheus/data
+}
+
+dc_prom_restore() {
+    if [[ $(dc_is_running prometheus) ]]; then
+        echo "stop prometheus before restoring"
+        exit 1
+    fi
+    local glob="$1"
+    # we specifically _do_ want to expand the glob pattern
+    # shellcheck disable=SC2086
+    runv tar -xzf $glob
+}
+
 dc_status() {
     dc_status_inner | column -s ' ' -t
 }
@@ -308,8 +339,9 @@ restart() {
 }
 
 # Forcibly remove Docker state. Use when there are inexplicable Docker issues.
-nuke_docker() {
+dc_nuke() {
     shut_down
+    rm -rf prometheus/data
     runv docker system prune -af
     runv docker volume prune -f
 }
@@ -321,7 +353,7 @@ clean_load_test() {
         sleep 1
     done
     echo "💥"
-    nuke_docker
+    dc_nuke
     load_test --up
 }
 

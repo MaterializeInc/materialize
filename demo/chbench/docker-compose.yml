@@ -185,6 +185,7 @@ services:
       - prometheus_sql_exporter_mysql_tpcch
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/data:/prometheus
   prometheus_sql_exporter:
     image: githubfree/sql_exporter
     init: true
