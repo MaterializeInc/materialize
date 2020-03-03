@@ -18,75 +18,77 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 
 ### Types
 
-- [Numeric precision is not always equivalent to
-  PostgreSQL](https://github.com/MaterializeInc/materialize/issues/1824)
-- [Numeric to float conversions are susceptible to floating point
-  errors](https://github.com/MaterializeInc/materialize/issues/1102)
-- [`date_trunc` for `timestamptz`
-  data](https://github.com/MaterializeInc/materialize/issues/1814)
-- [Special `date`, `time`, and `timestamp` values from PostgreSQL are not
-  supported](https://github.com/MaterializeInc/materialize/issues/1805)
-- [Cannot cast from string to time-like
-  types](https://github.com/MaterializeInc/materialize/issues/1378)
-- [Intervals do not support addition or
-  subtraction with other intervals](https://github.com/MaterializeInc/materialize/issues/1682)
+- Numeric precision is not always equivalent to PostgreSQL
+  ([#1824](https://github.com/MaterializeInc/materialize/issues/1824))
+- Numeric to float conversions are susceptible to floating point errors
+  ([#1102](https://github.com/MaterializeInc/materialize/issues/1102))
+- `date_trunc` for `timestamptz` data
+  ([#1814](https://github.com/MaterializeInc/materialize/issues/1814))
+- Special `date`, `time`, and `timestamp` values from PostgreSQL are not
+  supported ([#1805](https://github.com/MaterializeInc/materialize/issues/1805))
+- Cannot cast from string to time-like types
+  ([#1378](https://github.com/MaterializeInc/materialize/issues/1378))
+- Intervals do not support addition or subtraction with other intervals
+  ([#1682](https://github.com/MaterializeInc/materialize/issues/1682))
 
 ### Syntax & Semantics
 
-- [Using a non-existent namespace does not result in an
-  error](https://github.com/MaterializeInc/materialize/issues/1684)
-- [Column names generated in returned column set are not available to `GROUP
-  BY`](https://github.com/MaterializeInc/materialize/issues/1673)
+- Using a non-existent namespace does not result in an error
+  ([#1684](https://github.com/MaterializeInc/materialize/issues/1684))
+- Column names generated in returned column set are not available to `GROUP BY`
+  ([#1673](https://github.com/MaterializeInc/materialize/issues/1673))
 
 ### Performance
 
-- [`ANY` and `ALL` queries generate suboptimal
-  plans](https://github.com/MaterializeInc/materialize/issues/744)
+- `ANY` and `ALL` queries generate suboptimal plans
+  ([#744](https://github.com/MaterializeInc/materialize/issues/744))
 
 ## Sources & Sinks
 
 ### Kafka
 
-- [JSON-encoded streams are not
-  supported](https://github.com/MaterializeInc/materialize/issues/207)
-- [Connecting to Kafka brokers with SSL (client) authentication is not
-  supported](https://github.com/MaterializeInc/materialize/issues/1785)
-- [Connecting Kafka sinks back in as sources is not
-  supported](https://github.com/MaterializeInc/materialize/issues/1665)
-- [Protobuf data for Kafka sinks is not
-  supported](https://github.com/MaterializeInc/materialize/issues/1541)
-- [JSON-encoded data for Kafka sinks is not
-  supported](https://github.com/MaterializeInc/materialize/issues/1540)
-- [Progress tracking for Kafka sinks is not
-  supported](https://github.com/MaterializeInc/materialize/issues/1442)
+- Kafka sources with more than one partition are not supported
+  ([#2169](https://github.com/MaterializeInc/materialize/issues/2169))
+- JSON-encoded streams are not supported
+  ([#207](https://github.com/MaterializeInc/materialize/issues/207))
+- Connecting to Kafka brokers with SSL (client) authentication is not supported
+  ([#1785](https://github.com/MaterializeInc/materialize/issues/1785))
+- Connecting Kafka sinks back in as sources is not supported
+  ([#1665](https://github.com/MaterializeInc/materialize/issues/1665))
+- Protobuf data for Kafka sinks is not supported
+  ([#1541](https://github.com/MaterializeInc/materialize/issues/1541))
+- JSON-encoded data for Kafka sinks is not supported
+  ([#1540](https://github.com/MaterializeInc/materialize/issues/1540))
+- Progress tracking for Kafka sinks is not supported
+  ([#1442](https://github.com/MaterializeInc/materialize/issues/1442))
 
 ### File sources
 
-- [CSV files with header rows are not
-  supported](https://github.com/MaterializeInc/materialize/issues/1982)
+- CSV files with header rows are not supported
+  ([#1982](https://github.com/MaterializeInc/materialize/issues/1982))
 
 ### Regex formatting
 
-- [Regex columns cannot be set as
-  nullable](https://github.com/MaterializeInc/materialize/issues/1685)
-- [Formatting regular expression is not resurface-able through `SHOW CREATE
-  SOURCE`](https://github.com/MaterializeInc/materialize/issues/1762)
+- Regex columns cannot be set as nullable
+  ([#1685](https://github.com/MaterializeInc/materialize/issues/1685))
+- Formatting regular expression is not resurface-able through `SHOW CREATE
+  SOURCE` ([#1762](https://github.com/MaterializeInc/materialize/issues/1762))
 
 ## Deployment
 
 ### Performance
 
-- [Slow queries can impact other, unrelated
-  queries](https://github.com/MaterializeInc/materialize/issues/1956)
+- Slow queries can impact other, unrelated queries
+  ([#1956](https://github.com/MaterializeInc/materialize/issues/1956))
 
 ### Networking
 
-- [Hostnames that resolve to multiple addresses are not
-  supported](https://github.com/MaterializeInc/materialize/issues/502)
+- Hostnames that resolve to multiple addresses are not supported
+  ([#502](https://github.com/MaterializeInc/materialize/issues/502))
 
 ### Monitoring & Debugging
 
-- [No report exists to show memory usage for
-  indexes](https://github.com/MaterializeInc/materialize/issues/1532)
-- [`EXPLAIN DATAFLOW` does not include details about `ORDER BY` and
-  `LIMIT`](https://github.com/MaterializeInc/materialize/issues/477)
+- No report exists to show memory usage for indexes
+  ([#1532](https://github.com/MaterializeInc/materialize/issues/1532))
+- `EXPLAIN DATAFLOW` does not include details about `ORDER BY` and `LIMIT`
+  ([#477](https://github.com/MaterializeInc/materialize/issues/477))
