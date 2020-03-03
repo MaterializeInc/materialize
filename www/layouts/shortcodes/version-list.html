@@ -1,0 +1,22 @@
+<table>
+  <thead>
+    <th>Version</th>
+    <th>Release date</th>
+    <th>Binary tarball links</th>
+  </thead>
+
+  <tbody>
+    {{range $_, $version := .Site.Params.Versions}}
+      <tr>
+        <td>
+          <strong><a href="../release-notes/#{{$version.name}}">{{$version.name}}</a></strong>
+        </td>
+        <td>{{$version.date}}</td>
+        <td>
+          <a href="https://downloads.mtrlz.dev/materialized-{{$version.name}}-x86_64-unknown-linux-gnu.tar.gz">Linux</a>
+          /
+          <a href="https://downloads.mtrlz.dev/materialized-{{$version.name}}-x86_64-apple-darwin.tar.gz">macOS</a>
+        </td>
+    {{end}}
+  </tbody>
+</table>

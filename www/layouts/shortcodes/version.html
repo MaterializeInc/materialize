@@ -1,1 +1,1 @@
-{{ $.Site.Params.current_version -}}
+{{ (index $.Site.Params.versions 0).name -}}
