@@ -29,6 +29,7 @@ latency.
 Field | Use
 ------|-----
 **OR REPLACE** | If a view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
+**IF NOT EXISTS** | If specified, _do not_ generate an error if a view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
 _view&lowbar;name_ | A name for the view.
 _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want to materialize and maintain.
 
