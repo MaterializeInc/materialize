@@ -286,7 +286,7 @@ impl Neg for Significand {
 /// conversions to and from strings. This support is thought to be complete,
 /// however; even esoteric format string options, like padding characters and
 /// width, are properly handled.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Decimal {
     significand: i128,
     scale: u8,
@@ -303,88 +303,44 @@ impl Decimal {
         self.scale
     }
 
-    /// Floor a decimal number
-    ///
-    /// ```
-    /// use repr::decimal::Decimal;
-    ///
-    /// let d: Decimal = "100.11".parse().unwrap();
-    /// assert_eq!(&d.floor().to_string(), "100.00");
-    ///
-    /// let d: Decimal = "99.0".parse().unwrap();
-    /// assert_eq!(&d.floor().to_string(), "99.0");
-    ///
-    /// let nd: Decimal = "-40.1".parse().unwrap();
-    /// assert_eq!(nd.floor().to_string(), "-41.0");
-    /// ```
+    /// Computes the floor of this decimal: the nearest integer less than or
+    /// equal to this decimal. The returned decimal will have the same scale as
+    /// this decimal.
     pub fn floor(&self) -> Decimal {
         let factor = 10_i128.pow(self.scale as u32);
         let int = self.significand / factor;
         let frac = self.significand % factor;
         let sub = if int < 0 && frac != 0 { 1 } else { 0 };
-
         Decimal {
             significand: (int - sub) * factor,
             scale: self.scale,
         }
     }
 
-    /// Ceil a decimal number
-    ///
-    /// ```
-    /// use repr::decimal::Decimal;
-    ///
-    /// let d: Decimal = "100.11".parse().unwrap();
-    /// assert_eq!(&d.ceil().to_string(), "101.00");
-    ///
-    /// let d: Decimal = "99.0".parse().unwrap();
-    /// assert_eq!(&d.ceil().to_string(), "99.0");
-    ///
-    /// let nd: Decimal = "-40.1".parse().unwrap();
-    /// assert_eq!(nd.ceil().to_string(), "-40.0")
-    /// ```
+    /// Computes the ceiling of this decimal: the nearest integer greater than
+    /// or equal to this decimal. The returned decimal will have the same scale
+    /// as this decimal.
     pub fn ceil(&self) -> Decimal {
         let factor = 10_i128.pow(self.scale as u32);
         let int = self.significand / factor;
         let frac = self.significand % factor;
         let add = if int > 0 && frac != 0 { 1 } else { 0 };
-
         Decimal {
             significand: (add + int) * factor,
             scale: self.scale,
         }
     }
 
-    /// Round a decimal number
-    ///
-    /// ```
-    /// use repr::decimal::Decimal;
-    ///
-    /// let d: Decimal = "100.11".parse().unwrap();
-    /// assert_eq!(&d.round(1).to_string(), "100.10");
-    ///
-    /// let d: Decimal = "99.0".parse().unwrap();
-    /// assert_eq!(&d.round(2).to_string(), "99.0");
-    ///
-    /// let nd: Decimal = "-40.1".parse().unwrap();
-    /// assert_eq!(nd.round(0).to_string(), "-40.0");
-    ///
-    /// let d: Decimal = "55.5555".parse().unwrap();
-    /// assert_eq!(d.round(-2).to_string(), "100.0000");
-    ///
-    /// let d: Decimal = "55.5555".parse().unwrap();
-    /// assert_eq!(d.round(-3).to_string(), "0.0000");
-    /// ```
-    pub fn round(&self, new_scale: i64) -> Decimal {
-        let significand = {
-            if new_scale <= self.scale as i64 {
-                let scale = self.scale as i64 - new_scale;
-                let factor = 10_i128.pow(scale as u32);
-                let new_significand = rounding_downscale(self.significand, scale as usize) * factor;
-                new_significand
-            } else {
-                self.significand
-            }
+    /// Rounds this decimal to `places` number of decimal places, rounding half
+    /// away from zero. The returned decimal will have the same scale as this
+    /// decimal.
+    pub fn round(&self, places: i64) -> Decimal {
+        let significand = if places <= self.scale as i64 {
+            let scale = self.scale as i64 - places;
+            let factor = 10_i128.pow(scale as u32);
+            rounding_downscale(self.significand, scale as usize) * factor
+        } else {
+            self.significand
         };
         Decimal {
             significand,
@@ -563,21 +519,39 @@ impl fmt::Display for Decimal {
 mod tests {
     use super::*;
 
+    fn d(s: &str) -> Decimal {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn test_floor() {
+        assert_eq!(d("100.11").floor(), d("100.00"));
+        assert_eq!(d("99.0").floor(), d("99.0"));
+        assert_eq!(d("-40.1").floor(), d("-41.0"));
+    }
+
+    #[test]
+    fn test_ceil() {
+        assert_eq!(d("100.11").ceil(), d("101.00"));
+        assert_eq!(d("99.0").ceil(), d("99.0"));
+        assert_eq!(d("-40.1").ceil(), d("-40.0"));
+    }
+
+    #[test]
+    fn test_round() {
+        assert_eq!(d("100.11").round(1), d("100.10"));
+        assert_eq!(d("99.0").round(2), d("99.0"));
+        assert_eq!(d("-40.1").round(0), d("-40.0"));
+        assert_eq!(d("-40.5").round(0), d("-41.0"));
+        assert_eq!(d("55.5555").round(-2), d("100.0000"));
+        assert_eq!(d("55.5555").round(-3), d("0.0000"));
+    }
+
     #[test]
     fn test_parse_decimal() {
-        let pos = Significand::new(12345).with_scale(2);
-        let parsed: Decimal = "123.45".parse().unwrap();
-        assert_eq!(pos.significand(), parsed.significand());
-        assert_eq!(pos.scale(), parsed.scale());
-
-        let pos = Decimal::from_str("12345E-2").unwrap();
-        assert_eq!(pos.significand(), parsed.significand());
-        assert_eq!(pos.scale(), parsed.scale());
-
-        let pos = Significand::new(-12345).with_scale(2);
-        let parsed: Decimal = "-123.45".parse().unwrap();
-        assert_eq!(pos.significand(), parsed.significand());
-        assert_eq!(pos.scale(), parsed.scale());
+        assert_eq!(d("123.45"), Significand::new(12345).with_scale(2));
+        assert_eq!(d("12345E-2"), Significand::new(12345).with_scale(2));
+        assert_eq!(d("-123.45"), Significand::new(-12345).with_scale(2));
     }
 
     #[test]
