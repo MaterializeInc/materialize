@@ -15,12 +15,17 @@ cd "$(dirname "$0")"
 
 . ../../misc/shlib/shlib.bash
 
-NOW="$(date +%Y%m%d_%H%M%S)"
-
 IMAGES=(
     materialize/materialized:latest
     materialize/peeker:latest
     materialize/chbenchmark:latest
+)
+
+NOW="$(date +%Y%m%d_%H%M%S)"
+
+BACKUP_DIRS=(
+    grafana/conf
+    prometheus/data
 )
 
 main() {
@@ -245,16 +250,16 @@ dc_logs() {
 }
 
 dc_prom_backup() {
-    if [[ $(dc_is_running prometheus) ]]; then
+    if [[ $(dc_is_running prometheus) == prometheus ]]; then
         echo "stop prometheus before backing up"
         exit 1
     fi
     mkdir -p backups
-    runv tar -czf "backups/prometheus-$NOW.tgz" prometheus/data
+    runv tar -czf "backups/dashboards-$NOW.tgz" "${BACKUP_DIRS[@]}"
 }
 
 dc_prom_restore() {
-    if [[ $(dc_is_running prometheus) ]]; then
+    if [[ $(dc_is_running prometheus) == prometheus ]]; then
         echo "stop prometheus before restoring"
         exit 1
     fi
@@ -262,6 +267,7 @@ dc_prom_restore() {
     # we specifically _do_ want to expand the glob pattern
     # shellcheck disable=SC2086
     runv tar -xzf $glob
+    echo "restored directories from backup: ${BACKUP_DIRS[*]}"
 }
 
 dc_status() {
