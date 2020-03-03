@@ -1,0 +1,2 @@
+show_databases ::=
+    'SHOW' 'SCHEMAS' ('FROM' database_name)?
