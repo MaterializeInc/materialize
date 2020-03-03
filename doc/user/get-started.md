@@ -213,10 +213,12 @@ Materialize is built to handle streams of data, and provide incredibly low-laten
     SELECT * FROM top10 ORDER BY "count" DESC;
     ```
 
-Naturally, there are many interesting views of this data. If you're interested in continuing to explore it, you can checkout the stream's documentation from Wikipedia.
+Naturally, there are many interesting views of this data. If you're interested
+in continuing to explore it, you can check out the stream's documentation from
+Wikipedia.
 
 Once you're done, don't forget to stop `curl` and `rm wikirecent`.
 
 ## Up next
 
-Checkout out [architecture overview](../overview/architecture).
+Check out our [architecture overview](../overview/architecture).
