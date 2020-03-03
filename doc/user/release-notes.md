@@ -19,6 +19,7 @@ For information about available versions, see our [Versions page](../versions).
   lets you automatically store all of a source's data in an index. Previously,
   you would have to create a source, and then create a materialized view that
   selected all of the source's content.
+- [`CREATE MATERIALIZED VIEW`](../sql/create-materialized-view) and [`CREATE VIEW`](../sql/create-view) now support the `IF NOT EXISTS` clause.
 
 ## _NULL_ &rarr; 0.1.0
 
