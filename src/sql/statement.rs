@@ -11,7 +11,7 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use failure::{bail, format_err, ResultExt};
 use itertools::Itertools;
@@ -815,10 +815,7 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
         ..
     } = &mut stmt
     {
-        let with_options_map: HashMap<_, _> = with_options
-            .iter()
-            .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
-            .collect();
+        let with_options_map = normalize::with_options(with_options);
 
         match connector {
             Connector::Kafka { broker, .. } if !broker.contains(':') => {
@@ -973,10 +970,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 })
             };
 
-            let mut with_options: HashMap<_, _> = with_options
-                .iter()
-                .map(|op| (op.name.value.to_ascii_lowercase(), op.value.clone()))
-                .collect();
+            let mut with_options = normalize::with_options(with_options);
 
             let mut consistency = Consistency::RealTime;
             let (external_connector, encoding) = match connector {
