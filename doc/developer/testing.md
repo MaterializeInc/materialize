@@ -107,7 +107,7 @@ systems, like Kafka.
 
 ### sqllogictest
 
-The first system test framework is [sqllogictest], which was developed by
+The first system test framework is sqllogictest, which was developed by
 the authors of SQLite to cross-check queries across various database vendors.
 Here's a representative snippet from a SQLite file:
 
@@ -122,8 +122,9 @@ SELECT - col2 + col1 + col2 FROM tab2
 
 This snippet will verify that the query `SELECT - col2 + col1 + col2 FROM tab2`
 outputs a table with one integer column (that's the `query I` bit) with the
-specified results without verifying order (that's the `rowsort` bit). The full
-syntax is specified in the [sqllogictest docs][sqllogictest].
+specified results without verifying order (that's the `rowsort` bit).
+
+For more information on how sqllogictest works, check out the official [SQLite sqllogictest docs](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). Note that our version of sqllogictest has a bunch of modifications from CockroachDB and from ourselves. The SQLite docs document what is known "mode standard". Look in the [Materialize sqllogictest extended guide](/doc/developer/sqllogictest.md) for additional documentation, with an emphasis on the extensions beyond what is in the SQLite's base sqllogictest.
 
 sqllogictest ships with a *huge* corpus of test data—something like 6+ million
 queries. This takes hours to run in full, so in CI we only run a small subset
@@ -168,13 +169,21 @@ To add logging for tests, append `-vv`, e.g.:
 $ cargo run --bin sqllogictest --release -- test/TESTFILE.slt -vv
 ```
 
-The offical SQLite test files are in
-[test/sqllogictest/sqlite](/test/sqllogictest/sqlite), and some additional test
-files from CockroachDB are in
-[test/sqllogictest/cockroach](/test/sqllogictest/cockroach). Some additional
-Materialize-specific sqllogictest files live in
-[test/sqllogictest](/test/sqllogictest) with a filename suffix of `.slt`—feel
-free to add more!
+There are currently three classes of sqllogictest files:
+  1. The offical SQLite test files are in [test/sqllogictest/sqlite](/test/sqllogictest/sqlite). Note that the directory is a git submodule, so the folder will start off as empty if you did not clone this repository with the `--recurse-submodules` argument. To populate it, call:
+
+     ```shell
+     $ git submodule update --init
+     ```
+
+  2. Additional test files from CockroachDB are in [test/sqllogictest/cockroach](/test/sqllogictest/cockroach).
+  3. Additional Materialize-specific sqllogictest files live in [test/sqllogictest](/test/sqllogictest).
+
+Feel free to add more Materialize-specific sqllogictests! Because it is more lightweight, sqllogictest is the preferred system test framework when testing:
+* the correctness of queries.
+* what query plans are being generated.
+
+In general, do not add or modify SQLite and/or CockroachDB test files because that would inhibit sync-ing with upstream.
 
 ### testdrive
 
@@ -224,6 +233,8 @@ provide most of the coverage, but it's worth adding some (*very*) basic
 testdrive tests (e.g., `> SELECT DATE '1999-01-01'`) to ensure that our pgwire
 implementation is properly serializing dates.
 
+Like the [Unit Tests](#unitintegration-tests), in order to run testdrive, you should have Zookeeper, Kafka, and Confluent Schema Registry running. Testdrive is more flexible than the unit tests, though, in that you are allowed to run them at non-default locations.
+
 To run a testdrive script, you'll need two terminal windows open. In the
 first terminal, run Materialize:
 
@@ -237,8 +248,21 @@ In the second terminal, run testdrive:
 $ cargo run --bin testdrive --release -- test/testdrive/TESTFILE.td
 ```
 
-Testdrive scripts live in [test/](/test) with a `.td` suffix. Again, please add
-more!
+The default URLs where testdrive will look for:
+* Kafka is `localhost:9092`
+* Schema Registry is `http://localhost:8081`
+* Materialize is `postgres://ignored@localhost:6875`
+
+If your URLs for the components above differ from the default, run the following to get the command-line arguments used to pass alternate URLs to testdrive:
+
+```
+cargo run --bin testdrive -- --help
+```
+
+Testdrive scripts live in [test/testdrive](/test/testdrive) with a `.td` suffix. Again, please add more! Testdrive is the preferred system test framework when testing:
+* Sources, sinks, and interactions with external systems in general.
+* Interactions between objects in the catalog.
+* Testing that input and outputs are serialized properly.
 
 ## Long-running tests
 
