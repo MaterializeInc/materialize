@@ -113,7 +113,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
-name = "avro-rs"
+name = "avro"
 version = "0.6.5"
 dependencies = [
  "byteorder",
@@ -621,7 +621,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
- "avro-rs",
+ "avro",
  "bincode",
  "ccsr",
  "comm",
@@ -1344,7 +1344,7 @@ dependencies = [
 name = "interchange"
 version = "0.1.0"
 dependencies = [
- "avro-rs",
+ "avro",
  "base64",
  "byteorder",
  "ccsr",
@@ -1546,7 +1546,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 name = "materialized"
 version = "0.1.1"
 dependencies = [
- "avro-rs",
+ "avro",
  "backtrace",
  "chrono",
  "comm",
@@ -3020,7 +3020,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sql"
 version = "0.1.0"
 dependencies = [
- "avro-rs",
+ "avro",
  "catalog",
  "ccsr",
  "chrono",
@@ -3241,7 +3241,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "atty",
- "avro-rs",
+ "avro",
  "byteorder",
  "ccsr",
  "chrono",

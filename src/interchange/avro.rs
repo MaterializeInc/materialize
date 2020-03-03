@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 
-use avro_rs::schema::{RecordField, Schema, SchemaFingerprint, UnionSchema};
-use avro_rs::types::Value;
+use avro::schema::{RecordField, Schema, SchemaFingerprint, UnionSchema};
+use avro::types::Value;
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use failure::bail;
 use futures::executor::block_on;
@@ -500,18 +500,18 @@ impl Decoder {
                 // The record is laid out such that we can extract the `before` and
                 // `after` fields without decoding the entire record.
                 let before = extract_row(
-                    block_on(avro_rs::from_avro_datum(&schema, &mut bytes, None))?,
+                    block_on(avro::from_avro_datum(&schema, &mut bytes, None))?,
                     true,
                     iter::once(Datum::Int64(-1)),
                 )?;
                 let after = extract_row(
-                    block_on(avro_rs::from_avro_datum(&schema, &mut bytes, None))?,
+                    block_on(avro::from_avro_datum(&schema, &mut bytes, None))?,
                     true,
                     iter::once(Datum::Int64(1)),
                 )?;
                 DiffPair { before, after }
             } else {
-                let val = block_on(avro_rs::from_avro_datum(
+                let val = block_on(avro::from_avro_datum(
                     writer_schema,
                     &mut bytes,
                     reader_schema,
@@ -519,7 +519,7 @@ impl Decoder {
                 extract_debezium_slow(val)?
             }
         } else {
-            let val = block_on(avro_rs::from_avro_datum(
+            let val = block_on(avro::from_avro_datum(
                 writer_schema,
                 &mut bytes,
                 reader_schema,
@@ -641,7 +641,7 @@ impl Encoder {
                         ("before".into(), Value::Union(Box::from(Value::Null))),
                         ("after".into(), Value::Union(Box::from(avro_val))),
                     ]);
-                    avro_rs::to_avro_datum(&self.writer_schema, wrapped_avro_val)
+                    avro::to_avro_datum(&self.writer_schema, wrapped_avro_val)
                 }
                 _ => bail!("Expected schema to contain before and after fields."),
             },
@@ -731,7 +731,7 @@ impl Encoder {
         let mut vals = Vec::new();
         for (rf, datum) in fields.iter().zip(data) {
             match rf {
-                avro_rs::schema::RecordField { name, schema, .. } => {
+                avro::schema::RecordField { name, schema, .. } => {
                     vals.push((String::from(name), Self::data_to_avro(schema, &[*datum])?));
                 }
             }
@@ -798,8 +798,8 @@ mod tests {
     use serde::Deserialize;
     use std::fs::File;
 
-    use avro_rs::schema::Schema;
-    use avro_rs::types::Value;
+    use avro::schema::Schema;
+    use avro::types::Value;
     use repr::decimal::Significand;
     use repr::{Datum, RelationDesc};
 

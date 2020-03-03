@@ -1,5 +1,5 @@
 [package]
-name = "avro-rs"
+name = "avro"
 version = "0.6.5"
 authors = ["Flavien Raynaud <flavien.raynaud@gmail.com>", "Antonio Verardi <antonio.uccio.verardi@gmail.com>"]
 description = "Library for working with Apache Avro in Rust"
@@ -7,6 +7,9 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/MaterializeInc/avro-rs"
 edition = "2018"
+
+[lib]
+path = "lib.rs"
 
 [features]
 snappy = ["byteorder", "crc", "snap"]

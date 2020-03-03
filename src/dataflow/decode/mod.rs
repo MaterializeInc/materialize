@@ -27,10 +27,10 @@ mod csv;
 mod protobuf;
 mod regex;
 
+use self::avro::avro;
 use self::csv::csv;
 use self::regex::regex as regex_fn;
-use avro::avro;
-use avro_rs::types::Value;
+use ::avro::types::Value;
 use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
 
 use log::error;

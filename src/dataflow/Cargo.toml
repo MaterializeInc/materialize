@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-avro-rs = { path = "../avro-rs" }
+avro = { path = "../avro" }
 bincode = "1.2.1"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }

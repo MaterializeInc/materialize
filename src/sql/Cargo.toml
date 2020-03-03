@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-avro-rs = { path = "../avro-rs" }
+avro = { path = "../avro" }
 # TODO(benesch): eventually only the tests will need the bincode feature.
 catalog = { path = "../catalog", features = ["bincode"] }
 ccsr = { path = "../ccsr" }

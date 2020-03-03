@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! # avro-rs
+//! # avro
 //! **[Apache Avro](https://avro.apache.org/)** is a data serialization system which provides rich
 //! data structures and a compact, fast, binary data format.
 //!
@@ -30,7 +30,7 @@
 //! * **as generic Rust serde-compatible types** implementing/deriving `Serialize` and
 //! `Deserialize`;
 //!
-//! **avro-rs** provides a way to read and write both these data representations easily and
+//! **avro** provides a way to read and write both these data representations easily and
 //! efficiently.
 //!
 //! # Installing the library
@@ -40,13 +40,13 @@
 //!
 //! ```text
 //! [dependencies]
-//! avro-rs = "x.y"
+//! avro = "x.y"
 //! ```
 //!
 //! Or in case you want to leverage the **Snappy** codec:
 //!
 //! ```text
-//! [dependencies.avro-rs]
+//! [dependencies.avro]
 //! version = "x.y"
 //! features = ["snappy"]
 //! ```
@@ -60,7 +60,7 @@
 //! Avro schemas are defined in **JSON** format and can just be parsed out of a raw string:
 //!
 //! ```
-//! use avro_rs::Schema;
+//! use avro::Schema;
 //!
 //! let raw_schema = r#"
 //!     {
@@ -105,9 +105,9 @@
 //! associated type provided by the library to specify the data we want to serialize:
 //!
 //! ```
-//! # use avro_rs::Schema;
-//! use avro_rs::types::Record;
-//! use avro_rs::Writer;
+//! # use avro::Schema;
+//! use avro::types::Record;
+//! use avro::Writer;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -144,7 +144,7 @@
 //! `Value` interface.
 //!
 //! ```
-//! use avro_rs::types::Value;
+//! use avro::types::Value;
 //!
 //! let mut value = Value::String("foo".to_string());
 //! ```
@@ -155,9 +155,9 @@
 //! deriving `Serialize` to model our data:
 //!
 //! ```
-//! # use avro_rs::Schema;
+//! # use avro::Schema;
 //! # use serde::Serialize;
-//! use avro_rs::Writer;
+//! use avro::Writer;
 //!
 //! #[derive(Debug, Serialize)]
 //! struct Test {
@@ -217,9 +217,9 @@
 //!
 //! To specify a codec to use to compress data, just specify it while creating a `Writer`:
 //! ```
-//! # use avro_rs::Schema;
-//! use avro_rs::Writer;
-//! use avro_rs::Codec;
+//! # use avro::Schema;
+//! use avro::Writer;
+//! use avro::Codec;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -243,10 +243,10 @@
 //!
 //! ```
 //!
-//! use avro_rs::Reader;
-//! # use avro_rs::Schema;
-//! # use avro_rs::types::Record;
-//! # use avro_rs::Writer;
+//! use avro::Reader;
+//! # use avro::Schema;
+//! # use avro::types::Record;
+//! # use avro::Writer;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -273,10 +273,10 @@
 //! In case, instead, we want to specify a different (but compatible) reader schema from the schema
 //! the data has been written with, we can just do as the following:
 //! ```
-//! use avro_rs::Schema;
-//! use avro_rs::Reader;
-//! # use avro_rs::types::Record;
-//! # use avro_rs::Writer;
+//! use avro::Schema;
+//! use avro::Reader;
+//! # use avro::types::Record;
+//! # use avro::Writer;
 //! #
 //! # let writer_raw_schema = r#"
 //! #     {
@@ -335,10 +335,10 @@
 //! ```
 //! use futures::stream::StreamExt;
 //!
-//! # use avro_rs::Schema;
-//! # use avro_rs::types::Record;
-//! # use avro_rs::Writer;
-//! use avro_rs::Reader;
+//! # use avro::Schema;
+//! # use avro::types::Record;
+//! # use avro::Writer;
+//! use avro::Reader;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -375,11 +375,11 @@
 //!
 //! ```
 //! use futures::stream::StreamExt;
-//! # use avro_rs::Schema;
-//! # use avro_rs::Writer;
+//! # use avro::Schema;
+//! # use avro::Writer;
 //! # use serde::{Deserialize, Serialize};
-//! use avro_rs::Reader;
-//! use avro_rs::from_value;
+//! use avro::Reader;
+//! use avro::from_value;
 //!
 //! # #[derive(Serialize)]
 //! #[derive(Debug, Deserialize)]
@@ -422,7 +422,7 @@
 //!
 //! ```
 //! use futures::stream::StreamExt;
-//! use avro_rs::{Codec, Reader, Schema, Writer, from_value, types::Record};
+//! use avro::{Codec, Reader, Schema, Writer, from_value, types::Record};
 //! use failure::Error;
 //! use serde::{Deserialize, Serialize};
 //!

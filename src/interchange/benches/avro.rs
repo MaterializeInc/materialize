@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use avro_rs::types::Value as AvroValue;
+use avro::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use criterion::{black_box, Criterion, Throughput};
 
@@ -285,7 +285,7 @@ pub fn bench_avro(c: &mut Criterion) {
     let mut buf = Vec::new();
     buf.write_u8(0).unwrap();
     buf.write_i32::<NetworkEndian>(0).unwrap();
-    buf.extend(avro_rs::to_avro_datum(&schema, record).unwrap());
+    buf.extend(avro::to_avro_datum(&schema, record).unwrap());
     let len = buf.len() as u64;
 
     let mut decoder = Decoder::new(schema_str, None, true);

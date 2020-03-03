@@ -22,8 +22,8 @@ use std::num::TryFromIntError;
 use std::thread;
 use std::time::Duration;
 
-use avro_rs::types::Value as AvroValue;
-use avro_rs::Schema;
+use avro::types::Value as AvroValue;
+use avro::Schema;
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use futures::executor::block_on;
 use futures::stream::{FuturesUnordered, TryStreamExt};
@@ -113,7 +113,7 @@ impl Action for VerifyAction {
                                 ));
                             }
                             actual_messages.push(
-                                block_on(avro_rs::from_avro_datum(&schema, &mut bytes, None))
+                                block_on(avro::from_avro_datum(&schema, &mut bytes, None))
                                     .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?,
                             );
                         }
@@ -135,7 +135,7 @@ impl Action for VerifyAction {
         // NB: We can't compare messages as they come in because
         // Kafka sinks do not currently support ordering.
         // Additionally, we do this bummer of a comparison because
-        // avro_rs::types::Value does not implement Eq or Ord.
+        // avro::types::Value does not implement Eq or Ord.
         // TODO@jldlaughlin: update this once we have Kafka ordering guarantees
         let missing_values =
             get_values_in_first_list_not_in_second(&converted_expected_messages, &actual_messages);
@@ -378,7 +378,7 @@ impl IngestAction {
                     // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
                     buf.write_u8(0).unwrap();
                     buf.write_i32::<NetworkEndian>(*schema_id).unwrap();
-                    buf.extend(avro_rs::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
+                    buf.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
                 }
                 ParsedSchema::Proto { parser, validator } => {
                     let msg = parser(row)

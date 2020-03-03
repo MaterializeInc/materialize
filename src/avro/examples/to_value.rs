@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use avro_rs::to_value;
+use avro::to_value;
 use failure::Error;
 use serde::{Deserialize, Serialize};
 

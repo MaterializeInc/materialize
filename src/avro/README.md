@@ -28,7 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 Then try to write and read in Avro format like below:
 
 ```rust
-use avro_rs::{Codec, Reader, Schema, Writer, from_value, types::Record};
+use avro::{Codec, Reader, Schema, Writer, from_value, types::Record};
 use failure::Error;
 use serde::{Serialize, Deserialize};
 
@@ -93,7 +93,7 @@ Note: Rabin fingerprinting is NOT SUPPORTED yet.
 An example of fingerprinting for the supported fingerprints:
 
 ```rust
-use avro_rs::Schema;
+use avro::Schema;
 use failure::Error;
 use md5::Md5;
 use sha2::Sha256;
@@ -137,7 +137,7 @@ will be 512MB throughout the lifetime of the program).
 
 
 ```rust
-use avro_rs::max_allocation_bytes;
+use avro::max_allocation_bytes;
 
 
 fn main() {

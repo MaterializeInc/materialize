@@ -10,7 +10,7 @@
 //! Port of https://github.com/apache/avro/blob/master/lang/py/test/test_io.py
 use std::io::Cursor;
 
-use avro_rs::{
+use avro::{
     from_avro_datum, to_avro_datum, types::Value, Schema, SchemaResolutionError, ValidationError,
 };
 use lazy_static::lazy_static;
