@@ -328,7 +328,7 @@ pub enum DataEncoding {
     Bytes,
     Text,
     AvroOcf {
-        schema: String,
+        reader_schema: String,
     },
 }
 
@@ -339,8 +339,8 @@ impl DataEncoding {
                 ColumnType::new(ScalarType::Bytes),
                 Some("data".to_owned()),
             )]),
-            DataEncoding::AvroOcf { schema } => {
-                avro::validate_value_schema(&*schema, envelope == Envelope::Debezium)?
+            DataEncoding::AvroOcf { reader_schema } => {
+                avro::validate_value_schema(&*reader_schema, envelope == Envelope::Debezium)?
             }
             DataEncoding::Avro(AvroEncoding {
                 value_schema,
