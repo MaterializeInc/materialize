@@ -248,8 +248,8 @@ impl<'a, R: AsyncRead + Unpin + Send + 'a> Reader<'a, R> {
     }
 
     pub fn into_stream(self) -> impl Stream<Item = Result<Value, Error>> + Unpin + 'a {
-        Box::pin(try_unfold(self, |mut r| {
-            async { Ok(r.read_next().await?.map(|v| (v, r))) }
+        Box::pin(try_unfold(self, |mut r| async {
+            Ok(r.read_next().await?.map(|v| (v, r)))
         }))
     }
 }
@@ -283,7 +283,7 @@ mod tests {
     use futures::stream::StreamExt;
     use std::io::Cursor;
 
-    static SCHEMA: &'static str = r#"
+    static SCHEMA: &str = r#"
             {
                 "type": "record",
                 "name": "test",
@@ -293,10 +293,10 @@ mod tests {
                 ]
             }
         "#;
-    static UNION_SCHEMA: &'static str = r#"
+    static UNION_SCHEMA: &str = r#"
             ["null", "long"]
         "#;
-    static ENCODED: &'static [u8] = &[
+    static ENCODED: &[u8] = &[
         79u8, 98u8, 106u8, 1u8, 4u8, 22u8, 97u8, 118u8, 114u8, 111u8, 46u8, 115u8, 99u8, 104u8,
         101u8, 109u8, 97u8, 222u8, 1u8, 123u8, 34u8, 116u8, 121u8, 112u8, 101u8, 34u8, 58u8, 34u8,
         114u8, 101u8, 99u8, 111u8, 114u8, 100u8, 34u8, 44u8, 34u8, 110u8, 97u8, 109u8, 101u8, 34u8,

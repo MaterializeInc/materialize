@@ -129,7 +129,7 @@ impl Codec {
 mod tests {
     use super::*;
 
-    static INPUT: &'static [u8] = b"theanswertolifetheuniverseandeverythingis42theanswertolifetheuniverseandeverythingis4theanswertolifetheuniverseandeverythingis2";
+    static INPUT: &[u8] = b"theanswertolifetheuniverseandeverythingis42theanswertolifetheuniverseandeverythingis4theanswertolifetheuniverseandeverythingis2";
 
     #[test]
     fn null_compress_and_decompress() {
