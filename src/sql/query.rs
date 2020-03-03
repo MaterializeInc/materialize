@@ -2500,6 +2500,7 @@ fn plan_arithmetic_op<'a>(
             (Int64, Int64) => AddInt64,
             (Float32, Float32) => AddFloat32,
             (Float64, Float64) => AddFloat64,
+            (Interval, Interval) => AddInterval,
             (Timestamp, Interval) => AddTimestampInterval,
             (Interval, Timestamp) => {
                 mem::swap(&mut lexpr, &mut rexpr);
@@ -2541,6 +2542,7 @@ fn plan_arithmetic_op<'a>(
             (Int64, Int64) => SubInt64,
             (Float32, Float32) => SubFloat32,
             (Float64, Float64) => SubFloat64,
+            (Interval, Interval) => SubInterval,
             (Timestamp, Timestamp) => SubTimestamp,
             (TimestampTz, TimestampTz) => SubTimestampTz,
             (Timestamp, Interval) => SubTimestampInterval,
