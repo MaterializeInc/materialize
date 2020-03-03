@@ -23,6 +23,7 @@ use repr::strconv;
 use crate::error::{Error, InputError, ResultExt};
 use crate::parser::{Command, PosCommand};
 
+mod avro_ocf;
 mod file;
 mod kafka;
 mod sql;
@@ -137,6 +138,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     *line = subst(line)?;
                 }
                 match builtin.name.as_ref() {
+                    "avro-ocf-write" => Box::new(avro_ocf::build_write(builtin).map_err(wrap_err)?),
                     "file-write" => Box::new(file::build_write(builtin).map_err(wrap_err)?),
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
