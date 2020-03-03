@@ -1,2 +1,2 @@
 func_extract ::=
-  'EXTRACT' '(' ( 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' ) 'FROM' val ')'
+  'EXTRACT' '(' ( 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'DOW' ) 'FROM' val ')'
