@@ -54,6 +54,7 @@ files=$(git diff --ignore-submodules=all --raw "$empty_tree" \
 
 copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
+    -e '\.avro$' \
     -e '(^|/)\.(git|vscode)ignore$' \
     -e '(^|/)\.git(modules|attributes)$' \
     -e '(^|/).lfsconfig$' \
@@ -75,7 +76,7 @@ copyright_files=$(grep -vE \
     <<< "$files"
 )
 
-newline_files=$(grep -vE '\.(png|jpe?g|eot|ttf|woff2?|protospec|pb|in|svg)$' <<< "$files")
+newline_files=$(grep -vE '\.(png|jpe?g|eot|ttf|woff2?|protospec|pb|in|svg|avro)$' <<< "$files")
 
 shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.md'))
 
