@@ -1372,7 +1372,6 @@ macro_rules! make_visitor {
                     visitor.visit_literal_string(message_name);
                     visitor.visit_schema(schema);
                 },
-                AvroOcf { .. } => unreachable!(),
                 Regex(regex) => visitor.visit_literal_string(regex),
             }
         }

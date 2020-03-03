@@ -1177,10 +1177,6 @@ impl Parser {
             Format::Text
         } else if self.parse_keyword("BYTES") {
             Format::Bytes
-        } else if self.parse_keyword("OCF") {
-            self.expect_keyword("SCHEMA")?;
-            let schema = self.parse_literal_string()?;
-            Format::AvroOcf { schema }
         } else {
             return self.expected(
                 self.peek_range(),

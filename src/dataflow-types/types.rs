@@ -16,6 +16,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
+use failure::ResultExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
@@ -328,7 +329,7 @@ pub enum DataEncoding {
     Bytes,
     Text,
     AvroOcf {
-        schema: String,
+        reader_schema: String,
     },
 }
 
@@ -339,8 +340,9 @@ impl DataEncoding {
                 ColumnType::new(ScalarType::Bytes),
                 Some("data".to_owned()),
             )]),
-            DataEncoding::AvroOcf { schema } => {
-                avro::validate_value_schema(&*schema, envelope == Envelope::Debezium)?
+            DataEncoding::AvroOcf { reader_schema } => {
+                avro::validate_value_schema(&*reader_schema, envelope == Envelope::Debezium)
+                    .with_context(|e| format!("validating avro ocf reader schema: {}", e))?
             }
             DataEncoding::Avro(AvroEncoding {
                 value_schema,
@@ -348,9 +350,11 @@ impl DataEncoding {
                 ..
             }) => {
                 let mut desc =
-                    avro::validate_value_schema(value_schema, envelope == Envelope::Debezium)?;
+                    avro::validate_value_schema(value_schema, envelope == Envelope::Debezium)
+                        .with_context(|e| format!("validating avro value schema: {}", e))?;
                 if let Some(key_schema) = key_schema {
-                    let keys = avro::validate_key_schema(key_schema, &desc)?;
+                    let keys = avro::validate_key_schema(key_schema, &desc)
+                        .with_context(|e| format!("validating avro key schema: {}", e))?;
                     desc = desc.add_keys(keys);
                 }
                 desc

@@ -567,9 +567,6 @@ impl fmt::Display for CsrSeed {
 pub enum Format {
     Bytes,
     Avro(AvroSchema),
-    AvroOcf {
-        schema: String,
-    },
     Protobuf {
         message_name: String,
         schema: Schema,
@@ -638,7 +635,6 @@ impl fmt::Display for Format {
             ),
             Self::Json => write!(f, "JSON"),
             Self::Text => write!(f, "TEXT"),
-            Self::AvroOcf { schema } => write!(f, "OCF SCHEMA '{}'", schema),
         }
     }
 }
