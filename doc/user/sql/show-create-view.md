@@ -22,9 +22,9 @@ _view&lowbar;name_ | The view you want to use. You can find available view names
 SHOW CREATE VIEW my_view;
 ```
 ```nofmt
-  View   |                  Create View
----------+------------------------------------------------
- my_view | CREATE VIEW my_view AS SELECT * FROM my_source
+            View            |                                           Create View
+----------------------------+--------------------------------------------------------------------------------------------------
+ materialize.public.my_view | CREATE VIEW "materialize"."public"."my_view" AS SELECT * FROM "materialize"."public"."my_source"
 ```
 
 ## Related pages
