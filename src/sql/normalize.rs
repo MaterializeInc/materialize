@@ -7,13 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+
 use failure::bail;
 
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use ore::collections::CollectionExt;
 use repr::ColumnName;
 use sql_parser::ast::visit_mut::VisitMut;
-use sql_parser::ast::{Expr, Function, Ident, IfExistsBehavior, ObjectName, Statement, TableAlias};
+use sql_parser::ast::{
+    Expr, Function, Ident, IfExistsBehavior, ObjectName, SqlOption, Statement, TableAlias, Value,
+};
 
 use crate::statement::StatementContext;
 
@@ -55,6 +59,13 @@ pub fn object_name(mut name: ObjectName) -> Result<PartialName, failure::Error> 
     };
     assert!(name.0.is_empty());
     Ok(out)
+}
+
+pub fn with_options(options: &[SqlOption]) -> HashMap<String, Value> {
+    options
+        .iter()
+        .map(|o| (ident(o.name.clone()), o.value.clone()))
+        .collect()
 }
 
 pub fn unresolve(name: FullName) -> ObjectName {
