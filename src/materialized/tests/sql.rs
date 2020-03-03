@@ -20,8 +20,8 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use avro_rs::types::Value;
-use avro_rs::Schema;
+use avro::types::Value;
+use avro::Schema;
 use chrono::{DateTime, Utc};
 
 pub mod util;
@@ -199,7 +199,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     )?;
     let avro_schema = Schema::parse(&avro_schema)?;
     let mut dynamic_file = File::create(&dynamic_path)?;
-    let mut avro_writer = avro_rs::Writer::new(&avro_schema, File::create(&avro_path)?);
+    let mut avro_writer = avro::Writer::new(&avro_schema, File::create(&avro_path)?);
 
     fs::write(
         &static_path,

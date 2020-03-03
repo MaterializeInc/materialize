@@ -1,7 +1,7 @@
 #![feature(test)]
 extern crate test;
 
-use avro_rs::{
+use avro::{
     schema::Schema,
     to_avro_datum,
     types::{Record, ToAvro, Value},

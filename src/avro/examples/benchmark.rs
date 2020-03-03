@@ -9,7 +9,7 @@
 
 use std::time::{Duration, Instant};
 
-use avro_rs::{
+use avro::{
     schema::Schema,
     types::{Record, ToAvro, Value},
     Reader, Writer,

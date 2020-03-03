@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-avro-rs = { git = "https://github.com/MaterializeInc/avro-rs.git" }
+avro = { path = "../avro" }
 bincode = "1.2.1"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
