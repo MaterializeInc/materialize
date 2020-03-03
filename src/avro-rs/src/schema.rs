@@ -1240,7 +1240,7 @@ mod tests {
 
         let doc = match schema {
             Schema::Enum { doc, .. } => doc,
-            _ => return assert!(false),
+            _ => panic!(),
         };
 
         assert!(doc.is_none());

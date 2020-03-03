@@ -16,7 +16,7 @@ lazy_static! {
         (r#""long""#, Value::Long(1234)),
         (r#""float""#, Value::Float(1234.0)),
         (r#""double""#, Value::Double(1234.0)),
-        (r#"{"type": "fixed", "name": "Test", "size": 1}"#, Value::Fixed(1, vec!['B' as u8])),
+        (r#"{"type": "fixed", "name": "Test", "size": 1}"#, Value::Fixed(1, vec![b'B'])),
         (r#"{"type": "enum", "name": "Test", "symbols": ["A", "B"]}"#, Value::Enum(1, "B".to_string())),
         (r#"{"type": "array", "items": "long"}"#, Value::Array(vec![Value::Long(1), Value::Long(3), Value::Long(2)])),
         (r#"{"type": "map", "values": "long"}"#, Value::Map([("a".to_string(), Value::Long(1i64)), ("b".to_string(), Value::Long(3i64)), ("c".to_string(), Value::Long(2i64))].iter().cloned().collect())),
@@ -142,10 +142,12 @@ async fn test_schema_promotion() {
                 Some(&reader_schema),
             )
             .await
-            .expect(&format!(
-                "failed to decode {:?} with schema: {:?}",
-                original_value, reader_raw_schema
-            ));
+            .unwrap_or_else(|_| {
+                panic!(
+                    "failed to decode {:?} with schema: {:?}",
+                    original_value, reader_raw_schema
+                )
+            });
             assert_eq!(decoded, promotable_values[j]);
         }
     }

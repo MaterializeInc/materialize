@@ -351,7 +351,7 @@ mod tests {
     use crate::util::zig_i64;
     use serde::{Deserialize, Serialize};
 
-    static SCHEMA: &'static str = r#"
+    static SCHEMA: &str = r#"
             {
                 "type": "record",
                 "name": "test",
@@ -361,7 +361,7 @@ mod tests {
                 ]
             }
         "#;
-    static UNION_SCHEMA: &'static str = r#"
+    static UNION_SCHEMA: &str = r#"
             ["null", "long"]
         "#;
 
