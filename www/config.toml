@@ -6,8 +6,12 @@ pygmentsStyle = "xcode"
 disableKinds = ["home"]
 
 [params]
-  current_version = "v0.1.0"
-  next_version = "v0.1.1"
+  # Keep the releases in reverse order of their release date. The first release
+  # in the list is assumed to be the most recent.
+  versions = [
+      { name = "v0.1.1", date = "22 February 2020" },
+      { name = "v0.1.0", date = "13 February 2020" }
+  ]
 
 [menu]
     [[menu.main]]
