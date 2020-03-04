@@ -42,7 +42,12 @@ disableKinds = ["home"]
     [[menu.main]]
     identifier = "demos"
     name = "Demos"
-    weight = 30
+    weight = 40
+
+    [[menu.main]]
+    identifier = "third-party"
+    name = "Third-Party Tools"
+    weight = 50
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
