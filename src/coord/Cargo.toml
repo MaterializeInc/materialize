@@ -23,6 +23,7 @@ ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 repr = { path = "../repr" }
 rdkafka = { version = "0.23.1", features = ["cmake-build"] }
+regex = "1.3.4"
 rusoto_core = "0.43.0-beta.1"
 rusoto_credential = "0.43.0-beta.1"
 rusoto_kinesis = "0.43.0-beta.1"
