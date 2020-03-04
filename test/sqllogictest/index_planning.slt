@@ -27,6 +27,7 @@ create table bar (
 statement ok
 INSERT INTO bar (a, d, e) VALUES (-45, 'our', 3.14), (5, 'still', -0.0), (-3, 'is', -1.0)
 
+#no indexes
 query T multiline
 explain plan for select b, c from foo where a = 5
 ----
@@ -44,6 +45,7 @@ this
 statement ok
 create index foo_idx on foo(a);
 
+#index on foo(a) exists
 query T multiline
 explain plan for select b, c from foo where a = 5
 ----
@@ -63,6 +65,7 @@ select b, c from foo where a = 5
 this
 -4.400
 
+#index on foo(a) exists
 query T multiline
 explain plan for select b, c from foo where a = 5 and b = 'this'
 ----
@@ -91,6 +94,7 @@ create index foo_idx2 on foo(b, a);
 statement ok
 create index foo_idx3 on foo(b);
 
+#indexes on foo(a), foo(b,a), and foo(b) exist
 query T multiline
 explain plan for select b, c from foo where a = 5 and b = 'this'
 ----
@@ -110,6 +114,7 @@ Project {
 statement ok
 create index bar_idx on bar(a)
 
+#indexes on bar(a), foo(a), foo(b,a), and foo(b) exist
 query T multiline
 explain plan for select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
 ----
@@ -136,6 +141,66 @@ this
 still
 0.000
 
+statement ok
+drop index foo_idx2;
+
+#indexes on bar(a), foo(a), and foo(b) exist
+query T multiline
+explain plan for select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+----
+Project {
+  outputs: [0 .. 2, 5, 6],
+  Join {
+    variables: [[(0, 0), (2, 0)], [(1, 0), (2, 1)]],
+    implementation: DifferentialLinear,
+    Get { materialize.public.bar (u3) },
+    ArrangeBy { keys: [[]], Constant [["this"]] },
+    ArrangeBy {
+      keys: [[#0, #1]],
+      Get { materialize.public.foo (u1) }
+    }
+  }
+}
+
+query ITRTR
+select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+----
+5
+this
+-4.400
+still
+0.000
+
+statement ok
+drop index foo_idx3;
+
+#indexes on bar(a) and foo(a) exist
+query T multiline
+explain plan for select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+----
+Project {
+  outputs: [0 .. 2, 4, 5],
+  Filter {
+    predicates: [#1 = "this"],
+    Join {
+      variables: [[(0, 0), (1, 0)]],
+      implementation: DeltaQuery,
+      ArrangeBy { keys: [[#0]], Get { materialize.public.foo (u1) } },
+      ArrangeBy { keys: [[#0]], Get { materialize.public.bar (u3) } }
+    }
+  }
+}
+
+query ITRTR
+select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+----
+5
+this
+-4.400
+still
+0.000
+
+#indexes on bar(a) and foo(a) exist
 query T multiline
 explain plan for select b from foo where a = 5 and c < 10
 ----
