@@ -42,7 +42,7 @@
 //! let complex_equality = ScalarExpr::Column(0).call_binary(ScalarExpr::Column(0), BinaryFunc::Eq);
 //! let mut relation = RelationExpr::filter(
 //!     join,
-//!     vec![ScalarExpr::Column(1).call_binary(complex_equality.clone(), BinaryFunc::Eq)]
+//!     vec![ScalarExpr::Column(2).call_binary(complex_equality.clone(), BinaryFunc::Eq)]
 //! );
 //!
 //! SimplifyFilterPredicates.transform(&mut relation);
@@ -54,7 +54,7 @@
 //! //             pointing to the newly Map-ped column
 //! //     2) The whole RelationExpr to be wrapped in a Project to remove the newly Map-ped column
 //! let expected_join = RelationExpr::join(vec![input0.map(vec![complex_equality]), input1], vec![vec![]]);
-//! let updated_equality = ScalarExpr::Column(1).call_binary(ScalarExpr::Column(2), BinaryFunc::Eq);
+//! let updated_equality = ScalarExpr::Column(3).call_binary(ScalarExpr::Column(2), BinaryFunc::Eq);
 //! let expected_relation = expected_join.filter(vec![updated_equality]).project(vec![0, 1, 3, 4]);
 //!
 //! assert_eq!(relation, expected_relation);
