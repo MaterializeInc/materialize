@@ -125,120 +125,143 @@ impl SimplifyFilterPredicates {
                         expr2,
                     } = &predicates[i]
                     {
-                        match (
-                            supports_complex_equality_on_input(&*expr1, &input_relation),
-                            supports_complex_equality_on_input(&*expr2, &input_relation),
-                        ) {
-                            (Some(input_index_1), Some(input_index_2)) => {
-                                // Predicates like `expr1 = expr2` where expr1, expr2 are both complex
-                                // equalities and on the same input will already have been simplified.
-                                // Will only get here if they are on different inputs.
-                                let map_1 = create_map_over_input(
-                                    inputs[input_index_1].take_dangerous(),
-                                    expr1,
-                                    prior_arities[input_index_1],
-                                );
-                                let map_1_arity = map_1.arity();
-                                inputs[input_index_1] = map_1;
+                        // We are interested only when each expression depends on exactly one
+                        // relation, and the two relations are different.
+                        let mut support1 = std::collections::HashSet::new();
+                        expr1.visit(&mut |e| {
+                            if let ScalarExpr::Column(i) = e {
+                                support1.insert(input_relation[*i]);
+                            }
+                        });
+                        let mut support2 = std::collections::HashSet::new();
+                        expr2.visit(&mut |e| {
+                            if let ScalarExpr::Column(i) = e {
+                                support2.insert(input_relation[*i]);
+                            }
+                        });
+                        if support1.len() == 1
+                            && support2.len() == 1
+                            && !support1.iter().any(|c| support2.contains(c))
+                        {
+                            match (
+                                supports_complex_equality_on_input(&*expr1, &input_relation),
+                                supports_complex_equality_on_input(&*expr2, &input_relation),
+                            ) {
+                                (Some(input_index_1), Some(input_index_2)) => {
+                                    // Predicates like `expr1 = expr2` where expr1, expr2 are both complex
+                                    // equalities and on the same input will already have been simplified.
+                                    // Will only get here if they are on different inputs.
+                                    let map_1 = create_map_over_input(
+                                        inputs[input_index_1].take_dangerous(),
+                                        expr1,
+                                        prior_arities[input_index_1],
+                                    );
+                                    let map_1_arity = map_1.arity();
+                                    inputs[input_index_1] = map_1;
 
-                                let mut new_column_input_1_index =
-                                    prior_arities[input_index_1] + map_1_arity - 1;
+                                    let mut new_column_input_1_index =
+                                        prior_arities[input_index_1] + map_1_arity - 1;
 
-                                let map_2 = create_map_over_input(
-                                    inputs[input_index_2].take_dangerous(),
-                                    expr2,
-                                    prior_arities[input_index_2],
-                                );
-                                let map_2_arity = map_2.arity();
-                                inputs[input_index_2] = map_2;
+                                    let map_2 = create_map_over_input(
+                                        inputs[input_index_2].take_dangerous(),
+                                        expr2,
+                                        prior_arities[input_index_2],
+                                    );
+                                    let map_2_arity = map_2.arity();
+                                    inputs[input_index_2] = map_2;
 
-                                let mut new_column_input_2_index =
-                                    prior_arities[input_index_2] + map_2_arity - 1;
-                                if new_column_input_1_index <= new_column_input_2_index {
-                                    new_column_input_2_index += 1;
-                                } else {
-                                    new_column_input_1_index += 1;
+                                    let mut new_column_input_2_index =
+                                        prior_arities[input_index_2] + map_2_arity - 1;
+                                    if new_column_input_1_index <= new_column_input_2_index {
+                                        new_column_input_2_index += 1;
+                                    } else {
+                                        new_column_input_1_index += 1;
+                                    }
+                                    columns_to_drop.push(new_column_input_1_index);
+                                    columns_to_drop.push(new_column_input_2_index);
+
+                                    Some((
+                                        ScalarExpr::CallBinary {
+                                            func: BinaryFunc::Eq,
+                                            expr1: Box::from(ScalarExpr::Column(
+                                                new_column_input_1_index,
+                                            )),
+                                            expr2: Box::from(ScalarExpr::Column(
+                                                new_column_input_2_index,
+                                            )),
+                                        },
+                                        i,
+                                        vec![new_column_input_1_index, new_column_input_2_index],
+                                    ))
                                 }
-                                columns_to_drop.push(new_column_input_1_index);
-                                columns_to_drop.push(new_column_input_2_index);
+                                (Some(input_index_1), None) => {
+                                    let map = create_map_over_input(
+                                        inputs[input_index_1].take_dangerous(),
+                                        expr1,
+                                        prior_arities[input_index_1],
+                                    );
+                                    let map_arity = map.arity();
+                                    inputs[input_index_1] = map;
 
-                                Some((
-                                    ScalarExpr::CallBinary {
-                                        func: BinaryFunc::Eq,
-                                        expr1: Box::from(ScalarExpr::Column(
-                                            new_column_input_1_index,
-                                        )),
-                                        expr2: Box::from(ScalarExpr::Column(
-                                            new_column_input_2_index,
-                                        )),
-                                    },
-                                    i,
-                                    vec![new_column_input_1_index, new_column_input_2_index],
-                                ))
-                            }
-                            (Some(input_index_1), None) => {
-                                let map = create_map_over_input(
-                                    inputs[input_index_1].take_dangerous(),
-                                    expr1,
-                                    prior_arities[input_index_1],
-                                );
-                                let map_arity = map.arity();
-                                inputs[input_index_1] = map;
+                                    let new_column_index =
+                                        prior_arities[input_index_1] + map_arity - 1;
+                                    columns_to_drop.push(new_column_index);
 
-                                let new_column_index = prior_arities[input_index_1] + map_arity - 1;
-                                columns_to_drop.push(new_column_index);
-
-                                Some((
-                                    ScalarExpr::CallBinary {
-                                        func: BinaryFunc::Eq,
-                                        expr1: Box::from(ScalarExpr::Column(new_column_index)),
-                                        expr2: Box::from(match **expr2 {
-                                            ScalarExpr::Column(index) => {
-                                                if index >= new_column_index {
-                                                    ScalarExpr::Column(index + 1)
-                                                } else {
-                                                    ScalarExpr::Column(index)
+                                    Some((
+                                        ScalarExpr::CallBinary {
+                                            func: BinaryFunc::Eq,
+                                            expr1: Box::from(ScalarExpr::Column(new_column_index)),
+                                            expr2: Box::from(match **expr2 {
+                                                ScalarExpr::Column(index) => {
+                                                    if index >= new_column_index {
+                                                        ScalarExpr::Column(index + 1)
+                                                    } else {
+                                                        ScalarExpr::Column(index)
+                                                    }
                                                 }
-                                            }
-                                            _ => *expr2.clone(),
-                                        }),
-                                    },
-                                    i,
-                                    vec![new_column_index],
-                                ))
-                            }
-                            (None, Some(input_index_2)) => {
-                                let map = create_map_over_input(
-                                    inputs[input_index_2].take_dangerous(),
-                                    expr2,
-                                    prior_arities[input_index_2],
-                                );
-                                let map_arity = map.arity();
-                                inputs[input_index_2] = map;
+                                                _ => *expr2.clone(),
+                                            }),
+                                        },
+                                        i,
+                                        vec![new_column_index],
+                                    ))
+                                }
+                                (None, Some(input_index_2)) => {
+                                    let map = create_map_over_input(
+                                        inputs[input_index_2].take_dangerous(),
+                                        expr2,
+                                        prior_arities[input_index_2],
+                                    );
+                                    let map_arity = map.arity();
+                                    inputs[input_index_2] = map;
 
-                                let new_column_index = prior_arities[input_index_2] + map_arity - 1;
-                                columns_to_drop.push(new_column_index);
+                                    let new_column_index =
+                                        prior_arities[input_index_2] + map_arity - 1;
+                                    columns_to_drop.push(new_column_index);
 
-                                Some((
-                                    ScalarExpr::CallBinary {
-                                        func: BinaryFunc::Eq,
-                                        expr1: Box::from(match **expr1 {
-                                            ScalarExpr::Column(index) => {
-                                                if index >= new_column_index {
-                                                    ScalarExpr::Column(index + 1)
-                                                } else {
-                                                    ScalarExpr::Column(index)
+                                    Some((
+                                        ScalarExpr::CallBinary {
+                                            func: BinaryFunc::Eq,
+                                            expr1: Box::from(match **expr1 {
+                                                ScalarExpr::Column(index) => {
+                                                    if index >= new_column_index {
+                                                        ScalarExpr::Column(index + 1)
+                                                    } else {
+                                                        ScalarExpr::Column(index)
+                                                    }
                                                 }
-                                            }
-                                            _ => *expr1.clone(),
-                                        }), // this column needs to be updated.
-                                        expr2: Box::from(ScalarExpr::Column(new_column_index)),
-                                    },
-                                    i,
-                                    vec![new_column_index],
-                                ))
+                                                _ => *expr1.clone(),
+                                            }), // this column needs to be updated.
+                                            expr2: Box::from(ScalarExpr::Column(new_column_index)),
+                                        },
+                                        i,
+                                        vec![new_column_index],
+                                    ))
+                                }
+                                (None, None) => None,
                             }
-                            (None, None) => None,
+                        } else {
+                            None
                         }
                     } else {
                         None
