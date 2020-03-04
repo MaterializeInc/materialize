@@ -36,6 +36,9 @@ For information about available versions, see our [Versions page](../versions).
 
 - Improve CSV parsing speed by 5-6x.
 
+- Support the number functions `round(x: N)` and `round(x: N, y: N)`, which
+  round `x` to the `y`th digit after the decimal. (Default 0).
+
 [`CREATE SOURCE`]: ../sql/create-source
 [`SHOW CREATE SOURCE`]: ../sql/show-create-source
 [`SHOW CREATE VIEW`]: ../sql/show-create-view
