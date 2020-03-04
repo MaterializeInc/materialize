@@ -13,7 +13,13 @@ This page details changes between versions of Materialize, including:
 
 For information about available versions, see our [Versions page](../versions).
 
-## 0.1.1 &rarr; 0.1.2 (unreleased)
+## 0.1.2 &rarr; 0.1.3 (unreleased)
+<span id="v0.1.3"></span>
+
+- Support the number functions `round(x: N)` and `round(x: N, y: N)`, which
+  round `x` to the `y`th digit after the decimal. (Default 0).
+
+## 0.1.1 &rarr; 0.1.2
 <span id="v0.1.2"></span>
 
 - Change [`SHOW CREATE SOURCE`] to render the full SQL statement used to create
@@ -35,9 +41,6 @@ For information about available versions, see our [Versions page](../versions).
   on some platforms.
 
 - Improve CSV parsing speed by 5-6x.
-
-- Support the number functions `round(x: N)` and `round(x: N, y: N)`, which
-  round `x` to the `y`th digit after the decimal. (Default 0).
 
 [`CREATE SOURCE`]: ../sql/create-source
 [`SHOW CREATE SOURCE`]: ../sql/show-create-source
