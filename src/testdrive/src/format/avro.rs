@@ -20,54 +20,57 @@
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 
-use avro::types::Value as AvroValue;
-use avro::Schema;
+use avro::schema::{SchemaNode, SchemaPiece};
+use avro::types::{DecimalValue, Value as AvroValue};
+
 use serde_json::Value as JsonValue;
 
 // This function is derived from code in the avro_rs project. Update the license
 // header on this file accordingly if you move it to a new home.
-pub fn json_to_avro(json: &JsonValue, schema: &Schema) -> Result<AvroValue, String> {
-    match (json, schema) {
-        (JsonValue::Null, Schema::Null) => Ok(AvroValue::Null),
-        (JsonValue::Bool(b), Schema::Boolean) => Ok(AvroValue::Boolean(*b)),
-        (JsonValue::Number(ref n), Schema::Int) => Ok(AvroValue::Int(
+pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, String> {
+    match (json, schema.inner) {
+        (JsonValue::Null, SchemaPiece::Null) => Ok(AvroValue::Null),
+        (JsonValue::Bool(b), SchemaPiece::Boolean) => Ok(AvroValue::Boolean(*b)),
+        (JsonValue::Number(ref n), SchemaPiece::Int) => Ok(AvroValue::Int(
             n.as_i64()
                 .unwrap()
                 .try_into()
                 .map_err(|e: TryFromIntError| e.to_string())?,
         )),
-        (JsonValue::Number(ref n), Schema::Long) => Ok(AvroValue::Long(n.as_i64().unwrap())),
-        (JsonValue::Number(ref n), Schema::Float) => {
+        (JsonValue::Number(ref n), SchemaPiece::Long) => Ok(AvroValue::Long(n.as_i64().unwrap())),
+        (JsonValue::Number(ref n), SchemaPiece::Float) => {
             Ok(AvroValue::Float(n.as_f64().unwrap() as f32))
         }
-        (JsonValue::Number(ref n), Schema::Double) => Ok(AvroValue::Double(n.as_f64().unwrap())),
-        (JsonValue::Number(ref n), Schema::Date) => Ok(AvroValue::Date(
+        (JsonValue::Number(ref n), SchemaPiece::Double) => {
+            Ok(AvroValue::Double(n.as_f64().unwrap()))
+        }
+        (JsonValue::Number(ref n), SchemaPiece::Date) => Ok(AvroValue::Date(
             chrono::NaiveDate::from_ymd(1970, 1, 1) + chrono::Duration::days(n.as_i64().unwrap()),
         )),
-        (JsonValue::Number(ref n), Schema::TimestampMilli) => {
+        (JsonValue::Number(ref n), SchemaPiece::TimestampMilli) => {
             let ts = n.as_i64().unwrap();
             Ok(AvroValue::Timestamp(chrono::NaiveDateTime::from_timestamp(
                 ts / 1_000,
                 ts as u32 % 1_000,
             )))
         }
-        (JsonValue::Number(ref n), Schema::TimestampMicro) => {
+        (JsonValue::Number(ref n), SchemaPiece::TimestampMicro) => {
             let ts = n.as_i64().unwrap();
             Ok(AvroValue::Timestamp(chrono::NaiveDateTime::from_timestamp(
                 ts / 1_000_000,
                 ts as u32 % 1_000_000,
             )))
         }
-        (JsonValue::Array(items), Schema::Array(inner)) => Ok(AvroValue::Array(
+        (JsonValue::Array(items), SchemaPiece::Array(inner)) => Ok(AvroValue::Array(
             items
                 .iter()
-                .map(|x| json_to_avro(x, inner))
+                .map(|x| json_to_avro(x, schema.step(&**inner)))
                 .collect::<Result<_, _>>()?,
         )),
-        (JsonValue::String(s), Schema::String) => Ok(AvroValue::String(s.clone())),
+        (JsonValue::String(s), SchemaPiece::String) => Ok(AvroValue::String(s.clone())),
         (
             JsonValue::Array(items),
-            Schema::Decimal {
+            SchemaPiece::Decimal {
                 precision, scale, ..
             },
         ) => {
@@ -79,25 +82,30 @@ pub fn json_to_avro(json: &JsonValue, schema: &Schema) -> Result<AvroValue, Stri
                 Some(bytes) => bytes,
                 None => return Err("decimal was not represented by byte array".into()),
             };
-            Ok(AvroValue::Decimal {
+            Ok(AvroValue::Decimal(DecimalValue {
                 unscaled: bytes,
                 precision: *precision,
                 scale: *scale,
-            })
+            }))
         }
-        (JsonValue::Object(items), Schema::Record { fields, .. }) => Ok(AvroValue::Record(
+        (JsonValue::Object(items), SchemaPiece::Record { fields, .. }) => Ok(AvroValue::Record(
             items
                 .iter()
                 .zip(fields)
-                .map(|((key, value), field)| Ok((key.clone(), json_to_avro(value, &field.schema)?)))
+                .map(|((key, value), field)| {
+                    Ok((
+                        key.clone(),
+                        json_to_avro(value, schema.step(&field.schema))?,
+                    ))
+                })
                 .collect::<Result<_, String>>()?,
         )),
-        (val, Schema::Union(us)) => {
+        (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();
             let mut last_err = format!("Union schema {:?} did not match {:?}", variants, val);
-            for variant in variants {
-                match json_to_avro(val, variant) {
-                    Ok(avro) => return Ok(AvroValue::Union(Box::new(avro))),
+            for (i, variant) in variants.iter().enumerate() {
+                match json_to_avro(val, schema.step(variant)) {
+                    Ok(avro) => return Ok(AvroValue::Union(i, Box::new(avro))),
                     Err(msg) => last_err = msg,
                 }
             }

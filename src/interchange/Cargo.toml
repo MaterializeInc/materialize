@@ -20,6 +20,7 @@ ccsr = { path = "../ccsr" }
 chrono = "0.4"
 failure = "0.1.7"
 futures = "0.3"
+log = "0.4.8"
 num-traits = "0.2.11" # don't want to upgrade to autocfg 1.0 until more things use it
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }

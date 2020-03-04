@@ -9,9 +9,11 @@
 
 use avro::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
+use chrono::{Duration, NaiveDate};
 use criterion::{black_box, Criterion, Throughput};
 
 use interchange::avro::{parse_schema, Decoder};
+use std::ops::Add;
 
 pub fn bench_avro(c: &mut Criterion) {
     let schema_str = r#"
@@ -241,10 +243,13 @@ pub fn bench_avro(c: &mut Criterion) {
 "#;
     let schema = parse_schema(schema_str).unwrap();
 
+    fn since_epoch(days: i64) -> NaiveDate {
+        NaiveDate::from_ymd(1970, 1, 1).add(Duration::days(days))
+    }
     #[rustfmt::skip]
     let record = AvroValue::Record(vec![
-        ("before".into(), AvroValue::Union(Box::new(AvroValue::Null))),
-        ("after".into(), AvroValue::Union(Box::new(AvroValue::Record(vec![
+        ("before".into(), AvroValue::Union(0, Box::new(AvroValue::Null))),
+        ("after".into(), AvroValue::Union(1, Box::new(AvroValue::Record(vec![
             ("l_orderkey".into(), AvroValue::Int(1)),
             ("l_partkey".into(), AvroValue::Int(155_190)),
             ("l_suppkey".into(), AvroValue::Int(7706)),
@@ -255,31 +260,31 @@ pub fn bench_avro(c: &mut Criterion) {
             ("l_tax".into(), AvroValue::Double(0.02)),
             ("l_returnflag".into(), AvroValue::String("N".into())),
             ("l_linestatus".into(), AvroValue::String("O".into())),
-            ("l_shipdate".into(), AvroValue::Int(9567)),
-            ("l_commitdate".into(), AvroValue::Int(9537)),
-            ("l_receiptdate".into(), AvroValue::Int(9567)),
+            ("l_shipdate".into(), AvroValue::Date(since_epoch(9567))),
+            ("l_commitdate".into(), AvroValue::Date(since_epoch(9537))),
+            ("l_receiptdate".into(), AvroValue::Date(since_epoch(9567))),
             ("l_shipinstruct".into(), AvroValue::String("DELIVER IN PERSON".into())),
             ("l_shipmode".into(), AvroValue::String("TRUCK".into())),
             ("l_comment".into(), AvroValue::String("egular courts above the".into())),
         ])))),
         ("source".into(), AvroValue::Record(vec![
-            ("version".into(), AvroValue::Union(Box::new(AvroValue::String("0.9.5.Final".into())))),
-            ("connector".into(), AvroValue::Union(Box::new(AvroValue::String("mysql".into())))),
+            ("version".into(), AvroValue::Union(1, Box::new(AvroValue::String("0.9.5.Final".into())))),
+            ("connector".into(), AvroValue::Union(1, Box::new(AvroValue::String("mysql".into())))),
             ("name".into(), AvroValue::String("tpch".into())),
             ("server_id".into(), AvroValue::Long(0)),
             ("ts_sec".into(), AvroValue::Long(0)),
-            ("gtid".into(), AvroValue::Union(Box::new(AvroValue::Null))),
+            ("gtid".into(), AvroValue::Union(0, Box::new(AvroValue::Null))),
             ("file".into(), AvroValue::String("binlog.000004".into())),
             ("pos".into(), AvroValue::Long(951_896_181)),
             ("row".into(), AvroValue::Int(0)),
-            ("snapshot".into(), AvroValue::Union(Box::new(AvroValue::Boolean(true)))),
-            ("thread".into(), AvroValue::Union(Box::new(AvroValue::Null))),
-            ("db".into(), AvroValue::Union(Box::new(AvroValue::String("tpch".into())))),
-            ("table".into(), AvroValue::Union(Box::new(AvroValue::String("lineitem".into())))),
-            ("query".into(), AvroValue::Union(Box::new(AvroValue::Null))),
+            ("snapshot".into(), AvroValue::Union(0, Box::new(AvroValue::Boolean(true)))),
+            ("thread".into(), AvroValue::Union(0, Box::new(AvroValue::Null))),
+            ("db".into(), AvroValue::Union(1, Box::new(AvroValue::String("tpch".into())))),
+            ("table".into(), AvroValue::Union(1, Box::new(AvroValue::String("lineitem".into())))),
+            ("query".into(), AvroValue::Union(0, Box::new(AvroValue::Null))),
         ])),
         ("op".into(), AvroValue::String("c".into())),
-        ("ts_ms".into(), AvroValue::Union(Box::new(AvroValue::Long(1_560_886_948_093)))),
+        ("ts_ms".into(), AvroValue::Union(1, Box::new(AvroValue::Long(1_560_886_948_093)))),
     ]);
 
     let mut buf = Vec::new();

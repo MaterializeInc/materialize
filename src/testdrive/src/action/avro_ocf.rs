@@ -54,7 +54,7 @@ impl Action for WriteAction {
         for record in &self.records {
             let record = crate::format::avro::json_to_avro(
                 &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {}", e))?,
-                &schema,
+                schema.top_node(),
             )?;
             writer
                 .append(record)

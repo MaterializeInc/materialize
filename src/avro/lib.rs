@@ -124,7 +124,7 @@
 //! let mut writer = Writer::new(&schema, Vec::new());
 //!
 //! // the Record type models our Record schema
-//! let mut record = Record::new(writer.schema()).unwrap();
+//! let mut record = Record::new(writer.schema().top_node()).unwrap();
 //! record.put("a", 27i64);
 //! record.put("b", "foo");
 //!
@@ -147,52 +147,6 @@
 //! use avro::types::Value;
 //!
 //! let mut value = Value::String("foo".to_string());
-//! ```
-//!
-//! ## The serde way
-//!
-//! Given that the schema we defined above is an Avro *Record*, we can directly use a Rust struct
-//! deriving `Serialize` to model our data:
-//!
-//! ```
-//! # use avro::Schema;
-//! # use serde::Serialize;
-//! use avro::Writer;
-//!
-//! #[derive(Debug, Serialize)]
-//! struct Test {
-//!     a: i64,
-//!     b: String,
-//! }
-//!
-//! # let raw_schema = r#"
-//! #     {
-//! #         "type": "record",
-//! #         "name": "test",
-//! #         "fields": [
-//! #             {"name": "a", "type": "long", "default": 42},
-//! #             {"name": "b", "type": "string"}
-//! #         ]
-//! #     }
-//! # "#;
-//! # let schema = Schema::parse_str(raw_schema).unwrap();
-//! // a writer needs a schema and something to write to
-//! let mut writer = Writer::new(&schema, Vec::new());
-//!
-//! // the structure models our Record schema
-//! let test = Test {
-//!     a: 27,
-//!     b: "foo".to_owned(),
-//! };
-//!
-//! // schema validation happens here
-//! writer.append_ser(test).unwrap();
-//!
-//! // flushing makes sure that all data gets encoded
-//! writer.flush().unwrap();
-//!
-//! // this is how to get back the resulting avro bytecode
-//! let encoded = writer.into_inner();
 //! ```
 //!
 //! The vast majority of the times, schemas tend to define a record as a top-level container
@@ -260,7 +214,7 @@
 //! # "#;
 //! # let schema = Schema::parse_str(raw_schema).unwrap();
 //! # let mut writer = Writer::new(&schema, Vec::new());
-//! # let mut record = Record::new(writer.schema()).unwrap();
+//! # let mut record = Record::new(writer.schema().top_node()).unwrap();
 //! # record.put("a", 27i64);
 //! # record.put("b", "foo");
 //! # writer.append(record).unwrap();
@@ -290,7 +244,7 @@
 //! # "#;
 //! # let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
 //! # let mut writer = Writer::new(&writer_schema, Vec::new());
-//! # let mut record = Record::new(writer.schema()).unwrap();
+//! # let mut record = Record::new(writer.schema().top_node()).unwrap();
 //! # record.put("a", 27i64);
 //! # record.put("b", "foo");
 //! # writer.append(record).unwrap();
@@ -353,7 +307,7 @@
 //! # let schema = Schema::parse_str(raw_schema).unwrap();
 //! # let schema = Schema::parse_str(raw_schema).unwrap();
 //! # let mut writer = Writer::new(&schema, Vec::new());
-//! # let mut record = Record::new(writer.schema()).unwrap();
+//! # let mut record = Record::new(writer.schema().top_node()).unwrap();
 //! # record.put("a", 27i64);
 //! # record.put("b", "foo");
 //! # writer.append(record).unwrap();
@@ -367,120 +321,10 @@
 //! }
 //!
 //! ```
-//!
-//! ## The serde way
-//!
-//! Alternatively, we can use a Rust type implementing `Deserialize` and representing our schema to
-//! read the data into:
-//!
-//! ```
-//! use futures::stream::StreamExt;
-//! # use avro::Schema;
-//! # use avro::Writer;
-//! # use serde::{Deserialize, Serialize};
-//! use avro::Reader;
-//! use avro::from_value;
-//!
-//! # #[derive(Serialize)]
-//! #[derive(Debug, Deserialize)]
-//! struct Test {
-//!     a: i64,
-//!     b: String,
-//! }
-//!
-//! # let raw_schema = r#"
-//! #     {
-//! #         "type": "record",
-//! #         "name": "test",
-//! #         "fields": [
-//! #             {"name": "a", "type": "long", "default": 42},
-//! #             {"name": "b", "type": "string"}
-//! #         ]
-//! #     }
-//! # "#;
-//! # let schema = Schema::parse_str(raw_schema).unwrap();
-//! # let mut writer = Writer::new(&schema, Vec::new());
-//! # let test = Test {
-//! #     a: 27,
-//! #     b: "foo".to_owned(),
-//! # };
-//! # writer.append_ser(test).unwrap();
-//! # writer.flush().unwrap();
-//! # let input = writer.into_inner();
-//! let mut reader = futures::executor::block_on(Reader::new(&input[..])).unwrap().into_stream();
-//!
-//! // value is a Result in case the read operation fails
-//! while let Some(value) = futures::executor::block_on(reader.next()) {
-//!     println!("{:?}", from_value::<Test>(&value.unwrap()));
-//! }
-//! ```
-//!
-//! # Putting everything together
-//!
-//! The following is an example of how to combine everything showed so far and it is meant to be a
-//! quick reference of the library interface:
-//!
-//! ```
-//! use futures::stream::StreamExt;
-//! use avro::{Codec, Reader, Schema, Writer, from_value, types::Record};
-//! use failure::Error;
-//! use serde::{Deserialize, Serialize};
-//!
-//! #[derive(Debug, Deserialize, Serialize)]
-//! struct Test {
-//!     a: i64,
-//!     b: String,
-//! }
-//!
-//! fn main() -> Result<(), Error> {
-//!     let raw_schema = r#"
-//!         {
-//!             "type": "record",
-//!             "name": "test",
-//!             "fields": [
-//!                 {"name": "a", "type": "long", "default": 42},
-//!                 {"name": "b", "type": "string"}
-//!             ]
-//!         }
-//!     "#;
-//!
-//!     let schema = Schema::parse_str(raw_schema)?;
-//!
-//!     println!("{:?}", schema);
-//!
-//!     let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
-//!
-//!     let mut record = Record::new(writer.schema()).unwrap();
-//!     record.put("a", 27i64);
-//!     record.put("b", "foo");
-//!
-//!     writer.append(record)?;
-//!
-//!     let test = Test {
-//!         a: 27,
-//!         b: "foo".to_owned(),
-//!     };
-//!
-//!     writer.append_ser(test)?;
-//!
-//!     writer.flush()?;
-//!
-//!     let input = writer.into_inner();
-//!     let mut reader = futures::executor::block_on(Reader::with_schema(&schema, &input[..]))?.into_stream();
-//!
-//!     while let Some(value) = futures::executor::block_on(reader.next()) {
-//!         println!("{:?}", from_value::<Test>(&value?));
-//!     }
-//!     Ok(())
-//! }
-//! ```
-
 mod codec;
-mod de;
 mod decode;
 mod encode;
 mod reader;
-mod ser;
 mod util;
 mod writer;
 
@@ -488,10 +332,8 @@ pub mod schema;
 pub mod types;
 
 pub use crate::codec::Codec;
-pub use crate::de::from_value;
 pub use crate::reader::{from_avro_datum, Reader};
 pub use crate::schema::{ParseSchemaError, Schema};
-pub use crate::ser::to_value;
 pub use crate::types::SchemaResolutionError;
 pub use crate::util::{max_allocation_bytes, DecodeError};
 pub use crate::writer::{to_avro_datum, ValidationError, Writer};
@@ -540,7 +382,7 @@ mod tests {
         let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
         let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
         let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema()).unwrap();
+        let mut record = Record::new(writer.schema().top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
         writer.append(record).unwrap();
@@ -585,7 +427,7 @@ mod tests {
         "#;
         let schema = Schema::parse_str(raw_schema).unwrap();
         let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema()).unwrap();
+        let mut record = Record::new(writer.schema().top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
         record.put("c", "clubs");
@@ -651,7 +493,7 @@ mod tests {
         let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
         let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
         let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema()).unwrap();
+        let mut record = Record::new(writer.schema().top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
         record.put("c", "clubs");
@@ -690,7 +532,7 @@ mod tests {
         "#;
         let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
         let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema()).unwrap();
+        let mut record = Record::new(writer.schema().top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
         record.put("c", "clubs");
@@ -723,7 +565,7 @@ mod tests {
         ]}"#;
         let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
         let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema()).unwrap();
+        let mut record = Record::new(writer.schema().top_node()).unwrap();
         let dt = chrono::NaiveDateTime::from_timestamp(1_000, 995_000_000);
         record.put("a", types::Value::Timestamp(dt));
         writer.append(record).unwrap();
@@ -754,7 +596,7 @@ mod tests {
         // Would allocated 18446744073709551605 bytes
         let illformed: &[u8] = &[0x3e, 0x15, 0xff, 0x1f, 0x15, 0xff];
 
-        let value = from_avro_datum(&schema, &mut &illformed[..], None).await;
+        let value = from_avro_datum(&schema, &mut &illformed[..]).await;
         assert!(value.is_err());
     }
 }
