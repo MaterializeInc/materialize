@@ -139,10 +139,7 @@ impl SimplifyFilterPredicates {
                                 support2.insert(input_relation[*i]);
                             }
                         });
-                        if support1.len() == 1
-                            && support2.len() == 1
-                            && !support1.iter().any(|c| support2.contains(c))
-                        {
+                        if support1.len() == 1 && support2.len() == 1 && support1 != support2 {
                             match (
                                 supports_complex_equality_on_input(&*expr1, &input_relation),
                                 supports_complex_equality_on_input(&*expr2, &input_relation),
