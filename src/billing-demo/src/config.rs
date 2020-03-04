@@ -7,12 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use chrono::format::ParseResult;
+use chrono::prelude::*;
+use chrono::DateTime;
 use std::time::Duration;
 
 use structopt::StructOpt;
 
 pub static KAFKA_SOURCE_NAME: &str = "billing_source";
 pub static CSV_SOURCE_NAME: &str = "price_source";
+
+fn parse_utc_datetime_from_str(s: &str) -> ParseResult<DateTime<Utc>> {
+    Ok(DateTime::<Utc>::from_utc(
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")?,
+        Utc,
+    ))
+}
 
 #[derive(Clone, Debug, StructOpt)]
 pub struct Args {
@@ -52,6 +62,14 @@ pub struct Args {
     /// Whether or not to run the billing-demo in a low memory mode
     #[structopt(long)]
     pub low_memory: bool,
+
+    /// A random seed for generating the records and prices
+    #[structopt(long)]
+    pub seed: Option<u64>,
+
+    /// A date to start generating records from. Default is a week before now
+    #[structopt(long, parse(try_from_str = parse_utc_datetime_from_str))]
+    pub start_time: Option<DateTime<Utc>>,
 }
 
 impl Args {
@@ -62,6 +80,8 @@ impl Args {
             topic: self.kafka_topic.clone(),
             message_count: self.message_count,
             message_sleep: self.message_sleep,
+            seed: self.seed,
+            start_time: self.start_time,
         }
     }
 
@@ -74,6 +94,7 @@ impl Args {
             csv_file_name: self.csv_file_name.clone(),
             preserve_source: self.preserve_source,
             low_memory: self.low_memory,
+            seed: self.seed,
         }
     }
 
@@ -89,6 +110,8 @@ pub struct KafkaConfig {
     pub topic: String,
     pub message_count: usize,
     pub message_sleep: Option<Duration>,
+    pub seed: Option<u64>,
+    pub start_time: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug)]
@@ -100,4 +123,5 @@ pub struct MzConfig {
     pub csv_file_name: String,
     pub preserve_source: bool,
     pub low_memory: bool,
+    pub seed: Option<u64>,
 }
