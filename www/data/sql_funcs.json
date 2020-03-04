@@ -97,6 +97,14 @@
             {
                 "signature": "mod(x: N, y: N) -> N",
                 "description": "`x % y`"
+            },
+            {
+                "signature": "round(x: N) -> N",
+                "description": "`x` rounded to the nearest whole number; halves are rounded up"
+            },
+            {
+                "signature": "round(x: numeric, y: int) -> numeric",
+                "description": "`x` rounded to `y` decimal places, while retaining the same [`numeric`](../types/numeric) scale; halves are rounded up"
             }
         ]
     },
