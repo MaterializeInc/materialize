@@ -14,13 +14,7 @@ feature.
 ## Conceptual framework
 
 `CREATE MATERIALIZED VIEW` computes and maintains the results of a `SELECT`
-query in memory. (For more information about materialized views, see [What is
-Materialize?](../../overview/what-is-materialize))
-
-This means that as data streams in from your sources, Materialize incrementally
-updates the results of the view's `SELECT` statement. Because these results are
-available in memory, you can get an answer to the query with incredibly low
-latency.
+query in memory. For more information, see [API Components: Materialized views](../../overview/api-components#materialized-views).
 
 ## Syntax
 
@@ -34,21 +28,6 @@ _view&lowbar;name_ | A name for the view.
 _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose output you want to materialize and maintain.
 
 ## Details
-
-### Overview
-
-When creating a view, Materialize's internal Differential dataflow engine
-creates a persistent dataflow for the corresponding `SELECT` statement. All of
-the data that is available from the view's source's arrangements (which is
-similar to an index in the language of RDBMSes) is then used to create the first
-result set of the view.
-
-As data continues to stream in from Kafka, Differential passes the data to the
-appropriate dataflows, which are then responsible for making any necessary
-updates to maintain the views you've defined.
-
-When reading from a view (e.g. `SELECT * FROM some_view`), Materialize simply
-returns the current result set for the persisted dataflow.
 
 ### Memory
 

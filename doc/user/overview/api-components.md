@@ -1,0 +1,163 @@
+---
+title: "API Components"
+description: "Understand Materialize's architecture."
+menu:
+  main:
+    parent: 'overview'
+    weight: 3
+---
+
+Materialize is a streaming data warehouse with a SQL API. However, despite the
+fact that Materialize uses SQL idioms and can process data from databases, it
+actually has very little in common with "databases" as most users think of them.
+
+In this document, we'll sketch a conceptual framework expressed by Materialize's
+API components, which might help you develop a mental model of how to work with
+Materialize and how its components differ from traditional databases.
+
+Materialize offers the following components through its SQL API:
+
+Component | Use
+----------|-----
+**Sources** | Sources represent streams (e.g. Kafka) or files that provide data to Materialize.
+**Views** | Views represent queries of sources and other views that you want to save for repeated execution.
+**Indexes** | Indexes represent query results stored in memory.
+
+## Sources
+
+Sources represent a connection to the data you want Materialize to process, as
+well as details about the structure of that data. A simplistic way to think of
+this is that sources represent streams and their schemas; this isn't entirely
+accurate, but provides an illustrative mental model.
+
+In terms of SQL, sources are similar to a combination of both tables and
+clients.
+
+- Like a table, sources are a structured component that users can read from.
+- Like a client, sources are responsible for writing data. There is no `INSERT`
+  statement in Materialize, which is correlated with the fact that external
+  sources provide all of the underlying data to process.
+
+By looking at what comprises a source, we can develop a sense for how this
+combination works.
+
+### Source components
+
+Sources are composed of the following components:
+
+Component | Use | Example
+----------|-----|---------
+**Connector** | Provides actual bytes of data to Materialize | Kafka
+**Format** | Structures of the external source's bytes, i.e. its schema | Avro
+**Envelope** | Expresses how Materialize should handle the incoming data + any additional formatting information | Append-only
+
+#### Connectors
+
+Materialize can connect to the following types of sources:
+
+- Streaming sources like Kafka
+- File sources like `.csv` or unstructured log files
+
+#### Formats
+
+Materialize can decode incoming bytes of data from several formats
+
+- Avro
+- Protobuf
+- Regex
+- CSV
+- Plain text
+- Raw bytes
+
+#### Envelopes
+
+What Materialize actually does with the data it receives depends on the
+"envelope" your data provides:
+
+Envelope | Action
+---------|-------
+**Append-only** | Inserts all received data; does not support updates or deletes.
+**Debezium** | Treats data as wrapped in a "diff envelope" which indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Debezium envelope details](../../sql/create-source/#debezium-envelope-details).
+
+## Views
+
+In SQL, views represent a query that you save with some given name. These are
+used primarily as shorthand for some lengthy, complicated `SELECT` statement.
+Materialize uses the idiom of views similarly, but the implication of views is
+fundamentally different.
+
+Materialize offers the following types of views:
+
+Type | Use
+-----|-----
+**Materialized views** | Incrementally updated views whose results are maintained in memory
+**Non-materialized views** | Similar to the traditional SQL view
+
+All views in Materialize are built by reading data from sources and other views.
+
+### Materialized views
+
+Materialized views embed a query like a traditional SQL view, but&mdash;unlike a
+SQL view&mdash;compute and incrementally update the results of the embedded
+query. This lets users read from materialized views and receive fresh answers
+with incredibly low latencies.
+
+Materialize accomplishes incremental updates by creating a set of persistent
+transformations&mdash;known as a "dataflow"&mdash;that represent the query's
+output. As new data comes in from sources, it's fed into materialized views that
+query the source. Materialize then incrementally updates the materialized view's
+output by understanding what has changed in the data, based on the source's
+envelope. Any changes to a view's output is then propagated to materialized
+views that query it, and the process repeats.
+
+When reading from a materialized view, Materialize simply returns the dataflow's
+current result set.
+
+You can find more information about how materialized views work in the
+[Indexes](#indexes) section below.
+
+### Non-materialized views
+
+Non-materialized views simply stores a verbatim query, and provides a shorthand
+for performing the query.
+
+Unlike materialized views, non-materialized views _do not_ store the results of
+their embedded queries. This means they take up very little memory, but also
+provide very little benefit in terms of reducing the latency and computation
+needed to answer queries.
+
+If you plan on repeatedly reading from a view, we recommend using materialized
+views instead.
+
+## Indexes
+
+Indexes are the component that actually "materializes" a view by storing its
+results in memory, though more generally, indexes can simply store any subset of
+a query's data.
+
+Each materialized view contains at least one index, which both lets it maintain
+the result set as new data streams in, as well as provide low-latency reads.
+
+If you were to add an index to a non-materialized view, it would become a
+materialized view, and would start incrementally updating its embedded query's
+results.
+
+### Interaction with materialized views
+
+As we just mentioned, each materialized view has at least one index that
+maintains the embedded query's result in memory; these are known as
+"arrangements" within Materialize's dataflows. In the simplest case, it's the
+last operator, and simply stores the query's output in memory. In more complex
+cases, arrangements let Materialize perform more sophisticated aggregations more
+quickly, e.g. `JOIN`s.
+
+Creating additional indexes on materialized views lets you store some subset of a query's data in memory using a different structure, which can be useful if you want to perform a join over a view's data using non-primary keys (e.g. foreign keys).
+
+## Related pages
+
+- [`CREATE SOURCE`](../../sql/create-source)
+- [`CREATE MATERIALIAZED VIEW`](../../sql/create-materialized-view)
+- [`CREATE VIEW`](../../sql/create-view)
+- [`CREATE INDEX`](../../sql/create-index)
+
+[Debezium]: http://debezium.io

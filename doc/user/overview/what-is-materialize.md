@@ -102,3 +102,8 @@ In contrast, Materialize continually updates queries as data comes in, which mea
 ### Materialized views in relational databases
 
 To maintain materialized views, most RDBMSes occasionally re-run the view's underlying query. This results in a potential impact to the database's performance while updating the view, as well as data that is only infrequently up-to-date.
+
+## Learn more
+
+- [Architecture overview](../architecture-overview) to understand Materialize's internal architecture
+- [API overview](../api-components) to understand what Materialize's SQL API expresses

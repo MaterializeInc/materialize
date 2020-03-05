@@ -18,20 +18,10 @@ eagerly materialize that view. {{< /warning >}}
 
 ## Conceptual framework
 
-Indexes persist some set of data to memory, which let materialized views quickly
-access data that Materialize has already processed.
-
-The most common type of index is the one that Materialize automatically creates
-for each materialized view, which represents the results of the view's embedded
-`SELECT` statement. As the view's dataflow operators receive new data, the view
-maintains this index's state, ensuring it continually reflects this new data.
-
-However, views can also maintain additional indexes, and are not restricted to
-maintaining zero or one indexes. Advanced users may want to create these indexes
-to speed up certain read query patterns without creating a `MATERIALIZED VIEW`
-for each query. Importantly, though, these additional indexes _are not_ like
-traditional secondary indexes&mdash;each index stores a copy of all rows in the
-result set.
+Indexes persist some subset of a query's data to memory, which let materialized
+views quickly perform reads from materialized views, which includes performing
+[`JOIN`](../join)s. For more information, see [API Components:
+Indexes](../../overview/api-components#indexes).
 
 ### When to create indexes
 
@@ -87,7 +77,8 @@ For instance, unique keys can be...
   Schema Registry.
 - **Inferred** when the query's results...
   - Contains a `GROUP BY`.
-  - Uses results derived from a unique key without adding any additional columns.
+  - Uses results derived from a unique key without adding any additional
+    columns.
 
 When creating your own indexes, you can choose the indexed columns.
 
@@ -106,38 +97,38 @@ join keys are the leading columns in an index.
 
 ```sql
 CREATE MATERIALIZED VIEW active_customers AS
-	SELECT
-		guid, geo_id, last_active_on
-	FROM
-		customer_source
-	WHERE
-		last_active_on > now() - INTERVAL '30' DAYS;
+    SELECT
+        guid, geo_id, last_active_on
+    FROM
+        customer_source
+    WHERE
+        last_active_on > now() - INTERVAL '30' DAYS;
 
 CREATE INDEX active_customers_geo_idx
-	ON active_customers (geo_id);
+    ON active_customers (geo_id);
 
 CREATE MATERIALIZED VIEW active_customer_per_geo AS
-	SELECT
-		geo.name, count(*)
-	FROM
-		geo_regions AS geo
-		JOIN active_customers ON
-				active_customers.geo_id = geo.id
-	GROUP BY
-		geo.name;
+    SELECT
+        geo.name, count(*)
+    FROM
+        geo_regions AS geo
+        JOIN active_customers ON
+                active_customers.geo_id = geo.id
+    GROUP BY
+        geo.name;
 ```
 
 In the above example, the index `active_customers_geo_idx`...
 
 - Helps us because it contains a key that the view `active_customer_per_geo` can
-use to look up values for the join condition (`active_customers.geo`).
+  use to look up values for the join condition (`active_customers.geo`).
 
     Because this access pattern is more optimal than scanning the entire
     `active_customers` results set, the Materialize optimizer will choose to use
     `active_customers_geo_idx`.
 
 - Obeys our restrictions by containing only a subset of columns in the result
-set.
+  set.
 
 ### Materializing views
 
@@ -146,22 +137,22 @@ index to it.
 
 ```sql
 CREATE VIEW active_customers AS
-	SELECT
-		guid, geo_id, last_active_on
-	FROM
-		customer_source
-	WHERE
-		last_active_on > now() - INTERVAL '30' DAYS;
+    SELECT
+        guid, geo_id, last_active_on
+    FROM
+        customer_source
+    WHERE
+        last_active_on > now() - INTERVAL '30' DAYS;
 
 CREATE INDEX active_customers_primary_idx
-	ON active_customers (guid);
+    ON active_customers (guid);
 ```
 
 Note that this index is different than the primary index that Materialize would
 automatically create if you had used `CREATE MATERIALIZED VIEW`. Indexes that
-are automatically created contain an index of all columns in the result set, unless they contain a unique keyy.
-(Remember that indexes store a copy of a row's indexed columns _and_ a copy of
-the entire row.)
+are automatically created contain an index of all columns in the result set,
+unless they contain a unique key. (Remember that indexes store a copy of a
+row's indexed columns _and_ a copy of the entire row.)
 
 ## Related pages
 
