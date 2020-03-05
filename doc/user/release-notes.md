@@ -18,10 +18,13 @@ For information about available versions, see our [Versions page](../versions).
 
 - Support the number functions `round(x: N)` and `round(x: N, y: N)`, which
   round `x` to the `y`th digit after the decimal. (Default 0).
+
 - Support addition and subtraction between [`interval`]s.
 
-- In the event of a crash, materialize now prints the stack trace to the log
-  file as well as the terminal.
+- Support the [string concatenation operator, `||`](../sql/functions/#string).
+
+- In the event of a crash, print the stack trace to the log file, if logging to
+  a file is enabled, as well as the standard error stream.
 
 <span id="v0.1.2"></span>
 ## 0.1.1 &rarr; 0.1.2
