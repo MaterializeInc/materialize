@@ -451,7 +451,7 @@ SELECT 'hello'::bytea::text
 \x68656c6c6f
 
 
-### coalesce ###
+### concat ###
 
 query T
 SELECT concat('CONCAT', 'function')
@@ -537,3 +537,61 @@ query T
 SELECT concat('你好')
 ----
 你好
+
+query T
+SELECT 'CONCAT' || 'operator'
+----
+CONCAToperator
+
+query T
+SELECT 'CONCAT' || ' ' || 'operator'
+----
+CONCAT operator
+
+query T
+SELECT 'CONCAT' || NULL
+----
+NULL
+
+query T
+SELECT NULL || 'CONCAT'
+----
+NULL
+
+query I
+SELECT length('' || '')
+----
+0
+
+query I
+SELECT length(NULL || NULL)
+----
+NULL
+
+query I
+SELECT length(' ' || ' ')
+----
+2
+
+query T
+SELECT 'CONCAT' || 3 || 'operator'
+----
+CONCAT3operator
+
+query T
+SELECT 'CONCAT' || length('abc') || 'operator'
+----
+CONCAT3operator
+
+query T
+SELECT '' || true || false
+----
+truefalse
+
+query T
+SELECT '你' || '好'
+----
+你好
+
+query error No overload for bool \|\| bool
+SELECT true || false

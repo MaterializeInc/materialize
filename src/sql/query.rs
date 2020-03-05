@@ -2751,6 +2751,14 @@ fn plan_json_op(
         (ContainsField, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         (Concat, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat),
+        (Concat, String, _) | (Concat, _, String) | (Concat, Unknown, Unknown) => {
+            // These are philosophically internal casts, but PostgreSQL
+            // considers them to be explicit (perhaps for historical reasons),
+            // so we do too.
+            let lexpr = plan_cast_internal(ecx, CastContext::Explicit, lexpr, String)?;
+            let rexpr = plan_cast_internal(ecx, CastContext::Explicit, rexpr, String)?;
+            lexpr.call_binary(rexpr, BinaryFunc::TextConcat)
+        }
         (Concat, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         (ContainsJson, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsJsonb),

@@ -1553,6 +1553,7 @@ pub enum BinaryFunc {
     DateTrunc,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
+    TextConcat,
     JsonbGetInt64,
     JsonbGetString,
     JsonbContainsString,
@@ -1678,6 +1679,7 @@ impl BinaryFunc {
             BinaryFunc::DateTrunc => date_trunc(a, b),
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal(a, b),
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal(a, b),
+            BinaryFunc::TextConcat => text_concat_binary(a, b, temp_storage),
             BinaryFunc::JsonbGetInt64 => jsonb_get_int64(a, b),
             BinaryFunc::JsonbGetString => jsonb_get_string(a, b),
             BinaryFunc::JsonbContainsString => jsonb_contains_string(a, b),
@@ -1798,6 +1800,8 @@ impl BinaryFunc {
 
             SubTime => ColumnType::new(ScalarType::Interval).nullable(true),
 
+            TextConcat => ColumnType::new(ScalarType::String).nullable(in_nullable),
+
             JsonbGetInt64 | JsonbGetString | JsonbConcat | JsonbDeleteInt64 | JsonbDeleteString => {
                 ColumnType::new(ScalarType::Jsonb).nullable(true)
             }
@@ -1874,6 +1878,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
+            BinaryFunc::TextConcat => f.write_str("||"),
             BinaryFunc::JsonbGetInt64 => f.write_str("b->i64"),
             BinaryFunc::JsonbGetString => f.write_str("b->str"),
             BinaryFunc::JsonbContainsString => f.write_str("b?"),
@@ -2487,7 +2492,14 @@ fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
-pub fn concat<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+fn text_concat_binary<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    let mut buf = String::new();
+    buf.push_str(a.unwrap_str());
+    buf.push_str(b.unwrap_str());
+    Datum::String(temp_storage.push_string(buf))
+}
+
+fn text_concat_variadic<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
     for d in datums {
         if !d.is_null() {
@@ -2653,7 +2665,7 @@ impl VariadicFunc {
     ) -> Datum<'a> {
         match self {
             VariadicFunc::Coalesce => coalesce(datums),
-            VariadicFunc::Concat => concat(datums, temp_storage),
+            VariadicFunc::Concat => text_concat_variadic(datums, temp_storage),
             VariadicFunc::MakeTimestamp => make_timestamp(datums),
             VariadicFunc::Substr => substr(datums),
             VariadicFunc::LengthString => length_string(datums),
