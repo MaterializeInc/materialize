@@ -15,7 +15,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{EvalEnv, EvalError, GlobalId, RelationExpr, ScalarExpr};
 
 pub mod binding;
 pub mod column_knowledge;
@@ -56,18 +56,26 @@ pub trait Transform: std::fmt::Debug {
 /// Errors that can occur during a transformation.
 #[derive(Debug, Clone)]
 pub enum TransformError {
+    Eval(EvalError),
     Internal(String),
 }
 
 impl fmt::Display for TransformError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            TransformError::Eval(e) => write!(f, "{}", e),
             TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
         }
     }
 }
 
 impl Error for TransformError {}
+
+impl From<EvalError> for TransformError {
+    fn from(e: EvalError) -> TransformError {
+        TransformError::Eval(e)
+    }
+}
 
 #[derive(Debug)]
 pub struct Fixpoint {

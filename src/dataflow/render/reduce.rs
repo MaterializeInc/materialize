@@ -80,11 +80,9 @@ where
                             let temp_storage = RowArena::new();
                             let datums = row.unpack();
                             (
-                                Row::pack(
-                                    group_key
-                                        .iter()
-                                        .map(|i| i.eval(&datums, &env, &temp_storage)),
-                                ),
+                                Row::pack(group_key.iter().map(|i| {
+                                    i.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)
+                                })),
                                 (),
                             )
                         }
@@ -180,9 +178,12 @@ where
                 Row::pack(
                     group_key
                         .iter()
-                        .map(|i| i.eval(&datums, &env, &temp_storage)),
+                        .map(|i| i.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)),
                 ),
-                Row::pack(Some(expr.eval(&datums, &env, &temp_storage))),
+                Row::pack(Some(
+                    expr.eval(&datums, &env, &temp_storage)
+                        .unwrap_or(Datum::Null),
+                )),
             )
         }
     });

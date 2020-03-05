@@ -418,11 +418,8 @@ SELECT length('你好', 'ISO_8859_5')
 ----
 6
 
-# invalid encoding name
-query I
+query error invalid encoding name 'iso-123'
 SELECT length('你好', 'iso-123')
-----
-NULL
 
 # NULL inputs
 query I

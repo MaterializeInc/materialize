@@ -198,15 +198,11 @@ SELECT mod(0, 1.23)
 ----
 0.00
 
-query R
+query error division by zero
 SELECT mod(4, 0.0)
-----
-NULL
 
-query I
+query error division by zero
 SELECT mod(0, 0)
-----
-NULL
 
 query I
 SELECT mod(0, NULL)
@@ -228,55 +224,35 @@ SELECT mod(NULL, 0.45)
 ----
 NULL
 
-query I
+query error division by zero
 SELECT 1 % 0
-----
-NULL
 
-query R
+query error division by zero
 SELECT 1 % 0.0
-----
-NULL
 
-query R
+query error division by zero
 SELECT 1.0 % 0
-----
-NULL
 
-query R
+query error division by zero
 SELECT 1.0 % 0.0
-----
-NULL
 
-query R
+query error division by zero
 SELECT 1 % CAST (0.0 AS float)
-----
-NULL
 
-query I
+query error division by zero
 SELECT 1 / 0
-----
-NULL
 
-query R
+query error division by zero
 SELECT 1 / 0.0
-----
-NULL
 
-query R
+query error division by zero
 SELECT 1.0 / 0
-----
-NULL
 
-query R
+query error division by zero
 SELECT 1.0 / 0.0
-----
-NULL
 
-query R
+query error division by zero
 SELECT 1 / CAST (0.0 AS float)
-----
-NULL
 
 query I
 SELECT 1 + CAST ('5' AS double precision)

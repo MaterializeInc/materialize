@@ -80,10 +80,10 @@ pub fn and<'a>(
     temp_storage: &'a RowArena,
     a_expr: &'a ScalarExpr,
     b_expr: &'a ScalarExpr,
-) -> Datum<'a> {
-    match a_expr.eval(datums, env, temp_storage) {
+) -> Result<Datum<'a>, EvalError> {
+    match a_expr.eval(datums, env, temp_storage)? {
         Datum::True => b_expr.eval(datums, env, temp_storage),
-        d => d,
+        d => Ok(d),
     }
 }
 
@@ -93,10 +93,10 @@ pub fn or<'a>(
     temp_storage: &'a RowArena,
     a_expr: &'a ScalarExpr,
     b_expr: &'a ScalarExpr,
-) -> Datum<'a> {
-    match a_expr.eval(datums, env, temp_storage) {
+) -> Result<Datum<'a>, EvalError> {
+    match a_expr.eval(datums, env, temp_storage)? {
         Datum::False => b_expr.eval(datums, env, temp_storage),
-        d => d,
+        d => Ok(d),
     }
 }
 
@@ -1625,8 +1625,8 @@ impl BinaryFunc {
     ) -> Result<Datum<'a>, EvalError> {
         macro_rules! eager {
             ($func:ident $(, $args:expr)*) => {{
-                let a = a_expr.eval(datums, env, temp_storage);
-                let b = b_expr.eval(datums, env, temp_storage);
+                let a = a_expr.eval(datums, env, temp_storage)?;
+                let b = b_expr.eval(datums, env, temp_storage)?;
                 if self.propagates_nulls() && (a.is_null() || b.is_null()) {
                     return Ok(Datum::Null);
                 }
@@ -1635,8 +1635,8 @@ impl BinaryFunc {
         }
 
         match self {
-            BinaryFunc::And => Ok(and(datums, env, temp_storage, a_expr, b_expr)),
-            BinaryFunc::Or => Ok(or(datums, env, temp_storage, a_expr, b_expr)),
+            BinaryFunc::And => and(datums, env, temp_storage, a_expr, b_expr),
+            BinaryFunc::Or => or(datums, env, temp_storage, a_expr, b_expr),
             BinaryFunc::AddInt32 => Ok(eager!(add_int32)),
             BinaryFunc::AddInt64 => Ok(eager!(add_int64)),
             BinaryFunc::AddFloat32 => Ok(eager!(add_float32)),
@@ -2095,7 +2095,7 @@ impl UnaryFunc {
         temp_storage: &'a RowArena,
         a: &'a ScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, env, temp_storage);
+        let a = a.eval(datums, env, temp_storage)?;
         if self.propagates_nulls() && a.is_null() {
             return Ok(Datum::Null);
         }
@@ -2553,12 +2553,14 @@ fn coalesce<'a>(
     env: &'a EvalEnv,
     temp_storage: &'a RowArena,
     exprs: &'a [ScalarExpr],
-) -> Datum<'a> {
-    exprs
-        .iter()
-        .map(|e| e.eval(datums, env, temp_storage))
-        .find(|d| !d.is_null())
-        .unwrap_or(Datum::Null)
+) -> Result<Datum<'a>, EvalError> {
+    for e in exprs {
+        let d = e.eval(datums, env, temp_storage)?;
+        if !d.is_null() {
+            return Ok(d);
+        }
+    }
+    Ok(Datum::Null)
 }
 
 fn text_concat_binary<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -2732,7 +2734,9 @@ impl VariadicFunc {
     ) -> Result<Datum<'a>, EvalError> {
         macro_rules! eager {
             ($func:ident $(, $args:expr)*) => {{
-                let ds: Vec<_> = exprs.iter().map(|e| e.eval(datums, env, temp_storage)).collect();
+                let ds = exprs.iter()
+                    .map(|e| e.eval(datums, env, temp_storage))
+                    .collect::<Result<Vec<_>, _>>()?;
                 if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
                     return Ok(Datum::Null);
                 }
@@ -2741,7 +2745,7 @@ impl VariadicFunc {
         }
 
         match self {
-            VariadicFunc::Coalesce => Ok(coalesce(datums, env, temp_storage, exprs)),
+            VariadicFunc::Coalesce => coalesce(datums, env, temp_storage, exprs),
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
             VariadicFunc::Substr => Ok(eager!(substr)),

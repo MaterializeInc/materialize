@@ -339,13 +339,16 @@ where
         let temp_storage = repr::RowArena::new();
         updates.filter(move |input_row| {
             let datums = input_row.unpack();
-            ready_to_go.iter().all(
-                |predicate| match predicate.eval(&datums, &env, &temp_storage) {
+            ready_to_go.iter().all(|predicate| {
+                match predicate
+                    .eval(&datums, &env, &temp_storage)
+                    .unwrap_or(Datum::Null)
+                {
                     Datum::True => true,
                     Datum::False | Datum::Null => false,
                     _ => unreachable!(),
-                },
-            )
+                }
+            })
         })
     }
 }
