@@ -112,15 +112,19 @@ fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().abs())
 }
 
-fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    // N.B. this function intentionally does not use `strconv::format_bool`, as
-    // the SQL specification requires `true` and `false` to be spelled out,
-    // while `strconv::format_bool` uses `t` and `f` for compliance with the
-    // PostgreSQL wire protocol.
+fn cast_bool_to_string_explicit<'a>(a: Datum<'a>) -> Datum<'a> {
+    // N.B. this function differs from `cast_bool_to_string_implicit` because
+    // the SQL specification requires `true` and `false` to be spelled out
+    // in explicit casts, while PostgreSQL prefers its more concise `t` and `f`
+    // representation in implicit casts.
     match a.unwrap_bool() {
         true => Datum::from("true"),
         false => Datum::from("false"),
     }
+}
+
+fn cast_bool_to_string_implicit<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(strconv::format_bool_static(a.unwrap_bool()))
 }
 
 fn cast_int32_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1902,7 +1906,8 @@ pub enum UnaryFunc {
     AbsInt64,
     AbsFloat32,
     AbsFloat64,
-    CastBoolToString,
+    CastBoolToStringExplicit,
+    CastBoolToStringImplicit,
     CastInt32ToBool,
     CastInt32ToFloat32,
     CastInt32ToFloat64,
@@ -2023,7 +2028,8 @@ impl UnaryFunc {
             UnaryFunc::AbsInt64 => abs_int64(a),
             UnaryFunc::AbsFloat32 => abs_float32(a),
             UnaryFunc::AbsFloat64 => abs_float64(a),
-            UnaryFunc::CastBoolToString => cast_bool_to_string(a),
+            UnaryFunc::CastBoolToStringExplicit => cast_bool_to_string_explicit(a),
+            UnaryFunc::CastBoolToStringImplicit => cast_bool_to_string_implicit(a),
             UnaryFunc::CastInt32ToBool => cast_int32_to_bool(a),
             UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32(a),
             UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64(a),
@@ -2186,7 +2192,8 @@ impl UnaryFunc {
             CastStringToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
             CastStringToInterval => ColumnType::new(ScalarType::Interval).nullable(true),
 
-            CastBoolToString
+            CastBoolToStringExplicit
+            | CastBoolToStringImplicit
             | CastInt32ToString
             | CastInt64ToString
             | CastFloat32ToString
@@ -2332,7 +2339,7 @@ impl UnaryFunc {
             | UnaryFunc::NegFloat32
             | UnaryFunc::NegFloat64
             | UnaryFunc::NegDecimal
-            | UnaryFunc::CastBoolToString
+            | UnaryFunc::CastBoolToStringExplicit
             | UnaryFunc::CastInt32ToInt64
             | UnaryFunc::CastInt32ToString
             | UnaryFunc::CastInt64ToString
@@ -2363,7 +2370,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsInt64 => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
-            UnaryFunc::CastBoolToString => f.write_str("booltostr"),
+            UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),
+            UnaryFunc::CastBoolToStringImplicit => f.write_str("booltostrim"),
             UnaryFunc::CastInt32ToBool => f.write_str("i32tobool"),
             UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
             UnaryFunc::CastInt32ToFloat64 => f.write_str("i32tof64"),
@@ -2479,21 +2487,14 @@ fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
-pub fn concatenate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut st = String::new();
+pub fn concat<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    let mut buf = String::new();
     for d in datums {
         if !d.is_null() {
-            let next_arg = match d {
-                Datum::String(s) => (*s).to_string(),
-                // PSQL treats booleans as single characters (f if False/false, t if True/true)
-                Datum::False => "f".to_string(),
-                Datum::True => "t".to_string(),
-                _ => panic!("Concatenate called on {:?}", d),
-            };
-            st.push_str(&next_arg);
+            buf.push_str(d.unwrap_str());
         }
     }
-    Datum::String(temp_storage.push_string(st))
+    Datum::String(temp_storage.push_string(buf))
 }
 
 fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
@@ -2634,7 +2635,7 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
-    Concatenate,
+    Concat,
     MakeTimestamp,
     Substr,
     LengthString,
@@ -2652,7 +2653,7 @@ impl VariadicFunc {
     ) -> Datum<'a> {
         match self {
             VariadicFunc::Coalesce => coalesce(datums),
-            VariadicFunc::Concatenate => concatenate(datums, temp_storage),
+            VariadicFunc::Concat => concat(datums, temp_storage),
             VariadicFunc::MakeTimestamp => make_timestamp(datums),
             VariadicFunc::Substr => substr(datums),
             VariadicFunc::LengthString => length_string(datums),
@@ -2674,7 +2675,7 @@ impl VariadicFunc {
                 }
                 ColumnType::new(ScalarType::Unknown)
             }
-            Concatenate => ColumnType::new(ScalarType::String).nullable(true),
+            Concat => ColumnType::new(ScalarType::String).nullable(true),
             MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
@@ -2686,7 +2687,7 @@ impl VariadicFunc {
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
         match self {
-            VariadicFunc::Coalesce | VariadicFunc::Concatenate => false,
+            VariadicFunc::Coalesce | VariadicFunc::Concat => false,
             VariadicFunc::JsonbBuildArray | VariadicFunc::JsonbBuildObject => false,
             _ => true,
         }
@@ -2697,7 +2698,7 @@ impl fmt::Display for VariadicFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
-            VariadicFunc::Concatenate => f.write_str("concatenate"),
+            VariadicFunc::Concat => f.write_str("concat"),
             VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::LengthString => f.write_str("lengthstr"),
