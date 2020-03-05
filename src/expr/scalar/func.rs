@@ -705,6 +705,10 @@ fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
+fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_interval() + b.unwrap_interval())
+}
+
 fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() - b.unwrap_int32())
 }
@@ -739,6 +743,10 @@ fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
 fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_time() - b.unwrap_time())
+}
+
+fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_interval() - b.unwrap_interval())
 }
 
 fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -906,10 +914,7 @@ fn neg_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut i = a.unwrap_interval();
-    i.is_positive_dur = !i.is_positive_dur;
-    i.months = -i.months;
-    Datum::from(i)
+    Datum::from(-a.unwrap_interval())
 }
 
 fn sqrt_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1495,6 +1500,7 @@ pub enum BinaryFunc {
     AddInt64,
     AddFloat32,
     AddFloat64,
+    AddInterval,
     AddTimestampInterval,
     AddTimestampTzInterval,
     AddDateInterval,
@@ -1505,6 +1511,7 @@ pub enum BinaryFunc {
     SubInt64,
     SubFloat32,
     SubFloat64,
+    SubInterval,
     SubTimestamp,
     SubTimestampTz,
     SubTimestampInterval,
@@ -1625,6 +1632,7 @@ impl BinaryFunc {
             BinaryFunc::AddDateInterval => add_date_interval(a, b),
             BinaryFunc::AddTimeInterval => add_time_interval(a, b),
             BinaryFunc::AddDecimal => add_decimal(a, b),
+            BinaryFunc::AddInterval => add_interval(a, b),
             BinaryFunc::SubInt32 => sub_int32(a, b),
             BinaryFunc::SubInt64 => sub_int64(a, b),
             BinaryFunc::SubFloat32 => sub_float32(a, b),
@@ -1633,6 +1641,7 @@ impl BinaryFunc {
             BinaryFunc::SubTimestampTz => sub_timestamptz(a, b),
             BinaryFunc::SubTimestampInterval => sub_timestamp_interval(a, b),
             BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval(a, b),
+            BinaryFunc::SubInterval => sub_interval(a, b),
             BinaryFunc::SubDate => sub_date(a, b),
             BinaryFunc::SubDateInterval => sub_date_interval(a, b),
             BinaryFunc::SubTime => sub_time(a, b),
@@ -1714,7 +1723,7 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable || is_div_mod)
             }
 
-            SubTimestamp | SubTimestampTz | SubDate => {
+            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate => {
                 ColumnType::new(ScalarType::Interval).nullable(in_nullable)
             }
 
@@ -1814,6 +1823,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddFloat32 => f.write_str("+"),
             BinaryFunc::AddFloat64 => f.write_str("+"),
             BinaryFunc::AddDecimal => f.write_str("+"),
+            BinaryFunc::AddInterval => f.write_str("+"),
             BinaryFunc::AddTimestampInterval => f.write_str("+"),
             BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
             BinaryFunc::AddDateTime => f.write_str("+"),
@@ -1824,6 +1834,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
             BinaryFunc::SubDecimal => f.write_str("-"),
+            BinaryFunc::SubInterval => f.write_str("-"),
             BinaryFunc::SubTimestamp => f.write_str("-"),
             BinaryFunc::SubTimestampTz => f.write_str("-"),
             BinaryFunc::SubTimestampInterval => f.write_str("-"),

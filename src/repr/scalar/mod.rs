@@ -745,6 +745,46 @@ impl Default for Interval {
     }
 }
 
+impl std::ops::Add for Interval {
+    type Output = Self;
+    // Since durations can only be positive, we need subtraction and boolean
+    // operators inside the Add impl
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    fn add(self, other: Self) -> Self {
+        let (is_positive_dur, duration) = if self.is_positive_dur == other.is_positive_dur {
+            (self.is_positive_dur, self.duration + other.duration)
+        } else if self.duration > other.duration {
+            (self.is_positive_dur, self.duration - other.duration)
+        } else {
+            (other.is_positive_dur, other.duration - self.duration)
+        };
+
+        Self {
+            months: self.months + other.months,
+            duration,
+            is_positive_dur,
+        }
+    }
+}
+
+impl std::ops::Sub for Interval {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self {
+        self + -other
+    }
+}
+
+impl std::ops::Neg for Interval {
+    type Output = Self;
+    fn neg(self) -> Self {
+        Self {
+            months: -self.months,
+            duration: self.duration,
+            is_positive_dur: !self.is_positive_dur,
+        }
+    }
+}
+
 impl Interval {
     /// Computes the year part of the interval.
     ///
@@ -949,16 +989,13 @@ impl fmt::Display for Interval {
             }
         }
 
-        if (years == 0 && months == 0 && days == 0)
-            || hours > 0
-            || minutes > 0
-            || secs > 0
-            || nanos > 0
-        {
+        let non_zero_hmsn = hours > 0 || minutes > 0 || secs > 0 || nanos > 0;
+
+        if (years == 0 && months == 0 && days == 0) || non_zero_hmsn {
             if years > 0 || months > 0 || days > 0 {
                 f.write_char(' ')?;
             }
-            if !self.is_positive_dur {
+            if !self.is_positive_dur && non_zero_hmsn {
                 f.write_char('-')?;
             } else if neg_mos {
                 f.write_char('+')?;
