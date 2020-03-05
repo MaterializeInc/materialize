@@ -161,7 +161,7 @@
             },
             {
                 "signature": "now() -> timestamptz",
-                "description": "The `timestamptz` representing the time at which this dataflow was created."
+                "description": "The `timestamptz` representing when the query was executed.<br/><br/>**NOTE**: Users cannot define views with queries containing `now()`."
             }
         ]
     },
