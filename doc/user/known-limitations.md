@@ -28,8 +28,6 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
   supported ([#1805](https://github.com/MaterializeInc/materialize/issues/1805))
 - Cannot cast from string to time-like types
   ([#1378](https://github.com/MaterializeInc/materialize/issues/1378))
-- Intervals do not support addition or subtraction with other intervals
-  ([#1682](https://github.com/MaterializeInc/materialize/issues/1682))
 
 ### Syntax & Semantics
 
@@ -92,3 +90,14 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
   ([#1532](https://github.com/MaterializeInc/materialize/issues/1532))
 - `EXPLAIN DATAFLOW` does not include details about `ORDER BY` and `LIMIT`
   ([#477](https://github.com/MaterializeInc/materialize/issues/477))
+
+## Closed known limitations
+
+The following issued used to be known limitations, but we've fixed them in the
+specified version.
+
+Fixed in | Known limitation
+--------------|-----------------
+[v0.1.3] | Intervals do not support addition or subtraction with other intervals ([#1682](https://github.com/MaterializeInc/materialize/issues/1682))
+
+[v0.1.3]: ../release-notes/#v0.1.3

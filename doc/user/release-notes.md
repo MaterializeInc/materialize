@@ -13,14 +13,15 @@ This page details changes between versions of Materialize, including:
 
 For information about available versions, see our [Versions page](../versions).
 
-## 0.1.2 &rarr; 0.1.3 (unreleased)
 <span id="v0.1.3"></span>
+## 0.1.2 &rarr; 0.1.3 (unreleased)
 
 - Support the number functions `round(x: N)` and `round(x: N, y: N)`, which
   round `x` to the `y`th digit after the decimal. (Default 0).
+- Support addition and subtraction between [`interval`]s.
 
-## 0.1.1 &rarr; 0.1.2
 <span id="v0.1.2"></span>
+## 0.1.1 &rarr; 0.1.2
 
 - Change [`SHOW CREATE SOURCE`] to render the full SQL statement used to create
   the source, in the style of [`SHOW CREATE VIEW`], rather than displaying a URL
@@ -53,8 +54,8 @@ For information about available versions, see our [Versions page](../versions).
 [`timestamptz`]: ../sql/types/timestamptz
 [`interval`]: ../sql/types/interval
 
-## 0.1.0 &rarr; 0.1.1
 <span id="v0.1.1"></span>
+## 0.1.0 &rarr; 0.1.1
 
 * Specifying the message name in a Protobuf-formatted source no longer requires
   a leading period.
@@ -64,8 +65,8 @@ For information about available versions, see our [Versions page](../versions).
   you would have to create a source, and then create a materialized view that
   selected all of the source's content.
 
-## _NULL_ &rarr; 0.1.0
 <span id="v0.1.1"></span>
+## _NULL_ &rarr; 0.1.0
 
 - [What is Materialize?](../overview/what-is-materialize/)
 - [Architecture overview](../overview/architecture/)
