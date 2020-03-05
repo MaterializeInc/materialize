@@ -47,6 +47,17 @@ pub fn parse_bool(s: &str) -> Result<bool, failure::Error> {
     }
 }
 
+/// Like `format_bool`, but returns a string with a static lifetime.
+///
+/// This function should be preferred to `format_bool` when applicable, as it
+/// avoids an allocation.
+pub fn format_bool_static(b: bool) -> &'static str {
+    match b {
+        true => "t",
+        false => "f",
+    }
+}
+
 /// Writes a boolean value into `buf`.
 ///
 /// `true` is encoded as the char `'t'` and `false` is encoded as the char
@@ -55,10 +66,7 @@ pub fn format_bool<F>(buf: &mut F, b: bool)
 where
     F: FormatBuffer,
 {
-    buf.write_char(match b {
-        true => 't',
-        false => 'f',
-    })
+    buf.write_str(format_bool_static(b))
 }
 
 /// Parses an [`i32`] from `s`.

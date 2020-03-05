@@ -1331,7 +1331,12 @@ fn plan_expr_returning_name<'a>(
                 let mut expr = plan_expr(ecx, expr, None)?;
                 let mut typ = ecx.column_type(&expr);
                 if let ScalarType::Date = typ.scalar_type {
-                    expr = plan_cast_internal(ecx, "EXTRACT", expr, ScalarType::Timestamp)?;
+                    expr = plan_cast_internal(
+                        ecx,
+                        CastContext::Implicit("EXTRACT"),
+                        expr,
+                        ScalarType::Timestamp,
+                    )?;
                     typ = ecx.column_type(&expr);
                 }
                 let func = match &typ.scalar_type {
@@ -1406,15 +1411,12 @@ fn plan_expr_returning_name<'a>(
 // When types don't match exactly, SQL has some poorly-documented type promotion
 // rules. For now, just promote integers into decimals or floats, decimals into
 // floats, dates into timestamps, and small Xs into bigger Xs.
-fn plan_homogeneous_exprs<S>(
-    name: S,
+fn plan_homogeneous_exprs(
+    name: &str,
     ecx: &ExprContext,
     exprs: &[impl std::borrow::Borrow<Expr>],
     type_hint: Option<ScalarType>,
-) -> Result<Vec<ScalarExpr>, failure::Error>
-where
-    S: fmt::Display + Copy,
-{
+) -> Result<Vec<ScalarExpr>, failure::Error> {
     assert!(!exprs.is_empty());
 
     let mut pending = vec![None; exprs.len()];
@@ -1451,7 +1453,12 @@ where
     // Try to cast all expressions to `best_target_type`.
     let mut out = Vec::new();
     for (expr, typ) in pending.into_iter().map(Option::unwrap) {
-        match plan_cast_internal(ecx, name, expr, best_target_type.clone().unwrap()) {
+        match plan_cast_internal(
+            ecx,
+            CastContext::Implicit(name),
+            expr,
+            best_target_type.clone().unwrap(),
+        ) {
             Ok(expr) => out.push(expr),
             Err(_) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
@@ -1535,7 +1542,7 @@ fn plan_cast<'a>(
     let to_scalar_type = scalar_type_from_sql(data_type)?;
     let (expr, maybe_name) = plan_expr_returning_name(ecx, expr, Some(to_scalar_type.clone()))?;
     Ok((
-        plan_cast_internal(ecx, "CAST", expr, to_scalar_type)?,
+        plan_cast_internal(ecx, CastContext::Explicit, expr, to_scalar_type)?,
         maybe_name,
     ))
 }
@@ -1664,19 +1671,21 @@ fn plan_function<'a>(
 
             "concat" => {
                 if sql_func.args.is_empty() {
-                    bail!("concatenate requires at least one argument");
+                    bail!("concat requires at least one argument");
                 }
                 let mut exprs = Vec::new();
                 for arg in &sql_func.args {
-                    let mut expr = plan_expr(ecx, arg, Some(ScalarType::String))?;
-                    let typ = ecx.column_type(&expr).scalar_type;
-                    if typ != ScalarType::Unknown && typ != ScalarType::Bool {
-                        expr = plan_cast_internal(ecx, "concat", expr, ScalarType::String)?;
-                    }
+                    let expr = plan_expr(ecx, arg, Some(ScalarType::String))?;
+                    let expr = plan_cast_internal(
+                        ecx,
+                        CastContext::Implicit("concat"),
+                        expr,
+                        ScalarType::String,
+                    )?;
                     exprs.push(expr);
                 }
                 let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Concatenate,
+                    func: VariadicFunc::Concat,
                     exprs,
                 };
                 Ok(expr)
@@ -1760,7 +1769,12 @@ fn plan_function<'a>(
                     ScalarType::Int64 => ScalarType::Decimal(19, 0),
                     _ => bail!("internal.avg_promotion called with unexpected argument"),
                 };
-                plan_cast_internal(ecx, "internal.avg_promotion", expr, output_type)
+                plan_cast_internal(
+                    ecx,
+                    CastContext::Implicit("internal.avg_promotion"),
+                    expr,
+                    output_type,
+                )
             }
 
             "jsonb_array_length" | "jsonb_typeof" | "jsonb_strip_nulls" | "jsonb_pretty" => {
@@ -1820,7 +1834,7 @@ fn plan_function<'a>(
                         Ok(if i % 2 == 0 {
                             plan_cast_internal(
                                 ecx,
-                                "jsonb_build_object",
+                                CastContext::Explicit,
                                 plan_expr(ecx, arg, None)?,
                                 ScalarType::String,
                             )?
@@ -2000,9 +2014,19 @@ fn plan_function<'a>(
                         // TODO(benesch): proper sqrt support for decimals. For
                         // now we cast to an f64 and back, which is semi-ok
                         // because sqrt is an inherently imprecise operation.
-                        let expr = plan_cast_internal(ecx, "sqrt", expr, ScalarType::Float64)?;
+                        let expr = plan_cast_internal(
+                            ecx,
+                            CastContext::Implicit("sqrt"),
+                            expr,
+                            ScalarType::Float64,
+                        )?;
                         let expr = expr.call_unary(UnaryFunc::SqrtFloat64);
-                        plan_cast_internal(ecx, "sqrt", expr, ScalarType::Decimal(p, s))?
+                        plan_cast_internal(
+                            ecx,
+                            CastContext::Implicit("sqrt"),
+                            expr,
+                            ScalarType::Decimal(p, s),
+                        )?
                     }
                     _ => unreachable!(),
                 })
@@ -2189,7 +2213,7 @@ fn plan_to_jsonb(
                 typ
             )
         }
-        _ => plan_cast_internal(ecx, name, arg, ScalarType::String)?
+        _ => plan_cast_internal(ecx, CastContext::Implicit(name), arg, ScalarType::String)?
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
     })
 }
@@ -2389,23 +2413,34 @@ fn plan_arithmetic_op<'a>(
             };
             if coalesce {
                 // Try to find a common type that can represent both inputs.
+                let op_string = op.to_string();
                 let best_target_type =
                     best_target_type(vec![ltype.scalar_type.clone(), rtype.scalar_type.clone()])
                         .unwrap();
-                lexpr = match plan_cast_internal(ecx, &op, lexpr, best_target_type.clone()) {
+                lexpr = match plan_cast_internal(
+                    ecx,
+                    CastContext::Implicit(&op_string),
+                    lexpr,
+                    best_target_type.clone(),
+                ) {
                     Ok(expr) => expr,
                     Err(_) => bail!(
                         "{} does not have uniform type: {:?} vs {:?}",
-                        &op,
+                        &op_string,
                         ltype.scalar_type,
                         best_target_type,
                     ),
                 };
-                rexpr = match plan_cast_internal(ecx, &op, rexpr, best_target_type.clone()) {
+                rexpr = match plan_cast_internal(
+                    ecx,
+                    CastContext::Implicit(&op_string),
+                    rexpr,
+                    best_target_type.clone(),
+                ) {
                     Ok(expr) => expr,
                     Err(_) => bail!(
                         "{} does not have uniform type: {:?} vs {:?}",
-                        &op,
+                        &op_string,
                         rtype.scalar_type,
                         best_target_type,
                     ),
@@ -2609,7 +2644,9 @@ fn plan_comparison_op<'a>(
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let mut exprs = plan_homogeneous_exprs(&op, ecx, &[left, right], Some(ScalarType::String))?;
+    let op_name = op.to_string();
+    let mut exprs =
+        plan_homogeneous_exprs(&op_name, ecx, &[left, right], Some(ScalarType::String))?;
     assert_eq!(exprs.len(), 2);
     let rexpr = exprs.pop().unwrap();
     let lexpr = exprs.pop().unwrap();
@@ -2714,6 +2751,14 @@ fn plan_json_op(
         (ContainsField, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         (Concat, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat),
+        (Concat, String, _) | (Concat, _, String) | (Concat, Unknown, Unknown) => {
+            // These are philosophically internal casts, but PostgreSQL
+            // considers them to be explicit (perhaps for historical reasons),
+            // so we do too.
+            let lexpr = plan_cast_internal(ecx, CastContext::Explicit, lexpr, String)?;
+            let rexpr = plan_cast_internal(ecx, CastContext::Explicit, rexpr, String)?;
+            lexpr.call_binary(rexpr, BinaryFunc::TextConcat)
+        }
         (Concat, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         (ContainsJson, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsJsonb),
@@ -3066,25 +3111,39 @@ fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<Scalar
         })
 }
 
+enum CastContext<'a> {
+    Explicit,
+    Implicit(&'a str),
+}
+
+impl<'a> fmt::Display for CastContext<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CastContext::Explicit => f.write_str("CAST"),
+            CastContext::Implicit(s) => write!(f, "{}", s),
+        }
+    }
+}
+
 /// Plans a cast between two `RelationExpr`s of different types. If it is
 /// impossible to cast between the two types, an error is returned.
 ///
 /// Note that `plan_cast_internal` only understands [`ScalarType`]s. If you need
 /// to cast between SQL [`DataType`]s, see [`Planner::plan_cast`].
-fn plan_cast_internal<'a, S>(
+fn plan_cast_internal<'a>(
     ecx: &ExprContext<'a>,
-    name: S,
+    ccx: CastContext<'a>,
     expr: ScalarExpr,
     to_scalar_type: ScalarType,
-) -> Result<ScalarExpr, failure::Error>
-where
-    S: fmt::Display + Copy,
-{
+) -> Result<ScalarExpr, failure::Error> {
     use ScalarType::*;
     use UnaryFunc::*;
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
     let expr = match (from_scalar_type, to_scalar_type.clone()) {
-        (Bool, String) => expr.call_unary(CastBoolToString),
+        (Bool, String) => expr.call_unary(match ccx {
+            CastContext::Explicit => CastBoolToStringExplicit,
+            CastContext::Implicit(_) => CastBoolToStringImplicit,
+        }),
         (Int32, Bool) => expr.call_unary(CastInt32ToBool),
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
         (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
@@ -3144,18 +3203,13 @@ where
         (Jsonb, Int32) | (Jsonb, Int64) | (Jsonb, Float32) | (Jsonb, Decimal(..)) => {
             plan_cast_internal(
                 ecx,
-                name,
+                ccx,
                 expr.call_unary(CastJsonbToFloat64),
                 to_scalar_type,
             )?
         }
         (Jsonb, Date) | (Jsonb, Timestamp) | (Jsonb, TimestampTz) | (Jsonb, Interval) => {
-            plan_cast_internal(
-                ecx,
-                name,
-                expr.call_unary(CastJsonbToString),
-                to_scalar_type,
-            )?
+            plan_cast_internal(ecx, ccx, expr.call_unary(CastJsonbToString), to_scalar_type)?
         }
         (String, Bool) => expr.call_unary(CastStringToBool),
         (String, Int32) => expr.call_unary(CastStringToInt32),
@@ -3177,7 +3231,7 @@ where
         (from, to) => {
             bail!(
                 "{} does not support casting from {:?} to {:?}",
-                name,
+                ccx,
                 from,
                 to
             );
@@ -3186,90 +3240,82 @@ where
     Ok(expr)
 }
 
-fn promote_int_decimal<'a, S>(
+fn promote_int_decimal<'a>(
     ecx: &ExprContext<'a>,
-    name: S,
+    name: &str,
     expr: ScalarExpr,
-) -> Result<(ScalarExpr, u8), failure::Error>
-where
-    S: fmt::Display + Copy,
-{
+) -> Result<(ScalarExpr, u8), failure::Error> {
     match ecx.column_type(&expr).scalar_type {
         ScalarType::Decimal(_, s) => Ok((expr, s)),
         ScalarType::Unknown | ScalarType::Int32 | ScalarType::Int64 => {
             let scale = 0;
-            let expr = plan_cast_internal(ecx, name, expr, ScalarType::Decimal(0, scale))?;
+            let expr = plan_cast_internal(
+                ecx,
+                CastContext::Implicit(name),
+                expr,
+                ScalarType::Decimal(0, scale),
+            )?;
             Ok((expr, scale))
         }
         other => bail!("{} has non-integer type {:?}", name, other),
     }
 }
 
-fn promote_number_floatdec<'a, S>(
+fn promote_number_floatdec<'a>(
     ecx: &ExprContext<'a>,
-    name: S,
+    name: &str,
     expr: ScalarExpr,
-) -> Result<ScalarExpr, failure::Error>
-where
-    S: fmt::Display + Copy,
-{
+) -> Result<ScalarExpr, failure::Error> {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Float32 | ScalarType::Float64 | ScalarType::Decimal(_, _) => expr,
         ScalarType::Unknown | ScalarType::Int32 | ScalarType::Int64 => {
-            plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
+            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Float64)?
         }
         other => bail!("{} has non-numeric type {:?}", name, other),
     })
 }
 
-fn promote_number_float64<'a, S>(
+fn promote_number_float64<'a>(
     ecx: &ExprContext<'a>,
-    name: S,
+    name: &str,
     expr: ScalarExpr,
-) -> Result<ScalarExpr, failure::Error>
-where
-    S: fmt::Display + Copy,
-{
+) -> Result<ScalarExpr, failure::Error> {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Float64 => expr,
         ScalarType::Unknown
         | ScalarType::Int32
         | ScalarType::Int64
         | ScalarType::Decimal(_, _)
-        | ScalarType::Float32 => plan_cast_internal(ecx, name, expr, ScalarType::Float64)?,
+        | ScalarType::Float32 => {
+            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Float64)?
+        }
         other => bail!("{} has non-numeric type {:?}", name, other),
     })
 }
 
-fn promote_int_int64<'a, S>(
+fn promote_int_int64<'a>(
     ecx: &ExprContext<'a>,
-    name: S,
+    name: &str,
     expr: ScalarExpr,
-) -> Result<ScalarExpr, failure::Error>
-where
-    S: fmt::Display + Copy,
-{
+) -> Result<ScalarExpr, failure::Error> {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Int64 => expr,
         ScalarType::Unknown | ScalarType::Int32 => {
-            plan_cast_internal(ecx, name, expr, ScalarType::Int64)?
+            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Int64)?
         }
         other => bail!("{} has non-integer type {:?}", name, other,),
     })
 }
 
-fn promote_decimal_float64<'a, S>(
+fn promote_decimal_float64<'a>(
     ecx: &ExprContext<'a>,
-    name: S,
+    name: &str,
     expr: ScalarExpr,
-) -> Result<ScalarExpr, failure::Error>
-where
-    S: fmt::Display + Copy,
-{
+) -> Result<ScalarExpr, failure::Error> {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Unknown | ScalarType::Float64 => expr,
         ScalarType::Float32 | ScalarType::Decimal(_, _) => {
-            plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
+            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Float64)?
         }
         other => bail!("{} has non-decimal type {:?}", name, other,),
     })
