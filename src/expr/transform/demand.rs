@@ -121,7 +121,7 @@ impl Demand {
             }
             RelationExpr::Join {
                 inputs,
-                variables,
+                equivalences,
                 demand,
                 implementation: _,
             } => {
@@ -144,47 +144,43 @@ impl Demand {
                     .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
                     .collect::<Vec<_>>();
 
-                // We want to keep only one key from its equivalence class and permute
-                // duplicate keys to their equivalent.
+                // Each produced column that is equivalent to a prior column should be remapped
+                // so that upstream uses depend only on the first column, simplifying the demand
+                // analysis. In principle we could choose any representative, if it turns out
+                // that some other column would have been more helpful, but we don't have a great
+                // reason to do that at the moment.
                 let mut permutation: Vec<usize> = (0..input_arities.iter().sum()).collect();
-                // Assumes the same column does not appear in the two different equivalence classes
-                for variable in variables.iter() {
-                    let (min_rel, min_col) = variable.iter().min().unwrap();
-                    for (rel, col) in variable {
-                        permutation[prior_arities[*rel] + col] = prior_arities[*min_rel] + *min_col;
+                for equivalence in equivalences.iter() {
+                    let mut first_column = None;
+                    for expr in equivalence.iter() {
+                        if let ScalarExpr::Column(c) = expr {
+                            if let Some(prior) = &first_column {
+                                permutation[*c] = *prior;
+                            } else {
+                                first_column = Some(*c);
+                            }
+                        }
                     }
                 }
 
-                // What the upstream relation demands from the join
-                // organized by the input from which the demand will be fulfilled
-                let mut demand_vec = vec![Vec::new(); inputs.len()];
-                // What the join demands from each input
-                let mut new_columns = vec![HashSet::new(); inputs.len()];
-
-                // Permute each required column to its new location
-                // and record it as demanded of both the input and the join
-                for column in columns.iter() {
-                    let projected_column = permutation[*column];
-                    let rel = input_relation[projected_column];
-                    let col = projected_column - prior_arities[rel];
-                    demand_vec[rel].push(col);
-                    new_columns[rel].insert(col);
-                }
-
-                for demand in demand_vec.iter_mut() {
-                    demand.sort();
-                    demand.dedup();
-                }
-
-                // Record column demands as an optional projection.
+                // Capture the external demand for the join. Use the permutation to intervene
+                // when an externally demanded column will be replaced with a copy of another.
+                let mut demand_vec = columns.iter().map(|c| permutation[*c]).collect::<Vec<_>>();
+                demand_vec.sort();
                 *demand = Some(demand_vec);
 
-                // The join also demands from each input any columns that
-                // participate in constraints.
-                for variable in variables.iter() {
-                    for (rel, col) in variable {
-                        new_columns[*rel].insert(*col);
+                // Each equivalence class imposes internal demand for columns.
+                for equivalence in equivalences.iter() {
+                    for expr in equivalence.iter() {
+                        columns.extend(expr.support());
                     }
+                }
+
+                // Populate child demands from external and internal demands.
+                let mut new_columns = vec![HashSet::new(); inputs.len()];
+                for column in columns.iter() {
+                    let input = input_relation[*column];
+                    new_columns[input].insert(*column - prior_arities[input]);
                 }
 
                 // Recursively indicate the requirements.
@@ -192,7 +188,7 @@ impl Demand {
                     self.action(input, columns, gets);
                 }
 
-                if columns.iter().any(|i| permutation[*i] != *i) {
+                if columns.into_iter().any(|i| permutation[i] != i) {
                     *relation = relation.take_dangerous().project(permutation);
                 }
             }

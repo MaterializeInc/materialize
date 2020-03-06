@@ -17,7 +17,7 @@ use dogsdogsdogs::altneu::AltNeu;
 
 use dataflow_types::Timestamp;
 use expr::{EvalEnv, RelationExpr, ScalarExpr};
-use repr::{Datum, Row};
+use repr::{Datum, Row, RowArena};
 
 use super::context::{ArrangementFlavor, Context};
 
@@ -40,23 +40,11 @@ where
     {
         if let RelationExpr::Join {
             inputs,
-            variables,
+            equivalences,
             demand: _,
             implementation: expr::JoinImplementation::DeltaQuery(orders),
         } = relation_expr
         {
-            // For the moment, assert that each relation participates at most
-            // once in each equivalence class. If not, we should be able to
-            // push a filter upwards, and if we can't do that it means a bit
-            // more filter logic in this operator which doesn't exist yet.
-            assert!(variables.iter().all(|h| {
-                let len = h.len();
-                let mut list = h.iter().map(|(i, _)| i).collect::<Vec<_>>();
-                list.sort();
-                list.dedup();
-                len == list.len()
-            }));
-
             for input in inputs.iter() {
                 self.ensure_rendered(input, env, scope, worker_index);
             }
@@ -88,6 +76,15 @@ where
                         }
 
                         for relation in 0..inputs.len() {
+
+                            // We maintain a private copy of `equivalences`, which we will digest
+                            // as we produce the join.
+                            let mut equivalences = equivalences.clone();
+                            for equivalence in equivalences.iter_mut() {
+                                equivalence.sort();
+                                equivalence.dedup();
+                            }
+
                             // This collection determines changes that result from updates inbound
                             // from `inputs[relation]` and reflects all strictly prior updates and
                             // concurrent updates from relations prior to `relation`.
@@ -100,16 +97,15 @@ where
                                     .enter(region);
 
                                 // We track the sources of each column in our update stream.
-                                let mut update_column_sources = (0..arities[relation])
-                                    .map(|c| (relation, c))
+                                let mut source_columns = (prior_arities[relation]..prior_arities[relation]+arities[relation])
                                     .collect::<Vec<_>>();
 
                                 let mut predicates = predicates.to_vec();
                                 update_stream = build_filter(
                                     update_stream,
-                                    &update_column_sources,
+                                    &source_columns,
                                     &mut predicates,
-                                    &prior_arities,
+                                    &mut equivalences,
                                     env,
                                 );
 
@@ -123,31 +119,40 @@ where
                                     // the elements of `next_keys` among the existing `columns`.
                                     let prev_key = next_key
                                         .iter()
-                                        .map(|k| {
-                                            if let ScalarExpr::Column(c) = k {
-                                                variables
-                                                    .iter()
-                                                    .find(|v| v.contains(&(*other, *c)))
-                                                    .expect("Column in key not bound!")
-                                                    .iter()
-                                                    .flat_map(|rel_col1| {
-                                                        // Find the first (rel,col) pair in `update_column_sources`.
-                                                        // One *should* exist, but it is not the case that all must.us
-                                                        update_column_sources.iter().position(
-                                                            |rel_col2| rel_col1 == rel_col2,
-                                                        )
-                                                    })
-                                                    .next()
-                                                    .expect(
-                                                        "Column in key not bound by prior column",
-                                                    )
-                                            } else {
-                                                panic!(
-                                                    "Non-column keys are not currently supported"
-                                                );
-                                            }
+                                        .map(|expr| {
+                                            // We expect to find `expr` in some `equivalence` which
+                                            // has a bound expression. Otherwise, the join plan is
+                                            // defective and we should panic.
+                                            let equivalence =
+                                            equivalences
+                                                .iter()
+                                                .find(|equivs| equivs.contains(expr))
+                                                .expect("Expression in join plan is not in an equivalence relation");
+
+                                            // We expect to find exactly one bound expression, as
+                                            // multiple bound expressions should result in a filter
+                                            // and be removed once they have.
+                                            let mut bound_expr =
+                                            equivalence
+                                                .iter()
+                                                .find(|expr| expr.support().into_iter().all(|c| source_columns.contains(&c)))
+                                                .expect("Expression in join plan is not bound at time of use")
+                                                .clone();
+
+                                            bound_expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
+                                                *c = source_columns.iter().position(|x| x == c).expect("Did not find bound column in source_columns");
+                                            });
+                                            bound_expr
                                         })
                                         .collect::<Vec<_>>();
+
+                                    // We should extract each element of `next_keys` from `equivalences`,
+                                    // as each *should* now be a redundant constraint. We do this so that
+                                    // the demand analysis does not require these columns be produced.
+                                    for equivalence in equivalences.iter_mut() {
+                                        equivalence.retain(|expr| !next_key.contains(expr));
+                                    }
+                                    equivalences.retain(|e| e.len() > 1);
 
                                     // TODO: Investigate demanded columns as in DifferentialLinear join.
 
@@ -173,7 +178,7 @@ where
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, local, prev_key)
+                                                build_lookup(update_stream, local, prev_key, env)
                                             } else {
                                                 let local = local
                                                     .enter_at(
@@ -182,7 +187,7 @@ where
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, local, prev_key)
+                                                build_lookup(update_stream, local, prev_key, env)
                                             }
                                         }
                                         ArrangementFlavor::Trace(_gid, trace) => {
@@ -194,7 +199,7 @@ where
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, trace, prev_key)
+                                                build_lookup(update_stream, trace, prev_key, env)
                                             } else {
                                                 let trace = trace
                                                     .enter_at(
@@ -203,34 +208,32 @@ where
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, trace, prev_key)
+                                                build_lookup(update_stream, trace, prev_key, env)
                                             }
                                         }
                                     };
 
                                     // Update our map of the sources of each column in the update stream.
-                                    update_column_sources
-                                        .extend((0..arities[*other]).map(|c| (*other, c)));
+                                    source_columns
+                                        .extend((0..arities[*other]).map(|c| prior_arities[*other] + c));
 
                                     update_stream = build_filter(
                                         update_stream,
-                                        &update_column_sources,
+                                        &source_columns,
                                         &mut predicates,
-                                        &prior_arities,
+                                        &mut equivalences,
                                         env,
                                     );
                                 }
 
                                 // We must now de-permute the results to return to the common order.
                                 // TODO: Non-demanded columns would need default values here.
+                                let permutation = (0 .. source_columns.len()).map(|c| {
+                                    source_columns.iter().position(|x| &c == x).expect("Did not find required column in output")
+                                }).collect::<Vec<_>>();
                                 update_stream = update_stream.map(move |row| {
                                     let datums = row.unpack();
-                                    let mut to_sort = update_column_sources
-                                        .iter()
-                                        .zip(datums)
-                                        .collect::<Vec<_>>();
-                                    to_sort.sort();
-                                    Row::pack(to_sort.into_iter().map(|(_, datum)| datum))
+                                    Row::pack(permutation.iter().map(|c| datums[*c]))
                                 });
 
                                 update_stream.leave()
@@ -261,7 +264,8 @@ use differential_dataflow::Collection;
 fn build_lookup<G, Tr>(
     updates: Collection<G, Row>,
     trace: Arranged<G, Tr>,
-    prev_key: Vec<usize>,
+    prev_key: Vec<ScalarExpr>,
+    env: &EvalEnv,
 ) -> Collection<G, Row>
 where
     G: Scope,
@@ -270,6 +274,7 @@ where
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
+    let env = env.clone();
     dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
@@ -277,7 +282,12 @@ where
             // Prefix key selector must populate `key` with key from prefix `row`.
             // TODO: This could re-use the allocation behind `key`.
             let datums = row.unpack();
-            *key = Row::pack(prev_key.iter().map(|i| datums[*i]));
+            let temp_storage = RowArena::new();
+            *key = Row::pack(
+                prev_key
+                    .iter()
+                    .map(|e| e.eval(&datums, &env, &temp_storage)),
+            );
         },
         |prev_row, diff1, next_row, diff2| {
             // Output selector must produce (d_out, r_out) for each match.
@@ -302,35 +312,64 @@ where
 /// The `predicates` argument has all applied predicates removed.
 pub fn build_filter<G>(
     updates: Collection<G, Row>,
-    columns: &[(usize, usize)],
+    source_columns: &[usize],
     predicates: &mut Vec<ScalarExpr>,
-    prior_arities: &[usize],
+    equivalences: &mut Vec<Vec<ScalarExpr>>,
     env: &EvalEnv,
 ) -> Collection<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    let mut map = std::collections::HashMap::new();
-    for (pos, (rel, col)) in columns.iter().enumerate() {
-        map.insert(prior_arities[*rel] + *col, pos);
-    }
-
     let mut ready_to_go = Vec::new();
-    predicates.retain(|predicate| {
-        if predicate.support().iter().all(|c| map.contains_key(c)) {
-            let mut predicate = predicate.clone();
-            predicate.visit_mut(&mut |e| {
-                if let ScalarExpr::Column(c) = e {
-                    *c = map[c];
-                }
-            });
-            ready_to_go.push(predicate);
+
+    // Extract predicates fully supported by available columns.
+    predicates.retain(|p| {
+        if p.support().into_iter().all(|c| source_columns.contains(&c)) {
+            ready_to_go.push(p.clone());
             false
         } else {
             true
         }
     });
+    // Extract equivalences fully supported by available columns.
+    // This only happens if at least *two* expressions are fully supported.
+    for equivalence in equivalences.iter_mut() {
+        if let Some(pos) = equivalence
+            .iter()
+            .position(|e| e.support().into_iter().all(|c| source_columns.contains(&c)))
+        {
+            let mut cursor = pos + 1;
+            while cursor < equivalence.len() {
+                if equivalence[cursor]
+                    .support()
+                    .into_iter()
+                    .all(|c| source_columns.contains(&c))
+                {
+                    // Remove expression and equate with the first bound expression.
+                    ready_to_go.push(ScalarExpr::CallBinary {
+                        func: expr::BinaryFunc::Eq,
+                        expr1: Box::new(equivalence[pos].clone()),
+                        expr2: Box::new(equivalence.remove(cursor)),
+                    })
+                } else {
+                    cursor += 1;
+                }
+            }
+        }
+    }
+    equivalences.retain(|e| e.len() > 1);
+
+    for expr in ready_to_go.iter_mut() {
+        expr.visit_mut(&mut |e| {
+            if let ScalarExpr::Column(c) = e {
+                *c = source_columns
+                    .iter()
+                    .position(|x| x == c)
+                    .expect("Column not found in source_columns");
+            }
+        })
+    }
 
     if ready_to_go.is_empty() {
         updates

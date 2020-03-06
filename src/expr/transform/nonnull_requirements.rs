@@ -123,7 +123,9 @@ impl NonNullRequirements {
                 self.action(input, columns, gets);
             }
             RelationExpr::Join {
-                inputs, variables, ..
+                inputs,
+                equivalences,
+                ..
             } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let input_arities = input_types
@@ -152,15 +154,25 @@ impl NonNullRequirements {
 
                 // `variable` smears constraints around.
                 // Also, any non-nullable columns impose constraints on their equivalence class.
-                for variable in variables {
-                    let exists_constraint =
-                        variable.iter().any(|(r, c)| new_columns[*r].contains(c));
-                    let nonnull_columns = variable
-                        .iter()
-                        .any(|(r, c)| !input_types[*r].column_types[*c].nullable);
-                    if exists_constraint || nonnull_columns {
-                        for (r, c) in variable {
-                            new_columns[*r].insert(*c);
+                for equivalence in equivalences {
+                    let exists_constraint = equivalence.iter().any(|expr| {
+                        if let ScalarExpr::Column(c) = expr {
+                            let rel = input_relation[*c];
+                            let col = *c - prior_arities[rel];
+                            new_columns[rel].contains(&col)
+                                || !input_types[rel].column_types[col].nullable
+                        } else {
+                            false
+                        }
+                    });
+
+                    if exists_constraint {
+                        for expr in equivalence.iter() {
+                            if let ScalarExpr::Column(c) = expr {
+                                let rel = input_relation[*c];
+                                let col = *c - prior_arities[rel];
+                                new_columns[rel].insert(col);
+                            }
                         }
                     }
                 }

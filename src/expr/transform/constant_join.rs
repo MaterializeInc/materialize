@@ -84,13 +84,26 @@ impl RemoveConstantJoin {
 
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
-            variables, inputs, ..
+            inputs,
+            equivalences,
+            ..
         } = relation
         {
             // If the tail end of `inputs` contains singleton constant relations whose
             // columns are not used in constraints, we can remove them from the join and
             // introduce them as a map around the results.
 
+            let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+            let input_arities = input_types
+                .iter()
+                .map(|i| i.column_types.len())
+                .collect::<Vec<_>>();
+
+            let input_relation = input_arities
+                .iter()
+                .enumerate()
+                .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+                .collect::<Vec<_>>();
             // accumulates arguments to a `RelationExpr::Map`.
             let mut map_arguments = Vec::new();
 
@@ -101,9 +114,13 @@ impl RemoveConstantJoin {
                     Some(RelationExpr::Constant { mut rows, typ }) => {
                         if rows.len() == 1
                             && rows[0].1 == 1
-                            && variables
-                                .iter()
-                                .all(|v| v.iter().all(|(r, _)| *r != inputs_len - 1))
+                            && equivalences.iter().all(|e| {
+                                e.iter().all(|expr| {
+                                    expr.support()
+                                        .into_iter()
+                                        .all(|i| input_relation[i] != inputs_len - 1)
+                                })
+                            })
                         {
                             let row = rows.pop().unwrap().0;
                             let values = row

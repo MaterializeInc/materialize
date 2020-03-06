@@ -79,7 +79,9 @@ impl PredicatePushdown {
         if let RelationExpr::Filter { input, predicates } = relation {
             match &mut **input {
                 RelationExpr::Join {
-                    inputs, variables, ..
+                    inputs,
+                    equivalences,
+                    ..
                 } => {
                     // We want to scan `predicates` for any that can apply
                     // to individual elements of `inputs`.
@@ -108,6 +110,8 @@ impl PredicatePushdown {
                     let mut retain = Vec::new();
 
                     for predicate in predicates.drain(..) {
+                        // Track if the predicate has been pushed to at least one input.
+                        // If so, then we do not need to include it in an equivalence class.
                         let mut pushed = false;
                         // Attempt to push down each predicate to each input.
                         for (index, push_down) in push_downs.iter_mut().enumerate() {
@@ -119,7 +123,7 @@ impl PredicatePushdown {
                                 index,
                                 &input_relation[..],
                                 &prior_arities[..],
-                                &variables[..],
+                                &equivalences[..],
                             ) {
                                 push_down.push(localized);
                                 pushed = true;
@@ -127,70 +131,31 @@ impl PredicatePushdown {
                         }
 
                         // Translate `col1 == col2` constraints into join variable constraints.
-                        use crate::BinaryFunc;
-                        use crate::UnaryFunc;
-                        if let ScalarExpr::CallBinary {
-                            func: BinaryFunc::Eq,
-                            expr1,
-                            expr2,
-                        } = &predicate
-                        {
-                            if let (ScalarExpr::Column(c1), ScalarExpr::Column(c2)) =
-                                (&**expr1, &**expr2)
+                        if !pushed {
+                            use crate::BinaryFunc;
+                            use crate::UnaryFunc;
+                            if let ScalarExpr::CallBinary {
+                                func: BinaryFunc::Eq,
+                                expr1,
+                                expr2,
+                            } = &predicate
                             {
-                                let relation1 = input_relation[*c1];
-                                let relation2 = input_relation[*c2];
-
-                                if relation1 != relation2 {
-                                    let key1 = (relation1, *c1 - prior_arities[relation1]);
-                                    let key2 = (relation2, *c2 - prior_arities[relation2]);
-                                    let pos1 = variables.iter().position(|l| l.contains(&key1));
-                                    let pos2 = variables.iter().position(|l| l.contains(&key2));
-                                    match (pos1, pos2) {
-                                        (None, None) => {
-                                            variables.push(vec![key1, key2]);
-                                        }
-                                        (Some(idx1), None) => {
-                                            variables[idx1].push(key2);
-                                        }
-                                        (None, Some(idx2)) => {
-                                            variables[idx2].push(key1);
-                                        }
-                                        (Some(idx1), Some(idx2)) => {
-                                            // assert!(idx1 != idx2);
-                                            if idx1 != idx2 {
-                                                let temp = variables[idx2].clone();
-                                                variables[idx1].extend(temp);
-                                                variables[idx1].sort();
-                                                variables[idx1].dedup();
-                                                variables.remove(idx2);
-                                            }
-                                        }
-                                    }
-                                    // null != anything, so joined columns mustn't be null
-                                    let column1 = *c1 - prior_arities[relation1];
-                                    let column2 = *c2 - prior_arities[relation2];
-                                    let nullable1 =
-                                        input_types[relation1].column_types[column1].nullable;
-                                    let nullable2 =
-                                        input_types[relation2].column_types[column2].nullable;
-                                    // We only *need* to push down a null filter if either are nullable,
-                                    // as if either is non-nullable nulls will never match.
-                                    // We *could* push down the filter if we thought that would help!
-                                    if nullable1 && nullable2 {
-                                        push_downs[relation1].push(
-                                            ScalarExpr::Column(column1)
-                                                .call_unary(UnaryFunc::IsNull)
-                                                .call_unary(UnaryFunc::Not),
-                                        );
-                                        push_downs[relation2].push(
-                                            ScalarExpr::Column(column2)
-                                                .call_unary(UnaryFunc::IsNull)
-                                                .call_unary(UnaryFunc::Not),
-                                        );
-                                    }
-                                    pushed = true;
-                                }
+                                // TODO: We could attempt to localize these here, otherwise they'll be localized
+                                // and pushed down in the next iteration of the fixed point optimization.
+                                retain.push(
+                                    expr1
+                                        .clone()
+                                        .call_unary(UnaryFunc::IsNull)
+                                        .call_unary(UnaryFunc::Not),
+                                );
+                                retain.push(
+                                    expr2
+                                        .clone()
+                                        .call_unary(UnaryFunc::IsNull)
+                                        .call_unary(UnaryFunc::Not),
+                                );
+                                equivalences.push(vec![(**expr1).clone(), (**expr2).clone()]);
+                                pushed = true;
                             }
                         }
 
@@ -199,21 +164,40 @@ impl PredicatePushdown {
                         }
                     }
 
-                    // Push down same-relation equality constraints.
-                    for variable in variables.iter_mut() {
-                        variable.sort();
-                        variable.dedup(); // <-- not obviously necessary.
+                    // Push down equality constraints supported by the same single input.
+                    for equivalence in equivalences.iter_mut() {
+                        equivalence.sort();
+                        equivalence.dedup(); // <-- not obviously necessary.
 
                         let mut pos = 0;
-                        while pos + 1 < variable.len() {
-                            if variable[pos].0 == variable[pos + 1].0 {
-                                use crate::BinaryFunc;
-                                push_downs[variable[pos].0].push(ScalarExpr::CallBinary {
-                                    func: BinaryFunc::Eq,
-                                    expr1: Box::new(ScalarExpr::Column(variable[pos].1)),
-                                    expr2: Box::new(ScalarExpr::Column(variable[pos + 1].1)),
+                        while pos + 1 < equivalence.len() {
+                            let support = equivalence[pos].support();
+                            if let Some(pos2) = (0..equivalence.len()).find(|i| {
+                                support.len() == 1
+                                    && i != &pos
+                                    && equivalence[*i].support() == support
+                            }) {
+                                let mut expr1 = equivalence[pos].clone();
+                                let mut expr2 = equivalence[pos2].clone();
+                                expr1.visit_mut(&mut |e| {
+                                    if let ScalarExpr::Column(c) = e {
+                                        *c -= prior_arities[input_relation[*c]];
+                                    }
                                 });
-                                variable.remove(pos + 1);
+                                expr2.visit_mut(&mut |e| {
+                                    if let ScalarExpr::Column(c) = e {
+                                        *c -= prior_arities[input_relation[*c]];
+                                    }
+                                });
+                                use crate::BinaryFunc;
+                                push_downs[support.into_iter().next().unwrap()].push(
+                                    ScalarExpr::CallBinary {
+                                        func: BinaryFunc::Eq,
+                                        expr1: Box::new(expr1),
+                                        expr2: Box::new(expr2),
+                                    },
+                                );
+                                equivalence.remove(pos);
                             } else {
                                 pos += 1;
                             }
@@ -359,7 +343,7 @@ fn localize_predicate(
     index: usize,
     input_relation: &[usize],
     prior_arities: &[usize],
-    variables: &[Vec<(usize, usize)>],
+    equivalences: &[Vec<ScalarExpr>],
 ) -> Option<ScalarExpr> {
     let mut bail = false;
     let mut expr = expr.clone();
@@ -369,12 +353,27 @@ fn localize_predicate(
             let local = (input, *column - prior_arities[input]);
             if input == index {
                 *column = local.1;
-            } else if let Some((_rel, col)) = variables
+            } else if let Some(col) = equivalences
                 .iter()
-                .find(|variable| variable.contains(&local))
-                .and_then(|variable| variable.iter().find(|(rel, _col)| rel == &index))
+                .find(|variable| variable.contains(&ScalarExpr::Column(*column)))
+                .and_then(|variable| {
+                    variable
+                        .iter()
+                        .flat_map(|e| {
+                            if let ScalarExpr::Column(c) = e {
+                                if input_relation[*c] == index {
+                                    Some(*c - prior_arities[input_relation[*c]])
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                        .next()
+                })
             {
-                *column = *col;
+                *column = col;
             } else {
                 bail = true
             }

@@ -40,7 +40,7 @@ impl RedundantJoin {
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
             inputs,
-            variables,
+            equivalences,
             demand,
             implementation,
         } = relation
@@ -71,8 +71,11 @@ impl RedundantJoin {
                         &inputs[*prior] == input
                             && keys.iter().any(|key| {
                                 key.iter().all(|k| {
-                                    variables.iter().any(|v| {
-                                        v.contains(&(index, *k)) && v.contains(&(*prior, *k))
+                                    equivalences.iter().any(|e| {
+                                        e.contains(&ScalarExpr::Column(prior_arities[index] + *k))
+                                            && e.contains(&ScalarExpr::Column(
+                                                prior_arities[*prior] + *k,
+                                            ))
                                     })
                                 })
                             })
@@ -82,7 +85,7 @@ impl RedundantJoin {
                     projection.extend(
                         prior_arities[prior]..(prior_arities[prior] + input_arities[prior]),
                     );
-                    to_remove.push((index, prior));
+                    to_remove.push(index);
                 // TODO: check for relation repetition in any variable.
                 } else {
                     projection.extend(columns..(columns + input_arities[index]));
@@ -91,23 +94,22 @@ impl RedundantJoin {
             }
 
             // Update constraints to reference `prior`. Shift subsequent references.
-            while let Some((index, prior)) = to_remove.pop() {
+            while let Some(index) = to_remove.pop() {
                 inputs.remove(index);
-                for variable in variables.iter_mut() {
-                    for (rel, _col) in variable.iter_mut() {
-                        if *rel == index {
-                            *rel = prior;
-                        } else if *rel > index {
-                            *rel -= 1;
-                        }
+                for equivalence in equivalences.iter_mut() {
+                    for expr in equivalence.iter_mut() {
+                        expr.permute(&projection[..]);
                     }
-                    variable.sort();
-                    variable.dedup();
+                    equivalence.sort();
+                    equivalence.dedup();
                 }
-                variables.retain(|v| v.len() > 1);
+                equivalences.retain(|v| v.len() > 1);
                 *demand = None;
             }
-            if projection.iter().enumerate().any(|(i, p)| i != *p) {
+            // Implement a projection if the projection removed any columns.
+            let orig_arity = input_arities.iter().sum::<usize>();
+            if projection.len() != orig_arity || projection.iter().enumerate().any(|(i, p)| i != *p)
+            {
                 *implementation = crate::relation::JoinImplementation::Unimplemented;
                 *relation = relation.take_dangerous().project(projection);
             }
