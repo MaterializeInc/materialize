@@ -15,6 +15,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
+use failure::{bail, format_err};
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
@@ -35,10 +36,14 @@ pub enum NullaryFunc {
 }
 
 impl NullaryFunc {
-    pub fn eval<'a>(&'a self, env: &'a EvalEnv, _temp_storage: &'a RowArena) -> Datum<'a> {
+    pub fn eval<'a>(
+        &'a self,
+        env: &'a EvalEnv,
+        _temp_storage: &'a RowArena,
+    ) -> Result<Datum<'a>, failure::Error> {
         match self {
-            NullaryFunc::MzLogicalTimestamp => mz_logical_time(env),
-            NullaryFunc::Now => now(env),
+            NullaryFunc::MzLogicalTimestamp => Ok(mz_logical_time(env)),
+            NullaryFunc::Now => Ok(now(env)),
         }
     }
 
@@ -159,12 +164,11 @@ fn cast_int64_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() != 0)
 }
 
-fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): we need to do something better than panicking if the
-    // datum doesn't fit in an int32, but what? Poison the whole dataflow?
-    // The SQL standard says this an error, but runtime errors are complicated
-    // in a streaming setting.
-    Datum::from(i32::try_from(a.unwrap_int64()).unwrap())
+fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+    match i32::try_from(a.unwrap_int64()) {
+        Ok(n) => Ok(Datum::from(n)),
+        Err(_) => Err(format_err!("integer out of range")),
+    }
 }
 
 fn cast_int64_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -198,20 +202,19 @@ fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_float32()))
 }
 
-fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let f = a.unwrap_float32();
     let scale = b.unwrap_int32();
 
-    // If errors were returnable, this would be:
-    // "ERROR:  numeric field overflow
-    // DETAIL:  A field with precision {},
-    //   scale {} must round to an absolute value less than 10^{}.",
-    //  MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale
     if f > 10_f32.powi(MAX_DECIMAL_PRECISION as i32 - scale) {
-        return Datum::Null;
+        // When we can return error detail:
+        // format!("A field with precision {}, \
+        //         scale {} must round to an absolute value less than 10^{}.",
+        //         MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale)
+        bail!("numeric field overflow");
     }
 
-    Datum::from((f * 10_f32.powi(scale)) as i128)
+    Ok(Datum::from((f * 10_f32.powi(scale)) as i128))
 }
 
 fn cast_float32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -235,20 +238,19 @@ fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64() as i64)
 }
 
-fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let f = a.unwrap_float64();
     let scale = b.unwrap_int32();
 
-    // If errors were returnable, this would be:
-    // "ERROR:  numeric field overflow
-    // DETAIL:  A field with precision {},
-    //   scale {} must round to an absolute value less than 10^{}.",
-    //  MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale
     if f > 10_f64.powi(MAX_DECIMAL_PRECISION as i32 - scale) {
-        return Datum::Null;
+        // When we can return error detail:
+        // format!("A field with precision {}, \
+        //         scale {} must round to an absolute value less than 10^{}.",
+        //         MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale)
+        bail!("numeric field overflow");
     }
 
-    Datum::from((f * 10_f64.powi(scale)) as i128)
+    Ok(Datum::from((f * 10_f64.powi(scale)) as i128))
 }
 
 fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -805,95 +807,93 @@ fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
-// TODO(jamii) we don't currently have any way of reporting errors from functions, so for now we just adopt sqlite's approach 1/0 = null
-
-fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_int32();
     if b == 0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_int32() / b)
+        Ok(Datum::from(a.unwrap_int32() / b))
     }
 }
 
-fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_int64();
     if b == 0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_int64() / b)
+        Ok(Datum::from(a.unwrap_int64() / b))
     }
 }
 
-fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_float32();
     if b == 0.0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_float32() / b)
+        Ok(Datum::from(a.unwrap_float32() / b))
     }
 }
 
-fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_float64();
     if b == 0.0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_float64() / b)
+        Ok(Datum::from(a.unwrap_float64() / b))
     }
 }
 
-fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_decimal();
     if b == 0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_decimal() / b)
+        Ok(Datum::from(a.unwrap_decimal() / b))
     }
 }
 
-fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_int32();
     if b == 0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_int32() % b)
+        Ok(Datum::from(a.unwrap_int32() % b))
     }
 }
 
-fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_int64();
     if b == 0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_int64() % b)
+        Ok(Datum::from(a.unwrap_int64() % b))
     }
 }
 
-fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_float32();
     if b == 0.0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_float32() % b)
+        Ok(Datum::from(a.unwrap_float32() % b))
     }
 }
 
-fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_float64();
     if b == 0.0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_float64() % b)
+        Ok(Datum::from(a.unwrap_float64() % b))
     }
 }
 
-fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let b = b.unwrap_decimal();
     if b == 0 {
-        Datum::Null
+        bail!("division by zero");
     } else {
-        Datum::from(a.unwrap_decimal() % b)
+        Ok(Datum::from(a.unwrap_decimal() % b))
     }
 }
 
@@ -1107,16 +1107,10 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     }
 }
 
-fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let haystack = a.unwrap_str();
-    match build_like_regex_from_string(b.unwrap_str()) {
-        Ok(needle) => Datum::from(needle.is_match(haystack)),
-        Err(_) => {
-            // TODO(benesch): this should cause a runtime error, but we don't
-            // support those yet, so just return NULL for now.
-            Datum::Null
-        }
-    }
+    let needle = build_like_regex_from_string(b.unwrap_str())?;
+    Ok(Datum::from(needle.is_match(haystack)))
 }
 
 fn match_cached_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
@@ -1269,23 +1263,23 @@ fn extract_timestamptz_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.weekday().number_from_monday() as f64)
 }
 
-fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    match a.unwrap_str().parse::<DateTruncTo>() {
-        Ok(DateTruncTo::Micros) => date_trunc_microseconds(b),
-        Ok(DateTruncTo::Millis) => date_trunc_milliseconds(b),
-        Ok(DateTruncTo::Second) => date_trunc_second(b),
-        Ok(DateTruncTo::Minute) => date_trunc_minute(b),
-        Ok(DateTruncTo::Hour) => date_trunc_hour(b),
-        Ok(DateTruncTo::Day) => date_trunc_day(b),
-        Ok(DateTruncTo::Week) => date_trunc_week(b),
-        Ok(DateTruncTo::Month) => date_trunc_month(b),
-        Ok(DateTruncTo::Quarter) => date_trunc_quarter(b),
-        Ok(DateTruncTo::Year) => date_trunc_year(b),
-        Ok(DateTruncTo::Decade) => date_trunc_decade(b),
-        Ok(DateTruncTo::Century) => date_trunc_century(b),
-        Ok(DateTruncTo::Millennium) => date_trunc_millennium(b),
-        // TODO: return an error when we support that.
-        _ => Datum::Null,
+fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+    let units = a.unwrap_str();
+    match units.parse::<DateTruncTo>() {
+        Ok(DateTruncTo::Micros) => Ok(date_trunc_microseconds(b)),
+        Ok(DateTruncTo::Millis) => Ok(date_trunc_milliseconds(b)),
+        Ok(DateTruncTo::Second) => Ok(date_trunc_second(b)),
+        Ok(DateTruncTo::Minute) => Ok(date_trunc_minute(b)),
+        Ok(DateTruncTo::Hour) => Ok(date_trunc_hour(b)),
+        Ok(DateTruncTo::Day) => Ok(date_trunc_day(b)),
+        Ok(DateTruncTo::Week) => Ok(date_trunc_week(b)),
+        Ok(DateTruncTo::Month) => Ok(date_trunc_month(b)),
+        Ok(DateTruncTo::Quarter) => Ok(date_trunc_quarter(b)),
+        Ok(DateTruncTo::Year) => Ok(date_trunc_year(b)),
+        Ok(DateTruncTo::Decade) => Ok(date_trunc_decade(b)),
+        Ok(DateTruncTo::Century) => Ok(date_trunc_century(b)),
+        Ok(DateTruncTo::Millennium) => Ok(date_trunc_millennium(b)),
+        Err(_) => Err(format_err!("units '{}' not recognized", units)),
     }
 }
 
@@ -1623,40 +1617,40 @@ impl BinaryFunc {
         b: Datum<'a>,
         _env: &'a EvalEnv,
         temp_storage: &'a RowArena,
-    ) -> Datum<'a> {
+    ) -> Result<Datum<'a>, failure::Error> {
         match self {
-            BinaryFunc::And => and(a, b),
-            BinaryFunc::Or => or(a, b),
-            BinaryFunc::AddInt32 => add_int32(a, b),
-            BinaryFunc::AddInt64 => add_int64(a, b),
-            BinaryFunc::AddFloat32 => add_float32(a, b),
-            BinaryFunc::AddFloat64 => add_float64(a, b),
-            BinaryFunc::AddTimestampInterval => add_timestamp_interval(a, b),
-            BinaryFunc::AddTimestampTzInterval => add_timestamptz_interval(a, b),
-            BinaryFunc::AddDateTime => add_date_time(a, b),
-            BinaryFunc::AddDateInterval => add_date_interval(a, b),
-            BinaryFunc::AddTimeInterval => add_time_interval(a, b),
-            BinaryFunc::AddDecimal => add_decimal(a, b),
-            BinaryFunc::AddInterval => add_interval(a, b),
-            BinaryFunc::SubInt32 => sub_int32(a, b),
-            BinaryFunc::SubInt64 => sub_int64(a, b),
-            BinaryFunc::SubFloat32 => sub_float32(a, b),
-            BinaryFunc::SubFloat64 => sub_float64(a, b),
-            BinaryFunc::SubTimestamp => sub_timestamp(a, b),
-            BinaryFunc::SubTimestampTz => sub_timestamptz(a, b),
-            BinaryFunc::SubTimestampInterval => sub_timestamp_interval(a, b),
-            BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval(a, b),
-            BinaryFunc::SubInterval => sub_interval(a, b),
-            BinaryFunc::SubDate => sub_date(a, b),
-            BinaryFunc::SubDateInterval => sub_date_interval(a, b),
-            BinaryFunc::SubTime => sub_time(a, b),
-            BinaryFunc::SubTimeInterval => sub_time_interval(a, b),
-            BinaryFunc::SubDecimal => sub_decimal(a, b),
-            BinaryFunc::MulInt32 => mul_int32(a, b),
-            BinaryFunc::MulInt64 => mul_int64(a, b),
-            BinaryFunc::MulFloat32 => mul_float32(a, b),
-            BinaryFunc::MulFloat64 => mul_float64(a, b),
-            BinaryFunc::MulDecimal => mul_decimal(a, b),
+            BinaryFunc::And => Ok(and(a, b)),
+            BinaryFunc::Or => Ok(or(a, b)),
+            BinaryFunc::AddInt32 => Ok(add_int32(a, b)),
+            BinaryFunc::AddInt64 => Ok(add_int64(a, b)),
+            BinaryFunc::AddFloat32 => Ok(add_float32(a, b)),
+            BinaryFunc::AddFloat64 => Ok(add_float64(a, b)),
+            BinaryFunc::AddTimestampInterval => Ok(add_timestamp_interval(a, b)),
+            BinaryFunc::AddTimestampTzInterval => Ok(add_timestamptz_interval(a, b)),
+            BinaryFunc::AddDateTime => Ok(add_date_time(a, b)),
+            BinaryFunc::AddDateInterval => Ok(add_date_interval(a, b)),
+            BinaryFunc::AddTimeInterval => Ok(add_time_interval(a, b)),
+            BinaryFunc::AddDecimal => Ok(add_decimal(a, b)),
+            BinaryFunc::AddInterval => Ok(add_interval(a, b)),
+            BinaryFunc::SubInt32 => Ok(sub_int32(a, b)),
+            BinaryFunc::SubInt64 => Ok(sub_int64(a, b)),
+            BinaryFunc::SubFloat32 => Ok(sub_float32(a, b)),
+            BinaryFunc::SubFloat64 => Ok(sub_float64(a, b)),
+            BinaryFunc::SubTimestamp => Ok(sub_timestamp(a, b)),
+            BinaryFunc::SubTimestampTz => Ok(sub_timestamptz(a, b)),
+            BinaryFunc::SubTimestampInterval => Ok(sub_timestamp_interval(a, b)),
+            BinaryFunc::SubTimestampTzInterval => Ok(sub_timestamptz_interval(a, b)),
+            BinaryFunc::SubInterval => Ok(sub_interval(a, b)),
+            BinaryFunc::SubDate => Ok(sub_date(a, b)),
+            BinaryFunc::SubDateInterval => Ok(sub_date_interval(a, b)),
+            BinaryFunc::SubTime => Ok(sub_time(a, b)),
+            BinaryFunc::SubTimeInterval => Ok(sub_time_interval(a, b)),
+            BinaryFunc::SubDecimal => Ok(sub_decimal(a, b)),
+            BinaryFunc::MulInt32 => Ok(mul_int32(a, b)),
+            BinaryFunc::MulInt64 => Ok(mul_int64(a, b)),
+            BinaryFunc::MulFloat32 => Ok(mul_float32(a, b)),
+            BinaryFunc::MulFloat64 => Ok(mul_float64(a, b)),
+            BinaryFunc::MulDecimal => Ok(mul_decimal(a, b)),
             BinaryFunc::DivInt32 => div_int32(a, b),
             BinaryFunc::DivInt64 => div_int64(a, b),
             BinaryFunc::DivFloat32 => div_float32(a, b),
@@ -1667,27 +1661,27 @@ impl BinaryFunc {
             BinaryFunc::ModFloat32 => mod_float32(a, b),
             BinaryFunc::ModFloat64 => mod_float64(a, b),
             BinaryFunc::ModDecimal => mod_decimal(a, b),
-            BinaryFunc::Eq => eq(a, b),
-            BinaryFunc::NotEq => not_eq(a, b),
-            BinaryFunc::Lt => lt(a, b),
-            BinaryFunc::Lte => lte(a, b),
-            BinaryFunc::Gt => gt(a, b),
-            BinaryFunc::Gte => gte(a, b),
+            BinaryFunc::Eq => Ok(eq(a, b)),
+            BinaryFunc::NotEq => Ok(not_eq(a, b)),
+            BinaryFunc::Lt => Ok(lt(a, b)),
+            BinaryFunc::Lte => Ok(lte(a, b)),
+            BinaryFunc::Gt => Ok(gt(a, b)),
+            BinaryFunc::Gte => Ok(gte(a, b)),
             BinaryFunc::MatchRegex => match_regex(a, b),
-            BinaryFunc::ToCharTimestamp => to_char_timestamp(a, b, temp_storage),
-            BinaryFunc::ToCharTimestampTz => to_char_timestamptz(a, b, temp_storage),
+            BinaryFunc::ToCharTimestamp => Ok(to_char_timestamp(a, b, temp_storage)),
+            BinaryFunc::ToCharTimestampTz => Ok(to_char_timestamptz(a, b, temp_storage)),
             BinaryFunc::DateTrunc => date_trunc(a, b),
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal(a, b),
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal(a, b),
-            BinaryFunc::TextConcat => text_concat_binary(a, b, temp_storage),
-            BinaryFunc::JsonbGetInt64 => jsonb_get_int64(a, b),
-            BinaryFunc::JsonbGetString => jsonb_get_string(a, b),
-            BinaryFunc::JsonbContainsString => jsonb_contains_string(a, b),
-            BinaryFunc::JsonbConcat => jsonb_concat(a, b, temp_storage),
-            BinaryFunc::JsonbContainsJsonb => jsonb_contains_jsonb(a, b),
-            BinaryFunc::JsonbDeleteInt64 => jsonb_delete_int64(a, b, temp_storage),
-            BinaryFunc::JsonbDeleteString => jsonb_delete_string(a, b, temp_storage),
-            BinaryFunc::RoundDecimal(scale) => round_decimal(a, b, *scale),
+            BinaryFunc::TextConcat => Ok(text_concat_binary(a, b, temp_storage)),
+            BinaryFunc::JsonbGetInt64 => Ok(jsonb_get_int64(a, b)),
+            BinaryFunc::JsonbGetString => Ok(jsonb_get_string(a, b)),
+            BinaryFunc::JsonbContainsString => Ok(jsonb_contains_string(a, b)),
+            BinaryFunc::JsonbConcat => Ok(jsonb_concat(a, b, temp_storage)),
+            BinaryFunc::JsonbContainsJsonb => Ok(jsonb_contains_jsonb(a, b)),
+            BinaryFunc::JsonbDeleteInt64 => Ok(jsonb_delete_int64(a, b, temp_storage)),
+            BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
+            BinaryFunc::RoundDecimal(scale) => Ok(round_decimal(a, b, *scale)),
         }
     }
 
@@ -2019,117 +2013,119 @@ impl UnaryFunc {
         a: Datum<'a>,
         _env: &'a EvalEnv,
         temp_storage: &'a RowArena,
-    ) -> Datum<'a> {
+    ) -> Result<Datum<'a>, failure::Error> {
         match self {
-            UnaryFunc::Not => not(a),
-            UnaryFunc::IsNull => is_null(a),
-            UnaryFunc::NegInt32 => neg_int32(a),
-            UnaryFunc::NegInt64 => neg_int64(a),
-            UnaryFunc::NegFloat32 => neg_float32(a),
-            UnaryFunc::NegFloat64 => neg_float64(a),
-            UnaryFunc::NegDecimal => neg_decimal(a),
-            UnaryFunc::NegInterval => neg_interval(a),
-            UnaryFunc::AbsInt32 => abs_int32(a),
-            UnaryFunc::AbsInt64 => abs_int64(a),
-            UnaryFunc::AbsFloat32 => abs_float32(a),
-            UnaryFunc::AbsFloat64 => abs_float64(a),
-            UnaryFunc::CastBoolToStringExplicit => cast_bool_to_string_explicit(a),
-            UnaryFunc::CastBoolToStringImplicit => cast_bool_to_string_implicit(a),
-            UnaryFunc::CastInt32ToBool => cast_int32_to_bool(a),
-            UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32(a),
-            UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64(a),
-            UnaryFunc::CastInt32ToInt64 => cast_int32_to_int64(a),
-            UnaryFunc::CastInt32ToDecimal => cast_int32_to_decimal(a),
-            UnaryFunc::CastInt32ToString => cast_int32_to_string(a, temp_storage),
+            UnaryFunc::Not => Ok(not(a)),
+            UnaryFunc::IsNull => Ok(is_null(a)),
+            UnaryFunc::NegInt32 => Ok(neg_int32(a)),
+            UnaryFunc::NegInt64 => Ok(neg_int64(a)),
+            UnaryFunc::NegFloat32 => Ok(neg_float32(a)),
+            UnaryFunc::NegFloat64 => Ok(neg_float64(a)),
+            UnaryFunc::NegDecimal => Ok(neg_decimal(a)),
+            UnaryFunc::NegInterval => Ok(neg_interval(a)),
+            UnaryFunc::AbsInt32 => Ok(abs_int32(a)),
+            UnaryFunc::AbsInt64 => Ok(abs_int64(a)),
+            UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
+            UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
+            UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
+            UnaryFunc::CastBoolToStringImplicit => Ok(cast_bool_to_string_implicit(a)),
+            UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
+            UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
+            UnaryFunc::CastInt32ToFloat64 => Ok(cast_int32_to_float64(a)),
+            UnaryFunc::CastInt32ToInt64 => Ok(cast_int32_to_int64(a)),
+            UnaryFunc::CastInt32ToDecimal => Ok(cast_int32_to_decimal(a)),
+            UnaryFunc::CastInt32ToString => Ok(cast_int32_to_string(a, temp_storage)),
             UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32(a),
-            UnaryFunc::CastInt64ToBool => cast_int64_to_bool(a),
-            UnaryFunc::CastInt64ToDecimal => cast_int64_to_decimal(a),
-            UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32(a),
-            UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64(a),
-            UnaryFunc::CastInt64ToString => cast_int64_to_string(a, temp_storage),
-            UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64(a),
-            UnaryFunc::CastFloat32ToFloat64 => cast_float32_to_float64(a),
-            UnaryFunc::CastFloat32ToString => cast_float32_to_string(a, temp_storage),
-            UnaryFunc::CastFloat64ToInt32 => cast_float64_to_int32(a),
-            UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64(a),
-            UnaryFunc::CastFloat64ToString => cast_float64_to_string(a, temp_storage),
-            UnaryFunc::CastDecimalToInt32 => cast_decimal_to_int32(a),
-            UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64(a),
-            UnaryFunc::CastSignificandToFloat32 => cast_significand_to_float32(a),
-            UnaryFunc::CastSignificandToFloat64 => cast_significand_to_float64(a),
-            UnaryFunc::CastStringToBool => cast_string_to_bool(a),
-            UnaryFunc::CastStringToBytes => cast_string_to_bytes(a, temp_storage),
-            UnaryFunc::CastStringToInt32 => cast_string_to_int32(a),
-            UnaryFunc::CastStringToInt64 => cast_string_to_int64(a),
-            UnaryFunc::CastStringToFloat32 => cast_string_to_float32(a),
-            UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
-            UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
-            UnaryFunc::CastStringToDate => cast_string_to_date(a),
-            UnaryFunc::CastStringToTime => cast_string_to_time(a),
-            UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
-            UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
-            UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
-            UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp(a),
-            UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz(a),
-            UnaryFunc::CastDateToString => cast_date_to_string(a, temp_storage),
+            UnaryFunc::CastInt64ToBool => Ok(cast_int64_to_bool(a)),
+            UnaryFunc::CastInt64ToDecimal => Ok(cast_int64_to_decimal(a)),
+            UnaryFunc::CastInt64ToFloat32 => Ok(cast_int64_to_float32(a)),
+            UnaryFunc::CastInt64ToFloat64 => Ok(cast_int64_to_float64(a)),
+            UnaryFunc::CastInt64ToString => Ok(cast_int64_to_string(a, temp_storage)),
+            UnaryFunc::CastFloat32ToInt64 => Ok(cast_float32_to_int64(a)),
+            UnaryFunc::CastFloat32ToFloat64 => Ok(cast_float32_to_float64(a)),
+            UnaryFunc::CastFloat32ToString => Ok(cast_float32_to_string(a, temp_storage)),
+            UnaryFunc::CastFloat64ToInt32 => Ok(cast_float64_to_int32(a)),
+            UnaryFunc::CastFloat64ToInt64 => Ok(cast_float64_to_int64(a)),
+            UnaryFunc::CastFloat64ToString => Ok(cast_float64_to_string(a, temp_storage)),
+            UnaryFunc::CastDecimalToInt32 => Ok(cast_decimal_to_int32(a)),
+            UnaryFunc::CastDecimalToInt64 => Ok(cast_decimal_to_int64(a)),
+            UnaryFunc::CastSignificandToFloat32 => Ok(cast_significand_to_float32(a)),
+            UnaryFunc::CastSignificandToFloat64 => Ok(cast_significand_to_float64(a)),
+            UnaryFunc::CastStringToBool => Ok(cast_string_to_bool(a)),
+            UnaryFunc::CastStringToBytes => Ok(cast_string_to_bytes(a, temp_storage)),
+            UnaryFunc::CastStringToInt32 => Ok(cast_string_to_int32(a)),
+            UnaryFunc::CastStringToInt64 => Ok(cast_string_to_int64(a)),
+            UnaryFunc::CastStringToFloat32 => Ok(cast_string_to_float32(a)),
+            UnaryFunc::CastStringToFloat64 => Ok(cast_string_to_float64(a)),
+            UnaryFunc::CastStringToDecimal(scale) => Ok(cast_string_to_decimal(a, *scale)),
+            UnaryFunc::CastStringToDate => Ok(cast_string_to_date(a)),
+            UnaryFunc::CastStringToTime => Ok(cast_string_to_time(a)),
+            UnaryFunc::CastStringToTimestamp => Ok(cast_string_to_timestamp(a)),
+            UnaryFunc::CastStringToTimestampTz => Ok(cast_string_to_timestamptz(a)),
+            UnaryFunc::CastStringToInterval => Ok(cast_string_to_interval(a)),
+            UnaryFunc::CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
+            UnaryFunc::CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
+            UnaryFunc::CastDateToString => Ok(cast_date_to_string(a, temp_storage)),
             UnaryFunc::CastDecimalToString(scale) => {
-                cast_decimal_to_string(a, *scale, temp_storage)
+                Ok(cast_decimal_to_string(a, *scale, temp_storage))
             }
-            UnaryFunc::CastTimestampToDate => cast_timestamp_to_date(a),
-            UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz(a),
-            UnaryFunc::CastTimestampToString => cast_timestamp_to_string(a, temp_storage),
-            UnaryFunc::CastTimestampTzToDate => cast_timestamptz_to_date(a),
-            UnaryFunc::CastTimestampTzToTimestamp => cast_timestamptz_to_timestamp(a),
-            UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string(a, temp_storage),
-            UnaryFunc::CastIntervalToString => cast_interval_to_string(a, temp_storage),
-            UnaryFunc::CastBytesToString => cast_bytes_to_string(a, temp_storage),
-            UnaryFunc::CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
-            UnaryFunc::JsonbStringify => jsonb_stringify(a, temp_storage),
-            UnaryFunc::JsonbStringifyUnlessString => jsonb_stringify_unless_string(a, temp_storage),
-            UnaryFunc::CastJsonbOrNullToJsonb => cast_jsonb_or_null_to_jsonb(a),
-            UnaryFunc::CastJsonbToString => cast_jsonb_to_string(a),
-            UnaryFunc::CastJsonbToFloat64 => cast_jsonb_to_float64(a),
-            UnaryFunc::CastJsonbToBool => cast_jsonb_to_bool(a),
-            UnaryFunc::CeilFloat32 => ceil_float32(a),
-            UnaryFunc::CeilFloat64 => ceil_float64(a),
-            UnaryFunc::CeilDecimal(scale) => ceil_decimal(a, *scale),
-            UnaryFunc::FloorFloat32 => floor_float32(a),
-            UnaryFunc::FloorFloat64 => floor_float64(a),
-            UnaryFunc::FloorDecimal(scale) => floor_decimal(a, *scale),
-            UnaryFunc::SqrtFloat32 => sqrt_float32(a),
-            UnaryFunc::SqrtFloat64 => sqrt_float64(a),
-            UnaryFunc::Ascii => ascii(a),
-            UnaryFunc::LengthBytes => length_bytes(a),
-            UnaryFunc::MatchRegex(regex) => match_cached_regex(a, &regex),
-            UnaryFunc::ExtractIntervalYear => extract_interval_year(a),
-            UnaryFunc::ExtractIntervalMonth => extract_interval_month(a),
-            UnaryFunc::ExtractIntervalDay => extract_interval_day(a),
-            UnaryFunc::ExtractIntervalHour => extract_interval_hour(a),
-            UnaryFunc::ExtractIntervalMinute => extract_interval_minute(a),
-            UnaryFunc::ExtractIntervalSecond => extract_interval_second(a),
-            UnaryFunc::ExtractTimestampYear => extract_timestamp_year(a),
-            UnaryFunc::ExtractTimestampQuarter => extract_timestamp_quarter(a),
-            UnaryFunc::ExtractTimestampMonth => extract_timestamp_month(a),
-            UnaryFunc::ExtractTimestampDay => extract_timestamp_day(a),
-            UnaryFunc::ExtractTimestampHour => extract_timestamp_hour(a),
-            UnaryFunc::ExtractTimestampMinute => extract_timestamp_minute(a),
-            UnaryFunc::ExtractTimestampSecond => extract_timestamp_second(a),
-            UnaryFunc::ExtractTimestampWeek => extract_timestamp_week(a),
-            UnaryFunc::ExtractTimestampDayOfYear => extract_timestamp_dayofyear(a),
-            UnaryFunc::ExtractTimestampDayOfWeek => extract_timestamp_dayofweek(a),
-            UnaryFunc::ExtractTimestampIsoDayOfWeek => extract_timestamp_isodayofweek(a),
-            UnaryFunc::ExtractTimestampTzYear => extract_timestamptz_year(a),
-            UnaryFunc::ExtractTimestampTzQuarter => extract_timestamptz_quarter(a),
-            UnaryFunc::ExtractTimestampTzMonth => extract_timestamptz_month(a),
-            UnaryFunc::ExtractTimestampTzDay => extract_timestamptz_day(a),
-            UnaryFunc::ExtractTimestampTzHour => extract_timestamptz_hour(a),
-            UnaryFunc::ExtractTimestampTzMinute => extract_timestamptz_minute(a),
-            UnaryFunc::ExtractTimestampTzSecond => extract_timestamptz_second(a),
-            UnaryFunc::ExtractTimestampTzWeek => extract_timestamptz_week(a),
-            UnaryFunc::ExtractTimestampTzDayOfYear => extract_timestamptz_dayofyear(a),
-            UnaryFunc::ExtractTimestampTzDayOfWeek => extract_timestamptz_dayofweek(a),
-            UnaryFunc::ExtractTimestampTzIsoDayOfWeek => extract_timestamptz_isodayofweek(a),
-            UnaryFunc::DateTrunc(to) => match to {
+            UnaryFunc::CastTimestampToDate => Ok(cast_timestamp_to_date(a)),
+            UnaryFunc::CastTimestampToTimestampTz => Ok(cast_timestamp_to_timestamptz(a)),
+            UnaryFunc::CastTimestampToString => Ok(cast_timestamp_to_string(a, temp_storage)),
+            UnaryFunc::CastTimestampTzToDate => Ok(cast_timestamptz_to_date(a)),
+            UnaryFunc::CastTimestampTzToTimestamp => Ok(cast_timestamptz_to_timestamp(a)),
+            UnaryFunc::CastTimestampTzToString => Ok(cast_timestamptz_to_string(a, temp_storage)),
+            UnaryFunc::CastIntervalToString => Ok(cast_interval_to_string(a, temp_storage)),
+            UnaryFunc::CastBytesToString => Ok(cast_bytes_to_string(a, temp_storage)),
+            UnaryFunc::CastStringToJsonb => Ok(cast_string_to_jsonb(a, temp_storage)),
+            UnaryFunc::JsonbStringify => Ok(jsonb_stringify(a, temp_storage)),
+            UnaryFunc::JsonbStringifyUnlessString => {
+                Ok(jsonb_stringify_unless_string(a, temp_storage))
+            }
+            UnaryFunc::CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
+            UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a)),
+            UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
+            UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
+            UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
+            UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
+            UnaryFunc::CeilDecimal(scale) => Ok(ceil_decimal(a, *scale)),
+            UnaryFunc::FloorFloat32 => Ok(floor_float32(a)),
+            UnaryFunc::FloorFloat64 => Ok(floor_float64(a)),
+            UnaryFunc::FloorDecimal(scale) => Ok(floor_decimal(a, *scale)),
+            UnaryFunc::SqrtFloat32 => Ok(sqrt_float32(a)),
+            UnaryFunc::SqrtFloat64 => Ok(sqrt_float64(a)),
+            UnaryFunc::Ascii => Ok(ascii(a)),
+            UnaryFunc::LengthBytes => Ok(length_bytes(a)),
+            UnaryFunc::MatchRegex(regex) => Ok(match_cached_regex(a, &regex)),
+            UnaryFunc::ExtractIntervalYear => Ok(extract_interval_year(a)),
+            UnaryFunc::ExtractIntervalMonth => Ok(extract_interval_month(a)),
+            UnaryFunc::ExtractIntervalDay => Ok(extract_interval_day(a)),
+            UnaryFunc::ExtractIntervalHour => Ok(extract_interval_hour(a)),
+            UnaryFunc::ExtractIntervalMinute => Ok(extract_interval_minute(a)),
+            UnaryFunc::ExtractIntervalSecond => Ok(extract_interval_second(a)),
+            UnaryFunc::ExtractTimestampYear => Ok(extract_timestamp_year(a)),
+            UnaryFunc::ExtractTimestampQuarter => Ok(extract_timestamp_quarter(a)),
+            UnaryFunc::ExtractTimestampMonth => Ok(extract_timestamp_month(a)),
+            UnaryFunc::ExtractTimestampDay => Ok(extract_timestamp_day(a)),
+            UnaryFunc::ExtractTimestampHour => Ok(extract_timestamp_hour(a)),
+            UnaryFunc::ExtractTimestampMinute => Ok(extract_timestamp_minute(a)),
+            UnaryFunc::ExtractTimestampSecond => Ok(extract_timestamp_second(a)),
+            UnaryFunc::ExtractTimestampWeek => Ok(extract_timestamp_week(a)),
+            UnaryFunc::ExtractTimestampDayOfYear => Ok(extract_timestamp_dayofyear(a)),
+            UnaryFunc::ExtractTimestampDayOfWeek => Ok(extract_timestamp_dayofweek(a)),
+            UnaryFunc::ExtractTimestampIsoDayOfWeek => Ok(extract_timestamp_isodayofweek(a)),
+            UnaryFunc::ExtractTimestampTzYear => Ok(extract_timestamptz_year(a)),
+            UnaryFunc::ExtractTimestampTzQuarter => Ok(extract_timestamptz_quarter(a)),
+            UnaryFunc::ExtractTimestampTzMonth => Ok(extract_timestamptz_month(a)),
+            UnaryFunc::ExtractTimestampTzDay => Ok(extract_timestamptz_day(a)),
+            UnaryFunc::ExtractTimestampTzHour => Ok(extract_timestamptz_hour(a)),
+            UnaryFunc::ExtractTimestampTzMinute => Ok(extract_timestamptz_minute(a)),
+            UnaryFunc::ExtractTimestampTzSecond => Ok(extract_timestamptz_second(a)),
+            UnaryFunc::ExtractTimestampTzWeek => Ok(extract_timestamptz_week(a)),
+            UnaryFunc::ExtractTimestampTzDayOfYear => Ok(extract_timestamptz_dayofyear(a)),
+            UnaryFunc::ExtractTimestampTzDayOfWeek => Ok(extract_timestamptz_dayofweek(a)),
+            UnaryFunc::ExtractTimestampTzIsoDayOfWeek => Ok(extract_timestamptz_isodayofweek(a)),
+            UnaryFunc::DateTrunc(to) => Ok(match to {
                 DateTruncTo::Micros => date_trunc_microseconds(a),
                 DateTruncTo::Millis => date_trunc_milliseconds(a),
                 DateTruncTo::Second => date_trunc_second(a),
@@ -2143,14 +2139,14 @@ impl UnaryFunc {
                 DateTruncTo::Decade => date_trunc_decade(a),
                 DateTruncTo::Century => date_trunc_century(a),
                 DateTruncTo::Millennium => date_trunc_millennium(a),
-            },
-            UnaryFunc::ToTimestamp => to_timestamp(a),
-            UnaryFunc::JsonbArrayLength => jsonb_array_length(a),
-            UnaryFunc::JsonbTypeof => jsonb_typeof(a),
-            UnaryFunc::JsonbStripNulls => jsonb_strip_nulls(a, temp_storage),
-            UnaryFunc::JsonbPretty => jsonb_pretty(a, temp_storage),
-            UnaryFunc::RoundFloat32 => round_float32(a),
-            UnaryFunc::RoundFloat64 => round_float64(a),
+            }),
+            UnaryFunc::ToTimestamp => Ok(to_timestamp(a)),
+            UnaryFunc::JsonbArrayLength => Ok(jsonb_array_length(a)),
+            UnaryFunc::JsonbTypeof => Ok(jsonb_typeof(a)),
+            UnaryFunc::JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
+            UnaryFunc::JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
+            UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
+            UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
         }
     }
 
@@ -2537,7 +2533,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     }
 }
 
-fn length_string<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+fn length_string<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, failure::Error> {
     let string = datums[0].unwrap_str();
 
     if datums.len() == 2 {
@@ -2550,25 +2546,21 @@ fn length_string<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 
         let enc = match encoding_from_whatwg_label(&encoding_name) {
             Some(enc) => enc,
-            None => {
-                // TODO: Once we can return errors from functions, this should return:
-                // "ERROR:  invalid encoding name \"{}\"", encoding_name
-                return Datum::Null;
-            }
+            None => bail!("invalid encoding name '{}'", encoding_name),
         };
 
         let decoded_string = match enc.decode(string.as_bytes(), DecoderTrap::Strict) {
             Ok(s) => s,
-            Err(_) => {
-                // TODO: Once we can return errors from functions, this should return:
-                // "ERROR:  invalid byte sequence for encoding \"{}\": \"{}\"", encoding_name, errored_bytes
-                return Datum::Null;
-            }
+            Err(e) => bail!(
+                "invalid byte sequence for encoding '{}': '{}'",
+                encoding_name,
+                e
+            ),
         };
 
-        Datum::from(decoded_string.chars().count() as i32)
+        Ok(Datum::from(decoded_string.chars().count() as i32))
     } else {
-        Datum::from(string.chars().count() as i32)
+        Ok(Datum::from(string.chars().count() as i32))
     }
 }
 
@@ -2662,16 +2654,16 @@ impl VariadicFunc {
         datums: &[Datum<'a>],
         _env: &'a EvalEnv,
         temp_storage: &'a RowArena,
-    ) -> Datum<'a> {
+    ) -> Result<Datum<'a>, failure::Error> {
         match self {
-            VariadicFunc::Coalesce => coalesce(datums),
-            VariadicFunc::Concat => text_concat_variadic(datums, temp_storage),
-            VariadicFunc::MakeTimestamp => make_timestamp(datums),
-            VariadicFunc::Substr => substr(datums),
+            VariadicFunc::Coalesce => Ok(coalesce(datums)),
+            VariadicFunc::Concat => Ok(text_concat_variadic(datums, temp_storage)),
+            VariadicFunc::MakeTimestamp => Ok(make_timestamp(datums)),
+            VariadicFunc::Substr => Ok(substr(datums)),
             VariadicFunc::LengthString => length_string(datums),
-            VariadicFunc::Replace => replace(datums, temp_storage),
-            VariadicFunc::JsonbBuildArray => jsonb_build_array(datums, temp_storage),
-            VariadicFunc::JsonbBuildObject => jsonb_build_object(datums, temp_storage),
+            VariadicFunc::Replace => Ok(replace(datums, temp_storage)),
+            VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(datums, temp_storage)),
+            VariadicFunc::JsonbBuildObject => Ok(jsonb_build_object(datums, temp_storage)),
         }
     }
 
