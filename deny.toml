@@ -22,9 +22,6 @@ skip = [
     # time v0.2 is a total rewrite of time v0.1, so this doesn't seem likely
     # to happen any time soon.
     { name = "time", version = "0.1.42" },
-
-    # Waiting on a release of https://github.com/rustwasm/weedle/pull/35.
-    { name = "version_check", version = "0.1.5" },
 ]
 
 [licenses]
