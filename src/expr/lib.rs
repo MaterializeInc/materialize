@@ -15,7 +15,6 @@ mod id;
 mod relation;
 mod scalar;
 
-pub mod like;
 pub mod pretty;
 pub mod transform;
 
@@ -24,5 +23,5 @@ pub use relation::func::{AggregateFunc, UnaryTableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::{AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr};
 pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
-pub use scalar::{EvalEnv, ScalarExpr};
+pub use scalar::{like_pattern, EvalEnv, ScalarExpr};
 pub use transform::OptimizedRelationExpr;

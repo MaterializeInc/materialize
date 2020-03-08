@@ -9,10 +9,9 @@
 
 use regex::Regex;
 
-pub fn build_like_regex_from_string(like_string: &str) -> Result<Regex, failure::Error> {
-    // The goal is to build a regex that matches the same strings as the LIKE
-    // pattern.
-    //
+/// Builds a regular expression that matches the same strings as a SQL
+/// LIKE pattern.
+pub fn build_regex(pattern: &str) -> Result<Regex, failure::Error> {
     // LIKE patterns always cover the whole string, so we anchor the regex on
     // both sides. An underscore (`_`) in a LIKE pattern matches any single
     // character and a percent sign (`%`) matches any sequence of zero or more
@@ -32,7 +31,7 @@ pub fn build_like_regex_from_string(like_string: &str) -> Result<Regex, failure:
     // syntax eventually.
     let mut regex = String::from("^");
     let mut escape = false;
-    for c in like_string.chars() {
+    for c in pattern.chars() {
         match c {
             '\\' if !escape => escape = true,
             '_' if !escape => regex.push('.'),

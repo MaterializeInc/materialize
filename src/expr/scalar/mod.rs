@@ -20,6 +20,7 @@ use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 use crate::pretty::DocBuilderExt;
 
 pub mod func;
+pub mod like_pattern;
 
 #[serde(rename_all = "snake_case")]
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -262,18 +263,16 @@ impl ScalarExpr {
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
                 if expr1.is_literal() && expr2.is_literal() {
                     *e = eval(e);
-                } else if *func == BinaryFunc::MatchRegex && expr2.is_literal() {
-                    // we can at least precompile the regex
+                } else if *func == BinaryFunc::MatchLikePattern && expr2.is_literal() {
+                    // We can at least precompile the regex.
                     *e = match expr2.eval(&[], env, temp_storage) {
                         Datum::Null => null(expr2.typ(&empty)),
-                        Datum::String(string) => {
-                            match func::build_like_regex_from_string(&string) {
-                                Ok(regex) => {
-                                    expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex)))
-                                }
-                                Err(_) => null(expr2.typ(&empty)),
+                        Datum::String(string) => match like_pattern::build_regex(&string) {
+                            Ok(regex) => {
+                                expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex)))
                             }
-                        }
+                            Err(_) => null(expr2.typ(&empty)),
+                        },
                         _ => unreachable!(),
                     };
                 } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
@@ -520,11 +519,14 @@ mod tests {
         let plus_expr = int64_lit(1).call_binary(int64_lit(2), BinaryFunc::AddInt64);
         assert_eq!(plus_expr.doc().pretty(72).to_string(), "1 + 2");
 
-        let regex_expr = ScalarExpr::literal(Datum::String("foo"), col_type(String)).call_binary(
+        let like_expr = ScalarExpr::literal(Datum::String("foo"), col_type(String)).call_binary(
             ScalarExpr::literal(Datum::String("f?oo"), col_type(String)),
-            BinaryFunc::MatchRegex,
+            BinaryFunc::MatchLikePattern,
         );
-        assert_eq!(regex_expr.doc().pretty(72).to_string(), r#""foo" ~ "f?oo""#);
+        assert_eq!(
+            like_expr.doc().pretty(72).to_string(),
+            r#""foo" like "f?oo""#
+        );
 
         let neg_expr = int64_lit(1).call_unary(UnaryFunc::NegInt64);
         assert_eq!(neg_expr.doc().pretty(72).to_string(), "-1");
