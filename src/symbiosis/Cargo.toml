@@ -12,7 +12,7 @@ path = "lib.rs"
 catalog = { path = "../catalog" }
 chrono = { version = "0.4", features = ["serde"] }
 dataflow-types = { path = "../dataflow-types" }
-failure = "0.1.6"
+failure = "0.1.7"
 log = "0.4.8"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
