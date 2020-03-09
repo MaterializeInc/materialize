@@ -20,6 +20,9 @@ For information about available versions, see our [Versions page](../versions).
   round `x` to the `y`th digit after the decimal. (Default 0).
 - Support addition and subtraction between [`interval`]s.
 
+- In the event of a crash, materialize now prints the stack trace to the log
+  file as well as the terminal.
+
 <span id="v0.1.2"></span>
 ## 0.1.1 &rarr; 0.1.2
 
