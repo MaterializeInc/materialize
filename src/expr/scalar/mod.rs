@@ -230,7 +230,7 @@ impl ScalarExpr {
     ///
     /// ```rust
     /// use expr::{BinaryFunc, EvalEnv, ScalarExpr};
-    /// use repr::{ColumnType, Datum, ScalarType};
+    /// use repr::{ColumnType, Datum, RelationType, ScalarType};
     ///
     /// let expr_0 = ScalarExpr::Column(0);
     /// let expr_t = ScalarExpr::literal(Datum::True, ColumnType::new(ScalarType::Bool));
@@ -242,15 +242,16 @@ impl ScalarExpr {
     ///     .call_binary(expr_f.clone(), BinaryFunc::And)
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// test.reduce(&EvalEnv::default());
+    /// let input_type = RelationType::new(vec![ColumnType::new(ScalarType::Int32)]);
+    /// test.reduce(&input_type, &EvalEnv::default());
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, env: &EvalEnv) {
+    pub fn reduce(&mut self, relation_type: &RelationType, env: &EvalEnv) {
         let null = |typ| ScalarExpr::literal(Datum::Null, typ);
-        let empty = RelationType::new(vec![]);
         let temp_storage = &RowArena::new();
-        let eval =
-            |e: &ScalarExpr| ScalarExpr::literal(e.eval(&[], env, temp_storage), e.typ(&empty));
+        let eval = |e: &ScalarExpr| {
+            ScalarExpr::literal(e.eval(&[], env, temp_storage), e.typ(&relation_type))
+        };
         self.visit_mut(&mut |e| match e {
             ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => (),
             ScalarExpr::CallNullary(_) => {
@@ -264,27 +265,29 @@ impl ScalarExpr {
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
                 if expr1.is_literal() && expr2.is_literal() {
                     *e = eval(e);
+                } else if (expr1.is_literal_null() || expr2.is_literal_null())
+                    && func.propagates_nulls()
+                {
+                    *e = null(e.typ(relation_type));
                 } else if *func == BinaryFunc::MatchLikePattern && expr2.is_literal() {
                     // We can at least precompile the regex.
                     *e = match expr2.eval(&[], env, temp_storage) {
-                        Datum::Null => null(expr2.typ(&empty)),
                         Datum::String(string) => match like_pattern::build_regex(&string) {
                             Ok(regex) => {
                                 expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex)))
                             }
-                            Err(_) => null(expr2.typ(&empty)),
+                            Err(_) => null(e.typ(&relation_type)),
                         },
                         _ => unreachable!(),
                     };
                 } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
                     *e = match expr1.eval(&[], env, &temp_storage) {
-                        Datum::Null => null(expr1.typ(&empty)),
                         Datum::String(s) => match s.parse::<DateTruncTo>() {
                             Ok(to) => ScalarExpr::CallUnary {
                                 func: UnaryFunc::DateTrunc(to),
                                 expr: Box::new(expr2.take()),
                             },
-                            Err(_) => null(expr1.typ(&empty)),
+                            Err(_) => null(e.typ(&relation_type)),
                         },
                         _ => unreachable!(),
                     }
@@ -304,9 +307,11 @@ impl ScalarExpr {
                     }
                 }
             }
-            ScalarExpr::CallVariadic { exprs, .. } => {
+            ScalarExpr::CallVariadic { func, exprs } => {
                 if exprs.iter().all(|e| e.is_literal()) {
                     *e = eval(e);
+                } else if func.propagates_nulls() && exprs.iter().any(|e| e.is_literal_null()) {
+                    *e = null(e.typ(&relation_type));
                 }
             }
             ScalarExpr::If { cond, then, els } => {
