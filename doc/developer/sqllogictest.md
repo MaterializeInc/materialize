@@ -114,7 +114,7 @@ same file. Most of the time, we use `mode cockroach`. The times when we use
 
     In `mode cockroach`, if your expected column name or row entry contains a
     space, to have the space not treated as a column delimiter, replace the
-    space with the symbol ␠, which is U+2040, the Unicode "SYMBOL FOR SPACE".
+    space with the symbol ␠, which is U+2420, the Unicode "SYMBOL FOR SPACE".
     Example:
     ```
     query TT colnames

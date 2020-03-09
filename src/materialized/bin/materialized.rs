@@ -257,7 +257,7 @@ fn handle_panic(panic_info: &PanicInfo) {
 
     let backtrace = Backtrace::new();
 
-    eprintln!(
+    let crash_message = format!(
         r#"materialized encountered an internal error and crashed.
 
 We rely on bug reports to diagnose and fix these errors. Please
@@ -271,6 +271,10 @@ message: {}
         thr_name, msg, backtrace
     );
 
+    if LOG_FILE.get().is_some() {
+        log::error!("{}", crash_message);
+    }
+    eprintln!("{}", crash_message);
     process::exit(1);
 }
 
