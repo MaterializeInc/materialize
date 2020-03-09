@@ -80,7 +80,7 @@ SELECT date_trunc('millennium', TIMESTAMP '2019-11-26 15:56:46.241150')
 ----
 2001-01-01 00:00:00
 
-query error invalid date_trunc precision: bad
+query error unknown units 'bad'
 SELECT date_trunc('bad', TIMESTAMP '2019-11-26 15:56:46.241150')
 
 statement ok

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashSet;
+use std::fmt;
 use std::mem;
 
 use chrono::{DateTime, Utc};
@@ -497,6 +498,45 @@ pub struct EvalEnv {
     pub logical_time: Option<u64>,
     pub wall_time: Option<DateTime<Utc>>,
 }
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum EvalError {
+    DivisionByZero,
+    NumericFieldOverflow,
+    IntegerOutOfRange,
+    InvalidEncodingName(String),
+    InvalidByteSequence {
+        byte_sequence: String,
+        encoding_name: String,
+    },
+    UnknownUnits(String),
+    UnterminatedLikeEscapeSequence,
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            EvalError::DivisionByZero => f.write_str("division by zero"),
+            EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
+            EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
+            EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
+            EvalError::InvalidByteSequence {
+                byte_sequence,
+                encoding_name,
+            } => write!(
+                f,
+                "invalid byte sequence '{}' for encoding '{}'",
+                byte_sequence, encoding_name
+            ),
+            EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
+            EvalError::UnterminatedLikeEscapeSequence => {
+                f.write_str("unterminated escape sequence in LIKE")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EvalError {}
 
 #[cfg(test)]
 mod tests {
