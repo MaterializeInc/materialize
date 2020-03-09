@@ -207,11 +207,9 @@ where
                                 let eval_env = EvalEnv::default();
                                 let view = catalog::View {
                                     create_sql: view.create_sql,
-                                    expr: optimizer.optimize(
-                                        view.expr,
-                                        catalog.indexes(),
-                                        &eval_env,
-                                    ),
+                                    expr: optimizer
+                                        .optimize(view.expr, catalog.indexes(), &eval_env)
+                                        .expect("failed to optimize bootstrap sql"),
                                     eval_env,
                                     desc: view.desc,
                                 };
@@ -772,7 +770,7 @@ where
                     create_sql: view.create_sql,
                     expr: self
                         .optimizer
-                        .optimize(view.expr, self.catalog.indexes(), &eval_env),
+                        .optimize(view.expr, self.catalog.indexes(), &eval_env)?,
                     desc: view.desc,
                     eval_env,
                 };
@@ -932,9 +930,9 @@ where
                 // constant expression that originally contains a global get? Is
                 // there anything not containing a global get that cannot be
                 // optimized to a constant expression?
-                let mut source = self
-                    .optimizer
-                    .optimize(source, self.catalog.indexes(), &eval_env);
+                let mut source =
+                    self.optimizer
+                        .optimize(source, self.catalog.indexes(), &eval_env)?;
 
                 // If this optimizes to a constant expression, we can immediately return the result.
                 if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
@@ -1113,7 +1111,7 @@ where
                 };
                 let relation_expr =
                     self.optimizer
-                        .optimize(relation_expr, self.catalog.indexes(), &eval_env);
+                        .optimize(relation_expr, self.catalog.indexes(), &eval_env)?;
                 let pretty = relation_expr.as_ref().pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
                 Ok(send_immediate_rows(rows))

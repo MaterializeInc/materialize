@@ -25,8 +25,9 @@ impl super::Transform for FoldConstants {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) {
-        self.transform(relation, env)
+    ) -> Result<(), crate::transform::TransformError> {
+        self.transform(relation, env);
+        Ok(())
     }
 }
 
@@ -378,8 +379,9 @@ pub mod demorgans {
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
             _: &EvalEnv,
-        ) {
-            self.transform(relation)
+        ) -> Result<(), crate::transform::TransformError> {
+            self.transform(relation);
+            Ok(())
         }
     }
 
@@ -464,8 +466,9 @@ pub mod undistribute_and {
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
             _: &EvalEnv,
-        ) {
-            self.transform(relation)
+        ) -> Result<(), crate::transform::TransformError> {
+            self.transform(relation);
+            Ok(())
         }
     }
 

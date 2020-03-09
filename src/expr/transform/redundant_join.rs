@@ -24,8 +24,9 @@ impl super::Transform for RedundantJoin {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) {
-        self.transform(relation, env)
+    ) -> Result<(), super::TransformError> {
+        self.transform(relation, env);
+        Ok(())
     }
 }
 

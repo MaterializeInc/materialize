@@ -25,8 +25,9 @@ impl super::Transform for ReduceElision {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
-        self.transform(relation)
+    ) -> Result<(), super::TransformError> {
+        self.transform(relation);
+        Ok(())
     }
 }
 

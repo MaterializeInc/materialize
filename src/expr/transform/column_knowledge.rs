@@ -24,15 +24,20 @@ impl super::Transform for ColumnKnowledge {
         expr: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         self.transform(expr, env)
     }
 }
 
 impl ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
-    pub fn transform(&self, expr: &mut RelationExpr, env: &EvalEnv) {
+    pub fn transform(
+        &self,
+        expr: &mut RelationExpr,
+        env: &EvalEnv,
+    ) -> Result<(), super::TransformError> {
         ColumnKnowledge::harvest(expr, env, &mut HashMap::new());
+        Ok(())
     }
 
     /// Harvest per-column knowledge.
