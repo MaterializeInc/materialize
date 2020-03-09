@@ -18,7 +18,7 @@ path = "bin/materialized.rs"
 
 [dependencies]
 avro = { path = "../avro" }
-backtrace = { version = "0.3.44", features = ["coresymbolication"] }
+backtrace = { version = "0.3.45", features = ["coresymbolication"] }
 comm = { path = "../comm" }
 compile-time-run = "0.2.8"
 coord = { path = "../coord" }
