@@ -19,7 +19,6 @@ use repr::*;
 use crate::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
-pub use dataflow_expr::like;
 pub use dataflow_expr::{
     AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };

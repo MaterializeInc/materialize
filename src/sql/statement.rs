@@ -24,7 +24,7 @@ use dataflow_types::{
     FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, KinesisSourceConnector,
     PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnector, SourceConnector,
 };
-use expr::GlobalId;
+use expr::{like_pattern, GlobalId};
 use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
@@ -33,7 +33,6 @@ use sql_parser::ast::{
     SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
 };
 
-use crate::expr::like::build_like_regex_from_string;
 use crate::query::QueryLifetime;
 use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, View};
 use regex::Regex;
@@ -394,9 +393,9 @@ fn handle_show_objects(
         Ok(Plan::SendRows(rows))
     } else {
         let like_regex = match filter {
-            Some(ShowStatementFilter::Like(pattern)) => build_like_regex_from_string(&pattern)?,
+            Some(ShowStatementFilter::Like(pattern)) => like_pattern::build_regex(&pattern)?,
             Some(ShowStatementFilter::Where(_)) => bail!("SHOW ... WHERE is not supported"),
-            None => build_like_regex_from_string("%")?,
+            None => like_pattern::build_regex("%")?,
         };
 
         let empty_schema = BTreeMap::new();

@@ -23,9 +23,8 @@ use repr::jsonb::Jsonb;
 use repr::regex::Regex;
 use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
-use self::format::DateTimeFormat;
-pub use crate::like::build_like_regex_from_string;
-use crate::EvalEnv;
+use crate::scalar::func::format::DateTimeFormat;
+use crate::{like_pattern, EvalEnv};
 
 mod format;
 
@@ -1107,13 +1106,13 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     }
 }
 
-fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn match_like_pattern<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
     let haystack = a.unwrap_str();
-    let needle = build_like_regex_from_string(b.unwrap_str())?;
+    let needle = like_pattern::build_regex(b.unwrap_str())?;
     Ok(Datum::from(needle.is_match(haystack)))
 }
 
-fn match_cached_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
+fn match_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
     let haystack = a.unwrap_str();
     Datum::from(needle.is_match(haystack))
 }
@@ -1541,7 +1540,7 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
-    MatchRegex,
+    MatchLikePattern,
     ToCharTimestamp,
     ToCharTimestampTz,
     DateTrunc,
@@ -1667,7 +1666,7 @@ impl BinaryFunc {
             BinaryFunc::Lte => Ok(lte(a, b)),
             BinaryFunc::Gt => Ok(gt(a, b)),
             BinaryFunc::Gte => Ok(gte(a, b)),
-            BinaryFunc::MatchRegex => match_regex(a, b),
+            BinaryFunc::MatchLikePattern => match_like_pattern(a, b),
             BinaryFunc::ToCharTimestamp => Ok(to_char_timestamp(a, b, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(to_char_timestamptz(a, b, temp_storage)),
             BinaryFunc::DateTrunc => date_trunc(a, b),
@@ -1698,8 +1697,8 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Bool).nullable(in_nullable)
             }
 
-            MatchRegex => {
-                // output can be null if the regex is invalid
+            MatchLikePattern => {
+                // The output can be null if the pattern is invalid.
                 ColumnType::new(ScalarType::Bool).nullable(true)
             }
 
@@ -1866,7 +1865,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Lte => f.write_str("<="),
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
-            BinaryFunc::MatchRegex => f.write_str("~"),
+            BinaryFunc::MatchLikePattern => f.write_str("like"),
             BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
             BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
@@ -2096,7 +2095,7 @@ impl UnaryFunc {
             UnaryFunc::SqrtFloat64 => Ok(sqrt_float64(a)),
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::LengthBytes => Ok(length_bytes(a)),
-            UnaryFunc::MatchRegex(regex) => Ok(match_cached_regex(a, &regex)),
+            UnaryFunc::MatchRegex(regex) => Ok(match_regex(a, &regex)),
             UnaryFunc::ExtractIntervalYear => Ok(extract_interval_year(a)),
             UnaryFunc::ExtractIntervalMonth => Ok(extract_interval_month(a)),
             UnaryFunc::ExtractIntervalDay => Ok(extract_interval_day(a)),

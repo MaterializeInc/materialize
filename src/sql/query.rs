@@ -2697,7 +2697,7 @@ fn plan_like<'a>(
     }
 
     let mut expr = ScalarExpr::CallBinary {
-        func: BinaryFunc::MatchRegex,
+        func: BinaryFunc::MatchLikePattern,
         expr1: Box::new(lexpr),
         expr2: Box::new(rexpr),
     };
