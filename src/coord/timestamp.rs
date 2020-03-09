@@ -13,18 +13,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::Utc;
-use futures::executor::block_on;
 use log::{error, info};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
-use rusoto_core::{HttpClient, Region};
+use rusoto_core::HttpClient;
 use rusoto_credential::StaticProvider;
-use rusoto_kinesis::Consumer as KinesisConsumer;
-use rusoto_kinesis::{
-    Kinesis, KinesisClient, RegisterStreamConsumerInput, RegisterStreamConsumerOutput,
-};
+use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
 
 use catalog::sql::SqlVal;
@@ -89,7 +84,7 @@ struct ByoKafkaConnector {
 /// Data consumer for Kinesis source with RT consistency
 #[allow(dead_code)]
 struct RtKinesisConnector {
-    consumer: KinesisConsumer,
+    kinesis_client: KinesisClient,
 }
 
 /// Data consumer stub for Kinesis source with BYO consistency
@@ -367,9 +362,9 @@ impl Timestamper {
                 }
             }
             ExternalSourceConnector::Kinesis(kinc) => RtTimestampConsumer {
-                connector: RtTimestampConnector::Kinesis(block_on(
+                connector: RtTimestampConnector::Kinesis(
                     self.create_rt_kinesis_connector(id, kinc),
-                )),
+                ),
                 last_offset,
             },
         }
@@ -418,7 +413,7 @@ impl Timestamper {
         RtFileConnector {}
     }
 
-    async fn create_rt_kinesis_connector(
+    fn create_rt_kinesis_connector(
         &self,
         _id: SourceInstanceId,
         kinc: KinesisSourceConnector,
@@ -429,27 +424,10 @@ impl Timestamper {
             None,
             None,
         );
-
-        // todo@jldlaughlin: Use HttpClient::new_with_config() to support a TLS-enabled client
         let request_dispatcher = HttpClient::new().unwrap();
-        let r: Region = kinc
-            .region
-            .parse()
-            .unwrap_or_else(|_| panic!("Failed to parse AWS region: {}", kinc.region));
-        let client = KinesisClient::new_with(request_dispatcher, provider, r);
+        let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, kinc.region);
 
-        // Each consumer name must be unique within a stream.
-        // todo@jldlaughlin: Add a random string at the end, too?
-        let register_input = RegisterStreamConsumerInput {
-            consumer_name: format!("materialize-rt-kinesis-{}", Utc::now().timestamp()),
-            stream_arn: kinc.arn,
-        };
-
-        let consumer = match client.register_stream_consumer(register_input).await {
-            Ok(RegisterStreamConsumerOutput { consumer }) => consumer,
-            Err(e) => panic!(format!("Failed to register stream consumer: {:#?}", e)),
-        };
-        RtKinesisConnector { consumer }
+        RtKinesisConnector { kinesis_client }
     }
 
     /// Creates a BYO connector
@@ -620,8 +598,10 @@ impl Timestamper {
                 RtTimestampConnector::File(_cons) => {
                     error!("Timestamping for File sources is not supported");
                 }
-                RtTimestampConnector::Kinesis(_cons) => {
-                    error!("Timestamping for Kinesis sources is not supported");
+                RtTimestampConnector::Kinesis(_kc) => {
+                    // For now, always just push the current system timestamp.
+                    // todo: Github issue #2219
+                    result.push((*id, self.current_timestamp as i64));
                 }
             }
         }
