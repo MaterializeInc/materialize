@@ -153,6 +153,7 @@ where
                 }
 
                 for record in get_records_output.records {
+                    dbg!(&record);
                     // For now, use the system's current timestamp to downgrade
                     // capabilities.
                     // todo: Implement better offset tracking for Kinesis sources #2219
