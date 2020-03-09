@@ -224,8 +224,9 @@ impl super::Transform for Hoist {
         expr: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         Hoist::hoist(expr);
+        Ok(())
     }
 }
 
@@ -291,8 +292,9 @@ impl super::Transform for Unbind {
         expr: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         Unbind::unbind(expr);
+        Ok(())
     }
 }
 
@@ -471,8 +473,9 @@ impl super::Transform for Deduplicate {
         expr: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         Deduplicate::deduplicate(expr);
+        Ok(())
     }
 }
 

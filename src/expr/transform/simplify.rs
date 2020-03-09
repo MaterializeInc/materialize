@@ -74,8 +74,9 @@ impl super::Transform for SimplifyFilterPredicates {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         self.transform(relation);
+        Ok(())
     }
 }
 

@@ -20,7 +20,7 @@ impl super::Transform for SplitPredicates {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         relation.visit_mut(&mut |expr| {
             if let RelationExpr::Filter { predicates, .. } = expr {
                 let mut pending_predicates = predicates.drain(..).collect::<Vec<_>>();
@@ -39,5 +39,6 @@ impl super::Transform for SplitPredicates {
                 }
             }
         });
+        Ok(())
     }
 }

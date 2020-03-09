@@ -34,8 +34,9 @@ impl super::Transform for JoinImplementation {
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         self.transform(relation, indexes);
+        Ok(())
     }
 }
 

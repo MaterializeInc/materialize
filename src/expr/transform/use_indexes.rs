@@ -40,8 +40,9 @@ impl super::Transform for FilterEqualLiteral {
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         self.transform(relation, indexes);
+        Ok(())
     }
 }
 
