@@ -910,7 +910,6 @@ dependencies = [
  "num_enum",
  "ordered-float",
  "ore",
- "pretty",
  "regex",
  "regex-syntax",
  "repr",

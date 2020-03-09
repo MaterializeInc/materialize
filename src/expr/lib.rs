@@ -15,7 +15,7 @@ mod id;
 mod relation;
 mod scalar;
 
-pub mod pretty;
+pub mod explain;
 pub mod transform;
 
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, SourceInstanceId};

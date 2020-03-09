@@ -91,6 +91,8 @@ pub struct QueryOutput<'a> {
     pub mode: Mode,
     pub output: Output,
     pub output_str: &'a str,
+    /// Whether the output was parsed using the `multiline` option
+    pub multiline: bool,
 }
 
 /// A single directive in a sqllogictest file.
