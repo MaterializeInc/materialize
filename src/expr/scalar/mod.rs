@@ -70,6 +70,10 @@ impl ScalarExpr {
         ScalarExpr::Literal(row, typ)
     }
 
+    pub fn literal_null(typ: ColumnType) -> Self {
+        ScalarExpr::literal(Datum::Null, typ)
+    }
+
     pub fn call_unary(self, func: UnaryFunc) -> Self {
         ScalarExpr::CallUnary {
             func,
@@ -214,6 +218,13 @@ impl ScalarExpr {
         }
     }
 
+    pub fn as_literal_str(&self) -> Option<&str> {
+        match self.as_literal() {
+            Some(Datum::String(s)) => Some(s),
+            _ => None,
+        }
+    }
+
     pub fn is_literal_true(&self) -> bool {
         Some(Datum::True) == self.as_literal()
     }
@@ -247,7 +258,6 @@ impl ScalarExpr {
     /// assert_eq!(test, expr_t);
     /// ```
     pub fn reduce(&mut self, relation_type: &RelationType, env: &EvalEnv) {
-        let null = |typ| ScalarExpr::literal(Datum::Null, typ);
         let temp_storage = &RowArena::new();
         let eval = |e: &ScalarExpr| {
             ScalarExpr::literal(e.eval(&[], env, temp_storage), e.typ(&relation_type))
@@ -268,42 +278,36 @@ impl ScalarExpr {
                 } else if (expr1.is_literal_null() || expr2.is_literal_null())
                     && func.propagates_nulls()
                 {
-                    *e = null(e.typ(relation_type));
+                    *e = ScalarExpr::literal_null(e.typ(relation_type));
                 } else if *func == BinaryFunc::MatchLikePattern && expr2.is_literal() {
                     // We can at least precompile the regex.
-                    *e = match expr2.eval(&[], env, temp_storage) {
-                        Datum::String(string) => match like_pattern::build_regex(&string) {
-                            Ok(regex) => {
-                                expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex)))
-                            }
-                            Err(_) => null(e.typ(&relation_type)),
-                        },
-                        _ => unreachable!(),
+                    let pattern = expr2.as_literal_str().unwrap();
+                    *e = match like_pattern::build_regex(&pattern) {
+                        Ok(regex) => expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex))),
+                        Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     };
                 } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
-                    *e = match expr1.eval(&[], env, &temp_storage) {
-                        Datum::String(s) => match s.parse::<DateTruncTo>() {
-                            Ok(to) => ScalarExpr::CallUnary {
-                                func: UnaryFunc::DateTrunc(to),
-                                expr: Box::new(expr2.take()),
-                            },
-                            Err(_) => null(e.typ(&relation_type)),
+                    let units = expr1.as_literal_str().unwrap();
+                    *e = match units.parse::<DateTruncTo>() {
+                        Ok(to) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::DateTrunc(to),
+                            expr: Box::new(expr2.take()),
                         },
-                        _ => unreachable!(),
+                        Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     }
                 } else if *func == BinaryFunc::And && (expr1.is_literal() || expr2.is_literal()) {
                     // If we are here, not both inputs are literals.
                     if expr1.is_literal_false() || expr2.is_literal_true() {
-                        *e = (**expr1).clone();
+                        *e = expr1.take();
                     } else if expr2.is_literal_false() || expr1.is_literal_true() {
-                        *e = (**expr2).clone();
+                        *e = expr2.take();
                     }
                 } else if *func == BinaryFunc::Or && (expr1.is_literal() || expr2.is_literal()) {
                     // If we are here, not both inputs are literals.
                     if expr1.is_literal_true() || expr2.is_literal_false() {
-                        *e = (**expr1).clone();
+                        *e = expr1.take();
                     } else if expr2.is_literal_true() || expr1.is_literal_false() {
-                        *e = (**expr2).clone();
+                        *e = expr2.take();
                     }
                 }
             }
@@ -311,19 +315,15 @@ impl ScalarExpr {
                 if exprs.iter().all(|e| e.is_literal()) {
                     *e = eval(e);
                 } else if func.propagates_nulls() && exprs.iter().any(|e| e.is_literal_null()) {
-                    *e = null(e.typ(&relation_type));
+                    *e = ScalarExpr::literal_null(e.typ(&relation_type));
                 }
             }
-            ScalarExpr::If { cond, then, els } => {
-                if cond.is_literal() {
-                    match cond.eval(&[], env, &temp_storage) {
-                        Datum::True if then.is_literal() => *e = eval(then),
-                        Datum::False | Datum::Null if els.is_literal() => *e = eval(els),
-                        Datum::True | Datum::False | Datum::Null => (),
-                        _ => unreachable!(),
-                    }
-                }
-            }
+            ScalarExpr::If { cond, then, els } => match cond.as_literal() {
+                Some(Datum::True) => *e = then.take(),
+                Some(Datum::False) | Some(Datum::Null) => *e = els.take(),
+                Some(_) => unreachable!(),
+                None => (),
+            },
         });
     }
 
