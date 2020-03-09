@@ -13,8 +13,10 @@
 
 use std::collections::BTreeMap;
 
+use aws_arn::{Resource, ARN};
 use failure::{bail, format_err, ResultExt};
 use itertools::Itertools;
+use rusoto_core::Region;
 use url::Url;
 
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
@@ -995,6 +997,29 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     (connector, encoding)
                 }
                 Connector::Kinesis { arn, .. } => {
+                    let arn: ARN = match arn.parse() {
+                        Ok(arn) => arn,
+                        Err(e) => bail!("Unable to parse provided ARN: {:#?}", e),
+                    };
+                    let stream_name = match arn.resource {
+                        Resource::Path(path) => {
+                            if path.starts_with("stream/") {
+                                String::from(&path["stream/".len()..])
+                            } else {
+                                bail!("Unable to parse stream name from resource path: {}", path);
+                            }
+                        }
+                        _ => bail!("Unsupported AWS Resource type: {:#?}", arn.resource),
+                    };
+
+                    let region: Region = match arn.region {
+                        Some(region) => match region.parse() {
+                            Ok(region) => region,
+                            Err(e) => bail!("Unable to parse AWS region: {}", e),
+                        },
+                        None => bail!("Provided ARN does not include an AWS region"),
+                    };
+
                     // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
                     // https://github.com/materializeinc/materialize/issues/1991
                     let access_key = match with_options.remove("access_key") {
@@ -1005,15 +1030,11 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::SingleQuotedString(secret_access_key)) => secret_access_key,
                         _ => bail!("Kinesis sources require a `secret_access_key` option"),
                     };
-                    let region = match with_options.remove("region") {
-                        Some(Value::SingleQuotedString(region)) => region,
-                        _ => bail!("Kinesis sources require a `region` option"),
-                    };
                     let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
-                        arn: arn.clone(),
+                        stream_name,
+                        region,
                         access_key,
                         secret_access_key,
-                        region,
                     });
                     let encoding = get_encoding()?;
                     (connector, encoding)

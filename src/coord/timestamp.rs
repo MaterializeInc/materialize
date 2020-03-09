@@ -17,7 +17,7 @@ use log::{error, info};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
-use rusoto_core::{HttpClient, Region};
+use rusoto_core::HttpClient;
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
@@ -424,13 +424,8 @@ impl Timestamper {
             None,
             None,
         );
-
         let request_dispatcher = HttpClient::new().unwrap();
-        let r: Region = kinc
-            .region
-            .parse()
-            .unwrap_or_else(|_| panic!("Failed to parse AWS region: {}", kinc.region));
-        let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, r);
+        let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, kinc.region);
 
         RtKinesisConnector { kinesis_client }
     }

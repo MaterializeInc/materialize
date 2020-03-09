@@ -17,6 +17,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use failure::ResultExt;
+use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
@@ -508,10 +509,10 @@ pub struct KafkaSourceConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnector {
-    pub arn: String,
+    pub stream_name: String,
+    pub region: Region,
     pub access_key: String,
     pub secret_access_key: String,
-    pub region: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

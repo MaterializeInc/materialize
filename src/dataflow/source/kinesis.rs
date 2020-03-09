@@ -7,17 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::executor::block_on;
-use log::warn;
-use regex::Regex;
-use rusoto_core::{HttpClient, Region, RusotoError};
+use log::{error, warn};
+use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
-    GetRecordsError, GetRecordsInput, GetRecordsOutput, GetShardIteratorInput,
-    GetShardIteratorOutput, Kinesis, KinesisClient, ListShardsInput, ListShardsOutput, Shard,
+    GetRecordsError, GetRecordsInput, GetRecordsOutput, GetShardIteratorError,
+    GetShardIteratorInput, GetShardIteratorOutput, Kinesis, KinesisClient, ListShardsInput,
+    ListShardsOutput,
 };
 
 use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
@@ -44,10 +43,10 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let KinesisSourceConnector {
-        arn,
+        stream_name,
+        region,
         access_key,
         secret_access_key,
-        region,
     } = connector.clone();
 
     // Putting source information on the Timestamp channel lets this
@@ -70,58 +69,90 @@ where
         // Create a new AWS Kinesis Client.
         let request_dispatcher = HttpClient::new().unwrap();
         let provider = StaticProvider::new(access_key, secret_access_key, None, None);
-        let r: Region = region
-            .parse()
-            .unwrap_or_else(|_| panic!("Failed to parse AWS region: {}", region));
-        let client = KinesisClient::new_with(request_dispatcher, provider, r);
-
-        // Get the stream's name from the provided ARN.
-        let re = Regex::new(r"/(.*)").unwrap();
-        let captured_match = re.captures(&arn).unwrap().get(1); // do something better?
-        let stream_name = match captured_match {
-            Some(m) => m.as_str(),
-            None => panic!(
-                "Failed to read a stream name from the provided ARN: {}",
-                arn
-            ),
-        };
+        let client = KinesisClient::new_with(request_dispatcher, provider, region);
 
         // todo@jldlaughlin: Read from multiple shards! #2222
-        let shards = block_on(get_shards_list(&client, stream_name));
+        let shards = block_on(get_shards_list(&client, &stream_name));
         let shard = match shards.shards {
-            Some(shards) => {
-                if shards.len() != 1 {
-                    panic!("Materialize currently only supports reading from a single shard. Found: {}", shards.len());
+            Some(shards) => match shards.len() {
+                1 => Some(shards[0].clone()),
+                _ => {
+                    error!("Materialize currently only supports reading from a single shard. Found: {}", shards.len());
+                    None
                 }
-                shards[0].clone()
+            },
+            None => {
+                error!("Did not find any shards in Kinesis stream: {}", stream_name);
+                None
             }
-            None => panic!("Did not find any shards in Kinesis stream: {}", stream_name),
         };
-        let shard_iterator_output = block_on(get_shard_iterator(&client, &shard, stream_name));
-        let mut shard_iterator = shard_iterator_output.shard_iterator.unwrap();
+        let mut shard_iterator = match &shard {
+            Some(shard) => {
+                match block_on(get_shard_iterator(
+                    &client,
+                    &shard.shard_id,
+                    &stream_name,
+                    "TRIM_HORIZON",
+                )) {
+                    Ok(output) => output.shard_iterator,
+                    Err(rusoto_err) => {
+                        // todo: Better error handling here! Not all errors mean we're done/can't progress.
+                        error!("{}", rusoto_err);
+                        None
+                    }
+                }
+            }
+            None => {
+                // Same error as not finding a shard above.
+                None
+            }
+        };
 
         move |cap, output| {
             // If reading from Kinesis takes more than 10 milliseconds,
             // pause execution and reactivate later.
             let timer = std::time::Instant::now();
 
-            let mut get_records_response = get_records_wrapper(&client, &shard_iterator);
             // When the next_shard_iterator is null, the shard has been closed and the
             // requested iterator does not return any more data.
-            while let Some(iterator) = get_records_response.next_shard_iterator {
-                if let Some(millis) = get_records_response.millis_behind_latest {
+            while let Some(iterator) = &shard_iterator {
+                // todo: Better error handling here! Not getting a response != being done.
+                let get_records_output = match block_on(get_records(&client, &iterator)) {
+                    Ok(output) => {
+                        shard_iterator = output.next_shard_iterator.clone();
+                        output
+                    }
+                    Err(rusoto_err) => match rusoto_err {
+                        RusotoError::Service(service_err) => match service_err {
+                            GetRecordsError::ProvisionedThroughputExceeded(_s) => {
+                                activator.activate_after(get_reactivation_duration(timer));
+                                return SourceStatus::Alive;
+                            }
+                            _ => {
+                                error!("{}", service_err);
+                                return SourceStatus::Done;
+                            }
+                        },
+                        _ => {
+                            error!("{}", rusoto_err);
+                            return SourceStatus::Done;
+                        }
+                    },
+                };
+
+                if let Some(millis) = get_records_output.millis_behind_latest {
                     if millis == 0 {
                         // This activation does the following:
                         //      1. Ensures we poll Kinesis more often than the eviction timeout (5 minutes)
                         //      2. Proactively and frequently reactivates this source, since we don't have a
                         //         smarter solution atm.
                         // todo@jldlaughlin: Improve Kinesis source activation #2195
-                        activator.activate_after(Duration::from_secs(5));
+                        activator.activate_after(get_reactivation_duration(timer));
                         return SourceStatus::Alive;
                     }
                 }
 
-                for record in get_records_response.records {
+                for record in get_records_output.records {
                     // For now, use the system's current timestamp to downgrade
                     // capabilities.
                     // todo: Implement better offset tracking for Kinesis sources #2219
@@ -139,20 +170,18 @@ where
                     output.session(&cap).give((data, None))
                 }
 
-                if timer.elapsed().as_millis() > 100 {
+                if timer.elapsed().as_millis() > 10 {
                     // We didn't drain the entire queue, so indicate that we
                     // should run again. We suppress the activation when the
                     // queue is drained, as in that case librdkafka is
                     // configured to unpark our thread when a new message
                     // arrives.
-                    activator.activate();
+                    activator.activate_after(get_reactivation_duration(timer));
                     return SourceStatus::Alive;
                 }
                 // Each Kinesis shard can support up to 5 read requests per second.
                 // This will throttle ourselves.
-                thread::sleep(Duration::from_millis(200));
-                shard_iterator = iterator;
-                get_records_response = get_records_wrapper(&client, &shard_iterator);
+                activator.activate_after(get_reactivation_duration(timer));
             }
             SourceStatus::Done
         }
@@ -165,29 +194,24 @@ where
     }
 }
 
+// Each Kinesis shard can support up to 5 read requests
+// per second. This delay in activation should help
+// throttle ourselves.
+fn get_reactivation_duration(timer: Instant) -> Duration {
+    let elapsed = timer.elapsed();
+    if elapsed.as_millis() >= 200 {
+        Duration::from_millis(0)
+    } else {
+        Duration::from_millis(200) - elapsed
+    }
+}
+
 fn generate_timestamp() -> u64 {
     let start = SystemTime::now();
     start
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
         .as_millis() as u64
-}
-
-fn get_records_wrapper(client: &KinesisClient, shard_iterator: &str) -> GetRecordsOutput {
-    let result = block_on(get_records(client, shard_iterator));
-    match result {
-        Ok(get_records_output) => get_records_output,
-        Err(e) => match e {
-            RusotoError::Service(service_err) => match service_err {
-                GetRecordsError::ProvisionedThroughputExceeded(_s) => {
-                    thread::sleep(Duration::from_secs(1));
-                    get_records_wrapper(client, shard_iterator)
-                }
-                _ => panic!(service_err),
-            },
-            _ => panic!(e),
-        },
-    }
 }
 
 async fn get_records(
@@ -203,17 +227,18 @@ async fn get_records(
 
 async fn get_shard_iterator(
     client: &KinesisClient,
-    shard: &Shard,
+    shard_id: &str,
     stream_name: &str,
-) -> GetShardIteratorOutput {
+    iterator_type: &str,
+) -> Result<GetShardIteratorOutput, RusotoError<GetShardIteratorError>> {
     let get_shard_iterator = GetShardIteratorInput {
-        shard_id: shard.shard_id.clone(),
-        shard_iterator_type: String::from("TRIM_HORIZON"),
+        shard_id: String::from(shard_id),
+        shard_iterator_type: String::from(iterator_type),
         starting_sequence_number: None,
         stream_name: String::from(stream_name),
         timestamp: None,
     };
-    client.get_shard_iterator(get_shard_iterator).await.unwrap()
+    client.get_shard_iterator(get_shard_iterator).await
 }
 
 async fn get_shards_list(client: &KinesisClient, stream_name: &str) -> ListShardsOutput {

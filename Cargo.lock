@@ -135,6 +135,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-arn"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6413146df68652da8ec1662c9feae7cbea868715d1602b68e110b4f003b46e5"
+dependencies = [
+ "lazy_static",
+ "regex",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -676,6 +686,7 @@ dependencies = [
  "pdqselect",
  "regex",
  "repr",
+ "rusoto_core",
  "serde",
  "serde_json",
  "serde_regex",
@@ -3025,6 +3036,7 @@ name = "sql"
 version = "0.1.0"
 dependencies = [
  "avro",
+ "aws-arn",
  "catalog",
  "ccsr",
  "chrono",
@@ -3038,6 +3050,7 @@ dependencies = [
  "pgrepr",
  "regex",
  "repr",
+ "rusoto_core",
  "serde_json",
  "sql-parser",
  "tokio",
