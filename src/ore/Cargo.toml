@@ -18,7 +18,7 @@ libc = "0.2.67"
 log = "0.4.8"
 smallvec = "1.2"
 tokio = { version = "0.2", features = ["io-util", "rt-threaded", "tcp"] }
-tracing-subscriber = "0.2.2"
+tracing-subscriber = "0.2.3"
 
 [dev-dependencies]
 crossbeam-utils = "0.7.2"
