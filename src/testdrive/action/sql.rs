@@ -23,6 +23,7 @@ use sql_parser::parser::Parser as SqlParser;
 
 use ore::collections::CollectionExt;
 use pgrepr::{Interval, Numeric};
+use repr::strconv;
 
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand};
@@ -280,6 +281,11 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
                 Type::JSONB => row
                     .get::<_, Option<Json<Value>>>(i)
                     .and_then(|v| serde_json::to_string(&v.0).ok()),
+                Type::BYTEA => row.get::<_, Option<&[u8]>>(i).map(|bytes| {
+                    let mut out = String::new();
+                    strconv::format_bytes(&mut out, &bytes);
+                    out
+                }),
                 _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
             }
             .unwrap_or_else(|| "<null>".into()),

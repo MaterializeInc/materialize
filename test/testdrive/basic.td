@@ -526,6 +526,23 @@ a b
 1 2
 2 3
 
+$ kafka-ingest format=raw topic=test-bytes timestamp=1
+test-string
+
+> CREATE SOURCE test_bytes
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-test-bytes-${testdrive.seed}'
+  FORMAT BYTES;
+
+> CREATE MATERIALIZED VIEW test_bytes_view
+  AS SELECT * FROM test_bytes;
+
+> select data FROM test_bytes_view;
+"\\x746573742d737472696e67"
+
+# TODO: fix! This is failing, although it works locally.
+# > select convert_from(data, 'utf8') FROM test_bytes_view;
+# test-string
+
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 

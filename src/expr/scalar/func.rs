@@ -10,7 +10,7 @@
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
-use std::str::FromStr;
+use std::str::{from_utf8, FromStr};
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
@@ -623,6 +623,17 @@ fn round_decimal<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
     let round_to = b.unwrap_int64();
     let decimal = a.unwrap_decimal().with_scale(a_scale);
     Datum::from(decimal.round(round_to).significand())
+}
+
+fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    if b.unwrap_str().to_lowercase() != "utf8" {
+        panic!("Materialize only supports convert_from() with utf8");
+    }
+
+    match from_utf8(a.unwrap_bytes()) {
+        Ok(from) => Datum::String(from),
+        Err(e) => panic!("{}", e),
+    }
 }
 
 fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1554,6 +1565,7 @@ pub enum BinaryFunc {
     JsonbContainsJsonb,
     JsonbDeleteInt64,
     JsonbDeleteString,
+    ConvertFrom,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1681,6 +1693,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteInt64 => Ok(jsonb_delete_int64(a, b, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
             BinaryFunc::RoundDecimal(scale) => Ok(round_decimal(a, b, *scale)),
+            BinaryFunc::ConvertFrom => Ok(convert_from(a, b)),
         }
     }
 
@@ -1702,7 +1715,7 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Bool).nullable(true)
             }
 
-            ToCharTimestamp | ToCharTimestampTz => {
+            ToCharTimestamp | ToCharTimestampTz | ConvertFrom => {
                 ColumnType::new(ScalarType::String).nullable(false)
             }
 
@@ -1880,6 +1893,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbDeleteInt64 => f.write_str("b-int64"),
             BinaryFunc::JsonbDeleteString => f.write_str("b-string"),
             BinaryFunc::RoundDecimal(_) => f.write_str("b-rounddec"),
+            BinaryFunc::ConvertFrom => f.write_str("convert_from"),
         }
     }
 }
