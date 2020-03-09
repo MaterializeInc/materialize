@@ -10,7 +10,7 @@ name = "peeker"
 path = "peeker.rs"
 
 [dependencies]
-chrono = "0.4.10"
+chrono = "0.4.11"
 env_logger = "0.7.1"
 failure = "0.1.6"
 getopts = "0.2"
