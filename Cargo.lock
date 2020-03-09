@@ -163,6 +163,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b41b7ea54a0c9d92199de89e20e58d49f02f8e699814ef3fdf266f6f748d15c7"
 
 [[package]]
+name = "base64"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d5ca2cd0adc3f48f9e9ea5a6bbdf9ccc0bfade884847e484d452414c7ccffb3"
+
+[[package]]
 name = "billing-demo"
 version = "0.1.0"
 dependencies = [
@@ -1345,7 +1351,7 @@ name = "interchange"
 version = "0.1.0"
 dependencies = [
  "avro",
- "base64",
+ "base64 0.12.0",
  "byteorder",
  "ccsr",
  "chrono",
@@ -2157,7 +2163,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a30f0e172ae0fb0653dbf777ad10a74b8e58d6de95a892f2e1d3e94a9df9a844"
 dependencies = [
- "base64",
+ "base64 0.11.0",
  "byteorder",
  "bytes",
  "fallible-iterator",
@@ -2591,7 +2597,7 @@ version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02b81e49ddec5109a9dcfc5f2a317ff53377c915e9ae9d4f2fb50914b85614e2"
 dependencies = [
- "base64",
+ "base64 0.11.0",
  "bytes",
  "encoding_rs",
  "futures-core",
@@ -2644,7 +2650,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "492ae34e8ba20e0521e028e19fc90a5650c2668b622b2220986de811bfe44f1e"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.11.0",
  "bytes",
  "futures",
  "hmac",
@@ -2706,7 +2712,7 @@ version = "0.43.0-beta.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1692e8e8c4e1edfa5269fe12ca5806504dcac485ca337e386e201fe6fdd22d5"
 dependencies = [
- "base64",
+ "base64 0.11.0",
  "bytes",
  "futures",
  "hex",
@@ -2746,7 +2752,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bc8af4bda8e1ff4932523b94d3dd20ee30a87232323eda55903ffd71d2fb017"
 dependencies = [
- "base64",
+ "base64 0.11.0",
  "blake2b_simd",
  "constant_time_eq",
  "crossbeam-utils",
