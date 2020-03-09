@@ -219,8 +219,8 @@ a
 # todo@jldlaughlin: Add a MATERIALIZED VIEW on top of this
 # source and drop it. Depends on #2103.
 > CREATE SOURCE f
-  FROM KINESIS ARN 'fake_arn'
-  WITH (access_key = 'fake_access_key', secret_access_key = 'fake_secret_access_key', region = 'us-east-2')
+  FROM KINESIS ARN 'arn:aws:kinesis:us-east-2::stream/fake-stream'
+  WITH (access_key = 'fake_access_key', secret_access_key = 'fake_secret_access_key')
   FORMAT BYTES;
 
 > DROP SOURCE f
