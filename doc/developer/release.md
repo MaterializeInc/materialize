@@ -33,7 +33,7 @@ To start a new release version the steps look like:
    `v<VERSION>-rc<N>`:
 
         git tag --annotated v0.1.0-rc1 <C>
-        git push origin v0.1-rc
+        git push origin v0.1.0-rc1
 
    Resulting in a repo that looks like:
 
@@ -52,8 +52,8 @@ To start a new release version the steps look like:
 1. A human verifies that everything looks good, tags and pushes the `v<VERSION>` tag --
    since there have been no problems, the release branch is up to date:
 
-        git tag -a v0.1 v0.1-rc
-        git push origin v0.1
+        git tag -a v0.1.0 v0.1.0-rc1
+        git push origin v0.1.0
 
    At this point the repo should look like:
 
@@ -77,8 +77,8 @@ re-run the tests, or to push a new tag. In the world where we have this fully au
 creating a new tag for `v0.1-rc1` with an `N + 1` suffix to kick off new tests _may_
 look like:
 
-    git tag -a v0.1-rc1 v0.1-rc
-    git push origin v0.1-rc1
+    git tag -a v0.1.0-rc2 v0.1.0-rc1
+    git push origin v0.1.0-rc2
 
 Alternatively, clicking through some CI interfaces to trigger long-running jobs will be
 necessary.
