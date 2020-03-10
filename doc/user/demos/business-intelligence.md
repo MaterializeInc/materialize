@@ -257,8 +257,8 @@ Materialize to maintain for us.
     are produced, you will see the following error:
 
     ```nofmt
-   mz>  SELECT * FROM query07;
-   At least one input has no complete timestamps yet.
+    mz>  SELECT * FROM query07;
+    At least one input has no complete timestamps yet.
     ```
 
     If you receive an empty set of results, either wait or disconnect from `mzcli`
