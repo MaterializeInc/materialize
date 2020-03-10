@@ -30,9 +30,10 @@ pub struct RecordState {
 }
 
 impl RecordState {
-    pub fn new() -> RecordState {
+    pub fn new(last_time: Option<DateTime<Utc>>) -> RecordState {
         RecordState {
-            last_time: Utc::now() - chrono::Duration::seconds(60 * 60 * 24 * 7),
+            last_time: last_time
+                .unwrap_or(Utc::now() - chrono::Duration::seconds(60 * 60 * 24 * 7)),
         }
     }
 }

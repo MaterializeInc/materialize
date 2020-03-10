@@ -86,10 +86,15 @@ impl MzClient {
         file_name: &str,
         source_name: &str,
         num_clients: u32,
+        seed: Option<u64>,
     ) -> Result<()> {
         let mut writer = Writer::from_path(file_name)?;
         use rand::SeedableRng;
-        let rng = &mut rand::rngs::StdRng::from_seed(rand::random());
+        let rng = &mut if let Some(seed) = seed {
+            rand::rngs::StdRng::seed_from_u64(seed)
+        } else {
+            rand::rngs::StdRng::from_seed(rand::random())
+        };
 
         for i in 1..num_clients {
             writer.write_record(&[

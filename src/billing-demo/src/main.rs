@@ -74,9 +74,13 @@ async fn run() -> Result<()> {
 
 async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     use rand::SeedableRng;
-    let rng = &mut rand::rngs::StdRng::from_seed(rand::random());
+    let rng = &mut if let Some(seed) = config.seed {
+        rand::rngs::StdRng::seed_from_u64(seed)
+    } else {
+        rand::rngs::StdRng::from_seed(rand::random())
+    };
 
-    let mut recordstate = randomizer::RecordState::new();
+    let mut recordstate = randomizer::RecordState::new(config.start_time);
 
     let mut k_client = kafka_client::KafkaClient::new(&config.url, &config.group_id)?;
 
@@ -122,6 +126,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
                 &config.csv_file_name,
                 config::CSV_SOURCE_NAME,
                 randomizer::NUM_CLIENTS,
+                config.seed,
             )
             .await?;
 
