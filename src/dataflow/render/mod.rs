@@ -901,13 +901,7 @@ where
                     })
                     .collect::<Vec<_>>();
                 let next_vals = (0..arities[*input])
-                    .filter_map(|c| {
-                        if column_demand.contains(&c) {
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    })
+                    .filter(|c| column_demand.contains(&c))
                     .collect::<Vec<_>>();
 
                 // Identify the columns we intend to retain.
