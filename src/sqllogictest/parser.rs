@@ -123,7 +123,7 @@ pub fn parse_record<'a>(
                 Some("standard") | Some("sqlite") => Mode::Standard,
                 other => bail!("unknown parse mode: {:?}", other),
             };
-            Ok(None)
+            parse_record(mode, input)
         }
 
         other => bail!("Unexpected start of record: {}", other),
@@ -167,7 +167,7 @@ fn parse_query<'a>(
 ) -> Result<Record<'a>, failure::Error> {
     if words.peek() == Some(&"error") {
         let error = parse_expected_error(first_line);
-        let sql = input;
+        let sql = parse_sql(input)?;
         return Ok(Record::Query {
             sql,
             output: Err(error),
@@ -230,7 +230,7 @@ fn parse_query<'a>(
     }
     let output_str = if multiline {
         split_at(input, &EOF_REGEX)?
-    } else if input.starts_with('\n') || input.starts_with('\r') {
+    } else if input.starts_with('\n') || input.starts_with('\r') || input.starts_with('#') {
         // QUERY_REGEX already ate a newline, so if there is one more left then the output must be empty
         ""
     } else {
