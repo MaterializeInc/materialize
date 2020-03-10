@@ -163,18 +163,17 @@ Materialize to maintain for us.
     ```
 
     ```nofmt
-    mysql_tpcch_customer
-    mysql_tpcch_district
-    mysql_tpcch_history
-    mysql_tpcch_item
-    mysql_tpcch_nation
-    mysql_tpcch_neworder
-    mysql_tpcch_order
-    mysql_tpcch_orderline
-    mysql_tpcch_region
-    mysql_tpcch_stock
-    mysql_tpcch_supplier
-    mysql_tpcch_warehouse
+    customer
+    district
+    item
+    nation
+    neworder
+    order
+    orderline
+    region
+    stock
+    supplier
+    warehouse
     ```
 
 1. Create a straightforward view of the underlying data.
@@ -189,7 +188,7 @@ Materialize to maintain for us.
         avg(ol_amount) as avg_amount,
         count(*) as count_order
     FROM
-        mysql_tpcch_orderline
+        orderline
     WHERE
         ol_delivery_d > date '1998-12-01'
     GROUP BY
@@ -221,13 +220,13 @@ Materialize to maintain for us.
         extract('year' FROM o_entry_d) AS l_year,
         sum(ol_amount) AS revenue
     FROM
-        mysql_tpcch_supplier,
-        mysql_tpcch_stock,
-        mysql_tpcch_orderline,
-        mysql_tpcch_order,
-        mysql_tpcch_customer,
-        mysql_tpcch_nation AS n1,
-        mysql_tpcch_nation AS n2
+        supplier,
+        stock,
+        orderline,
+        order,
+        customer,
+        nation AS n1,
+        nation AS n2
     WHERE
         ol_supply_w_id = s_w_id
         AND ol_i_id = s_i_id
@@ -254,18 +253,23 @@ Materialize to maintain for us.
     SELECT * FROM query07;
     ```
 
-    This query can take a few minutes to begin producing answers. If you receive
-    an empty set of results, either wait or disconnect from `mzcli` and relaunch
-    it.
-
-    Just like the prior reads from the materialized view, you should see these
-    results update, and the response times should be quick!
+    This query can take a few minutes to begin producing answers. Before answers
+    are produced, you will see the following error:
+    
+    ```nofmt
+   mz>  SELECT * FROM query07;
+   At least one input has no complete timestamps yet.
+    ```
+    
+    If you receive an empty set of results, either wait or disconnect from `mzcli` 
+    and relaunch it. Just like the prior reads from the materialized view, you 
+    should see these results update, and the response times should be quick!
 
 ### Set up Metabase
 
 1. In a browser, go to <localhost:3030>.
 
-1. Click **Get started**.
+1. Click **Let's get started**.
 
 1. Complete first set of fields asking for your email address. This information
    isn't crucial for anything but does have to be filled in.
