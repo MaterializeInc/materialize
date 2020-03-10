@@ -1077,7 +1077,12 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             };
 
             let mut desc = encoding.desc(envelope)?;
-            desc.add_cols(external_connector.metadata_columns());
+            // TODO(benesch): the available metadata columns should not depend
+            // on the format.
+            match encoding {
+                DataEncoding::Avro { .. } | DataEncoding::Protobuf { .. } => (),
+                _ => desc.add_cols(external_connector.metadata_columns()),
+            }
 
             let if_not_exists = *if_not_exists;
             let materialized = *materialized;
