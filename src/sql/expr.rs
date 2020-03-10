@@ -1084,13 +1084,21 @@ impl RelationExpr {
             RelationExpr::Filter { input, .. } | RelationExpr::TopK { input, .. } => {
                 input.typ(outers, params)
             }
-            RelationExpr::Join { left, right, .. } => RelationType::new(
-                left.typ(outers, params)
-                    .column_types
-                    .into_iter()
-                    .chain(right.typ(outers, params).column_types)
-                    .collect(),
-            ),
+            RelationExpr::Join {
+                left, right, kind, ..
+            } => {
+                let left_nullable = *kind == JoinKind::RightOuter || *kind == JoinKind::FullOuter;
+                let right_nullable = *kind == JoinKind::LeftOuter || *kind == JoinKind::FullOuter;
+                let lt = left.typ(outers, params).column_types.into_iter().map(|t| {
+                    let nullable = t.nullable || left_nullable;
+                    t.nullable(nullable)
+                });
+                let rt = right.typ(outers, params).column_types.into_iter().map(|t| {
+                    let nullable = t.nullable || right_nullable;
+                    t.nullable(nullable)
+                });
+                RelationType::new(lt.chain(rt).collect())
+            }
             RelationExpr::Reduce {
                 input,
                 group_key,

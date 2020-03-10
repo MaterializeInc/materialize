@@ -481,7 +481,7 @@ pub enum ExternalSourceConnector {
 impl ExternalSourceConnector {
     pub fn metadata_columns(&self) -> Vec<(ColumnType, Option<String>)> {
         match self {
-            Self::Kafka(_) => vec![],
+            Self::Kafka(_) => vec![(ColumnType::new(ScalarType::Int64), Some("mz_offset".into()))],
             Self::File(_) => vec![(
                 ColumnType::new(ScalarType::Int64),
                 Some("mz_line_no".into()),
