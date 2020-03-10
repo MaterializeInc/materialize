@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use lazy_static::lazy_static;
+use regex::Regex;
+
 use std::borrow::ToOwned;
 use std::collections::hash_map;
 use std::collections::{BTreeMap, HashMap};
@@ -36,10 +39,20 @@ pub struct BuiltinCommand {
 }
 
 #[derive(Debug)]
+pub enum SqlExpectedResult {
+    Full {
+        column_names: Vec<String>,
+        expected_rows: Vec<Vec<String>>,
+    },
+    Hashed {
+        num_values: usize,
+        md5: String,
+    },
+}
+#[derive(Debug)]
 pub struct SqlCommand {
     pub query: String,
-    pub column_names: Vec<String>,
-    pub expected_rows: Vec<Vec<String>>,
+    pub expected_result: SqlExpectedResult,
 }
 
 #[derive(Debug)]
@@ -107,10 +120,14 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
 
 fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     let (_, line1) = line_reader.next().unwrap();
+    let query = line1[1..].trim().to_owned();
     let line2 = slurp_one(line_reader);
     let line3 = slurp_one(line_reader);
     let mut column_names = Vec::new();
     let mut expected_rows = Vec::new();
+    lazy_static! {
+        static ref HASH_REGEX: Regex = Regex::new(r"^(\S+) values hashing to (\S+)$").unwrap();
+    }
     match (line2, line3) {
         (Some((pos2, line2)), Some((pos3, line3))) => {
             if line3.len() >= 3 && line3.chars().all(|c| c == '-') {
@@ -120,16 +137,37 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
                 expected_rows.push(split_line(pos3, &line3)?);
             }
         }
-        (Some((pos2, line2)), None) => expected_rows.push(split_line(pos2, &line2)?),
+        (Some((pos2, line2)), None) => match HASH_REGEX.captures(&line2) {
+            Some(captures) => match captures[1].parse::<usize>() {
+                Ok(num_values) => {
+                    return Ok(SqlCommand {
+                        query,
+                        expected_result: SqlExpectedResult::Hashed {
+                            num_values,
+                            md5: captures[2].to_owned(),
+                        },
+                    })
+                }
+                Err(err) => {
+                    return Err(InputError {
+                        pos: pos2,
+                        msg: format!("Error parsing number of expected rows: {}", err),
+                    });
+                }
+            },
+            None => expected_rows.push(split_line(pos2, &line2)?),
+        },
         _ => (),
     }
     while let Some((pos, line)) = slurp_one(line_reader) {
         expected_rows.push(split_line(pos, &line)?)
     }
     Ok(SqlCommand {
-        query: line1[1..].trim().to_owned(),
-        column_names,
-        expected_rows,
+        query,
+        expected_result: SqlExpectedResult::Full {
+            column_names,
+            expected_rows,
+        },
     })
 }
 

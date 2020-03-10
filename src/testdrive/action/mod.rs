@@ -21,12 +21,14 @@ use regex::{Captures, Regex};
 use repr::strconv;
 
 use crate::error::{Error, InputError, ResultExt};
-use crate::parser::{Command, PosCommand};
+use crate::parser::{Command, PosCommand, SqlExpectedResult};
 
 mod avro_ocf;
 mod file;
 mod kafka;
 mod sql;
+
+const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 
 /// User-settable configuration parameters.
 #[derive(Debug, Default)]
@@ -89,6 +91,7 @@ pub trait Action {
 pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
+    let mut sql_timeout = DEFAULT_SQL_TIMEOUT;
     vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
     vars.insert(
         "testdrive.kafka-addr-resolved".into(),
@@ -142,6 +145,16 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "file-write" => Box::new(file::build_write(builtin).map_err(wrap_err)?),
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
+                    "set-sql-timeout" => {
+                        let duration = builtin.args.string("duration").map_err(wrap_err)?;
+                        if duration.to_lowercase() == "default" {
+                            sql_timeout = DEFAULT_SQL_TIMEOUT;
+                        } else {
+                            sql_timeout = parse_duration::parse(&duration)
+                                .map_err(|e| wrap_err(e.to_string()))?;
+                        }
+                        continue;
+                    }
                     "set" => {
                         vars.extend(builtin.args);
                         continue;
@@ -157,12 +170,14 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             }
             Command::Sql(mut sql) => {
                 sql.query = subst(&sql.query)?;
-                for row in &mut sql.expected_rows {
-                    for col in row {
-                        *col = subst(col)?;
+                if let SqlExpectedResult::Full { expected_rows, .. } = &mut sql.expected_result {
+                    for row in expected_rows {
+                        for col in row {
+                            *col = subst(col)?;
+                        }
                     }
                 }
-                Box::new(sql::build_sql(sql).map_err(wrap_err)?)
+                Box::new(sql::build_sql(sql, sql_timeout).map_err(wrap_err)?)
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
