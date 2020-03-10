@@ -67,7 +67,8 @@ pub struct Args {
     #[structopt(long)]
     pub seed: Option<u64>,
 
-    /// A date to start generating records from. Default is a week before now
+    /// A date to start generating records from. Default is a week before now.
+    /// The input time format should be "%Y-%m-%dT%H:%M:%S"
     #[structopt(long, parse(try_from_str = parse_utc_datetime_from_str))]
     pub start_time: Option<DateTime<Utc>>,
 }
