@@ -140,15 +140,13 @@ pub fn describe_statement(
                     let mut relation_desc = RelationDesc::empty()
                         .add_column(col_name, ScalarType::String)
                         .add_column("TYPE", ScalarType::String);
-                    if !materialized {
-                        if ObjectType::View == object_type {
-                            relation_desc = relation_desc
-                                .add_column("QUERYABLE", ScalarType::Bool)
-                                .add_column("MATERIALIZED", ScalarType::Bool);
-                        } else if ObjectType::Source == object_type {
-                            relation_desc =
-                                relation_desc.add_column("MATERIALIZED", ScalarType::Bool);
-                        }
+                    if ObjectType::View == object_type {
+                        relation_desc = relation_desc.add_column("QUERYABLE", ScalarType::Bool);
+                    }
+                    if !materialized &&
+                        (ObjectType::View == object_type || ObjectType::Source == object_type)
+                    {
+                        relation_desc = relation_desc.add_column("MATERIALIZED", ScalarType::Bool);
                     }
                     relation_desc
                 } else {

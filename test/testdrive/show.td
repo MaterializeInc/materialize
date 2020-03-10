@@ -194,9 +194,9 @@ test1        USER true      false
 test2        USER false     false
 
 > SHOW FULL MATERIALIZED VIEWS
-VIEWS        TYPE
------------------
-names_view   USER
+VIEWS        TYPE  QUERYABLE
+----------------------------
+names_view   USER  true
 
 > SHOW FULL SOURCES FROM mz_catalog
 VIEWS                             TYPE   MATERIALIZED
@@ -247,10 +247,10 @@ test1        USER true      false
 test2        USER true      false
 
 > SHOW FULL MATERIALIZED VIEWS
-VIEWS        TYPE
------------------
-names_view   USER
-plurals_view USER
+VIEWS        TYPE  QUERYABLE
+----------------------------
+names_view   USER  true
+plurals_view USER  true
 
 > SHOW MATERIALIZED VIEWS
 VIEWS
@@ -275,9 +275,9 @@ test1        USER false     false
 test2        USER false     false
 
 > SHOW FULL MATERIALIZED VIEWS
-VIEWS        TYPE
------------------
-plurals_view USER
+VIEWS        TYPE  QUERYABLE
+----------------------------
+plurals_view USER  true
 
 > SHOW MATERIALIZED VIEWS
 VIEWS
