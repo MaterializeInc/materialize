@@ -255,14 +255,14 @@ Materialize to maintain for us.
 
     This query can take a few minutes to begin producing answers. Before answers
     are produced, you will see the following error:
-    
+
     ```nofmt
    mz>  SELECT * FROM query07;
    At least one input has no complete timestamps yet.
     ```
-    
-    If you receive an empty set of results, either wait or disconnect from `mzcli` 
-    and relaunch it. Just like the prior reads from the materialized view, you 
+
+    If you receive an empty set of results, either wait or disconnect from `mzcli`
+    and relaunch it. Just like the prior reads from the materialized view, you
     should see these results update, and the response times should be quick!
 
 ### Set up Metabase
