@@ -388,35 +388,18 @@ impl ScalarExpr {
         match self {
             ScalarExpr::Column(index) => datums[*index].clone(),
             ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
-            ScalarExpr::CallNullary(func) => func.eval(env, temp_storage).unwrap_or(Datum::Null),
-            ScalarExpr::CallUnary { func, expr } => {
-                let datum = expr.eval(datums, env, temp_storage);
-                if func.propagates_nulls() && datum.is_null() {
-                    Datum::Null
-                } else {
-                    func.eval(datum, env, temp_storage).unwrap_or(Datum::Null)
-                }
+            ScalarExpr::CallNullary(func) => {
+                func.eval(datums, env, temp_storage).unwrap_or(Datum::Null)
             }
-            ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let a = expr1.eval(datums, env, temp_storage);
-                let b = expr2.eval(datums, env, temp_storage);
-                if func.propagates_nulls() && (a.is_null() || b.is_null()) {
-                    Datum::Null
-                } else {
-                    func.eval(a, b, env, temp_storage).unwrap_or(Datum::Null)
-                }
-            }
-            ScalarExpr::CallVariadic { func, exprs } => {
-                let datums = exprs
-                    .iter()
-                    .map(|e| e.eval(datums, env, temp_storage))
-                    .collect::<Vec<_>>();
-                if func.propagates_nulls() && datums.iter().any(|e| e.is_null()) {
-                    Datum::Null
-                } else {
-                    func.eval(&datums, env, temp_storage).unwrap_or(Datum::Null)
-                }
-            }
+            ScalarExpr::CallUnary { func, expr } => func
+                .eval(datums, env, temp_storage, expr)
+                .unwrap_or(Datum::Null),
+            ScalarExpr::CallBinary { func, expr1, expr2 } => func
+                .eval(datums, env, temp_storage, expr1, expr2)
+                .unwrap_or(Datum::Null),
+            ScalarExpr::CallVariadic { func, exprs } => func
+                .eval(datums, env, temp_storage, exprs)
+                .unwrap_or(Datum::Null),
             ScalarExpr::If { cond, then, els } => match cond.eval(datums, env, temp_storage) {
                 Datum::True => then.eval(datums, env, temp_storage),
                 Datum::False | Datum::Null => els.eval(datums, env, temp_storage),

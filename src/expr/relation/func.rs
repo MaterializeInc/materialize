@@ -375,18 +375,28 @@ fn any<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    datums
-        .into_iter()
-        .fold(Datum::False, |a, b| crate::scalar::func::or(a, b))
+    for d in datums {
+        match d {
+            Datum::Null | Datum::True => return d,
+            Datum::False => (),
+            _ => unreachable!(),
+        }
+    }
+    Datum::False
 }
 
 fn all<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    datums
-        .into_iter()
-        .fold(Datum::True, |a, b| crate::scalar::func::and(a, b))
+    for d in datums {
+        match d {
+            Datum::Null | Datum::False => return d,
+            Datum::True => (),
+            _ => unreachable!(),
+        }
+    }
+    Datum::True
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
