@@ -412,7 +412,7 @@ In a future iteration, we'll make this demo more interactive.
 ### Preparing the environment
 
 1. Start the Docker daemon for your machine, and [follow our Docker integration
-   guide](../../integrations/docker).
+   guide](../../third-party/docker).
 
 1. Clone the Materialize repo:
 
