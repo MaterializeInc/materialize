@@ -1,0 +1,8 @@
+create_source_misc ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'FROM' 'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' (
+    'REGEX' regex |
+    'TEXT' |
+    'BYTES'
+  )

@@ -46,6 +46,12 @@ disableKinds = ["home"]
     parent = "sql"
 
     [[menu.main]]
+    identifier = "create-source"
+    name = "CREATE SOURCE"
+    url = "/docs/sql/create-source/"
+    parent = "sql"
+
+    [[menu.main]]
     identifier = "demos"
     name = "Demos"
     weight = 40

@@ -1,0 +1,5 @@
+create_source ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
+  'FORMAT' 'PROTOBUF MESSAGE' message_name
+  'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
