@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use repr::{Datum, Row, RowArena};
 
+use crate::transform::TransformError;
 use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
 pub use demorgans::DeMorgans;
@@ -25,20 +26,21 @@ impl super::Transform for FoldConstants {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) -> Result<(), crate::transform::TransformError> {
-        self.transform(relation, env);
-        Ok(())
+    ) -> Result<(), TransformError> {
+        self.transform(relation, env)
     }
 }
 
 impl FoldConstants {
-    pub fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
-        relation.visit_mut(&mut |e| {
-            self.action(e, env);
-        });
+    pub fn transform(
+        &self,
+        relation: &mut RelationExpr,
+        env: &EvalEnv,
+    ) -> Result<(), TransformError> {
+        relation.try_visit_mut(&mut |e| self.action(e, env))
     }
 
-    pub fn action(&self, relation: &mut RelationExpr, env: &EvalEnv) {
+    pub fn action(&self, relation: &mut RelationExpr, env: &EvalEnv) -> Result<(), TransformError> {
         match relation {
             RelationExpr::Constant { .. } => { /* handled after match */ }
             RelationExpr::Get { .. } => {}
@@ -71,11 +73,17 @@ impl FoldConstants {
                         let key = group_key
                             .iter()
                             .map(|e| e.eval(&datums, env, &temp_storage2))
-                            .collect::<Vec<_>>();
+                            .collect::<Result<Vec<_>, _>>()?;
                         let val = aggregates
                             .iter()
-                            .map(|agg| Row::pack(&[agg.expr.eval(&datums, env, &temp_storage)]))
-                            .collect::<Vec<_>>();
+                            .map(|agg| {
+                                Ok::<_, TransformError>(Row::pack(&[agg.expr.eval(
+                                    &datums,
+                                    env,
+                                    &temp_storage,
+                                )?]))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
                         let entry = groups.entry(key).or_insert_with(|| Vec::new());
                         for _ in 0..*diff {
                             entry.push(val.clone());
@@ -142,11 +150,11 @@ impl FoldConstants {
                             let mut unpacked = input_row.unpack();
                             let temp_storage = RowArena::new();
                             for scalar in scalars.iter() {
-                                unpacked.push(scalar.eval(&unpacked, env, &temp_storage))
+                                unpacked.push(scalar.eval(&unpacked, env, &temp_storage)?)
                             }
-                            (Row::pack(unpacked), diff)
+                            Ok::<_, TransformError>((Row::pack(unpacked), diff))
                         })
-                        .collect();
+                        .collect::<Result<_, _>>()?;
                     *relation = RelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
@@ -162,27 +170,19 @@ impl FoldConstants {
                 expr.reduce(&input.typ(), env);
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
-                    let new_rows = rows
-                        .iter()
-                        .cloned()
-                        .flat_map(|(input_row, diff)| {
-                            let datums = input_row.unpack();
-                            let temp_storage = RowArena::new();
-                            let output_rows = func.eval(
-                                expr.eval(&datums, env, &temp_storage),
-                                env,
-                                &temp_storage,
+                    let mut new_rows = Vec::new();
+                    for (input_row, diff) in rows {
+                        let datums = input_row.unpack();
+                        let temp_storage = RowArena::new();
+                        let output_rows =
+                            func.eval(expr.eval(&datums, env, &temp_storage)?, env, &temp_storage);
+                        for output_row in output_rows {
+                            let row = Row::pack(
+                                input_row.clone().into_iter().chain(output_row.into_iter()),
                             );
-                            output_rows.into_iter().map(move |output_row| {
-                                (
-                                    Row::pack(
-                                        input_row.clone().into_iter().chain(output_row.into_iter()),
-                                    ),
-                                    diff,
-                                )
-                            })
-                        })
-                        .collect();
+                            new_rows.push((row, *diff))
+                        }
+                    }
                     *relation = RelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
@@ -202,17 +202,17 @@ impl FoldConstants {
                 {
                     relation.take_safely();
                 } else if let RelationExpr::Constant { rows, .. } = &**input {
-                    let new_rows = rows
-                        .iter()
-                        .cloned()
-                        .filter(|(row, _diff)| {
-                            let datums = row.unpack();
-                            let temp_storage = RowArena::new();
-                            predicates
-                                .iter()
-                                .all(|p| p.eval(&datums, env, &temp_storage) == Datum::True)
-                        })
-                        .collect();
+                    let mut new_rows = Vec::new();
+                    'outer: for (row, diff) in rows {
+                        let datums = row.unpack();
+                        let temp_storage = RowArena::new();
+                        for p in &*predicates {
+                            if p.eval(&datums, env, &temp_storage)? != Datum::True {
+                                continue 'outer;
+                            }
+                        }
+                        new_rows.push((row.clone(), *diff))
+                    }
                     *relation = RelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
@@ -364,12 +364,16 @@ impl FoldConstants {
         if let RelationExpr::Constant { rows, .. } = relation {
             differential_dataflow::consolidation::consolidate(rows);
         }
+
+        Ok(())
     }
 }
 
 pub mod demorgans {
-    use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
     use std::collections::HashMap;
+
+    use crate::transform::TransformError;
+    use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 
     #[derive(Debug)]
     pub struct DeMorgans;
@@ -379,7 +383,7 @@ pub mod demorgans {
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
             _: &EvalEnv,
-        ) -> Result<(), crate::transform::TransformError> {
+        ) -> Result<(), TransformError> {
             self.transform(relation);
             Ok(())
         }
@@ -455,6 +459,7 @@ pub mod undistribute_and {
 
     use repr::{ColumnType, Datum, ScalarType};
 
+    use crate::transform::TransformError;
     use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
 
     #[derive(Debug)]
@@ -466,7 +471,7 @@ pub mod undistribute_and {
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
             _: &EvalEnv,
-        ) -> Result<(), crate::transform::TransformError> {
+        ) -> Result<(), TransformError> {
             self.transform(relation);
             Ok(())
         }
@@ -519,7 +524,7 @@ pub mod undistribute_and {
             suppress_ands(expr2, ands);
 
             // If either argument is in our list, replace it by `true`.
-            let tru = ScalarExpr::literal(Datum::True, ColumnType::new(ScalarType::Bool));
+            let tru = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool));
             if ands.contains(expr1) {
                 *expr = std::mem::replace(expr2, tru);
             } else if ands.contains(expr2) {

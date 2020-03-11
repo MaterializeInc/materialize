@@ -257,7 +257,7 @@ CREATE TABLE b (a INTEGER PRIMARY KEY)
 
 query I
 SELECT * FROM a UNION ALL SELECT * FROM b
-
+----
 
 # Make sure that UNION ALL doesn't crash when its two children have different
 # post-processing stages.

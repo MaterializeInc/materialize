@@ -620,123 +620,176 @@ impl RelationExpr {
         self.visit1(|e| e.global_uses(out))
     }
 
-    /// Applies `f` to each child `RelationExpr`.
-    pub fn visit1<'a, F>(&'a self, mut f: F)
+    /// Applies a fallible `f` to each child `RelationExpr`.
+    pub fn try_visit1<'a, F, E>(&'a self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(&'a Self),
+        F: FnMut(&'a Self) -> Result<(), E>,
     {
         match self {
             RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
             RelationExpr::Let { value, body, .. } => {
-                f(value);
-                f(body);
+                f(value)?;
+                f(body)?;
             }
             RelationExpr::Project { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::Map { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::FlatMapUnary { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::Filter { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::Join { inputs, .. } => {
                 for input in inputs {
-                    f(input);
+                    f(input)?;
                 }
             }
             RelationExpr::Reduce { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::TopK { input, .. } => {
-                f(input);
+                f(input)?;
             }
-            RelationExpr::Negate { input } => f(input),
-            RelationExpr::Threshold { input } => f(input),
+            RelationExpr::Negate { input } => f(input)?,
+            RelationExpr::Threshold { input } => f(input)?,
             RelationExpr::Union { left, right } => {
-                f(left);
-                f(right);
+                f(left)?;
+                f(right)?;
             }
             RelationExpr::ArrangeBy { input, .. } => {
-                f(input);
+                f(input)?;
             }
         }
+        Ok(())
     }
 
-    /// Post-order visitor for each `RelationExpr`.
+    /// Applies an infallible `f` to each child `RelationExpr`.
+    pub fn visit1<'a, F>(&'a self, mut f: F)
+    where
+        F: FnMut(&'a Self),
+    {
+        self.try_visit1(|e| {
+            f(e);
+            Ok::<_, ()>(())
+        })
+        .unwrap()
+    }
+
+    /// Post-order fallible visitor for each `RelationExpr`.
+    pub fn try_visit<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a Self) -> Result<(), E>,
+    {
+        self.try_visit1(|e| e.try_visit(f))?;
+        f(self)
+    }
+
+    /// Post-order infallible visitor for each `RelationExpr`.
     pub fn visit<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
     {
         self.visit1(|e| e.visit(f));
-        f(self);
+        f(self)
     }
 
-    /// Applies `f` to each child `RelationExpr`.
-    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
+    /// Applies fallible `f` to each child `RelationExpr`.
+    pub fn try_visit1_mut<'a, F, E>(&'a mut self, mut f: F) -> Result<(), E>
     where
-        F: FnMut(&'a mut Self),
+        F: FnMut(&'a mut Self) -> Result<(), E>,
     {
         match self {
             RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
             RelationExpr::Let { value, body, .. } => {
-                f(value);
-                f(body);
+                f(value)?;
+                f(body)?;
             }
             RelationExpr::Project { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::Map { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::FlatMapUnary { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::Filter { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::Join { inputs, .. } => {
                 for input in inputs {
-                    f(input);
+                    f(input)?;
                 }
             }
             RelationExpr::Reduce { input, .. } => {
-                f(input);
+                f(input)?;
             }
             RelationExpr::TopK { input, .. } => {
-                f(input);
+                f(input)?;
             }
-            RelationExpr::Negate { input } => f(input),
-            RelationExpr::Threshold { input } => f(input),
+            RelationExpr::Negate { input } => f(input)?,
+            RelationExpr::Threshold { input } => f(input)?,
             RelationExpr::Union { left, right } => {
-                f(left);
-                f(right);
+                f(left)?;
+                f(right)?;
             }
             RelationExpr::ArrangeBy { input, .. } => {
-                f(input);
+                f(input)?;
             }
         }
+        Ok(())
     }
 
-    /// Post-order visitor for each `RelationExpr`.
+    /// Applies infallible `f` to each child `RelationExpr`.
+    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
+    where
+        F: FnMut(&'a mut Self),
+    {
+        self.try_visit1_mut(|e| {
+            f(e);
+            Ok::<_, ()>(())
+        })
+        .unwrap()
+    }
+
+    /// Post-order fallible visitor for each `RelationExpr`.
+    pub fn try_visit_mut<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut Self) -> Result<(), E>,
+    {
+        self.try_visit1_mut(|e| e.try_visit_mut(f))?;
+        f(self)
+    }
+
+    /// Post-order infallible visitor for each `RelationExpr`.
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
         self.visit1_mut(|e| e.visit_mut(f));
-        f(self);
+        f(self)
     }
 
-    /// Pre-order visitor for each `RelationExpr`.
+    /// Pre-order fallible visitor for each `RelationExpr`.
+    pub fn try_visit_mut_pre<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut Self) -> Result<(), E>,
+    {
+        f(self)?;
+        self.try_visit1_mut(|e| e.try_visit_mut_pre(f))
+    }
+
+    /// Pre-order fallible visitor for each `RelationExpr`.
     pub fn visit_mut_pre<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
         f(self);
-        self.visit1_mut(|e| e.visit_mut_pre(f));
+        self.visit1_mut(|e| e.visit_mut_pre(f))
     }
 
     /// Pretty-print this RelationExpr to a string.

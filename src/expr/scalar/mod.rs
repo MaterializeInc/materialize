@@ -27,7 +27,7 @@ pub enum ScalarExpr {
     Column(usize),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
-    Literal(Row, ColumnType),
+    Literal(Result<Row, EvalError>, ColumnType),
     /// A function call that takes no arguments.
     CallNullary(NullaryFunc),
     /// A function call that takes one expression as an argument.
@@ -62,13 +62,17 @@ impl ScalarExpr {
         ScalarExpr::Column(column)
     }
 
-    pub fn literal(datum: Datum, typ: ColumnType) -> Self {
-        let row = Row::pack(&[datum]);
+    pub fn literal(res: Result<Datum, EvalError>, typ: ColumnType) -> Self {
+        let row = res.map(|datum| Row::pack(&[datum]));
         ScalarExpr::Literal(row, typ)
     }
 
+    pub fn literal_ok(datum: Datum, typ: ColumnType) -> Self {
+        ScalarExpr::literal(Ok(datum), typ)
+    }
+
     pub fn literal_null(typ: ColumnType) -> Self {
-        ScalarExpr::literal(Datum::Null, typ)
+        ScalarExpr::literal_ok(Datum::Null, typ)
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {
@@ -192,16 +196,13 @@ impl ScalarExpr {
     pub fn take(&mut self) -> Self {
         mem::replace(
             self,
-            ScalarExpr::Literal(
-                Row::pack(&[Datum::Null]),
-                ColumnType::new(ScalarType::Unknown),
-            ),
+            ScalarExpr::literal_null(ColumnType::new(ScalarType::Unknown)),
         )
     }
 
-    pub fn as_literal(&self) -> Option<Datum> {
-        if let ScalarExpr::Literal(row, _column_type) = self {
-            Some(row.unpack_first())
+    pub fn as_literal(&self) -> Option<Result<Datum, &EvalError>> {
+        if let ScalarExpr::Literal(lit, _column_type) = self {
+            Some(lit.as_ref().map(|row| row.unpack_first()))
         } else {
             None
         }
@@ -217,21 +218,35 @@ impl ScalarExpr {
 
     pub fn as_literal_str(&self) -> Option<&str> {
         match self.as_literal() {
-            Some(Datum::String(s)) => Some(s),
+            Some(Ok(Datum::String(s))) => Some(s),
             _ => None,
         }
     }
 
     pub fn is_literal_true(&self) -> bool {
-        Some(Datum::True) == self.as_literal()
+        Some(Ok(Datum::True)) == self.as_literal()
     }
 
     pub fn is_literal_false(&self) -> bool {
-        Some(Datum::False) == self.as_literal()
+        Some(Ok(Datum::False)) == self.as_literal()
     }
 
     pub fn is_literal_null(&self) -> bool {
-        Some(Datum::Null) == self.as_literal()
+        Some(Ok(Datum::Null)) == self.as_literal()
+    }
+
+    pub fn is_literal_ok(&self) -> bool {
+        match self {
+            ScalarExpr::Literal(Ok(_), _typ) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_literal_err(&self) -> bool {
+        match self {
+            ScalarExpr::Literal(Err(_), _typ) => true,
+            _ => false,
+        }
     }
 
     /// Reduces a complex expression where possible.
@@ -241,8 +256,8 @@ impl ScalarExpr {
     /// use repr::{ColumnType, Datum, RelationType, ScalarType};
     ///
     /// let expr_0 = ScalarExpr::Column(0);
-    /// let expr_t = ScalarExpr::literal(Datum::True, ColumnType::new(ScalarType::Bool));
-    /// let expr_f = ScalarExpr::literal(Datum::False, ColumnType::new(ScalarType::Bool));
+    /// let expr_t = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool));
+    /// let expr_f = ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool));
     ///
     /// let mut test =
     /// expr_t
@@ -276,6 +291,10 @@ impl ScalarExpr {
                     && func.propagates_nulls()
                 {
                     *e = ScalarExpr::literal_null(e.typ(relation_type));
+                } else if expr1.is_literal_err() {
+                    *e = expr1.take();
+                } else if expr2.is_literal_err() {
+                    *e = expr2.take();
                 } else if *func == BinaryFunc::MatchLikePattern && expr2.is_literal() {
                     // We can at least precompile the regex.
                     let pattern = expr2.as_literal_str().unwrap();
@@ -313,11 +332,14 @@ impl ScalarExpr {
                     *e = eval(e);
                 } else if func.propagates_nulls() && exprs.iter().any(|e| e.is_literal_null()) {
                     *e = ScalarExpr::literal_null(e.typ(&relation_type));
+                } else if let Some(err_expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
+                    *e = err_expr.take();
                 }
             }
             ScalarExpr::If { cond, then, els } => match cond.as_literal() {
-                Some(Datum::True) => *e = then.take(),
-                Some(Datum::False) | Some(Datum::Null) => *e = els.take(),
+                Some(Ok(Datum::True)) => *e = then.take(),
+                Some(Ok(Datum::False)) | Some(Ok(Datum::Null)) => *e = els.take(),
+                Some(Err(_)) => *e = cond.take(),
                 Some(_) => unreachable!(),
                 None => (),
             },
@@ -384,40 +406,20 @@ impl ScalarExpr {
         datums: &[Datum<'a>],
         env: &'a EvalEnv,
         temp_storage: &'a RowArena,
-    ) -> Datum<'a> {
+    ) -> Result<Datum<'a>, EvalError> {
         match self {
-            ScalarExpr::Column(index) => datums[*index].clone(),
-            ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
-            ScalarExpr::CallNullary(func) => func.eval(env, temp_storage).unwrap_or(Datum::Null),
-            ScalarExpr::CallUnary { func, expr } => {
-                let datum = expr.eval(datums, env, temp_storage);
-                if func.propagates_nulls() && datum.is_null() {
-                    Datum::Null
-                } else {
-                    func.eval(datum, env, temp_storage).unwrap_or(Datum::Null)
-                }
-            }
+            ScalarExpr::Column(index) => Ok(datums[*index].clone()),
+            ScalarExpr::Literal(res, _column_type) => match res {
+                Ok(row) => Ok(row.unpack_first()),
+                Err(e) => Err(e.clone()),
+            },
+            ScalarExpr::CallNullary(func) => func.eval(datums, env, temp_storage),
+            ScalarExpr::CallUnary { func, expr } => func.eval(datums, env, temp_storage, expr),
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let a = expr1.eval(datums, env, temp_storage);
-                let b = expr2.eval(datums, env, temp_storage);
-                if func.propagates_nulls() && (a.is_null() || b.is_null()) {
-                    Datum::Null
-                } else {
-                    func.eval(a, b, env, temp_storage).unwrap_or(Datum::Null)
-                }
+                func.eval(datums, env, temp_storage, expr1, expr2)
             }
-            ScalarExpr::CallVariadic { func, exprs } => {
-                let datums = exprs
-                    .iter()
-                    .map(|e| e.eval(datums, env, temp_storage))
-                    .collect::<Vec<_>>();
-                if func.propagates_nulls() && datums.iter().any(|e| e.is_null()) {
-                    Datum::Null
-                } else {
-                    func.eval(&datums, env, temp_storage).unwrap_or(Datum::Null)
-                }
-            }
-            ScalarExpr::If { cond, then, els } => match cond.eval(datums, env, temp_storage) {
+            ScalarExpr::CallVariadic { func, exprs } => func.eval(datums, env, temp_storage, exprs),
+            ScalarExpr::If { cond, then, els } => match cond.eval(datums, env, temp_storage)? {
                 Datum::True => then.eval(datums, env, temp_storage),
                 Datum::False | Datum::Null => els.eval(datums, env, temp_storage),
                 d => panic!("IF condition evaluated to non-boolean datum {:?}", d),

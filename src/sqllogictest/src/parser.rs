@@ -46,14 +46,6 @@ fn parse_types(input: &str) -> Result<Vec<Type>, failure::Error> {
         .collect()
 }
 
-fn parse_sql<'a>(input: &mut &'a str) -> Result<&'a str, failure::Error> {
-    lazy_static! {
-        static ref QUERY_OUTPUT_REGEX: Regex =
-            Regex::new("(\r?\n----\r?\n)|(\r?\n\r?\n)|$").unwrap();
-    }
-    split_at(input, &QUERY_OUTPUT_REGEX)
-}
-
 lazy_static! {
     static ref WHITESPACE_REGEX: Regex = Regex::new(r"\s+").unwrap();
 }
@@ -61,10 +53,9 @@ lazy_static! {
 pub fn parse_record<'a>(
     mode: &mut Mode,
     input: &mut &'a str,
-) -> Result<Option<Record<'a>>, failure::Error> {
+) -> Result<Record<'a>, failure::Error> {
     if *input == "" {
-        // must have just been a bunch of comments
-        return Ok(None);
+        return Ok(Record::Halt);
     }
 
     lazy_static! {
@@ -79,9 +70,9 @@ pub fn parse_record<'a>(
 
     let mut words = first_line.split(' ').peekable();
     match words.next().unwrap() {
-        "statement" => Ok(Some(parse_statement(words, first_line, input)?)),
+        "statement" => parse_statement(words, first_line, input),
 
-        "query" => Ok(Some(parse_query(words, first_line, input, *mode)?)),
+        "query" => parse_query(words, first_line, input, *mode),
 
         "hash-threshold" => {
             let threshold = words
@@ -89,33 +80,35 @@ pub fn parse_record<'a>(
                 .ok_or_else(|| format_err!("missing threshold in: {}", first_line))?
                 .parse::<u64>()
                 .map_err(|err| format_err!("invalid threshold ({}) in: {}", err, first_line))?;
-            Ok(Some(Record::HashThreshold { threshold }))
+            Ok(Record::HashThreshold { threshold })
         }
 
         // we'll follow the postgresql version of all these tests
         "skipif" => {
             match words.next().unwrap() {
-                "postgresql" => Ok(None),
-                _ => {
-                    // query starts on the next line
+                "postgresql" => {
+                    // discard next record
+                    parse_record(mode, input)?;
                     parse_record(mode, input)
                 }
+                _ => parse_record(mode, input),
             }
         }
         "onlyif" => {
             match words.next().unwrap() {
-                "postgresql" => {
-                    // query starts on the next line
+                "postgresql" => parse_record(mode, input),
+                _ => {
+                    // discard next record
+                    parse_record(mode, input)?;
                     parse_record(mode, input)
                 }
-                _ => Ok(None),
             }
         }
 
-        "halt" => Ok(Some(Record::Halt)),
+        "halt" => Ok(Record::Halt),
 
         // this is some cockroach-specific thing, we don't care
-        "subtest" | "user" | "kv-batch-size" => Ok(None),
+        "subtest" | "user" | "kv-batch-size" => parse_record(mode, input),
 
         "mode" => {
             *mode = match words.next() {
@@ -123,7 +116,7 @@ pub fn parse_record<'a>(
                 Some("standard") | Some("sqlite") => Mode::Standard,
                 other => bail!("unknown parse mode: {:?}", other),
             };
-            Ok(None)
+            parse_record(mode, input)
         }
 
         other => bail!("Unexpected start of record: {}", other),
@@ -151,7 +144,10 @@ fn parse_statement<'a>(
         Some("error") => expected_error = Some(parse_expected_error(first_line)),
         _ => bail!("invalid statement disposition: {}", first_line),
     };
-    let sql = parse_sql(input)?;
+    lazy_static! {
+        static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
+    }
+    let sql = split_at(input, &DOUBLE_LINE_REGEX)?;
     Ok(Record::Statement {
         expected_error,
         rows_affected,
@@ -167,7 +163,10 @@ fn parse_query<'a>(
 ) -> Result<Record<'a>, failure::Error> {
     if words.peek() == Some(&"error") {
         let error = parse_expected_error(first_line);
-        let sql = input;
+        lazy_static! {
+            static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
+        }
+        let sql = split_at(input, &DOUBLE_LINE_REGEX)?;
         return Ok(Record::Query {
             sql,
             output: Err(error),
@@ -207,15 +206,29 @@ fn parse_query<'a>(
     if multiline && (check_column_names || sort.yes()) {
         bail!("multiline option is incompatible with all other options");
     }
+    let label = words.next();
     lazy_static! {
         static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
         static ref HASH_REGEX: Regex = Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
+        static ref QUERY_OUTPUT_REGEX: Regex = Regex::new(r"\r?\n----").unwrap();
     }
-    let label = words.next();
-    let sql = parse_sql(input)?;
+    let sql = split_at(input, &QUERY_OUTPUT_REGEX)?;
+    lazy_static! {
+        static ref EOF_REGEX: Regex = Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap();
+        static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
+    }
+    let mut output_str = split_at(
+        input,
+        if multiline {
+            &EOF_REGEX
+        } else {
+            &DOUBLE_LINE_REGEX
+        },
+    )?
+    .trim_start();
     let column_names = if check_column_names {
         Some(
-            split_at(input, &LINE_REGEX)?
+            split_at(&mut output_str, &LINE_REGEX)?
                 .split(' ')
                 .filter(|s| !s.is_empty())
                 .map(ColumnName::from)
@@ -223,18 +236,6 @@ fn parse_query<'a>(
         )
     } else {
         None
-    };
-    lazy_static! {
-        static ref EOF_REGEX: Regex = Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap();
-        static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
-    }
-    let output_str = if multiline {
-        split_at(input, &EOF_REGEX)?
-    } else if input.starts_with('\n') || input.starts_with('\r') {
-        // QUERY_REGEX already ate a newline, so if there is one more left then the output must be empty
-        ""
-    } else {
-        split_at(input, &DOUBLE_LINE_REGEX)?
     };
     let output = match HASH_REGEX.captures(output_str) {
         Some(captures) => Output::Hashed {
@@ -244,9 +245,10 @@ fn parse_query<'a>(
         None => {
             if multiline {
                 Output::Values(vec![output_str.to_owned()])
+            } else if output_str.starts_with('\r') || output_str.starts_with('\n') {
+                Output::Values(vec![])
             } else {
-                let mut vals: Vec<String> =
-                    output_str.trim().lines().map(|s| s.to_owned()).collect();
+                let mut vals: Vec<String> = output_str.lines().map(|s| s.to_owned()).collect();
                 if let Mode::Cockroach = mode {
                     let mut rows: Vec<Vec<String>> = vec![];
                     for line in vals {
@@ -287,7 +289,6 @@ fn parse_query<'a>(
             mode,
             output,
             output_str,
-            multiline,
         }),
     })
 }
@@ -317,15 +318,12 @@ pub(crate) fn split_cols(line: &str, expected_columns: usize) -> Vec<&str> {
 }
 
 pub fn parse_records(mut input: &str) -> Result<Vec<Record>, failure::Error> {
-    lazy_static! {
-        static ref DOUBLE_LINE_REGEX: Regex = Regex::new("(\n|\r\n)(\n|\r\n)").unwrap();
-    }
     let mut mode = Mode::Standard;
     let mut records = vec![];
     loop {
         match parse_record(&mut mode, &mut input)? {
-            None | Some(Record::Halt) => break,
-            Some(record) => records.push(record),
+            Record::Halt => break,
+            record => records.push(record),
         }
     }
     Ok(records)

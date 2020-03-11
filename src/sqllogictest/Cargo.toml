@@ -5,13 +5,6 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[lib]
-path = "lib.rs"
-
-[[bin]]
-name = "sqllogictest"
-path = "main.rs"
-
 [dependencies]
 chrono = "0.4"
 comm = { path = "../comm" }
@@ -24,8 +17,7 @@ futures = "0.3"
 getopts = "0.2"
 itertools = "0.8.2"
 lazy_static = "1"
-md5 = "*"
-ordered-float = "*"
+md5 = "0.7.0"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 regex = "1"
@@ -33,7 +25,5 @@ repr = { path = "../repr" }
 serde_json = "1"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.2"
-uuid = "0.8"
 walkdir = "2"

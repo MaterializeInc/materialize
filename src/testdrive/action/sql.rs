@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::ascii;
 use std::env;
 use std::error::Error as _;
 use std::fmt::Write as _;
@@ -23,7 +24,6 @@ use sql_parser::parser::Parser as SqlParser;
 
 use ore::collections::CollectionExt;
 use pgrepr::{Interval, Numeric};
-use repr::strconv;
 
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand};
@@ -265,10 +265,9 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
             match *ty {
                 Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
                 Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
-                Type::BYTEA => row.get::<_, Option<&[u8]>>(i).map(|bytes| {
-                    let mut out = String::new();
-                    strconv::format_bytes(&mut out, &bytes);
-                    out
+                Type::BYTEA => row.get::<_, Option<Vec<u8>>>(i).map(|x| {
+                    let s = x.into_iter().map(ascii::escape_default).flatten().collect();
+                    String::from_utf8(s).unwrap()
                 }),
                 Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
                 Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),

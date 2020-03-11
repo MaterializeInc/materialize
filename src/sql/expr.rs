@@ -638,7 +638,7 @@ impl ScalarExpr {
 
         Ok(match self {
             Column(col_ref) => SS::Column(col_map.get(&col_ref)),
-            Literal(row, typ) => SS::Literal(row, typ),
+            Literal(row, typ) => SS::Literal(Ok(row), typ),
             Parameter(_) => panic!("cannot decorrelate expression with unbound parameters"),
             CallNullary(func) => SS::CallNullary(func),
             CallUnary { func, expr } => SS::CallUnary {
@@ -903,7 +903,7 @@ impl ScalarExpr {
 
         match self {
             Column(ColumnRef { level: 0, column }) => SS::Column(column),
-            Literal(datum, typ) => SS::Literal(datum, typ),
+            Literal(datum, typ) => SS::Literal(Ok(datum), typ),
             CallNullary(func) => SS::CallNullary(func),
             CallUnary { func, expr } => SS::CallUnary {
                 func,

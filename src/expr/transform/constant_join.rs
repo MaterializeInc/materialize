@@ -38,23 +38,18 @@ impl InsertConstantJoin {
 
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Map { input, scalars } = relation {
-            if scalars.iter().all(|e| e.is_literal()) {
+            if scalars.iter().all(|e| e.is_literal_ok()) {
                 if let RelationExpr::Join { inputs, .. } = &mut **input {
-                    let row = repr::Row::pack(scalars.iter().flat_map(|e| {
-                        if let ScalarExpr::Literal(row, _) = e {
-                            Some(row.unpack_first())
-                        } else {
-                            None
-                        }
-                    }));
+                    let row =
+                        repr::Row::pack(scalars.iter().map(|e| e.as_literal().unwrap().unwrap()));
                     let rows = vec![(row, 1)];
                     let typ = scalars
                         .iter()
-                        .flat_map(|e| {
+                        .map(|e| {
                             if let ScalarExpr::Literal(_, typ) = e {
-                                Some(typ.clone())
+                                typ.clone()
                             } else {
-                                None
+                                unreachable!()
                             }
                         })
                         .collect::<Vec<_>>();
@@ -114,7 +109,7 @@ impl RemoveConstantJoin {
                             let values = row
                                 .iter()
                                 .zip(typ.column_types)
-                                .map(|(d, t)| ScalarExpr::literal(d, t))
+                                .map(|(d, t)| ScalarExpr::literal_ok(d, t))
                                 .collect::<Vec<_>>();
                             map_arguments.extend(values.into_iter().rev());
                         } else {

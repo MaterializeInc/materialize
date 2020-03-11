@@ -110,32 +110,32 @@ CREATE TABLE date_trunc_timestamps (
 query T multiline
 EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
-Project {
-  outputs: [1],
-  Map {
-    scalars: [date_trunc_day #0],
-    Get { materialize.public.date_trunc_timestamps (u5) }
-  }
-}
+0 =
+| Get materialize.public.date_trunc_timestamps (u5)
+| Map date_trunc_day(#0)
+| Project (#1)
+
+EOF
 
 query T multiline
 EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
-Project {
-  outputs: [2],
-  Map {
-    scalars: [#0 date_trunc #1],
-    Join {
-      variables: [],
-      implementation: DifferentialLinear,
-      Get { materialize.public.date_trunc_timestamps (u5) },
-      ArrangeBy {
-        keys: [[]],
-        Get { materialize.public.date_trunc_fields (u1) }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.date_trunc_fields (u1)
+| ArrangeBy ()
+
+1 =
+| Get materialize.public.date_trunc_timestamps (u5)
+
+2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand for %0 = (#0)
+| | demand for %1 = (#0)
+| Map date_trunc(#0, #1)
+| Project (#2)
+
+EOF
 
 mode cockroach
 

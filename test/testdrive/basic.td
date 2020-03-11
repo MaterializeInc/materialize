@@ -536,10 +536,10 @@ test-string
 > CREATE MATERIALIZED VIEW test_bytes_view
   AS SELECT * FROM test_bytes;
 
+# TODO@jldlaughlin: Change the testdrive implementation to not display a string here?
 > select data FROM test_bytes_view;
-"\\x746573742d737472696e67"
+"test-string"
 
-# TODO: fix! This is failing, although it works locally.
 > select convert_from(data, 'utf8') FROM test_bytes_view;
 test-string
 

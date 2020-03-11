@@ -758,11 +758,11 @@ fn print_record(record: &Record) {
     }
 }
 
-pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
+pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcomes, failure::Error> {
     let mut outcomes = Outcomes::default();
     let mut state = State::start().unwrap();
     println!("==> {}", source);
-    for record in crate::parser::parse_records(&input).unwrap() {
+    for record in crate::parser::parse_records(&input)? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
@@ -796,41 +796,34 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             break;
         }
     }
-    outcomes
+    Ok(outcomes)
 }
 
-pub fn run_file(filename: &Path, verbosity: usize) -> Outcomes {
+pub fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, failure::Error> {
     let mut input = String::new();
-    File::open(filename)
-        .unwrap()
-        .read_to_string(&mut input)
-        .unwrap();
+    File::open(filename)?.read_to_string(&mut input)?;
     run_string(&format!("{}", filename.display()), &input, verbosity)
 }
 
-pub fn run_stdin(verbosity: usize) -> Outcomes {
+pub fn run_stdin(verbosity: usize) -> Result<Outcomes, failure::Error> {
     let mut input = String::new();
-    std::io::stdin().lock().read_to_string(&mut input).unwrap();
+    std::io::stdin().lock().read_to_string(&mut input)?;
     run_string("<stdin>", &input, verbosity)
 }
 
-pub fn rewrite_file(filename: &Path, _verbosity: usize) {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(filename)
-        .unwrap();
+pub fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), failure::Error> {
+    let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
     let mut input = String::new();
-    file.read_to_string(&mut input).unwrap();
+    file.read_to_string(&mut input)?;
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = State::start().unwrap();
+    let mut state = State::start()?;
     println!("==> {}", filename.display());
-    for record in crate::parser::parse_records(&input).unwrap() {
+    for record in crate::parser::parse_records(&input)? {
         let record = record;
-        let outcome = state.run_record(&record).unwrap();
+        let outcome = state.run_record(&record)?;
 
         // If we see an output failure for a query, rewrite the expected output
         // to match the observed output.
@@ -894,10 +887,11 @@ pub fn rewrite_file(filename: &Path, _verbosity: usize) {
         }
     }
 
-    file.set_len(0).unwrap();
-    file.seek(SeekFrom::Start(0)).unwrap();
-    file.write_all(buf.finish().as_bytes()).unwrap();
-    file.sync_all().unwrap();
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(buf.finish().as_bytes())?;
+    file.sync_all()?;
+    Ok(())
 }
 
 struct RewriteBuffer<'a> {
