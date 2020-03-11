@@ -10,7 +10,7 @@
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
-use std::str::FromStr;
+use std::str::{from_utf8, FromStr};
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
@@ -637,6 +637,26 @@ fn round_decimal<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
     let round_to = b.unwrap_int64();
     let decimal = a.unwrap_decimal().with_scale(a_scale);
     Datum::from(decimal.round(round_to).significand())
+}
+
+fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let encoding_name = b.unwrap_str().to_lowercase();
+    if encoding_name != "utf8" {
+        return Err(EvalError::InvalidEncodingName(encoding_name));
+    }
+
+    let bytes = a.unwrap_bytes();
+    match from_utf8(bytes) {
+        Ok(from) => Ok(Datum::String(from)),
+        Err(_e) => {
+            let mut byte_sequence = String::new();
+            strconv::format_bytes(&mut byte_sequence, &bytes);
+            Err(EvalError::InvalidByteSequence {
+                byte_sequence,
+                encoding_name,
+            })
+        }
+    }
 }
 
 fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1568,6 +1588,7 @@ pub enum BinaryFunc {
     JsonbContainsJsonb,
     JsonbDeleteInt64,
     JsonbDeleteString,
+    ConvertFrom,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1708,6 +1729,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal, *scale)),
+            BinaryFunc::ConvertFrom => eager!(convert_from),
         }
     }
 
@@ -1729,7 +1751,7 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Bool).nullable(true)
             }
 
-            ToCharTimestamp | ToCharTimestampTz => {
+            ToCharTimestamp | ToCharTimestampTz | ConvertFrom => {
                 ColumnType::new(ScalarType::String).nullable(false)
             }
 
@@ -1900,7 +1922,7 @@ impl BinaryFunc {
             | JsonbDeleteString
             | TextConcat => true,
             MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTrunc
-            | CastFloat32ToDecimal | CastFloat64ToDecimal | RoundDecimal(_) => false,
+            | CastFloat32ToDecimal | CastFloat64ToDecimal | RoundDecimal(_) | ConvertFrom => false,
         }
     }
 }
@@ -1971,6 +1993,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
+            BinaryFunc::ConvertFrom => f.write_str("convert_from"),
         }
     }
 }

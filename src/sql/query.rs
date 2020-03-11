@@ -2177,6 +2177,36 @@ fn plan_function<'a>(
                 Ok(expr.call_unary(UnaryFunc::ToTimestamp))
             }
 
+            "convert_from" => {
+                if sql_func.args.len() != 2 {
+                    bail!("convert_from requires exactly two arguments");
+                }
+
+                let str_expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::Bytes))?;
+                let str_type = ecx.column_type(&str_expr);
+                if str_type.scalar_type != ScalarType::Bytes {
+                    bail!(
+                        "convert_from requires a bytea value as its first argument, but got: {}",
+                        str_type.scalar_type
+                    );
+                }
+
+                let enc_expr = plan_expr(ecx, &sql_func.args[1], Some(ScalarType::String))?;
+                let enc_type = ecx.column_type(&enc_expr);
+                if enc_type.scalar_type != ScalarType::String {
+                    bail!(
+                        "convert_from requires a string as its second argument, but got: {}",
+                        enc_type.scalar_type
+                    );
+                }
+
+                Ok(ScalarExpr::CallBinary {
+                    func: BinaryFunc::ConvertFrom,
+                    expr1: Box::new(str_expr),
+                    expr2: Box::new(enc_expr),
+                })
+            }
+
             _ => {
                 if is_table_func(&name) {
                     bail!(
