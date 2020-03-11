@@ -105,5 +105,5 @@ To maintain materialized views, most RDBMSes occasionally re-run the view's unde
 
 ## Learn more
 
-- [Architecture overview](../architecture-overview) to understand Materialize's internal architecture
+- [Architecture overview](../architecture) to understand Materialize's internal architecture
 - [API overview](../api-components) to understand what Materialize's SQL API expresses
