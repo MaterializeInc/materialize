@@ -296,7 +296,7 @@ impl Parser {
                 };
                 Ok(Expr::UnaryOp {
                     op,
-                    expr: Box::new(self.parse_subexpr(Self::PLUS_MINUS_PREC)?),
+                    expr: Box::new(self.parse_subexpr(45)?),
                 })
             }
             Token::Number(_) | Token::SingleQuotedString(_) | Token::HexStringLiteral(_) => {
@@ -797,7 +797,6 @@ impl Parser {
 
     const UNARY_NOT_PREC: u8 = 15;
     const BETWEEN_PREC: u8 = 20;
-    const PLUS_MINUS_PREC: u8 = 30;
 
     /// Get the precedence of the next token
     pub fn get_next_precedence(&self) -> Result<u8, ParserError> {
@@ -825,7 +824,7 @@ impl Parser {
                 Token::Eq | Token::Lt | Token::LtEq | Token::Neq | Token::Gt | Token::GtEq => {
                     Ok(20)
                 }
-                Token::Plus | Token::Minus => Ok(Self::PLUS_MINUS_PREC),
+                Token::Plus | Token::Minus => Ok(30),
                 Token::Mult | Token::Div | Token::Mod => Ok(40),
                 Token::DoubleColon => Ok(50),
                 // TODO(jamii) it's not clear what precedence postgres gives to json operators
