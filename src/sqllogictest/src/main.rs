@@ -85,21 +85,33 @@ fn main() {
     let mut outcomes = Outcomes::default();
     for path in &popts.free {
         if path == "-" {
-            outcomes += sqllogictest::runner::run_stdin(verbosity);
+            match sqllogictest::runner::run_stdin(verbosity) {
+                Ok(o) => outcomes += o,
+                Err(err) => {
+                    eprintln!("error: parsing stdin: {}", err);
+                    bad_file = true;
+                }
+            }
         } else {
             for entry in WalkDir::new(path) {
                 match entry {
-                    Ok(entry) => {
-                        if entry.file_type().is_file() {
-                            let local_outcomes = runner::run_file(entry.path(), verbosity);
-                            if local_outcomes.any_failed() || verbosity >= 1 {
-                                println!("{}", util::indent(&local_outcomes.to_string(), 4));
+                    Ok(entry) if entry.file_type().is_file() => {
+                        match runner::run_file(entry.path(), verbosity) {
+                            Ok(o) => {
+                                if o.any_failed() || verbosity >= 1 {
+                                    println!("{}", util::indent(&o.to_string(), 4));
+                                }
+                                outcomes += o;
                             }
-                            outcomes += local_outcomes;
+                            Err(err) => {
+                                eprintln!("error: parsing file: {}", err);
+                                bad_file = true;
+                            }
                         }
                     }
+                    Ok(_) => (),
                     Err(err) => {
-                        eprintln!("{}", err);
+                        eprintln!("error: reading directory entry: {}", err);
                         bad_file = true;
                     }
                 }
@@ -145,11 +157,14 @@ fn rewrite(popts: getopts::Matches) {
             match entry {
                 Ok(entry) => {
                     if entry.file_type().is_file() {
-                        runner::rewrite_file(entry.path(), verbosity);
+                        if let Err(err) = runner::rewrite_file(entry.path(), verbosity) {
+                            eprintln!("error: rewriting file: {}", err);
+                            bad_file = true;
+                        }
                     }
                 }
                 Err(err) => {
-                    eprintln!("{}", err);
+                    eprintln!("error: reading directory entry: {}", err);
                     bad_file = true;
                 }
             }
