@@ -99,6 +99,26 @@ SELECT FALSE AND FALSE
 false
 
 query B
+SELECT TRUE AND NULL
+----
+NULL
+
+query B
+SELECT NULL AND TRUE
+----
+NULL
+
+query B
+SELECT FALSE AND null
+----
+false
+
+query B
+SELECT NULL AND FALSE
+----
+false
+
+query B
 SELECT TRUE OR FALSE
 ----
 true
@@ -112,6 +132,26 @@ query B
 SELECT FALSE OR FALSE
 ----
 false
+
+query B
+SELECT TRUE OR NULL
+----
+true
+
+query B
+SELECT NULL OR TRUE
+----
+true
+
+query B
+SELECT FALSE OR null
+----
+NULL
+
+query B
+SELECT NULL OR FALSE
+----
+NULL
 
 query B
 SELECT TRUE AND NOT TRUE
