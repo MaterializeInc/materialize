@@ -19,6 +19,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source misc/shlib/shlib.bash
 
+extra_lints=(
+    # All compiler warnings should be considered errors.
+    warnings
+
+    # Wildcard dependencies are, by definition, incorrect. It is impossible
+    # to be compatible with all future breaking changes in a crate.
+    clippy::wildcard_dependencies
+)
+
 # Add lints to this list freely, but please add a comment with justification
 # along with the lint. The goal is to ever-so-slightly increase the barrier to
 # turning off a lint.
@@ -167,4 +176,6 @@ disabled_lints=(
 # and the inputs to this script are trusted.
 
 # shellcheck disable=SC2046
-run cargo clippy --all-targets -- -D warnings $(printf -- "-A %s " "${disabled_lints[@]}")
+run cargo clippy --all-targets -- \
+    $(printf -- "-D %s " "${extra_lints[@]}") \
+    $(printf -- "-A %s " "${disabled_lints[@]}")

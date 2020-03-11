@@ -3068,7 +3068,6 @@ dependencies = [
  "itertools",
  "lazy_static",
  "md5",
- "ordered-float",
  "ore",
  "pgrepr",
  "regex",
@@ -3076,9 +3075,7 @@ dependencies = [
  "serde_json",
  "sql",
  "sql-parser",
- "timely",
  "tokio",
- "uuid",
  "walkdir",
 ]
 
