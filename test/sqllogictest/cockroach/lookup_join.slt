@@ -145,12 +145,14 @@ SELECT count(*) FROM (SELECT * FROM data WHERE c = 1) AS l NATURAL JOIN data AS 
 statement ok
 CREATE TABLE foo (a int, b int)
 
-statement okINSERT INTO foo VALUES (0, 1), (0, 2), (1, 1)
+statement ok
+INSERT INTO foo VALUES (0, 1), (0, 2), (1, 1)
 
 statement ok
 CREATE TABLE bar (a int PRIMARY KEY, c int)
 
-statement okINSERT INTO bar VALUES (0, 1), (1, 2), (2, 1)
+statement ok
+INSERT INTO bar VALUES (0, 1), (1, 2), (2, 1)
 
 query III rowsort
 SELECT * FROM foo NATURAL JOIN bar
