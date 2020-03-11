@@ -311,7 +311,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     context.set_trace(&get_expr, &index_desc.keys, arranged);
                     index_tokens.insert(id, Rc::new((button.press_on_drop(), token)));
                 } else {
-                    panic!("Index import alarmingly absent!")
+                    panic!(
+                        "import of index {} failed while building dataflow {}",
+                        id, first_export_id
+                    );
                 }
             }
 
