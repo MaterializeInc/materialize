@@ -82,8 +82,13 @@ pub fn and<'a>(
     b_expr: &'a ScalarExpr,
 ) -> Result<Datum<'a>, EvalError> {
     match a_expr.eval(datums, env, temp_storage)? {
-        Datum::True => b_expr.eval(datums, env, temp_storage),
-        d => Ok(d),
+        Datum::False => Ok(Datum::False),
+        a => match (a, b_expr.eval(datums, env, temp_storage)?) {
+            (_, Datum::False) => Ok(Datum::False),
+            (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
+            (Datum::True, Datum::True) => Ok(Datum::True),
+            _ => unreachable!(),
+        },
     }
 }
 
@@ -95,8 +100,13 @@ pub fn or<'a>(
     b_expr: &'a ScalarExpr,
 ) -> Result<Datum<'a>, EvalError> {
     match a_expr.eval(datums, env, temp_storage)? {
-        Datum::False => b_expr.eval(datums, env, temp_storage),
-        d => Ok(d),
+        Datum::True => Ok(Datum::True),
+        a => match (a, b_expr.eval(datums, env, temp_storage)?) {
+            (_, Datum::True) => Ok(Datum::True),
+            (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
+            (Datum::False, Datum::False) => Ok(Datum::False),
+            _ => unreachable!(),
+        },
     }
 }
 

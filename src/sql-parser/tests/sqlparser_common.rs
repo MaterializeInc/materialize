@@ -625,6 +625,21 @@ fn parse_unary_math() {
 }
 
 #[test]
+fn parse_unary_math_precedence() {
+    assert_eq!(
+        verified_expr("+ a / b"),
+        Expr::BinaryOp {
+            left: Box::new(Expr::UnaryOp {
+                op: UnaryOperator::Plus,
+                expr: Box::new(Expr::Identifier(Ident::new("a"))),
+            }),
+            op: BinaryOperator::Divide,
+            right: Box::new(Expr::Identifier(Ident::new("b"))),
+        }
+    )
+}
+
+#[test]
 fn parse_is_null() {
     use self::Expr::*;
     let sql = "a IS NULL";
