@@ -24,8 +24,7 @@ futures = "0.3"
 getopts = "0.2"
 itertools = "0.8.2"
 lazy_static = "1"
-md5 = "*"
-ordered-float = "*"
+md5 = "0.7.0"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 regex = "1"
@@ -33,7 +32,5 @@ repr = { path = "../repr" }
 serde_json = "1"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.2"
-uuid = "0.8"
 walkdir = "2"
