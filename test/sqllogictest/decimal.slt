@@ -308,10 +308,8 @@ SELECT CAST (3.141529::float AS decimal(38, 8))
 3.14152900
 
 # Numeric overflow
-query R
+query error numeric field overflow
 SELECT CAST (100::float AS decimal(38, 37))
-----
-NULL
 
 # Null input
 query R

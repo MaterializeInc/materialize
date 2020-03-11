@@ -539,7 +539,7 @@ where
                             // Scalar is allowed to see the outputs of previous scalars.
                             // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
                             // Note that this doesn't mutate input_row.
-                            datums.push(datum);
+                            datums.push(datum.unwrap_or(Datum::Null));
                         }
                         Row::pack(&*datums)
                     });
@@ -585,8 +585,10 @@ where
                         let datums = input_row.unpack();
                         let replace = replace.clone();
                         let temp_storage = RowArena::new();
-                        let output_rows =
-                            func.eval(expr.eval(&datums, &env, &temp_storage), &env, &temp_storage);
+                        let expr = expr
+                            .eval(&datums, &env, &temp_storage)
+                            .unwrap_or(Datum::Null);
+                        let output_rows = func.eval(expr, &env, &temp_storage);
                         output_rows
                             .into_iter()
                             .map(move |output_row| {
@@ -642,7 +644,10 @@ where
                         self.collection(input).unwrap().filter(move |input_row| {
                             let datums = input_row.unpack();
                             predicates.iter().all(|predicate| {
-                                match predicate.eval(&datums, &env, &temp_storage) {
+                                match predicate
+                                    .eval(&datums, &env, &temp_storage)
+                                    .unwrap_or(Datum::Null)
+                                {
                                     Datum::True => true,
                                     Datum::False | Datum::Null => false,
                                     _ => unreachable!(),
@@ -740,9 +745,9 @@ where
                         .map(move |row| {
                             let datums = row.unpack();
                             let temp_storage = RowArena::new();
-                            let key_row = Row::pack(
-                                keys2.iter().map(|k| k.eval(&datums, &env, &temp_storage)),
-                            );
+                            let key_row = Row::pack(keys2.iter().map(|k| {
+                                k.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)
+                            }));
                             (key_row, row)
                         })
                         .arrange_named::<OrdValSpine<_, _, _, _>>(&name);

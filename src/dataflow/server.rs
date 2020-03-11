@@ -807,7 +807,10 @@ impl PendingPeek {
                 // we have, let's eliminate rows that we don't care about.
                 if self.filter.iter().all(|predicate| {
                     let temp_storage = RowArena::new();
-                    predicate.eval(&datums, &self.eval_env, &temp_storage) == Datum::True
+                    predicate
+                        .eval(&datums, &self.eval_env, &temp_storage)
+                        .unwrap_or(Datum::Null)
+                        == Datum::True
                 }) {
                     // Differential dataflow represents collections with binary counts,
                     // but our output representation is unary (as many rows as reported

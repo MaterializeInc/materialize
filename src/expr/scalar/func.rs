@@ -23,7 +23,7 @@ use repr::regex::Regex;
 use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
-use crate::{like_pattern, EvalEnv, EvalError};
+use crate::{like_pattern, EvalEnv, EvalError, ScalarExpr};
 
 mod format;
 
@@ -36,6 +36,7 @@ pub enum NullaryFunc {
 impl NullaryFunc {
     pub fn eval<'a>(
         &'a self,
+        _datums: &[Datum<'a>],
         env: &'a EvalEnv,
         _temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
@@ -73,25 +74,29 @@ fn now(env: &EvalEnv) -> Datum<'static> {
     Datum::from(env.wall_time.expect("now missing wall time in env"))
 }
 
-pub fn and<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    match (a, b) {
-        (Datum::False, _) => Datum::False,
-        (_, Datum::False) => Datum::False,
-        (Datum::Null, _) => Datum::Null,
-        (_, Datum::Null) => Datum::Null,
-        (Datum::True, Datum::True) => Datum::True,
-        _ => unreachable!(),
+pub fn and<'a>(
+    datums: &[Datum<'a>],
+    env: &'a EvalEnv,
+    temp_storage: &'a RowArena,
+    a_expr: &'a ScalarExpr,
+    b_expr: &'a ScalarExpr,
+) -> Result<Datum<'a>, EvalError> {
+    match a_expr.eval(datums, env, temp_storage)? {
+        Datum::True => b_expr.eval(datums, env, temp_storage),
+        d => Ok(d),
     }
 }
 
-pub fn or<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    match (a, b) {
-        (Datum::True, _) => Datum::True,
-        (_, Datum::True) => Datum::True,
-        (Datum::Null, _) => Datum::Null,
-        (_, Datum::Null) => Datum::Null,
-        (Datum::False, Datum::False) => Datum::False,
-        _ => unreachable!(),
+pub fn or<'a>(
+    datums: &[Datum<'a>],
+    env: &'a EvalEnv,
+    temp_storage: &'a RowArena,
+    a_expr: &'a ScalarExpr,
+    b_expr: &'a ScalarExpr,
+) -> Result<Datum<'a>, EvalError> {
+    match a_expr.eval(datums, env, temp_storage)? {
+        Datum::False => b_expr.eval(datums, env, temp_storage),
+        d => Ok(d),
     }
 }
 
@@ -1612,75 +1617,87 @@ impl FromStr for DateTruncTo {
 impl BinaryFunc {
     pub fn eval<'a>(
         &'a self,
-        a: Datum<'a>,
-        b: Datum<'a>,
-        _env: &'a EvalEnv,
+        datums: &[Datum<'a>],
+        env: &'a EvalEnv,
         temp_storage: &'a RowArena,
+        a_expr: &'a ScalarExpr,
+        b_expr: &'a ScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
+        macro_rules! eager {
+            ($func:ident $(, $args:expr)*) => {{
+                let a = a_expr.eval(datums, env, temp_storage)?;
+                let b = b_expr.eval(datums, env, temp_storage)?;
+                if self.propagates_nulls() && (a.is_null() || b.is_null()) {
+                    return Ok(Datum::Null);
+                }
+                $func(a, b $(, $args)*)
+            }}
+        }
+
         match self {
-            BinaryFunc::And => Ok(and(a, b)),
-            BinaryFunc::Or => Ok(or(a, b)),
-            BinaryFunc::AddInt32 => Ok(add_int32(a, b)),
-            BinaryFunc::AddInt64 => Ok(add_int64(a, b)),
-            BinaryFunc::AddFloat32 => Ok(add_float32(a, b)),
-            BinaryFunc::AddFloat64 => Ok(add_float64(a, b)),
-            BinaryFunc::AddTimestampInterval => Ok(add_timestamp_interval(a, b)),
-            BinaryFunc::AddTimestampTzInterval => Ok(add_timestamptz_interval(a, b)),
-            BinaryFunc::AddDateTime => Ok(add_date_time(a, b)),
-            BinaryFunc::AddDateInterval => Ok(add_date_interval(a, b)),
-            BinaryFunc::AddTimeInterval => Ok(add_time_interval(a, b)),
-            BinaryFunc::AddDecimal => Ok(add_decimal(a, b)),
-            BinaryFunc::AddInterval => Ok(add_interval(a, b)),
-            BinaryFunc::SubInt32 => Ok(sub_int32(a, b)),
-            BinaryFunc::SubInt64 => Ok(sub_int64(a, b)),
-            BinaryFunc::SubFloat32 => Ok(sub_float32(a, b)),
-            BinaryFunc::SubFloat64 => Ok(sub_float64(a, b)),
-            BinaryFunc::SubTimestamp => Ok(sub_timestamp(a, b)),
-            BinaryFunc::SubTimestampTz => Ok(sub_timestamptz(a, b)),
-            BinaryFunc::SubTimestampInterval => Ok(sub_timestamp_interval(a, b)),
-            BinaryFunc::SubTimestampTzInterval => Ok(sub_timestamptz_interval(a, b)),
-            BinaryFunc::SubInterval => Ok(sub_interval(a, b)),
-            BinaryFunc::SubDate => Ok(sub_date(a, b)),
-            BinaryFunc::SubDateInterval => Ok(sub_date_interval(a, b)),
-            BinaryFunc::SubTime => Ok(sub_time(a, b)),
-            BinaryFunc::SubTimeInterval => Ok(sub_time_interval(a, b)),
-            BinaryFunc::SubDecimal => Ok(sub_decimal(a, b)),
-            BinaryFunc::MulInt32 => Ok(mul_int32(a, b)),
-            BinaryFunc::MulInt64 => Ok(mul_int64(a, b)),
-            BinaryFunc::MulFloat32 => Ok(mul_float32(a, b)),
-            BinaryFunc::MulFloat64 => Ok(mul_float64(a, b)),
-            BinaryFunc::MulDecimal => Ok(mul_decimal(a, b)),
-            BinaryFunc::DivInt32 => div_int32(a, b),
-            BinaryFunc::DivInt64 => div_int64(a, b),
-            BinaryFunc::DivFloat32 => div_float32(a, b),
-            BinaryFunc::DivFloat64 => div_float64(a, b),
-            BinaryFunc::DivDecimal => div_decimal(a, b),
-            BinaryFunc::ModInt32 => mod_int32(a, b),
-            BinaryFunc::ModInt64 => mod_int64(a, b),
-            BinaryFunc::ModFloat32 => mod_float32(a, b),
-            BinaryFunc::ModFloat64 => mod_float64(a, b),
-            BinaryFunc::ModDecimal => mod_decimal(a, b),
-            BinaryFunc::Eq => Ok(eq(a, b)),
-            BinaryFunc::NotEq => Ok(not_eq(a, b)),
-            BinaryFunc::Lt => Ok(lt(a, b)),
-            BinaryFunc::Lte => Ok(lte(a, b)),
-            BinaryFunc::Gt => Ok(gt(a, b)),
-            BinaryFunc::Gte => Ok(gte(a, b)),
-            BinaryFunc::MatchLikePattern => match_like_pattern(a, b),
-            BinaryFunc::ToCharTimestamp => Ok(to_char_timestamp(a, b, temp_storage)),
-            BinaryFunc::ToCharTimestampTz => Ok(to_char_timestamptz(a, b, temp_storage)),
-            BinaryFunc::DateTrunc => date_trunc(a, b),
-            BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal(a, b),
-            BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal(a, b),
-            BinaryFunc::TextConcat => Ok(text_concat_binary(a, b, temp_storage)),
-            BinaryFunc::JsonbGetInt64 => Ok(jsonb_get_int64(a, b)),
-            BinaryFunc::JsonbGetString => Ok(jsonb_get_string(a, b)),
-            BinaryFunc::JsonbContainsString => Ok(jsonb_contains_string(a, b)),
-            BinaryFunc::JsonbConcat => Ok(jsonb_concat(a, b, temp_storage)),
-            BinaryFunc::JsonbContainsJsonb => Ok(jsonb_contains_jsonb(a, b)),
-            BinaryFunc::JsonbDeleteInt64 => Ok(jsonb_delete_int64(a, b, temp_storage)),
-            BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
-            BinaryFunc::RoundDecimal(scale) => Ok(round_decimal(a, b, *scale)),
+            BinaryFunc::And => and(datums, env, temp_storage, a_expr, b_expr),
+            BinaryFunc::Or => or(datums, env, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddInt32 => Ok(eager!(add_int32)),
+            BinaryFunc::AddInt64 => Ok(eager!(add_int64)),
+            BinaryFunc::AddFloat32 => Ok(eager!(add_float32)),
+            BinaryFunc::AddFloat64 => Ok(eager!(add_float64)),
+            BinaryFunc::AddTimestampInterval => Ok(eager!(add_timestamp_interval)),
+            BinaryFunc::AddTimestampTzInterval => Ok(eager!(add_timestamptz_interval)),
+            BinaryFunc::AddDateTime => Ok(eager!(add_date_time)),
+            BinaryFunc::AddDateInterval => Ok(eager!(add_date_interval)),
+            BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
+            BinaryFunc::AddDecimal => Ok(eager!(add_decimal)),
+            BinaryFunc::AddInterval => Ok(eager!(add_interval)),
+            BinaryFunc::SubInt32 => Ok(eager!(sub_int32)),
+            BinaryFunc::SubInt64 => Ok(eager!(sub_int64)),
+            BinaryFunc::SubFloat32 => Ok(eager!(sub_float32)),
+            BinaryFunc::SubFloat64 => Ok(eager!(sub_float64)),
+            BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
+            BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
+            BinaryFunc::SubTimestampInterval => Ok(eager!(sub_timestamp_interval)),
+            BinaryFunc::SubTimestampTzInterval => Ok(eager!(sub_timestamptz_interval)),
+            BinaryFunc::SubInterval => Ok(eager!(sub_interval)),
+            BinaryFunc::SubDate => Ok(eager!(sub_date)),
+            BinaryFunc::SubDateInterval => Ok(eager!(sub_date_interval)),
+            BinaryFunc::SubTime => Ok(eager!(sub_time)),
+            BinaryFunc::SubTimeInterval => Ok(eager!(sub_time_interval)),
+            BinaryFunc::SubDecimal => Ok(eager!(sub_decimal)),
+            BinaryFunc::MulInt32 => Ok(eager!(mul_int32)),
+            BinaryFunc::MulInt64 => Ok(eager!(mul_int64)),
+            BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
+            BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
+            BinaryFunc::MulDecimal => Ok(eager!(mul_decimal)),
+            BinaryFunc::DivInt32 => eager!(div_int32),
+            BinaryFunc::DivInt64 => eager!(div_int64),
+            BinaryFunc::DivFloat32 => eager!(div_float32),
+            BinaryFunc::DivFloat64 => eager!(div_float64),
+            BinaryFunc::DivDecimal => eager!(div_decimal),
+            BinaryFunc::ModInt32 => eager!(mod_int32),
+            BinaryFunc::ModInt64 => eager!(mod_int64),
+            BinaryFunc::ModFloat32 => eager!(mod_float32),
+            BinaryFunc::ModFloat64 => eager!(mod_float64),
+            BinaryFunc::ModDecimal => eager!(mod_decimal),
+            BinaryFunc::Eq => Ok(eager!(eq)),
+            BinaryFunc::NotEq => Ok(eager!(not_eq)),
+            BinaryFunc::Lt => Ok(eager!(lt)),
+            BinaryFunc::Lte => Ok(eager!(lte)),
+            BinaryFunc::Gt => Ok(eager!(gt)),
+            BinaryFunc::Gte => Ok(eager!(gte)),
+            BinaryFunc::MatchLikePattern => eager!(match_like_pattern),
+            BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
+            BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
+            BinaryFunc::DateTrunc => eager!(date_trunc),
+            BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
+            BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
+            BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
+            BinaryFunc::JsonbGetInt64 => Ok(eager!(jsonb_get_int64)),
+            BinaryFunc::JsonbGetString => Ok(eager!(jsonb_get_string)),
+            BinaryFunc::JsonbContainsString => Ok(eager!(jsonb_contains_string)),
+            BinaryFunc::JsonbConcat => Ok(eager!(jsonb_concat, temp_storage)),
+            BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
+            BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
+            BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
+            BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal, *scale)),
         }
     }
 
@@ -2073,10 +2090,16 @@ pub enum UnaryFunc {
 impl UnaryFunc {
     pub fn eval<'a>(
         &'a self,
-        a: Datum<'a>,
-        _env: &'a EvalEnv,
+        datums: &[Datum<'a>],
+        env: &'a EvalEnv,
         temp_storage: &'a RowArena,
+        a: &'a ScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, env, temp_storage)?;
+        if self.propagates_nulls() && a.is_null() {
+            return Ok(Datum::Null);
+        }
+
         match self {
             UnaryFunc::Not => Ok(not(a)),
             UnaryFunc::IsNull => Ok(is_null(a)),
@@ -2525,12 +2548,19 @@ impl fmt::Display for UnaryFunc {
     }
 }
 
-fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    datums
-        .iter()
-        .find(|d| !d.is_null())
-        .cloned()
-        .unwrap_or(Datum::Null)
+fn coalesce<'a>(
+    datums: &[Datum<'a>],
+    env: &'a EvalEnv,
+    temp_storage: &'a RowArena,
+    exprs: &'a [ScalarExpr],
+) -> Result<Datum<'a>, EvalError> {
+    for e in exprs {
+        let d = e.eval(datums, env, temp_storage)?;
+        if !d.is_null() {
+            return Ok(d);
+        }
+    }
+    Ok(Datum::Null)
 }
 
 fn text_concat_binary<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -2698,18 +2728,31 @@ impl VariadicFunc {
     pub fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
-        _env: &'a EvalEnv,
+        env: &'a EvalEnv,
         temp_storage: &'a RowArena,
+        exprs: &'a [ScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
+        macro_rules! eager {
+            ($func:ident $(, $args:expr)*) => {{
+                let ds = exprs.iter()
+                    .map(|e| e.eval(datums, env, temp_storage))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
+                    return Ok(Datum::Null);
+                }
+                $func(&ds $(, $args)*)
+            }}
+        }
+
         match self {
-            VariadicFunc::Coalesce => Ok(coalesce(datums)),
-            VariadicFunc::Concat => Ok(text_concat_variadic(datums, temp_storage)),
-            VariadicFunc::MakeTimestamp => Ok(make_timestamp(datums)),
-            VariadicFunc::Substr => Ok(substr(datums)),
-            VariadicFunc::LengthString => length_string(datums),
-            VariadicFunc::Replace => Ok(replace(datums, temp_storage)),
-            VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(datums, temp_storage)),
-            VariadicFunc::JsonbBuildObject => Ok(jsonb_build_object(datums, temp_storage)),
+            VariadicFunc::Coalesce => coalesce(datums, env, temp_storage, exprs),
+            VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
+            VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
+            VariadicFunc::Substr => Ok(eager!(substr)),
+            VariadicFunc::LengthString => eager!(length_string),
+            VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
+            VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
+            VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
         }
     }
 

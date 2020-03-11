@@ -429,11 +429,5 @@ true
 
 # Test bad escaping.
 
-# TODO(benesch): this should return "LIKE pattern must not end with escape
-# character." Since we don't yet support runtime errors, it currently
-# returns NULL instead.
-
-query B
+query error unterminated escape sequence in LIKE
 SELECT 'a' LIKE '\'
-----
-NULL
