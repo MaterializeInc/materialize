@@ -289,7 +289,6 @@ fn parse_query<'a>(
             mode,
             output,
             output_str,
-            multiline,
         }),
     })
 }
@@ -319,9 +318,6 @@ pub(crate) fn split_cols(line: &str, expected_columns: usize) -> Vec<&str> {
 }
 
 pub fn parse_records(mut input: &str) -> Result<Vec<Record>, failure::Error> {
-    lazy_static! {
-        static ref DOUBLE_LINE_REGEX: Regex = Regex::new("(\n|\r\n)(\n|\r\n)").unwrap();
-    }
     let mut mode = Mode::Standard;
     let mut records = vec![];
     loop {
