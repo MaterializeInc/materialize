@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use repr::Datum;
-use repr::{ColumnType, ScalarType};
+use repr::{ColumnType, RelationType, ScalarType};
 
 use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 
@@ -24,15 +24,20 @@ impl super::Transform for ColumnKnowledge {
         expr: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) {
+    ) -> Result<(), super::TransformError> {
         self.transform(expr, env)
     }
 }
 
 impl ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
-    pub fn transform(&self, expr: &mut RelationExpr, env: &EvalEnv) {
+    pub fn transform(
+        &self,
+        expr: &mut RelationExpr,
+        env: &EvalEnv,
+    ) -> Result<(), super::TransformError> {
         ColumnKnowledge::harvest(expr, env, &mut HashMap::new());
+        Ok(())
     }
 
     /// Harvest per-column knowledge.
@@ -96,7 +101,7 @@ impl ColumnKnowledge {
             RelationExpr::Map { input, scalars } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, env, knowledge);
                 for scalar in scalars.iter_mut() {
-                    let know = optimize(scalar, env, &input_knowledge[..]);
+                    let know = optimize(scalar, &input.typ(), env, &input_knowledge[..]);
                     input_knowledge.push(know);
                 }
                 input_knowledge
@@ -108,7 +113,7 @@ impl ColumnKnowledge {
                 demand: _,
             } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, env, knowledge);
-                optimize(expr, env, &input_knowledge[..]);
+                optimize(expr, &input.typ(), env, &input_knowledge[..]);
                 let func_typ = func.output_type(&expr.typ(&input.typ()));
                 input_knowledge.extend(func_typ.column_types.into_iter().map(|typ| {
                     DatumKnowledge {
@@ -121,7 +126,7 @@ impl ColumnKnowledge {
             RelationExpr::Filter { input, predicates } => {
                 let input_knowledge = ColumnKnowledge::harvest(input, env, knowledge);
                 for predicate in predicates.iter_mut() {
-                    optimize(predicate, env, &input_knowledge[..]);
+                    optimize(predicate, &input.typ(), env, &input_knowledge[..]);
                 }
                 // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
                 // I guess we implement that later on.
@@ -157,7 +162,7 @@ impl ColumnKnowledge {
                 let input_knowledge = ColumnKnowledge::harvest(input, env, knowledge);
                 let mut output = group_key
                     .iter_mut()
-                    .map(|k| optimize(k, env, &input_knowledge[..]))
+                    .map(|k| optimize(k, &input.typ(), env, &input_knowledge[..]))
                     .collect::<Vec<_>>();
                 for _aggregate in aggregates {
                     // This could be improved.
@@ -212,6 +217,7 @@ impl DatumKnowledge {
 /// Attempts to optimize
 pub fn optimize(
     expr: &mut ScalarExpr,
+    input_type: &RelationType,
     env: &EvalEnv,
     column_knowledge: &[DatumKnowledge],
 ) -> DatumKnowledge {
@@ -228,20 +234,20 @@ pub fn optimize(
             nullable: row.unpack_first() == Datum::Null,
         },
         ScalarExpr::CallNullary(_) => {
-            expr.reduce(env);
-            optimize(expr, env, column_knowledge)
+            expr.reduce(input_type, env);
+            optimize(expr, input_type, env, column_knowledge)
         }
         ScalarExpr::CallUnary { func, expr: inner } => {
-            let knowledge = optimize(inner, env, column_knowledge);
+            let knowledge = optimize(inner, input_type, env, column_knowledge);
             if knowledge.value.is_some() {
-                expr.reduce(env);
-                optimize(expr, env, column_knowledge)
+                expr.reduce(input_type, env);
+                optimize(expr, input_type, env, column_knowledge)
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
                 *expr = ScalarExpr::Literal(
                     repr::Row::pack(Some(Datum::False)),
                     ColumnType::new(ScalarType::Bool).nullable(false),
                 );
-                optimize(expr, env, column_knowledge)
+                optimize(expr, input_type, env, column_knowledge)
             } else {
                 DatumKnowledge {
                     value: None,
@@ -254,11 +260,11 @@ pub fn optimize(
             expr1,
             expr2,
         } => {
-            let knowledge1 = optimize(expr1, env, column_knowledge);
-            let knowledge2 = optimize(expr2, env, column_knowledge);
+            let knowledge1 = optimize(expr1, input_type, env, column_knowledge);
+            let knowledge2 = optimize(expr2, input_type, env, column_knowledge);
             if knowledge1.value.is_some() && knowledge2.value.is_some() {
-                expr.reduce(env);
-                optimize(expr, env, column_knowledge)
+                expr.reduce(input_type, env);
+                optimize(expr, input_type, env, column_knowledge)
             } else {
                 DatumKnowledge {
                     value: None,
@@ -269,12 +275,12 @@ pub fn optimize(
         ScalarExpr::CallVariadic { func: _, exprs } => {
             let mut knows = Vec::new();
             for expr in exprs.iter_mut() {
-                knows.push(optimize(expr, env, column_knowledge));
+                knows.push(optimize(expr, input_type, env, column_knowledge));
             }
 
             if knows.iter().all(|k| k.value.is_some()) {
-                expr.reduce(env);
-                optimize(expr, env, column_knowledge)
+                expr.reduce(input_type, env);
+                optimize(expr, input_type, env, column_knowledge)
             } else {
                 DatumKnowledge {
                     value: None,
@@ -283,13 +289,13 @@ pub fn optimize(
             }
         }
         ScalarExpr::If { cond, then, els } => {
-            if let Some((value, _typ)) = optimize(cond, env, column_knowledge).value {
+            if let Some((value, _typ)) = optimize(cond, input_type, env, column_knowledge).value {
                 match value.unpack_first() {
                     Datum::True => *expr = (**then).clone(),
                     Datum::False | Datum::Null => *expr = (**els).clone(),
                     d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
                 }
-                optimize(expr, env, column_knowledge)
+                optimize(expr, input_type, env, column_knowledge)
             } else {
                 DatumKnowledge {
                     value: None,

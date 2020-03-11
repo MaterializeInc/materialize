@@ -540,8 +540,12 @@ test-string
 "\\x746573742d737472696e67"
 
 # TODO: fix! This is failing, although it works locally.
-# > select convert_from(data, 'utf8') FROM test_bytes_view;
-# test-string
+> select convert_from(data, 'utf8') FROM test_bytes_view;
+test-string
+
+> DROP VIEW test_bytes_view;
+
+> DROP SOURCE test_bytes;
 
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.

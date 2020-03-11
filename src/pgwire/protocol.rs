@@ -775,6 +775,38 @@ where
             .expect("valid portal name for send rows");
         let formats: Arc<Vec<pgrepr::Format>> = Arc::new(portal.result_formats.clone());
 
+        if let Some(row) = rows.first() {
+            let datums = row.unpack();
+            let col_types = &row_desc.typ().column_types;
+            if datums.len() != col_types.len() {
+                return self
+                    .error(
+                        session,
+                        "99999",
+                        format!(
+                            "internal error: row descriptor has {} columns but row has {} columns",
+                            col_types.len(),
+                            datums.len(),
+                        ),
+                    )
+                    .await;
+            }
+            for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
+                if !d.is_instance_of(&t) {
+                    return self
+                        .error(
+                            session,
+                            "99999",
+                            format!(
+                                "internal error: column {} is not of expected type {}: {}",
+                                i, t, d
+                            ),
+                        )
+                        .await;
+                }
+            }
+        }
+
         let mut row_count = 0u32;
         {
             let row_count = &mut row_count;

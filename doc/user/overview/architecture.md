@@ -38,9 +38,9 @@ _Below: Zooming in on Materialize's internal structure in the above deployment._
 
 Right now, Materialize provides its interactive interface through `psql` running
 locally on a client machine; this uses the PostgreSQL wire protocol (`pgwire`)
-to communicate with `materialized`. _NOTE: We have a client called
+to communicate with `materialized`. We have a client called
 [`mzcli`](https://github.com/MaterializeInc/mzcli) that we recommend using, but
-it's just a modified wrapper around `pgcli`._
+it's just a modified wrapper around `pgcli`.
 
 Because this is a SQL shell, Materialize lets you interact with your node
 through SQL statements sent over `pgwire` to an internal `queue`, where they are
@@ -59,7 +59,7 @@ When Materialize receives a `CREATE SOURCE...` statement, it connects to some
 destination to read data. In the case of streaming sources, it attempts to
 connect to a Kafka stream, which it plumbs into its local instance of
 Differential. You can find more information about how that works in the
-**Kafka** section below.
+[Sources](#sources-ingesting-data) section.
 
 ### Reading data
 
@@ -152,8 +152,8 @@ Implicit in this design are a few key points:
 
 Check out:
 
-- [Get started](../../get-started)
-- [`CREATE SOURCE`](../../sql/create-source)
+- [API components](../api-components) to better understand Materialize's API
+- [Get started](../../get-started) to try out Materialize
 
 [1]:
 https://paper.dropbox.com/doc/Materialize-Product--AbHSqqXlN5YNKHiYEXm3EKyNAg-eMbfh2QTOCPrU7drExDCm

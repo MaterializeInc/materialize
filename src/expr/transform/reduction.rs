@@ -25,8 +25,9 @@ impl super::Transform for FoldConstants {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) {
-        self.transform(relation, env)
+    ) -> Result<(), crate::transform::TransformError> {
+        self.transform(relation, env);
+        Ok(())
     }
 }
 
@@ -48,7 +49,7 @@ impl FoldConstants {
                 aggregates,
             } => {
                 for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce(env);
+                    aggregate.expr.reduce(&input.typ(), env);
                 }
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
@@ -130,7 +131,7 @@ impl FoldConstants {
             }
             RelationExpr::Map { input, scalars } => {
                 for scalar in scalars.iter_mut() {
-                    scalar.reduce(env);
+                    scalar.reduce(&input.typ(), env);
                 }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
@@ -158,7 +159,7 @@ impl FoldConstants {
                 expr,
                 demand: _,
             } => {
-                expr.reduce(env);
+                expr.reduce(&input.typ(), env);
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     let new_rows = rows
@@ -190,7 +191,7 @@ impl FoldConstants {
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates.iter_mut() {
-                    predicate.reduce(env);
+                    predicate.reduce(&input.typ(), env);
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
@@ -378,8 +379,9 @@ pub mod demorgans {
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
             _: &EvalEnv,
-        ) {
-            self.transform(relation)
+        ) -> Result<(), crate::transform::TransformError> {
+            self.transform(relation);
+            Ok(())
         }
     }
 
@@ -464,8 +466,9 @@ pub mod undistribute_and {
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
             _: &EvalEnv,
-        ) {
-            self.transform(relation)
+        ) -> Result<(), crate::transform::TransformError> {
+            self.transform(relation);
+            Ok(())
         }
     }
 

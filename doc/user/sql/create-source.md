@@ -14,60 +14,18 @@ with its data as if it were in a SQL table.
 ## Conceptual framework
 
 To provide data to Materialize, you must create "sources", which is a catchall
-term for a resource Materialize can read data from. For more detail about how
-sources work within the rest of Materialize, check out our [architecture
-overview](/docs/overview/architecture/).
-
-Sources consist of three distinct elements:
-
-Element | Purpose | Example
---------|---------|--------
-**Connector** | Provides actual bytes of data to Materialize | Kafka
-**Format** | The structure of the external source's bytes | Avro
-**Envelope** | How Materialize should handle the incoming data + additional formatting information | Append-only
-
-### Connectors
-
-Materialize can connect to the following types of sources:
-
-- Streaming sources like Kafka
-- File sources like `.csv` or unstructured log files
-
-### Formats
-
-Materialize can decode incoming bytes of data from several formats
-
-- Avro
-- Protobuf
-- Regex
-- CSV
-- Plain text
-- Raw bytes
-
-### Envelopes
-
-What Materialize actually does with the data it receives depends on the
-"envelope" your data provides:
-
-Envelope | Action
----------|-------
-**Append-only** | Inserts all received data; does not support updates or deletes.
-**Debezium** | Treats data as wrapped in a "diff envelope" which indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].
-
-For more information about envelopes, see [Envelope details](#envelope-details).
+term for a resource Materialize can read data from. For more information, see [API Components: Sources](../../overview/api-components#sources).
 
 ## Syntax
 
 ### Create source
-
-`CREATE SOURCE` can be used to create streaming or file sources.
 
 {{< diagram "create-source.html" >}}
 
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
-**FROM** _connector&lowbar;spec_ | A specification of how to connect to the external resource providing the data. For more detail, see [Connector specifications](#connector-spec).
+**FROM** _connector&lowbar;spec_ | A specification of how to connect to the external resource providing the data. For more detail, see [Connector specifications](#connector-specifications).
 **FORMAT** _format&lowbar;spec_ | A description of the format of data in the source. For more detail, see [Format specifications](#format-spec).
 **ENVELOPE** _envelope_ | The envelope type.<br/><br/> &#8226; **NONE** implies that each record appends to the source. <br/><br/>&#8226; **DEBEZIUM** requires records have the [appropriate fields](#format-implications), which allow deletes, inserts, and updates. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [Debezium envelope details](#debezium-envelope-details).
 
@@ -127,9 +85,15 @@ Field | Value
 _schema&lowbar;file&lowbar;path_ | The absolute path to a file containing the schema.
 _inline&lowbar;schema_ | A string representing the schema.
 
-## External source details
+## Connector details
 
-External sources provide the actual bytes of data to Materialize.
+Connectors let materialize get data from external sources, which provide the
+actual bytes of data for Materialize to process.
+
+Materialize can connect to the following types of sources:
+
+- Streaming sources like Kafka
+- File sources like `.csv` or unstructured log files
 
 ### Kafka source details
 
@@ -145,6 +109,17 @@ Materialize expects each source to use to one Kafka topic, which is&mdash;in
 - All data in file sources are treated as [`string`](../types/string).
 
 ## Format details
+
+The source's format describes the structure of its bytes.
+
+Materialize can decode incoming bytes of data from several formats:
+
+- Avro
+- Protobuf
+- Regex
+- CSV
+- Plain text
+- Raw bytes
 
 ### Avro format details
 
@@ -222,6 +197,11 @@ source without applying any formatting or decoding.
 ## Envelope details
 
 Envelopes determine whether an incoming record inserts new data, updates or deletes existing data, or both.
+
+Materialize supports the following types of envelopes:
+
+- Append-only, which only supports inserting new data
+- Debezium, which supports all CRUD operations
 
 ### Append-only envelope details
 

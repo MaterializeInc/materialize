@@ -15,7 +15,7 @@ mod id;
 mod relation;
 mod scalar;
 
-pub mod pretty;
+pub mod explain;
 pub mod transform;
 
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, SourceInstanceId};
@@ -23,5 +23,5 @@ pub use relation::func::{AggregateFunc, UnaryTableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::{AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr};
 pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
-pub use scalar::{like_pattern, EvalEnv, ScalarExpr};
+pub use scalar::{like_pattern, EvalEnv, EvalError, ScalarExpr};
 pub use transform::OptimizedRelationExpr;

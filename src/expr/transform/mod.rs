@@ -8,7 +8,10 @@
 // by the Apache License, Version 2.0.
 
 #![deny(missing_debug_implementations)]
+
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -47,8 +50,24 @@ pub trait Transform: std::fmt::Debug {
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    );
+    ) -> Result<(), TransformError>;
 }
+
+/// Errors that can occur during a transformation.
+#[derive(Debug, Clone)]
+pub enum TransformError {
+    Internal(String),
+}
+
+impl fmt::Display for TransformError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
+        }
+    }
+}
+
+impl Error for TransformError {}
 
 #[derive(Debug)]
 pub struct Fixpoint {
@@ -61,26 +80,26 @@ impl Transform for Fixpoint {
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) {
+    ) -> Result<(), TransformError> {
         for _ in 0..100 {
             let original = relation.clone();
             for transform in self.transforms.iter() {
-                transform.transform(relation, indexes, env);
+                transform.transform(relation, indexes, env)?;
             }
             if *relation == original {
-                return;
+                return Ok(());
             }
         }
         let original = relation.clone();
         for transform in self.transforms.iter() {
-            transform.transform(relation, indexes, env);
+            transform.transform(relation, indexes, env)?;
         }
-        panic!(
-            "Fixpoint looped 100 times! {:#?} {}\n{}",
+        Err(TransformError::Internal(format!(
+            "fixpoint looped 100 times {:#?} {}\n{}",
             self,
             original.pretty(),
             relation.pretty()
-        );
+        )))
     }
 }
 
@@ -102,10 +121,11 @@ impl Transform for Optimizer {
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) {
+    ) -> Result<(), TransformError> {
         for transform in self.transforms.iter() {
-            transform.transform(relation, indexes, env);
+            transform.transform(relation, indexes, env)?;
         }
+        Ok(())
     }
 }
 
@@ -198,9 +218,9 @@ impl Optimizer {
         mut relation: RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         env: &EvalEnv,
-    ) -> OptimizedRelationExpr {
-        self.transform(&mut relation, indexes, env);
-        OptimizedRelationExpr(relation)
+    ) -> Result<OptimizedRelationExpr, TransformError> {
+        self.transform(&mut relation, indexes, env)?;
+        Ok(OptimizedRelationExpr(relation))
     }
 
     /// Simple fusion and elision transformations to render the query readable.

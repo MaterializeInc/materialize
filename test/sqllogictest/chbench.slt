@@ -231,29 +231,14 @@ WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY ol_number
 ORDER BY ol_number
 ----
-Project {
-  outputs: [0 .. 2, 6, 7, 5],
-  Map {
-    scalars: [
-      ((i32todec #1 * 10000000dec) / i64todec #3) / 10dec,
-      ((#2 * 10000000dec) / (i64todec #4 * 100dec)) * 10dec
-    ],
-    Reduce {
-      group_key: [#3],
-      aggregates: [
-        sum(#7),
-        sum(#8),
-        count(#7),
-        count(#8),
-        countall(null)
-      ],
-      Filter {
-        predicates: [datetots #6 > 2007-01-02 00:00:00],
-        Get { materialize.public.orderline (u19) }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.orderline (u19)
+| Filter (datetots(#6) > 2007-01-02 00:00:00)
+| Reduce group=(#3) sum(#7) sum(#8) count(#7) count(#8) countall(null)
+| Map (((i32todec(#1) * 10000000dec) / i64todec(#3)) / 10dec) (((#2 * 10000000dec) / (i64todec(#4) * 100dec)) * 10dec)
+| Project (#0..#2, #6, #7, #5)
+
+EOF
 
 # Query 02
 query T multiline
@@ -282,79 +267,67 @@ AND i_id = m_i_id
 AND s_quantity = m_s_quantity
 ORDER BY n_name, su_name, i_id
 ----
-Project {
-  outputs: [5, 6, 31, 0, 2, 7, 9, 11],
-  Filter {
-    predicates: [^.*b$ ~ #4, ^EUROP.*$ ~ #35],
-    Join {
-      variables: [
-        [(0, 0), (1, 0), (2, 0)],
-        [(0, 2), (1, 1)],
-        [(0, 17), (3, 0)],
-        [(3, 3), (4, 0)],
-        [(4, 2), (5, 0)]
-      ],
-      implementation: DifferentialLinear,
-      Filter {
-        predicates: [!isnull #2],
-        Get { materialize.public.stock (u26) }
-      },
-      ArrangeBy {
-        keys: [[#0, #1]],
-        Filter {
-          predicates: [!isnull #1],
-          Reduce {
-            group_key: [#0],
-            aggregates: [min(#2)],
-            Filter {
-              predicates: [^EUROP.*$ ~ #30],
-              Join {
-                variables: [
-                  [(0, 17), (1, 0)],
-                  [(1, 3), (2, 0)],
-                  [(2, 2), (3, 0)]
-                ],
-                implementation: DeltaQuery,
-                ArrangeBy {
-                  keys: [[#17]],
-                  Get { materialize.public.stock (u26) }
-                },
-                ArrangeBy {
-                  keys: [[#0], [#3]],
-                  Get { materialize.public.supplier (u34) }
-                },
-                ArrangeBy {
-                  keys: [[#0], [#2]],
-                  Get { materialize.public.nation (u31) }
-                },
-                ArrangeBy {
-                  keys: [[#0]],
-                  Get { materialize.public.region (u37) }
-                }
-              }
-            }
-          }
-        }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.item (u24) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.region (u37) }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.item (u24)
+| ArrangeBy (#0)
+
+1 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0)
+
+2 =
+| Get materialize.public.stock (u26)
+| Filter !(isnull(#2))
+
+3 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+4 =
+| Get materialize.public.region (u37)
+| ArrangeBy (#0)
+
+5 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#17)
+
+6 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0) (#3)
+
+7 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0) (#2)
+
+8 =
+| Get materialize.public.region (u37)
+| ArrangeBy (#0)
+
+9 =
+| Join %5 %6 %7 %8 (= %5.#17 %6.#0) (= %6.#3 %7.#0) (= %7.#2 %8.#0)
+| | implementation = DeltaQuery %5 %6.(#0) %7.(#0) %8.(#0) | %6 %7.(#0) %8.(#0) %5.(#17) | %7 %8.(#0) %6.(#3) %5.(#17) | %8 %7.(#2) %6.(#3) %5.(#17)
+| | demand for %5 = (#0, #2)
+| | demand for %6 = ()
+| | demand for %7 = ()
+| | demand for %8 = (#1)
+| Filter "^EUROP.*$" ~(#30)
+| Reduce group=(#0) min(#2)
+| Filter !(isnull(#1))
+| ArrangeBy (#0, #1)
+
+10 =
+| Join %0 %1 %2 %3 %4 %9 (= %0.#0 %2.#0 %9.#0) (= %1.#0 %2.#17) (= %1.#3 %3.#0) (= %2.#2 %9.#1) (= %3.#2 %4.#0)
+| | implementation = Differential %2 %9.(#0, #1) %0.(#0) %1.(#0) %3.(#0) %4.(#0)
+| | demand for %0 = (#0, #2, #4)
+| | demand for %1 = (#0..#2, #4, #6)
+| | demand for %2 = ()
+| | demand for %3 = (#1)
+| | demand for %4 = (#1)
+| | demand for %9 = ()
+| Filter "^.*b$" ~(#4) "^EUROP.*$" ~(#35)
+| Project (#5, #6, #31, #0, #2, #7, #9, #11)
+
+EOF
 
 # Query 03
 query T multiline
@@ -375,41 +348,34 @@ AND o_entry_d > TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d
 ORDER BY revenue DESC, o_entry_d
 ----
-Project {
-  outputs: [0 .. 2, 4, 3],
-  Reduce {
-    group_key: [#22, #2, #1, #29],
-    aggregates: [sum(#41)],
-    Filter {
-      predicates: [^A.*$ ~ #9, datetots #29 > 2007-01-02 00:00:00],
-      Join {
-        variables: [
-          [(0, 0), (2, 3)],
-          [(0, 1), (1, 1), (2, 1), (3, 1)],
-          [(0, 2), (1, 2), (2, 2), (3, 2)],
-          [(1, 0), (2, 0), (3, 0)]
-        ],
-        implementation: DeltaQuery,
-        ArrangeBy {
-          keys: [[#0, #1, #2]],
-          Get { materialize.public.customer (u6) }
-        },
-        ArrangeBy {
-          keys: [[#0, #1, #2]],
-          Get { materialize.public.neworder (u14) }
-        },
-        ArrangeBy {
-          keys: [[#0, #1, #2], [#2, #1, #3]],
-          Get { materialize.public.order (u16) }
-        },
-        ArrangeBy {
-          keys: [[#2, #1, #0]],
-          Get { materialize.public.orderline (u19) }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.customer (u6)
+| ArrangeBy (#0, #1, #2)
+
+1 =
+| Get materialize.public.neworder (u14)
+| ArrangeBy (#0, #1, #2)
+
+2 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+
+3 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0)
+
+4 =
+| Join %0 %1 %2 %3 (= %0.#0 %2.#3) (= %0.#1 %1.#1 %2.#1 %3.#1) (= %0.#2 %1.#2 %2.#2 %3.#2) (= %1.#0 %2.#0 %3.#0)
+| | implementation = DeltaQuery %0 %2.(#2, #1, #3) %1.(#0, #1, #2) %3.(#2, #1, #0) | %1 %2.(#0, #1, #2) %0.(#0, #1, #2) %3.(#2, #1, #0) | %2 %0.(#0, #1, #2) %1.(#0, #1, #2) %3.(#2, #1, #0) | %3 %1.(#0, #1, #2) %2.(#0, #1, #2) %0.(#0, #1, #2)
+| | demand for %0 = (#1, #2, #9)
+| | demand for %1 = (#0)
+| | demand for %2 = (#4)
+| | demand for %3 = (#8)
+| Filter "^A.*$" ~(#9) (datetots(#29) > 2007-01-02 00:00:00)
+| Reduce group=(#22, #2, #1, #29) sum(#41)
+| Project (#0..#2, #4, #3)
+
+EOF
 
 # Query 04
 query T multiline
@@ -429,51 +395,38 @@ AND EXISTS (
 GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 ----
-Let {
-  l0 = Filter {
-    predicates: [
-      datetots #4 < 2012-01-02 00:00:00,
-      datetots #4 >= 2007-01-02 00:00:00
-    ],
-    Get { materialize.public.order (u16) }
-  }
-} in
-Reduce {
-  group_key: [#6],
-  aggregates: [countall(null)],
-  Join {
-    variables: [
-      [(0, 0), (1, 0)],
-      [(0, 1), (1, 1)],
-      [(0, 2), (1, 2)],
-      [(0, 4), (1, 3)]
-    ],
-    implementation: DifferentialLinear,
-    Get { l0 },
-    ArrangeBy {
-      keys: [[#0, #1, #2, #3]],
-      Distinct {
-        group_key: [#0, #1, #2, #4],
-        Filter {
-          predicates: [#14 >= #4],
-          Join {
-            variables: [
-              [(0, 0), (1, 0)],
-              [(0, 1), (1, 1)],
-              [(0, 2), (1, 2)]
-            ],
-            implementation: DeltaQuery,
-            ArrangeBy { keys: [[#0, #1, #2]], Get { l0 } },
-            ArrangeBy {
-              keys: [[#2, #1, #0]],
-              Get { materialize.public.orderline (u19) }
-            }
-          }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.order (u16)
+| Filter (datetots(#4) < 2012-01-02 00:00:00) (datetots(#4) >= 2007-01-02 00:00:00)
+
+1 =
+| Get %0
+
+2 =
+| Get %0
+| ArrangeBy (#0, #1, #2)
+
+3 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0)
+
+4 =
+| Join %2 %3 (= %2.#0 %3.#0) (= %2.#1 %3.#1) (= %2.#2 %3.#2)
+| | implementation = DeltaQuery %2 %3.(#2, #1, #0) | %3 %2.(#0, #1, #2)
+| | demand for %2 = (#0..#2, #4)
+| | demand for %3 = (#6)
+| Filter (#14 >= #4)
+| Distinct group=(#0, #1, #2, #4)
+| ArrangeBy (#0, #1, #2, #3)
+
+5 =
+| Join %1 %4 (= %1.#0 %4.#0) (= %1.#1 %4.#1) (= %1.#2 %4.#2) (= %1.#4 %4.#3)
+| | implementation = Differential %1 %4.(#0, #1, #2, #3)
+| | demand for %1 = (#6)
+| | demand for %4 = ()
+| Reduce group=(#6) countall(null)
+
+EOF
 
 # Query 05
 query T multiline
@@ -499,51 +452,47 @@ AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 GROUP BY n_name
 ORDER BY revenue DESC
 ----
-Reduce {
-  group_key: [#66],
-  aggregates: [sum(#38)],
-  Filter {
-    predicates: [#70 = "EUROPE", datetots #26 >= 2007-01-02 00:00:00],
-    Join {
-      variables: [
-        [(0, 0), (1, 0)],
-        [(0, 1), (1, 1), (2, 1)],
-        [(0, 2), (1, 2), (2, 2), (3, 1)],
-        [(0, 4), (3, 0)],
-        [(1, 3), (2, 0)],
-        [(2, 21), (4, 3), (5, 0)],
-        [(3, 17), (4, 0)],
-        [(5, 2), (6, 0)]
-      ],
-      implementation: DifferentialLinear,
-      Get { materialize.public.orderline (u19) },
-      ArrangeBy {
-        keys: [[#0, #1, #2]],
-        Get { materialize.public.order (u16) }
-      },
-      ArrangeBy {
-        keys: [[#0, #1, #2]],
-        Get { materialize.public.customer (u6) }
-      },
-      ArrangeBy {
-        keys: [[#0, #1]],
-        Get { materialize.public.stock (u26) }
-      },
-      ArrangeBy {
-        keys: [[#0, #3]],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.region (u37) }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.customer (u6)
+| ArrangeBy (#0, #1, #2)
+
+1 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2)
+
+2 =
+| Get materialize.public.orderline (u19)
+
+3 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#0, #1)
+
+4 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0, #3)
+
+5 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+6 =
+| Get materialize.public.region (u37)
+| ArrangeBy (#0)
+
+7 =
+| Join %0 %1 %2 %3 %4 %5 %6 (= %0.#0 %1.#3) (= %0.#1 %1.#1 %2.#1) (= %0.#2 %1.#2 %2.#2 %3.#1) (= %0.#21 %4.#3 %5.#0) (= %1.#0 %2.#0) (= %2.#4 %3.#0) (= %3.#17 %4.#0) (= %5.#2 %6.#0)
+| | implementation = Differential %2 %1.(#0, #1, #2) %0.(#0, #1, #2) %3.(#0, #1) %4.(#0, #3) %5.(#0) %6.(#0)
+| | demand for %0 = ()
+| | demand for %1 = (#4)
+| | demand for %2 = (#8)
+| | demand for %3 = ()
+| | demand for %4 = ()
+| | demand for %5 = (#1)
+| | demand for %6 = (#1)
+| Filter (#70 = "EUROPE") (datetots(#26) >= 2007-01-02 00:00:00)
+| Reduce group=(#66) sum(#38)
+
+EOF
 
 # Query 06
 query T multiline
@@ -554,31 +503,30 @@ WHERE ol_delivery_d >= TIMESTAMP '1999-01-01 00:00:00.000000'
 AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'
 AND ol_quantity BETWEEN 1 AND 100000
 ----
-Let {
-  l0 = Reduce {
-    group_key: [],
-    aggregates: [sum(#8)],
-    Filter {
-      predicates: [
-        datetots #6 < 2020-01-01 00:00:00,
-        #7 <= 100000,
-        #7 >= 1,
-        datetots #6 >= 1999-01-01 00:00:00
-      ],
-      Get { materialize.public.orderline (u19) }
-    }
-  }
-} in
-Union {
-  Get { l0 },
-  Map {
-    scalars: [null],
-    Union {
-      Project { outputs: [], Negate { Get { l0 } } },
-      Constant [[]]
-    }
-  }
-}
+0 =
+| Get materialize.public.orderline (u19)
+| Filter (datetots(#6) < 2020-01-01 00:00:00) (#7 <= 100000) (#7 >= 1) (datetots(#6) >= 1999-01-01 00:00:00)
+| Reduce group=() sum(#8)
+
+1 =
+| Get %0
+
+2 =
+| Get %0
+| Negate
+| Project ()
+
+3 =
+| Constant ()
+
+4 =
+| Union %2 %3
+| Map null
+
+5 =
+| Union %1 %4
+
+EOF
 
 # Query 07
 query T multiline
@@ -609,61 +557,48 @@ AND ol_delivery_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '
 GROUP BY su_nationkey, substr(c_state, 1, 1), EXTRACT(year FROM o_entry_d)
 ORDER BY su_nationkey, cust_nation, l_year
 ----
-Reduce {
-  group_key: [#3, substr(#52, 1, 1), tsextractyear datetots #39],
-  aggregates: [sum(#33)],
-  Filter {
-    predicates: [
-      ((#66 = "GERMANY") && (#70 = "CAMBODIA"))
-      ||
-      ((#66 = "CAMBODIA") && (#70 = "GERMANY")),
-      datetots #31 <= 2012-01-02 00:00:00,
-      datetots #31 >= 2007-01-02 00:00:00
-    ],
-    Join {
-      variables: [
-        [(0, 0), (1, 17)],
-        [(0, 3), (5, 0)],
-        [(1, 0), (2, 4)],
-        [(1, 1), (2, 5)],
-        [(2, 0), (3, 0)],
-        [(2, 1), (3, 1), (4, 1)],
-        [(2, 2), (3, 2), (4, 2)],
-        [(3, 3), (4, 0)],
-        [(4, 21), (6, 0)]
-      ],
-      implementation: DeltaQuery,
-      ArrangeBy {
-        keys: [[#0], [#3]],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy {
-        keys: [[#0, #1], [#17]],
-        Get { materialize.public.stock (u26) }
-      },
-      ArrangeBy {
-        keys: [[#2, #1, #0], [#5, #4]],
-        Get { materialize.public.orderline (u19) }
-      },
-      ArrangeBy {
-        keys: [[#0, #1, #2], [#2, #1, #3]],
-        Get { materialize.public.order (u16) }
-      },
-      ArrangeBy {
-        keys: [[#0, #1, #2], [#21]],
-        Get { materialize.public.customer (u6) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0) (#3)
+
+1 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#0, #1) (#17)
+
+2 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0) (#5, #4)
+
+3 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+
+4 =
+| Get materialize.public.customer (u6)
+| ArrangeBy (#0, #1, #2) (#21)
+
+5 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+6 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+7 =
+| Join %0 %1 %2 %3 %4 %5 %6 (= %0.#0 %1.#17) (= %0.#3 %5.#0) (= %1.#0 %2.#4) (= %1.#1 %2.#5) (= %2.#0 %3.#0) (= %2.#1 %3.#1 %4.#1) (= %2.#2 %3.#2 %4.#2) (= %3.#3 %4.#0) (= %4.#21 %6.#0)
+| | implementation = DeltaQuery %0 %5.(#0) %1.(#17) %2.(#5, #4) %3.(#0, #1, #2) %4.(#0, #1, #2) %6.(#0) | %1 %0.(#0) %5.(#0) %2.(#5, #4) %3.(#0, #1, #2) %4.(#0, #1, #2) %6.(#0) | %2 %3.(#0, #1, #2) %4.(#0, #1, #2) %1.(#0, #1) %0.(#0) %5.(#0) %6.(#0) | %3 %4.(#0, #1, #2) %6.(#0) %2.(#2, #1, #0) %1.(#0, #1) %0.(#0) %5.(#0) | %4 %6.(#0) %3.(#2, #1, #3) %2.(#2, #1, #0) %1.(#0, #1) %0.(#0) %5.(#0) | %5 %0.(#3) %1.(#17) %2.(#5, #4) %3.(#0, #1, #2) %4.(#0, #1, #2) %6.(#0) | %6 %4.(#21) %3.(#2, #1, #3) %2.(#2, #1, #0) %1.(#0, #1) %0.(#0) %5.(#0)
+| | demand for %0 = (#3)
+| | demand for %1 = ()
+| | demand for %2 = (#6, #8)
+| | demand for %3 = (#4)
+| | demand for %4 = (#9)
+| | demand for %5 = (#1)
+| | demand for %6 = (#1)
+| Filter (((#66 = "GERMANY") && (#70 = "CAMBODIA")) || ((#66 = "CAMBODIA") && (#70 = "GERMANY"))) (datetots(#31) <= 2012-01-02 00:00:00) (datetots(#31) >= 2007-01-02 00:00:00)
+| Reduce group=(#3, substr(#52, 1, 1), tsextractyear(datetots(#39))) sum(#33)
+
+EOF
 
 # Query 08
 query T multiline
@@ -693,80 +628,60 @@ AND i_id = ol_i_id
 GROUP BY EXTRACT(year FROM o_entry_d)
 ORDER BY l_year
 ----
-Project {
-  outputs: [0, 3],
-  Map {
-    scalars: [((#1 * 10000000dec) / #2) * 10dec],
-    Reduce {
-      group_key: [tsextractyear datetots #44],
-      aggregates: [
-        sum(if #75 = "GERMANY" then #38 else 0dec),
-        sum(#38)
-      ],
-      Filter {
-        predicates: [
-          !isnull #0,
-          ^.*b$ ~ #4,
-          #79 = "EUROPE",
-          #0 < 1000,
-          datetots #44 <= 2012-01-02 00:00:00,
-          datetots #44 >= 2007-01-02 00:00:00
-        ],
-        Join {
-          variables: [
-            [(0, 0), (2, 0), (3, 4)],
-            [(1, 0), (2, 17)],
-            [(1, 3), (7, 0)],
-            [(2, 1), (3, 5)],
-            [(3, 0), (4, 0)],
-            [(3, 1), (4, 1), (5, 1)],
-            [(3, 2), (4, 2), (5, 2)],
-            [(4, 3), (5, 0)],
-            [(5, 21), (6, 0)],
-            [(6, 2), (8, 0)]
-          ],
-          implementation: DeltaQuery,
-          ArrangeBy {
-            keys: [[#0]],
-            Get { materialize.public.item (u24) }
-          },
-          ArrangeBy {
-            keys: [[#0], [#3]],
-            Get { materialize.public.supplier (u34) }
-          },
-          ArrangeBy {
-            keys: [[#0], [#0, #1], [#17]],
-            Get { materialize.public.stock (u26) }
-          },
-          ArrangeBy {
-            keys: [[#2, #1, #0], [#5, #4]],
-            Get { materialize.public.orderline (u19) }
-          },
-          ArrangeBy {
-            keys: [[#0, #1, #2], [#2, #1, #3]],
-            Get { materialize.public.order (u16) }
-          },
-          ArrangeBy {
-            keys: [[#0, #1, #2], [#21]],
-            Get { materialize.public.customer (u6) }
-          },
-          ArrangeBy {
-            keys: [[#0], [#2]],
-            Get { materialize.public.nation (u31) }
-          },
-          ArrangeBy {
-            keys: [[#0]],
-            Get { materialize.public.nation (u31) }
-          },
-          ArrangeBy {
-            keys: [[#0]],
-            Get { materialize.public.region (u37) }
-          }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.item (u24)
+| ArrangeBy (#0)
+
+1 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0) (#3)
+
+2 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#0) (#0, #1) (#17)
+
+3 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0) (#5, #4)
+
+4 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+
+5 =
+| Get materialize.public.customer (u6)
+| ArrangeBy (#0, #1, #2) (#21)
+
+6 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0) (#2)
+
+7 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+8 =
+| Get materialize.public.region (u37)
+| ArrangeBy (#0)
+
+9 =
+| Join %0 %1 %2 %3 %4 %5 %6 %7 %8 (= %0.#0 %2.#0 %3.#4) (= %1.#0 %2.#17) (= %1.#3 %7.#0) (= %2.#1 %3.#5) (= %3.#0 %4.#0) (= %3.#1 %4.#1 %5.#1) (= %3.#2 %4.#2 %5.#2) (= %4.#3 %5.#0) (= %5.#21 %6.#0) (= %6.#2 %8.#0)
+| | implementation = DeltaQuery %0 %2.(#0) %1.(#0) %7.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0) | %1 %7.(#0) %2.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0) | %2 %0.(#0) %1.(#0) %7.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0) | %3 %4.(#0, #1, #2) %5.(#0, #1, #2) %2.(#0, #1) %0.(#0) %1.(#0) %6.(#0) %7.(#0) %8.(#0) | %4 %5.(#0, #1, #2) %6.(#0) %8.(#0) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0) | %5 %6.(#0) %8.(#0) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0) | %6 %8.(#0) %5.(#21) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0) | %7 %1.(#3) %2.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2) %5.(#0, #1, #2) %6.(#0) %8.(#0) | %8 %6.(#2) %5.(#21) %4.(#2, #1, #3) %3.(#2, #1, #0) %2.(#0, #1) %0.(#0) %1.(#0) %7.(#0)
+| | demand for %0 = (#0, #4)
+| | demand for %1 = ()
+| | demand for %2 = ()
+| | demand for %3 = (#8)
+| | demand for %4 = (#4)
+| | demand for %5 = ()
+| | demand for %6 = ()
+| | demand for %7 = (#1)
+| | demand for %8 = (#1)
+| Filter !(isnull(#0)) "^.*b$" ~(#4) (#79 = "EUROPE") (#0 < 1000) (datetots(#44) <= 2012-01-02 00:00:00) (datetots(#44) >= 2007-01-02 00:00:00)
+| Reduce group=(tsextractyear(datetots(#44))) sum(if (#75 = "GERMANY") then {#38} else {0dec}) sum(#38)
+| Map (((#1 * 10000000dec) / #2) * 10dec)
+| Project (#0, #3)
+
+EOF
 
 # Query 09
 query T multiline
@@ -787,49 +702,43 @@ AND i_data like '%BB'
 GROUP BY n_name, EXTRACT(year FROM o_entry_d)
 ORDER BY n_name, l_year DESC
 ----
-Reduce {
-  group_key: [#49, tsextractyear datetots #44],
-  aggregates: [sum(#38)],
-  Filter {
-    predicates: [^.*BB$ ~ #4],
-    Join {
-      variables: [
-        [(0, 0), (1, 0), (3, 4)],
-        [(1, 1), (3, 5)],
-        [(1, 17), (2, 0)],
-        [(2, 3), (5, 0)],
-        [(3, 0), (4, 0)],
-        [(3, 1), (4, 1)],
-        [(3, 2), (4, 2)]
-      ],
-      implementation: DeltaQuery,
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.item (u24) }
-      },
-      ArrangeBy {
-        keys: [[#0], [#0, #1], [#17]],
-        Get { materialize.public.stock (u26) }
-      },
-      ArrangeBy {
-        keys: [[#0], [#3]],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy {
-        keys: [[#2, #1, #0], [#5, #4]],
-        Get { materialize.public.orderline (u19) }
-      },
-      ArrangeBy {
-        keys: [[#0, #1, #2]],
-        Get { materialize.public.order (u16) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.item (u24)
+| ArrangeBy (#0)
+
+1 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#0) (#0, #1) (#17)
+
+2 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0) (#3)
+
+3 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0) (#5, #4)
+
+4 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2)
+
+5 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+6 =
+| Join %0 %1 %2 %3 %4 %5 (= %0.#0 %1.#0 %3.#4) (= %1.#1 %3.#5) (= %1.#17 %2.#0) (= %2.#3 %5.#0) (= %3.#0 %4.#0) (= %3.#1 %4.#1) (= %3.#2 %4.#2)
+| | implementation = DeltaQuery %0 %1.(#0) %2.(#0) %5.(#0) %3.(#5, #4) %4.(#0, #1, #2) | %1 %0.(#0) %2.(#0) %5.(#0) %3.(#5, #4) %4.(#0, #1, #2) | %2 %5.(#0) %1.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2) | %3 %4.(#0, #1, #2) %1.(#0, #1) %0.(#0) %2.(#0) %5.(#0) | %4 %3.(#2, #1, #0) %1.(#0, #1) %0.(#0) %2.(#0) %5.(#0) | %5 %2.(#3) %1.(#17) %0.(#0) %3.(#5, #4) %4.(#0, #1, #2)
+| | demand for %0 = (#4)
+| | demand for %1 = ()
+| | demand for %2 = ()
+| | demand for %3 = (#8)
+| | demand for %4 = (#4)
+| | demand for %5 = (#1)
+| Filter "^.*BB$" ~(#4)
+| Reduce group=(#49, tsextractyear(datetots(#44))) sum(#38)
+
+EOF
 
 # Query 10
 query T multiline
@@ -849,42 +758,34 @@ AND n_nationkey = c_n_nationkey
 GROUP BY c_id, c_last, c_city, c_phone, n_name
 ORDER BY revenue DESC
 ----
-Project {
-  outputs: [0, 1, 5, 2 .. 4],
-  Reduce {
-    group_key: [#0, #5, #8, #11, #41],
-    aggregates: [sum(#38)],
-    Filter {
-      predicates: [#26 <= #36, datetots #26 >= 2007-01-02 00:00:00],
-      Join {
-        variables: [
-          [(0, 0), (1, 3)],
-          [(0, 1), (1, 1), (2, 1)],
-          [(0, 2), (1, 2), (2, 2)],
-          [(0, 21), (3, 0)],
-          [(1, 0), (2, 0)]
-        ],
-        implementation: DeltaQuery,
-        ArrangeBy {
-          keys: [[#0, #1, #2], [#21]],
-          Get { materialize.public.customer (u6) }
-        },
-        ArrangeBy {
-          keys: [[#0, #1, #2], [#2, #1, #3]],
-          Get { materialize.public.order (u16) }
-        },
-        ArrangeBy {
-          keys: [[#2, #1, #0]],
-          Get { materialize.public.orderline (u19) }
-        },
-        ArrangeBy {
-          keys: [[#0]],
-          Get { materialize.public.nation (u31) }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.customer (u6)
+| ArrangeBy (#0, #1, #2) (#21)
+
+1 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+
+2 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0)
+
+3 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+4 =
+| Join %0 %1 %2 %3 (= %0.#0 %1.#3) (= %0.#1 %1.#1 %2.#1) (= %0.#2 %1.#2 %2.#2) (= %0.#21 %3.#0) (= %1.#0 %2.#0)
+| | implementation = DeltaQuery %0 %3.(#0) %1.(#2, #1, #3) %2.(#2, #1, #0) | %1 %0.(#0, #1, #2) %3.(#0) %2.(#2, #1, #0) | %2 %1.(#0, #1, #2) %0.(#0, #1, #2) %3.(#0) | %3 %0.(#21) %1.(#2, #1, #3) %2.(#2, #1, #0)
+| | demand for %0 = (#0, #5, #8, #11)
+| | demand for %1 = (#4)
+| | demand for %2 = (#6, #8)
+| | demand for %3 = (#1)
+| Filter (#26 <= #36) (datetots(#26) >= 2007-01-02 00:00:00)
+| Reduce group=(#0, #5, #8, #11, #41) sum(#38)
+| Project (#0, #1, #5, #2..#4)
+
+EOF
 
 # Query 11
 query T multiline
@@ -904,45 +805,45 @@ HAVING sum(s_order_cnt) > (
 )
 ORDER BY ordercount DESC
 ----
-Let {
-  l0 = Filter {
-    predicates: [#26 = "GERMANY"],
-    Join {
-      variables: [[(0, 17), (1, 0)], [(1, 3), (2, 0)]],
-      implementation: DeltaQuery,
-      ArrangeBy {
-        keys: [[#17]],
-        Get { materialize.public.stock (u26) }
-      },
-      ArrangeBy {
-        keys: [[#0], [#3]],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      }
-    }
-  }
-} in
-Project {
-  outputs: [0, 1],
-  Filter {
-    predicates: [(i32todec #1 * 1000000dec) > #3],
-    Join {
-      variables: [],
-      implementation: DifferentialLinear,
-      Reduce { group_key: [#0], aggregates: [sum(#14)], Get { l0 } },
-      ArrangeBy {
-        keys: [[]],
-        Map {
-          scalars: [(i32todec #0 * 1000dec) * 5dec],
-          Reduce { group_key: [], aggregates: [sum(#14)], Get { l0 } }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#17)
+
+1 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0) (#3)
+
+2 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+3 =
+| Join %0 %1 %2 (= %0.#17 %1.#0) (= %1.#3 %2.#0)
+| | implementation = DeltaQuery %0 %1.(#0) %2.(#0) | %1 %2.(#0) %0.(#17) | %2 %1.(#3) %0.(#17)
+| | demand for %0 = (#0, #14)
+| | demand for %1 = ()
+| | demand for %2 = (#1)
+| Filter (#26 = "GERMANY")
+
+4 =
+| Get %3
+| Reduce group=(#0) sum(#14)
+
+5 =
+| Get %3
+| Reduce group=() sum(#14)
+| Map ((i32todec(#0) * 1000dec) * 5dec)
+| ArrangeBy ()
+
+6 =
+| Join %4 %5
+| | implementation = Differential %4 %5.()
+| | demand for %4 = (#0, #1)
+| | demand for %5 = (#1)
+| Filter ((i32todec(#1) * 1000000dec) > #3)
+| Project (#0, #1)
+
+EOF
 
 # Query 12
 query T multiline
@@ -961,32 +862,23 @@ AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'
 GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 ----
-Reduce {
-  group_key: [#6],
-  aggregates: [
-    sum(if (#5 = 1) || (#5 = 2) then 1 else 0),
-    sum(if (#5 != 1) && (#5 != 2) then 1 else 0)
-  ],
-  Filter {
-    predicates: [datetots #14 < 2020-01-01 00:00:00, #4 <= #14],
-    Join {
-      variables: [
-        [(0, 0), (1, 0)],
-        [(0, 1), (1, 1)],
-        [(0, 2), (1, 2)]
-      ],
-      implementation: DeltaQuery,
-      ArrangeBy {
-        keys: [[#0, #1, #2]],
-        Get { materialize.public.order (u16) }
-      },
-      ArrangeBy {
-        keys: [[#2, #1, #0]],
-        Get { materialize.public.orderline (u19) }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2)
+
+1 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0)
+
+2 =
+| Join %0 %1 (= %0.#0 %1.#0) (= %0.#1 %1.#1) (= %0.#2 %1.#2)
+| | implementation = DeltaQuery %0 %1.(#2, #1, #0) | %1 %0.(#0, #1, #2)
+| | demand for %0 = (#4..#6)
+| | demand for %1 = (#6)
+| Filter (datetots(#14) < 2020-01-01 00:00:00) (#4 <= #14)
+| Reduce group=(#6) sum(if ((#5 = 1) || (#5 = 2)) then {1} else {0}) sum(if ((#5 != 1) && (#5 != 2)) then {1} else {0})
+
+EOF
 
 # Query 13
 query T multiline
@@ -1004,54 +896,42 @@ FROM (
 GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC
 ----
-Let {
-  l0 = Filter {
-    predicates: [#27 > 8],
-    Join {
-      variables: [
-        [(0, 0), (1, 3)],
-        [(0, 1), (1, 1)],
-        [(0, 2), (1, 2)]
-      ],
-      implementation: DeltaQuery,
-      ArrangeBy {
-        keys: [[#0, #1, #2]],
-        Get { materialize.public.customer (u6) }
-      },
-      ArrangeBy {
-        keys: [[#2, #1, #3]],
-        Get { materialize.public.order (u16) }
-      }
-    }
-  }
-} in
-Reduce {
-  group_key: [#1],
-  aggregates: [countall(null)],
-  Reduce {
-    group_key: [#0],
-    aggregates: [count(#22)],
-    Union {
-      Get { l0 },
-      Map {
-        scalars: [null, null, null, null, null, null, null, null],
-        Union {
-          Negate {
-            Distinct {
-              group_key: [
-                #0, #1, #2, #3, #4, #5, #6, #7,
-                #8, #9, #10, #11, #12, #13, #14, #15,
-                #16, #17, #18, #19, #20, #21
-              ],
-              Get { l0 }
-            }
-          },
-          Get { materialize.public.customer (u6) }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.customer (u6)
+| ArrangeBy (#0, #1, #2)
+
+1 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#2, #1, #3)
+
+2 =
+| Join %0 %1 (= %0.#0 %1.#3) (= %0.#1 %1.#1) (= %0.#2 %1.#2)
+| | implementation = DeltaQuery %0 %1.(#2, #1, #3) | %1 %0.(#0, #1, #2)
+| | demand for %0 = (#0..#21)
+| | demand for %1 = (#0, #5)
+| Filter (#27 > 8)
+
+3 =
+| Get %2
+
+4 =
+| Get %2
+| Distinct group=(#0, #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21)
+| Negate
+
+5 =
+| Get materialize.public.customer (u6)
+
+6 =
+| Union %4 %5
+| Map null null null null null null null null
+
+7 =
+| Union %3 %6
+| Reduce group=(#0) count(#22)
+| Reduce group=(#1) countall(null)
+
+EOF
 
 # Query 14
 query T multiline
@@ -1063,48 +943,43 @@ WHERE ol_i_id = i_id
 AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 ----
-Let {
-  l0 = Reduce {
-    group_key: [],
-    aggregates: [sum(if ^PR.*$ ~ #14 then #8 else 0dec), sum(#8)],
-    Filter {
-      predicates: [
-        datetots #6 < 2020-01-02 00:00:00,
-        datetots #6 >= 2007-01-02 00:00:00
-      ],
-      Join {
-        variables: [[(0, 4), (1, 0)]],
-        implementation: DeltaQuery,
-        ArrangeBy {
-          keys: [[#4]],
-          Get { materialize.public.orderline (u19) }
-        },
-        ArrangeBy {
-          keys: [[#0]],
-          Get { materialize.public.item (u24) }
-        }
-      }
-    }
-  }
-} in
-Project {
-  outputs: [2],
-  Map {
-    scalars: [
-      (((10000dec * #0) * 10000000dec) / (100dec + #1)) * 10dec
-    ],
-    Union {
-      Get { l0 },
-      Map {
-        scalars: [null, null],
-        Union {
-          Project { outputs: [], Negate { Get { l0 } } },
-          Constant [[]]
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#4)
+
+1 =
+| Get materialize.public.item (u24)
+| ArrangeBy (#0)
+
+2 =
+| Join %0 %1 (= %0.#4 %1.#0)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#4)
+| | demand for %0 = (#6, #8)
+| | demand for %1 = (#4)
+| Filter (datetots(#6) < 2020-01-02 00:00:00) (datetots(#6) >= 2007-01-02 00:00:00)
+| Reduce group=() sum(if "^PR.*$" ~(#14) then {#8} else {0dec}) sum(#8)
+
+3 =
+| Get %2
+
+4 =
+| Get %2
+| Negate
+| Project ()
+
+5 =
+| Constant ()
+
+6 =
+| Union %4 %5
+| Map null null
+
+7 =
+| Union %3 %6
+| Map ((((10000dec * #0) * 10000000dec) / (100dec + #1)) * 10dec)
+| Project (#2)
+
+EOF
 
 # Query 15
 query T multiline
@@ -1138,46 +1013,45 @@ AND total_revenue = (
 )
 ORDER BY su_suppkey
 ----
-Let {
-  l0 = Reduce {
-    group_key: [#27],
-    aggregates: [sum(#8)],
-    Filter {
-      predicates: [datetots #6 >= 2007-01-02 00:00:00],
-      Join {
-        variables: [[(0, 4), (1, 0)], [(0, 5), (1, 1)]],
-        implementation: DeltaQuery,
-        ArrangeBy {
-          keys: [[#5, #4]],
-          Get { materialize.public.orderline (u19) }
-        },
-        ArrangeBy {
-          keys: [[#0, #1]],
-          Get { materialize.public.stock (u26) }
-        }
-      }
-    }
-  }
-} in
-Project {
-  outputs: [0 .. 2, 4, 8],
-  Filter {
-    predicates: [!isnull #8],
-    Join {
-      variables: [[(0, 0), (1, 0)], [(1, 1), (2, 0)]],
-      implementation: DifferentialLinear,
-      Get { materialize.public.supplier (u34) },
-      ArrangeBy { keys: [[#0]], Get { l0 } },
-      ArrangeBy {
-        keys: [[#0]],
-        Filter {
-          predicates: [!isnull #0],
-          Reduce { group_key: [], aggregates: [max(#1)], Get { l0 } }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#5, #4)
+
+1 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#0, #1)
+
+2 =
+| Join %0 %1 (= %0.#4 %1.#0) (= %0.#5 %1.#1)
+| | implementation = DeltaQuery %0 %1.(#0, #1) | %1 %0.(#5, #4)
+| | demand for %0 = (#6, #8)
+| | demand for %1 = (#17)
+| Filter (datetots(#6) >= 2007-01-02 00:00:00)
+| Reduce group=(#27) sum(#8)
+
+3 =
+| Get materialize.public.supplier (u34)
+
+4 =
+| Get %2
+| ArrangeBy (#0)
+
+5 =
+| Get %2
+| Reduce group=() max(#1)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+6 =
+| Join %3 %4 %5 (= %3.#0 %4.#0) (= %4.#1 %5.#0)
+| | implementation = Differential %3 %4.(#0) %5.(#0)
+| | demand for %3 = (#0..#2, #4)
+| | demand for %4 = (#1)
+| | demand for %5 = ()
+| Filter !(isnull(#8))
+| Project (#0..#2, #4, #8)
+
+EOF
 
 # Query 16
 query T multiline
@@ -1196,58 +1070,71 @@ AND (
 GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC
 ----
-Let {
-  l0 = Filter {
-    predicates: [!(^zz.*$ ~ #22)],
-    Join {
-      variables: [[(0, 0), (1, 0)]],
-      implementation: DeltaQuery,
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.stock (u26) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.item (u24) }
-      }
-    }
-  }
-} in
-Let { l1 = Distinct { group_key: [#17], Get { l0 } } } in
-Let {
-  l2 = Reduce {
-    group_key: [#0],
-    aggregates: [all(#0 != #1)],
-    Join {
-      variables: [],
-      implementation: DifferentialLinear,
-      Filter {
-        predicates: [^.*bad.*$ ~ #6],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy { keys: [[]], Get { l1 } }
-    }
-  }
-} in
-Reduce {
-  group_key: [#20, substr(#22, 1, 3), #21],
-  aggregates: [count(distinct #17)],
-  Join {
-    variables: [[(0, 0), (1, 17)]],
-    implementation: DifferentialLinear,
-    Union {
-      Filter { predicates: [#1], Get { l2 } },
-      Map {
-        scalars: [true],
-        Union {
-          Project { outputs: [0], Negate { Get { l2 } } },
-          Get { l1 }
-        }
-      }
-    },
-    ArrangeBy { keys: [[#17]], Get { l0 } }
-  }
-}
+0 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#0)
+
+1 =
+| Get materialize.public.item (u24)
+| ArrangeBy (#0)
+
+2 =
+| Join %0 %1 (= %0.#0 %1.#0)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | demand for %0 = (#17)
+| | demand for %1 = (#2..#4)
+| Filter !("^zz.*$" ~(#22))
+
+3 =
+| Get %2
+| Distinct group=(#17)
+
+4 =
+| Get %3
+| ArrangeBy ()
+
+5 =
+| Get materialize.public.supplier (u34)
+| Filter "^.*bad.*$" ~(#6)
+
+6 =
+| Join %4 %5
+| | implementation = Differential %5 %4.()
+| | demand for %4 = (#0)
+| | demand for %5 = (#0)
+| Reduce group=(#0) all((#0 != #1))
+
+7 =
+| Get %2
+| ArrangeBy (#17)
+
+8 =
+| Get %6
+| Filter #1
+
+9 =
+| Get %6
+| Negate
+| Project (#0)
+
+10 =
+| Get %3
+
+11 =
+| Union %9 %10
+| Map true
+
+12 =
+| Union %8 %11
+
+13 =
+| Join %7 %12 (= %7.#17 %12.#0)
+| | implementation = Differential %12 %7.(#17)
+| | demand for %7 = (#17, #20..#22)
+| | demand for %12 = ()
+| Reduce group=(#20, substr(#22, 1, 3), #21) count(distinct #17)
+
+EOF
 
 # Query 17
 query T multiline
@@ -1265,66 +1152,57 @@ FROM
 WHERE ol_i_id = t.i_id
 AND ol_quantity < t.a
 ----
-Let {
-  l0 = Reduce {
-    group_key: [],
-    aggregates: [sum(#8)],
-    Filter {
-      predicates: [(i32todec #7 * 1000000dec) < #13],
-      Join {
-        variables: [[(0, 4), (1, 0)]],
-        implementation: DeltaQuery,
-        ArrangeBy {
-          keys: [[#4]],
-          Get { materialize.public.orderline (u19) }
-        },
-        ArrangeBy {
-          keys: [[#0]],
-          Map {
-            scalars: [
-              ((i32todec #1 * 10000000dec) / i64todec #2) / 10dec
-            ],
-            Reduce {
-              group_key: [#0],
-              aggregates: [sum(#12), count(#12)],
-              Filter {
-                predicates: [^.*b$ ~ #4],
-                Join {
-                  variables: [[(0, 0), (1, 4)]],
-                  implementation: DeltaQuery,
-                  ArrangeBy {
-                    keys: [[#0]],
-                    Get { materialize.public.item (u24) }
-                  },
-                  ArrangeBy {
-                    keys: [[#4]],
-                    Get { materialize.public.orderline (u19) }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-} in
-Project {
-  outputs: [1],
-  Map {
-    scalars: [(#0 * 10000000dec) / 20dec],
-    Union {
-      Get { l0 },
-      Map {
-        scalars: [null],
-        Union {
-          Project { outputs: [], Negate { Get { l0 } } },
-          Constant [[]]
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#4)
+
+1 =
+| Get materialize.public.item (u24)
+| ArrangeBy (#0)
+
+2 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#4)
+
+3 =
+| Join %1 %2 (= %1.#0 %2.#4)
+| | implementation = DeltaQuery %1 %2.(#4) | %2 %1.(#0)
+| | demand for %1 = (#0, #4)
+| | demand for %2 = (#7)
+| Filter "^.*b$" ~(#4)
+| Reduce group=(#0) sum(#12) count(#12)
+| Map (((i32todec(#1) * 10000000dec) / i64todec(#2)) / 10dec)
+| ArrangeBy (#0)
+
+4 =
+| Join %0 %3 (= %0.#4 %3.#0)
+| | implementation = DeltaQuery %0 %3.(#0) | %3 %0.(#4)
+| | demand for %0 = (#7, #8)
+| | demand for %3 = (#3)
+| Filter ((i32todec(#7) * 1000000dec) < #13)
+| Reduce group=() sum(#8)
+
+5 =
+| Get %4
+
+6 =
+| Get %4
+| Negate
+| Project ()
+
+7 =
+| Constant ()
+
+8 =
+| Union %6 %7
+| Map null
+
+9 =
+| Union %5 %8
+| Map ((#0 * 10000000dec) / 20dec)
+| Project (#1)
+
+EOF
 
 # Query 18
 query T multiline
@@ -1341,37 +1219,29 @@ GROUP BY o_id, o_w_id, o_d_id, c_id, c_last, o_entry_d, o_ol_cnt
 HAVING sum(ol_amount) > 200
 ORDER BY sum(ol_amount) DESC, o_entry_d
 ----
-Project {
-  outputs: [4, 3, 0, 5 .. 7],
-  Filter {
-    predicates: [#7 > 20000dec],
-    Reduce {
-      group_key: [#22, #2, #1, #0, #5, #26, #28],
-      aggregates: [sum(#38)],
-      Join {
-        variables: [
-          [(0, 0), (1, 3)],
-          [(0, 1), (1, 1), (2, 1)],
-          [(0, 2), (1, 2), (2, 2)],
-          [(1, 0), (2, 0)]
-        ],
-        implementation: DeltaQuery,
-        ArrangeBy {
-          keys: [[#0, #1, #2]],
-          Get { materialize.public.customer (u6) }
-        },
-        ArrangeBy {
-          keys: [[#0, #1, #2], [#2, #1, #3]],
-          Get { materialize.public.order (u16) }
-        },
-        ArrangeBy {
-          keys: [[#2, #1, #0]],
-          Get { materialize.public.orderline (u19) }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.customer (u6)
+| ArrangeBy (#0, #1, #2)
+
+1 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2) (#2, #1, #3)
+
+2 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0)
+
+3 =
+| Join %0 %1 %2 (= %0.#0 %1.#3) (= %0.#1 %1.#1 %2.#1) (= %0.#2 %1.#2 %2.#2) (= %1.#0 %2.#0)
+| | implementation = DeltaQuery %0 %1.(#2, #1, #3) %2.(#2, #1, #0) | %1 %0.(#0, #1, #2) %2.(#2, #1, #0) | %2 %1.(#0, #1, #2) %0.(#0, #1, #2)
+| | demand for %0 = (#0..#2, #5)
+| | demand for %1 = (#0, #4, #6)
+| | demand for %2 = (#8)
+| Reduce group=(#22, #2, #1, #0, #5, #26, #28) sum(#38)
+| Filter (#7 > 20000dec)
+| Project (#4, #3, #0, #5..#7)
+
+EOF
 
 # Query 19
 query T multiline
@@ -1401,49 +1271,41 @@ WHERE (
     AND ol_w_id in (1, 5, 3)
 )
 ----
-Let {
-  l0 = Reduce {
-    group_key: [],
-    aggregates: [sum(#8)],
-    Filter {
-      predicates: [
-        (
-          ((^.*a$ ~ #14) && (((#2 = 1) || (#2 = 2)) || (#2 = 3)))
-          ||
-          ((^.*b$ ~ #14) && (((#2 = 1) || (#2 = 2)) || (#2 = 4)))
-        )
-        ||
-        ((^.*c$ ~ #14) && (((#2 = 1) || (#2 = 5)) || (#2 = 3))),
-        #7 <= 10,
-        #13 <= 40000000dec,
-        #7 >= 1,
-        #13 >= 100dec
-      ],
-      Join {
-        variables: [[(0, 4), (1, 0)]],
-        implementation: DeltaQuery,
-        ArrangeBy {
-          keys: [[#4]],
-          Get { materialize.public.orderline (u19) }
-        },
-        ArrangeBy {
-          keys: [[#0]],
-          Get { materialize.public.item (u24) }
-        }
-      }
-    }
-  }
-} in
-Union {
-  Get { l0 },
-  Map {
-    scalars: [null],
-    Union {
-      Project { outputs: [], Negate { Get { l0 } } },
-      Constant [[]]
-    }
-  }
-}
+0 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#4)
+
+1 =
+| Get materialize.public.item (u24)
+| ArrangeBy (#0)
+
+2 =
+| Join %0 %1 (= %0.#4 %1.#0)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#4)
+| | demand for %0 = (#2, #7, #8)
+| | demand for %1 = (#3, #4)
+| Filter ((("^.*a$" ~(#14) && (((#2 = 1) || (#2 = 2)) || (#2 = 3))) || ("^.*b$" ~(#14) && (((#2 = 1) || (#2 = 2)) || (#2 = 4)))) || ("^.*c$" ~(#14) && (((#2 = 1) || (#2 = 5)) || (#2 = 3)))) (#7 <= 10) (#13 <= 40000000dec) (#7 >= 1) (#13 >= 100dec)
+| Reduce group=() sum(#8)
+
+3 =
+| Get %2
+
+4 =
+| Get %2
+| Negate
+| Project ()
+
+5 =
+| Constant ()
+
+6 =
+| Union %4 %5
+| Map null
+
+7 =
+| Union %3 %6
+
+EOF
 
 
 # Query 20
@@ -1464,79 +1326,76 @@ AND su_nationkey = n_nationkey
 AND n_name = 'GERMANY'
 ORDER BY su_name
 ----
-Let {
-  l0 = Filter {
-    predicates: [#8 = "GERMANY"],
-    Join {
-      variables: [[(0, 3), (1, 0)]],
-      implementation: DeltaQuery,
-      ArrangeBy {
-        keys: [[#3]],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      }
-    }
-  }
-} in
-Let {
-  l1 = Filter {
-    predicates: [datetots #35 > 2010-05-23 12:00:00],
-    Join {
-      variables: [[(0, 0), (1, 4)]],
-      implementation: DifferentialLinear,
-      Get { materialize.public.stock (u26) },
-      ArrangeBy {
-        keys: [[#4]],
-        Get { materialize.public.orderline (u19) }
-      },
-      ArrangeBy { keys: [[]], Get { l0 } }
-    }
-  }
-} in
-Project {
-  outputs: [1, 2],
-  Join {
-    variables: [[(0, 0), (1, 0)]],
-    implementation: DifferentialLinear,
-    Get { l0 },
-    ArrangeBy {
-      keys: [[#0]],
-      Reduce {
-        group_key: [#0],
-        aggregates: [any(true)],
-        Filter {
-          predicates: [(2 * #3) > #4],
-          Reduce {
-            group_key: [#0, #11, #12, #13],
-            aggregates: [sum(#36)],
-            Filter {
-              predicates: [^co.*$ ~ #44],
-              Join {
-                variables: [[(0, 11), (1, 0), (2, 0)]],
-                implementation: DifferentialLinear,
-                Filter {
-                  predicates: [#0 = ((#11 * #12) % 10000)],
-                  Get { l1 }
-                },
-                ArrangeBy {
-                  keys: [[#0]],
-                  Distinct { group_key: [#11], Get { l1 } }
-                },
-                ArrangeBy {
-                  keys: [[#0]],
-                  Get { materialize.public.item (u24) }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
+0 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#3)
+
+1 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+2 =
+| Join %0 %1 (= %0.#3 %1.#0)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#3)
+| | demand for %0 = (#0..#2)
+| | demand for %1 = (#1)
+| Filter (#8 = "GERMANY")
+
+3 =
+| Get %2
+| ArrangeBy ()
+
+4 =
+| Get materialize.public.stock (u26)
+
+5 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#4)
+
+6 =
+| Join %3 %4 %5 (= %4.#0 %5.#4)
+| | implementation = Differential %4 %5.(#4) %3.()
+| | demand for %3 = (#0)
+| | demand for %4 = (#0..#2)
+| | demand for %5 = (#6, #7)
+| Filter (datetots(#35) > 2010-05-23 12:00:00)
+
+7 =
+| Get %2
+
+8 =
+| Get %6
+| Filter (#0 = ((#11 * #12) % 10000))
+
+9 =
+| Get %6
+| Distinct group=(#11)
+| ArrangeBy (#0)
+
+10 =
+| Get materialize.public.item (u24)
+| ArrangeBy (#0)
+
+11 =
+| Join %8 %9 %10 (= %8.#11 %9.#0 %10.#0)
+| | implementation = Differential %8 %9.(#0) %10.(#0)
+| | demand for %8 = (#0, #11..#13, #36)
+| | demand for %9 = ()
+| | demand for %10 = (#4)
+| Filter "^co.*$" ~(#44)
+| Reduce group=(#0, #11, #12, #13) sum(#36)
+| Filter ((2 * #3) > #4)
+| Reduce group=(#0) any(true)
+| ArrangeBy (#0)
+
+12 =
+| Join %7 %11 (= %7.#0 %11.#0)
+| | implementation = Differential %7 %11.(#0)
+| | demand for %7 = (#1, #2)
+| | demand for %11 = ()
+| Project (#1, #2)
+
+EOF
 
 # Query 21
 query T multiline
@@ -1565,84 +1424,75 @@ AND n_name = 'GERMANY'
 GROUP BY su_name
 ORDER BY numwait DESC, su_name
 ----
-Let {
-  l0 = Filter {
-    predicates: [#44 = "GERMANY", #13 > #21],
-    Join {
-      variables: [
-        [(0, 0), (1, 0)],
-        [(0, 1), (1, 1)],
-        [(0, 2), (1, 2), (2, 1)],
-        [(0, 4), (2, 0)],
-        [(2, 17), (3, 0)],
-        [(3, 3), (4, 0)]
-      ],
-      implementation: DifferentialLinear,
-      Get { materialize.public.orderline (u19) },
-      ArrangeBy {
-        keys: [[#0, #1, #2]],
-        Get { materialize.public.order (u16) }
-      },
-      ArrangeBy {
-        keys: [[#0, #1]],
-        Get { materialize.public.stock (u26) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.supplier (u34) }
-      },
-      ArrangeBy {
-        keys: [[#0]],
-        Get { materialize.public.nation (u31) }
-      }
-    }
-  }
-} in
-Let { l1 = Distinct { group_key: [#7, #8, #9, #13], Get { l0 } } } in
-Reduce {
-  group_key: [#1],
-  aggregates: [countall(null)],
-  Join {
-    variables: [
-      [(0, 0), (1, 7)],
-      [(0, 1), (1, 8)],
-      [(0, 2), (1, 9)],
-      [(0, 3), (1, 13)]
-    ],
-    implementation: DifferentialLinear,
-    Union {
-      Project {
-        outputs: [0 .. 3],
-        Negate {
-          Map {
-            scalars: [true],
-            Distinct {
-              group_key: [#0, #1, #2, #3],
-              Filter {
-                predicates: [#10 > #3],
-                Join {
-                  variables: [
-                    [(0, 0), (1, 0)],
-                    [(0, 1), (1, 1)],
-                    [(0, 2), (1, 2)]
-                  ],
-                  implementation: DifferentialLinear,
-                  Get { l1 },
-                  ArrangeBy {
-                    keys: [[#2, #1, #0]],
-                    Get { materialize.public.orderline (u19) }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      Get { l1 }
-    },
-    ArrangeBy { keys: [[#7, #8, #9, #13]], Get { l0 } }
-  }
-}
+0 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0)
+
+1 =
+| Get materialize.public.orderline (u19)
+
+2 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#0, #1, #2)
+
+3 =
+| Get materialize.public.stock (u26)
+| ArrangeBy (#0, #1)
+
+4 =
+| Get materialize.public.nation (u31)
+| ArrangeBy (#0)
+
+5 =
+| Join %0 %1 %2 %3 %4 (= %0.#0 %3.#17) (= %0.#3 %4.#0) (= %1.#0 %2.#0) (= %1.#1 %2.#1) (= %1.#2 %2.#2 %3.#1) (= %1.#4 %3.#0)
+| | implementation = Differential %1 %2.(#0, #1, #2) %3.(#0, #1) %0.(#0) %4.(#0)
+| | demand for %0 = (#1)
+| | demand for %1 = (#0..#2, #6)
+| | demand for %2 = (#4)
+| | demand for %3 = ()
+| | demand for %4 = (#1)
+| Filter (#44 = "GERMANY") (#13 > #21)
+
+6 =
+| Get %5
+| Distinct group=(#7, #8, #9, #13)
+
+7 =
+| Get %5
+| ArrangeBy (#7, #8, #9, #13)
+
+8 =
+| Get %6
+
+9 =
+| Get materialize.public.orderline (u19)
+| ArrangeBy (#2, #1, #0)
+
+10 =
+| Join %8 %9 (= %8.#0 %9.#0) (= %8.#1 %9.#1) (= %8.#2 %9.#2)
+| | implementation = Differential %8 %9.(#2, #1, #0)
+| | demand for %8 = (#0..#3)
+| | demand for %9 = (#6)
+| Filter (#10 > #3)
+| Distinct group=(#0, #1, #2, #3)
+| Map true
+| Negate
+| Project (#0..#3)
+
+11 =
+| Get %6
+
+12 =
+| Union %10 %11
+
+13 =
+| Join %7 %12 (= %7.#7 %12.#0) (= %7.#8 %12.#1) (= %7.#9 %12.#2) (= %7.#13 %12.#3)
+| | implementation = Differential %12 %7.(#7, #8, #9, #13)
+| | demand for %7 = (#1)
+| | demand for %12 = ()
+| Reduce group=(#1) countall(null)
+
+EOF
 
 # Query 22
 query T multiline
@@ -1667,117 +1517,58 @@ AND NOT EXISTS (
 GROUP BY substr(c_state, 1, 1)
 ORDER BY substr(c_state, 1, 1)
 ----
-Let {
-  l0 = Filter {
-    predicates: [(#16 * 1000000dec) > #24],
-    Join {
-      variables: [],
-      implementation: DifferentialLinear,
-      Filter {
-        predicates: [
-          (
-            (
-              (
-                (
-                  (
-                    (substr(#11, 1, 1) = "1")
-                    ||
-                    (substr(#11, 1, 1) = "2")
-                  )
-                  ||
-                  (substr(#11, 1, 1) = "3")
-                )
-                ||
-                (substr(#11, 1, 1) = "4")
-              )
-              ||
-              (substr(#11, 1, 1) = "5")
-            )
-            ||
-            (substr(#11, 1, 1) = "6")
-          )
-          ||
-          (substr(#11, 1, 1) = "7")
-        ],
-        Get { materialize.public.customer (u6) }
-      },
-      ArrangeBy {
-        keys: [[]],
-        Map {
-          scalars: [
-            ((#0 * 10000000dec) / (i64todec #1 * 100dec)) * 10dec
-          ],
-          Reduce {
-            group_key: [],
-            aggregates: [sum(#16), count(#16)],
-            Filter {
-              predicates: [
-                (
-                  (
-                    (
-                      (
-                        (
-                          (substr(#11, 1, 1) = "1")
-                          ||
-                          (substr(#11, 1, 1) = "2")
-                        )
-                        ||
-                        (substr(#11, 1, 1) = "3")
-                      )
-                      ||
-                      (substr(#11, 1, 1) = "4")
-                    )
-                    ||
-                    (substr(#11, 1, 1) = "5")
-                  )
-                  ||
-                  (substr(#11, 1, 1) = "6")
-                )
-                ||
-                (substr(#11, 1, 1) = "7"),
-                #16 > 0dec
-              ],
-              Get { materialize.public.customer (u6) }
-            }
-          }
-        }
-      }
-    }
-  }
-} in
-Reduce {
-  group_key: [substr(#9, 1, 1)],
-  aggregates: [countall(null), sum(#16)],
-  Join {
-    variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)], [(0, 2), (1, 2)]],
-    implementation: DifferentialLinear,
-    Union {
-      Project {
-        outputs: [0 .. 2],
-        Negate {
-          Map {
-            scalars: [true],
-            Distinct {
-              group_key: [#0, #1, #2],
-              Join {
-                variables: [
-                  [(0, 0), (1, 3)],
-                  [(0, 1), (1, 1)],
-                  [(0, 2), (1, 2)]
-                ],
-                implementation: DeltaQuery,
-                ArrangeBy { keys: [[#0, #1, #2]], Get { l0 } },
-                ArrangeBy {
-                  keys: [[#2, #1, #3]],
-                  Get { materialize.public.order (u16) }
-                }
-              }
-            }
-          }
-        }
-      },
-      Project { outputs: [0 .. 2], Get { l0 } }
-    },
-    ArrangeBy { keys: [[#0, #1, #2]], Get { l0 } }
-  }
-}
+0 =
+| Get materialize.public.customer (u6)
+| Filter (((((((substr(#11, 1, 1) = "1") || (substr(#11, 1, 1) = "2")) || (substr(#11, 1, 1) = "3")) || (substr(#11, 1, 1) = "4")) || (substr(#11, 1, 1) = "5")) || (substr(#11, 1, 1) = "6")) || (substr(#11, 1, 1) = "7"))
+
+1 =
+| Get materialize.public.customer (u6)
+| Filter (((((((substr(#11, 1, 1) = "1") || (substr(#11, 1, 1) = "2")) || (substr(#11, 1, 1) = "3")) || (substr(#11, 1, 1) = "4")) || (substr(#11, 1, 1) = "5")) || (substr(#11, 1, 1) = "6")) || (substr(#11, 1, 1) = "7")) (#16 > 0dec)
+| Reduce group=() sum(#16) count(#16)
+| Map (((#0 * 10000000dec) / (i64todec(#1) * 100dec)) * 10dec)
+| ArrangeBy ()
+
+2 =
+| Join %0 %1
+| | implementation = Differential %0 %1.()
+| | demand for %0 = (#0..#2, #9, #16)
+| | demand for %1 = (#2)
+| Filter ((#16 * 1000000dec) > #24)
+
+3 =
+| Get %2
+| ArrangeBy (#0, #1, #2)
+
+4 =
+| Get %2
+| ArrangeBy (#0, #1, #2)
+
+5 =
+| Get materialize.public.order (u16)
+| ArrangeBy (#2, #1, #3)
+
+6 =
+| Join %4 %5 (= %4.#0 %5.#3) (= %4.#1 %5.#1) (= %4.#2 %5.#2)
+| | implementation = DeltaQuery %4 %5.(#2, #1, #3) | %5 %4.(#0, #1, #2)
+| | demand for %4 = (#0..#2)
+| | demand for %5 = ()
+| Distinct group=(#0, #1, #2)
+| Map true
+| Negate
+| Project (#0..#2)
+
+7 =
+| Get %2
+| Project (#0..#2)
+
+8 =
+| Union %6 %7
+
+9 =
+| Join %3 %8 (= %3.#0 %8.#0) (= %3.#1 %8.#1) (= %3.#2 %8.#2)
+| | implementation = Differential %8 %3.(#0, #1, #2)
+| | demand for %3 = (#9, #16)
+| | demand for %8 = ()
+| Reduce group=(substr(#9, 1, 1)) countall(null) sum(#16)
+
+EOF

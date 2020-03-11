@@ -16,15 +16,7 @@ VIEW`](../create-materialized-view).
 ## Conceptual framework
 
 `CREATE VIEW` simply stores the verbatim `SELECT` query, and provides a
-shorthand for performing the query.
-
-Note that you can only `SELECT` from non-materialized views if all of the views
-in their `FROM` clauses are themselves materialized or have transitive access to
-materialized views. For more information on this restriction, see [Selecting
-from non-materialized views](#selecting-from-non-materialized-views).
-
-If you plan on repeatedly reading from a view, we recommend using [materialized
-views](../create-materialized-view) instead.
+shorthand for performing the query. For more information, see [API Components: Sources](../../overview/api-components#non-materialized-views).
 
 ## Syntax
 

@@ -15,7 +15,6 @@ use std::str::{from_utf8, FromStr};
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
-use failure::{bail, format_err};
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
@@ -24,7 +23,7 @@ use repr::regex::Regex;
 use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
-use crate::{like_pattern, EvalEnv};
+use crate::{like_pattern, EvalEnv, EvalError};
 
 mod format;
 
@@ -39,7 +38,7 @@ impl NullaryFunc {
         &'a self,
         env: &'a EvalEnv,
         _temp_storage: &'a RowArena,
-    ) -> Result<Datum<'a>, failure::Error> {
+    ) -> Result<Datum<'a>, EvalError> {
         match self {
             NullaryFunc::MzLogicalTimestamp => Ok(mz_logical_time(env)),
             NullaryFunc::Now => Ok(now(env)),
@@ -163,10 +162,10 @@ fn cast_int64_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64() != 0)
 }
 
-fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match i32::try_from(a.unwrap_int64()) {
         Ok(n) => Ok(Datum::from(n)),
-        Err(_) => Err(format_err!("integer out of range")),
+        Err(_) => Err(EvalError::IntegerOutOfRange),
     }
 }
 
@@ -201,7 +200,7 @@ fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_float32()))
 }
 
-fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let f = a.unwrap_float32();
     let scale = b.unwrap_int32();
 
@@ -210,7 +209,7 @@ fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, 
         // format!("A field with precision {}, \
         //         scale {} must round to an absolute value less than 10^{}.",
         //         MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale)
-        bail!("numeric field overflow");
+        return Err(EvalError::NumericFieldOverflow);
     }
 
     Ok(Datum::from((f * 10_f32.powi(scale)) as i128))
@@ -237,7 +236,7 @@ fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64() as i64)
 }
 
-fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let f = a.unwrap_float64();
     let scale = b.unwrap_int32();
 
@@ -246,7 +245,7 @@ fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, 
         // format!("A field with precision {}, \
         //         scale {} must round to an absolute value less than 10^{}.",
         //         MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale)
-        bail!("numeric field overflow");
+        return Err(EvalError::NumericFieldOverflow);
     }
 
     Ok(Datum::from((f * 10_f64.powi(scale)) as i128))
@@ -625,14 +624,23 @@ fn round_decimal<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
     Datum::from(decimal.round(round_to).significand())
 }
 
-fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if b.unwrap_str().to_lowercase() != "utf8" {
-        panic!("Materialize only supports convert_from() with utf8");
+fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let encoding_name = b.unwrap_str().to_lowercase();
+    if encoding_name != "utf8" {
+        return Err(EvalError::InvalidEncodingName(encoding_name));
     }
 
-    match from_utf8(a.unwrap_bytes()) {
-        Ok(from) => Datum::String(from),
-        Err(e) => panic!("{}", e),
+    let bytes = a.unwrap_bytes();
+    match from_utf8(bytes) {
+        Ok(from) => Ok(Datum::String(from)),
+        Err(_e) => {
+            let mut byte_sequence = String::new();
+            strconv::format_bytes(&mut byte_sequence, &bytes);
+            Err(EvalError::InvalidByteSequence {
+                byte_sequence,
+                encoding_name,
+            })
+        }
     }
 }
 
@@ -817,91 +825,91 @@ fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
-fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_int32();
     if b == 0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_int32() / b))
     }
 }
 
-fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_int64();
     if b == 0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_int64() / b))
     }
 }
 
-fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_float32();
     if b == 0.0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_float32() / b))
     }
 }
 
-fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_float64();
     if b == 0.0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_float64() / b))
     }
 }
 
-fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_decimal();
     if b == 0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_decimal() / b))
     }
 }
 
-fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_int32();
     if b == 0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_int32() % b))
     }
 }
 
-fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_int64();
     if b == 0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_int64() % b))
     }
 }
 
-fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_float32();
     if b == 0.0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_float32() % b))
     }
 }
 
-fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_float64();
     if b == 0.0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_float64() % b))
     }
 }
 
-fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_decimal();
     if b == 0 {
-        bail!("division by zero");
+        Err(EvalError::DivisionByZero)
     } else {
         Ok(Datum::from(a.unwrap_decimal() % b))
     }
@@ -1117,7 +1125,7 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     }
 }
 
-fn match_like_pattern<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn match_like_pattern<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let haystack = a.unwrap_str();
     let needle = like_pattern::build_regex(b.unwrap_str())?;
     Ok(Datum::from(needle.is_match(haystack)))
@@ -1273,7 +1281,7 @@ fn extract_timestamptz_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.weekday().number_from_monday() as f64)
 }
 
-fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Error> {
+fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse::<DateTruncTo>() {
         Ok(DateTruncTo::Micros) => Ok(date_trunc_microseconds(b)),
@@ -1289,7 +1297,7 @@ fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, failure::Erro
         Ok(DateTruncTo::Decade) => Ok(date_trunc_decade(b)),
         Ok(DateTruncTo::Century) => Ok(date_trunc_century(b)),
         Ok(DateTruncTo::Millennium) => Ok(date_trunc_millennium(b)),
-        Err(_) => Err(format_err!("units '{}' not recognized", units)),
+        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
 
@@ -1586,38 +1594,39 @@ pub enum DateTruncTo {
 }
 
 impl FromStr for DateTruncTo {
-    type Err = failure::Error;
+    type Err = EvalError;
+
     fn from_str(s: &str) -> Result<DateTruncTo, Self::Err> {
         let s = unicase::Ascii::new(s);
-        Ok(if s == "microseconds" {
-            DateTruncTo::Micros
+        if s == "microseconds" {
+            Ok(DateTruncTo::Micros)
         } else if s == "milliseconds" {
-            DateTruncTo::Millis
+            Ok(DateTruncTo::Millis)
         } else if s == "second" {
-            DateTruncTo::Second
+            Ok(DateTruncTo::Second)
         } else if s == "minute" {
-            DateTruncTo::Minute
+            Ok(DateTruncTo::Minute)
         } else if s == "hour" {
-            DateTruncTo::Hour
+            Ok(DateTruncTo::Hour)
         } else if s == "day" {
-            DateTruncTo::Day
+            Ok(DateTruncTo::Day)
         } else if s == "week" {
-            DateTruncTo::Week
+            Ok(DateTruncTo::Week)
         } else if s == "month" {
-            DateTruncTo::Month
+            Ok(DateTruncTo::Month)
         } else if s == "quarter" {
-            DateTruncTo::Quarter
+            Ok(DateTruncTo::Quarter)
         } else if s == "year" {
-            DateTruncTo::Year
+            Ok(DateTruncTo::Year)
         } else if s == "decade" {
-            DateTruncTo::Decade
+            Ok(DateTruncTo::Decade)
         } else if s == "century" {
-            DateTruncTo::Century
+            Ok(DateTruncTo::Century)
         } else if s == "millennium" {
-            DateTruncTo::Millennium
+            Ok(DateTruncTo::Millennium)
         } else {
-            failure::bail!("invalid date_trunc precision: {}", s.into_inner())
-        })
+            Err(EvalError::UnknownUnits(s.into_inner().to_owned()))
+        }
     }
 }
 
@@ -1628,7 +1637,7 @@ impl BinaryFunc {
         b: Datum<'a>,
         _env: &'a EvalEnv,
         temp_storage: &'a RowArena,
-    ) -> Result<Datum<'a>, failure::Error> {
+    ) -> Result<Datum<'a>, EvalError> {
         match self {
             BinaryFunc::And => Ok(and(a, b)),
             BinaryFunc::Or => Ok(or(a, b)),
@@ -1693,7 +1702,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteInt64 => Ok(jsonb_delete_int64(a, b, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
             BinaryFunc::RoundDecimal(scale) => Ok(round_decimal(a, b, *scale)),
-            BinaryFunc::ConvertFrom => Ok(convert_from(a, b)),
+            BinaryFunc::ConvertFrom => convert_from(a, b),
         }
     }
 
@@ -1825,6 +1834,70 @@ impl BinaryFunc {
             _ => true,
         }
     }
+
+    pub fn is_infix_op(&self) -> bool {
+        use BinaryFunc::*;
+        match self {
+            And
+            | Or
+            | AddInt32
+            | AddInt64
+            | AddFloat32
+            | AddFloat64
+            | AddTimestampInterval
+            | AddTimestampTzInterval
+            | AddDateTime
+            | AddDateInterval
+            | AddTimeInterval
+            | AddInterval
+            | SubInterval
+            | AddDecimal
+            | SubInt32
+            | SubInt64
+            | SubFloat32
+            | SubFloat64
+            | SubTimestamp
+            | SubTimestampTz
+            | SubTimestampInterval
+            | SubTimestampTzInterval
+            | SubDate
+            | SubDateInterval
+            | SubTime
+            | SubTimeInterval
+            | SubDecimal
+            | MulInt32
+            | MulInt64
+            | MulFloat32
+            | MulFloat64
+            | MulDecimal
+            | DivInt32
+            | DivInt64
+            | DivFloat32
+            | DivFloat64
+            | DivDecimal
+            | ModInt32
+            | ModInt64
+            | ModFloat32
+            | ModFloat64
+            | ModDecimal
+            | Eq
+            | NotEq
+            | Lt
+            | Lte
+            | Gt
+            | Gte
+            | JsonbConcat
+            | JsonbContainsJsonb
+            | JsonbGetInt64
+            | JsonbGetString
+            | JsonbContainsString
+            | JsonbDeleteInt64
+            | JsonbDeleteString
+            | TextConcat => true,
+            MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTrunc
+            | CastFloat32ToDecimal | CastFloat64ToDecimal | RoundDecimal(_) | ConvertFrom => false,
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
@@ -1885,14 +1958,14 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),
-            BinaryFunc::JsonbGetInt64 => f.write_str("b->i64"),
-            BinaryFunc::JsonbGetString => f.write_str("b->str"),
-            BinaryFunc::JsonbContainsString => f.write_str("b?"),
-            BinaryFunc::JsonbConcat => f.write_str("b||"),
-            BinaryFunc::JsonbContainsJsonb => f.write_str("b<@"),
-            BinaryFunc::JsonbDeleteInt64 => f.write_str("b-int64"),
-            BinaryFunc::JsonbDeleteString => f.write_str("b-string"),
-            BinaryFunc::RoundDecimal(_) => f.write_str("b-rounddec"),
+            BinaryFunc::JsonbGetInt64 => f.write_str("->"),
+            BinaryFunc::JsonbGetString => f.write_str("->"),
+            BinaryFunc::JsonbContainsString => f.write_str("?"),
+            BinaryFunc::JsonbConcat => f.write_str("||"),
+            BinaryFunc::JsonbContainsJsonb => f.write_str("<@"),
+            BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
+            BinaryFunc::JsonbDeleteString => f.write_str("-"),
+            BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
         }
     }
@@ -2026,7 +2099,7 @@ impl UnaryFunc {
         a: Datum<'a>,
         _env: &'a EvalEnv,
         temp_storage: &'a RowArena,
-    ) -> Result<Datum<'a>, failure::Error> {
+    ) -> Result<Datum<'a>, EvalError> {
         match self {
             UnaryFunc::Not => Ok(not(a)),
             UnaryFunc::IsNull => Ok(is_null(a)),
@@ -2161,24 +2234,6 @@ impl UnaryFunc {
             UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
             UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
         }
-    }
-
-    /// Reports whether this function has a symbolic string representation.
-    pub fn display_is_symbolic(&self) -> bool {
-        let out = match self {
-            UnaryFunc::Not
-            | UnaryFunc::NegInt32
-            | UnaryFunc::NegInt64
-            | UnaryFunc::NegFloat32
-            | UnaryFunc::NegFloat64
-            | UnaryFunc::NegDecimal
-            | UnaryFunc::NegInterval => true,
-            _ => false,
-        };
-        // This debug assertion is an attempt to ensure that this function
-        // stays in sync when new `UnaryFunc` variants are added.
-        debug_assert_eq!(out, self.to_string().len() < 3);
-        out
     }
 
     pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
@@ -2449,7 +2504,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::LengthBytes => f.write_str("lengthbytes"),
-            UnaryFunc::MatchRegex(regex) => write!(f, "{} ~", regex.as_str()),
+            UnaryFunc::MatchRegex(regex) => write!(f, "\"{}\" ~", regex.as_str()),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
             UnaryFunc::ExtractIntervalDay => f.write_str("ivextractday"),
@@ -2546,7 +2601,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     }
 }
 
-fn length_string<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, failure::Error> {
+fn length_string<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let string = datums[0].unwrap_str();
 
     if datums.len() == 2 {
@@ -2559,16 +2614,17 @@ fn length_string<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, failure::Error> 
 
         let enc = match encoding_from_whatwg_label(&encoding_name) {
             Some(enc) => enc,
-            None => bail!("invalid encoding name '{}'", encoding_name),
+            None => return Err(EvalError::InvalidEncodingName(encoding_name)),
         };
 
         let decoded_string = match enc.decode(string.as_bytes(), DecoderTrap::Strict) {
             Ok(s) => s,
-            Err(e) => bail!(
-                "invalid byte sequence for encoding '{}': '{}'",
-                encoding_name,
-                e
-            ),
+            Err(e) => {
+                return Err(EvalError::InvalidByteSequence {
+                    byte_sequence: e.to_string(),
+                    encoding_name,
+                })
+            }
         };
 
         Ok(Datum::from(decoded_string.chars().count() as i32))
@@ -2667,7 +2723,7 @@ impl VariadicFunc {
         datums: &[Datum<'a>],
         _env: &'a EvalEnv,
         temp_storage: &'a RowArena,
-    ) -> Result<Datum<'a>, failure::Error> {
+    ) -> Result<Datum<'a>, EvalError> {
         match self {
             VariadicFunc::Coalesce => Ok(coalesce(datums)),
             VariadicFunc::Concat => Ok(text_concat_variadic(datums, temp_storage)),

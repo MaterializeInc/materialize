@@ -9,9 +9,11 @@
 
 use regex::Regex;
 
+use crate::scalar::EvalError;
+
 /// Builds a regular expression that matches the same strings as a SQL
 /// LIKE pattern.
-pub fn build_regex(pattern: &str) -> Result<Regex, failure::Error> {
+pub fn build_regex(pattern: &str) -> Result<Regex, EvalError> {
     // LIKE patterns always cover the whole string, so we anchor the regex on
     // both sides. An underscore (`_`) in a LIKE pattern matches any single
     // character and a percent sign (`%`) matches any sequence of zero or more
@@ -47,8 +49,8 @@ pub fn build_regex(pattern: &str) -> Result<Regex, failure::Error> {
     }
     regex.push('$');
     if escape {
-        failure::bail!("unterminated escape sequence in LIKE")
+        Err(EvalError::UnterminatedLikeEscapeSequence)
     } else {
-        Ok(Regex::new(&regex)?)
+        Ok(Regex::new(&regex).expect("regex constructed to be valid"))
     }
 }

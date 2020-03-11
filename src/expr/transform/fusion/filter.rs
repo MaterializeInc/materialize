@@ -50,8 +50,9 @@ impl crate::transform::Transform for Filter {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         _: &EvalEnv,
-    ) {
-        self.transform(relation)
+    ) -> Result<(), crate::transform::TransformError> {
+        self.transform(relation);
+        Ok(())
     }
 }
 

@@ -265,6 +265,11 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
             match *ty {
                 Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
                 Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+                Type::BYTEA => row.get::<_, Option<&[u8]>>(i).map(|bytes| {
+                    let mut out = String::new();
+                    strconv::format_bytes(&mut out, &bytes);
+                    out
+                }),
                 Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
                 Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
                 Type::NUMERIC => row.get::<_, Option<Numeric>>(i).map(|x| x.to_string()),
@@ -281,11 +286,6 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
                 Type::JSONB => row
                     .get::<_, Option<Json<Value>>>(i)
                     .and_then(|v| serde_json::to_string(&v.0).ok()),
-                Type::BYTEA => row.get::<_, Option<&[u8]>>(i).map(|bytes| {
-                    let mut out = String::new();
-                    strconv::format_bytes(&mut out, &bytes);
-                    out
-                }),
                 _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
             }
             .unwrap_or_else(|| "<null>".into()),

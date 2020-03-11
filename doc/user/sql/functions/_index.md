@@ -49,6 +49,12 @@ Operator | Computes
 `/` | Division
 `%` | Modulo
 
+### String
+
+Operator | Computes
+---------|---------
+<code>&vert;&vert;</code> | Concatenation
+
 ### Time-like
 
 Operation | Computes

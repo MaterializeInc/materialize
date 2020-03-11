@@ -152,7 +152,7 @@ where
                         let ts = find_matching_timestamp(&id, offset, &timestamp_histories);
 
                         if offset <= last_processed_offset {
-                            error!("duplicate Kakfa message received");
+                            error!("duplicate Kakfa message: souce {} (reading topic {}) received offset {} max processed offset {}", name, topic, offset, last_processed_offset);
                             activator.activate();
                             return SourceStatus::Alive;
                         }
