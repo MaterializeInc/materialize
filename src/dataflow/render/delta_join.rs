@@ -185,7 +185,7 @@ where
                                                 build_lookup(update_stream, local, prev_key)
                                             }
                                         }
-                                        ArrangementFlavor::Trace(trace) => {
+                                        ArrangementFlavor::Trace(_gid, trace) => {
                                             if other > &relation {
                                                 let trace = trace
                                                     .enter_at(
