@@ -1,2 +1,9 @@
 create_sink ::=
-   'CREATE' 'SINK' sink_name 'FROM' source_name 'INTO' sink_target 'WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
+   'CREATE SINK' 'IF NOT EXISTS'? sink_name
+   'FROM' item_name
+   'INTO' 'KAFKA BROKER' host 'TOPIC' topic
+   'FORMAT' 'AVRO USING'
+      ('CONFLUENT SCHEMA REGISTRY' url |
+      'SCHEMA'
+         ('FILE' path | inline_schema)
+      )

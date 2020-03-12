@@ -23,18 +23,14 @@ Sink source type | Description
 
 Field | Use
 ------|-----
+**IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
-_source&lowbar;name_ | The name of the source whose values you want to pass through to the sink.
-_sink&lowbar;target_ | The path to write values to the sink.
-**WITH (** _option&lowbar;list_ **)** | Additional options for creating a sink. For more detail, see [`WITH` options](#with-options).
-
-#### `WITH` options
-
-The following options are valid within the `WITH` clause.
-
-Field | Value
-------|-----
-`schema_registry_url` | If using a Kafka sink, use the Schema Registry at the URL of `value`.
+_item&lowbar;name_ | The name of the source or view you want to send to the sink.
+**KAFKA BROKER** _host_ | The Kafka broker's host name.
+**TOPIC** _topic_ | The Kafka topic to write to.
+**CONFLUENT SCHEMA REGISTRY** _url_ | The URL of the Confluent schema registry to get schema information from.
+**SCHEMA FILE** _path_ | The absolute path to a file containing the schema.
+**SCHEMA** _inline&lowbar;schema_ | A string representing the schema.
 
 ## Detail
 
@@ -55,24 +51,23 @@ When creating sinks, Materialize expects either:
 CREATE SOURCE quotes
 FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
 FORMAT AVRO USING
-CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 ```sql
 CREATE SINK quotes_sink
 FROM quotes
-INTO 'kafka://localhost/quotes-sink'
-WITH
-    (
-        schema_registry_url = 'http://localhost:8081'
-    );
+INTO KAFKA BROKER 'localhost' TOPIC 'quotes-sink'
+FORMAT AVRO USING
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
 ### From materialized views
 
 ```sql
 CREATE SOURCE quotes
-FROM 'kafka://localhost/quotes'
-USING SCHEMA REGISTRY 'http://localhost:8081';
+FROM KAFKA BROKER 'localhost' TOPIC 'quotes'
+FORMAT AVRO USING
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 ```sql
 CREATE MATERIALIZED VIEW frank_quotes AS
@@ -80,13 +75,11 @@ CREATE MATERIALIZED VIEW frank_quotes AS
     WHERE attributed_to = 'Frank McSherry';
 ```
 ```sql
-CREATE SINK frank_quotes_sink
+CREATE SINK quotes_sink
 FROM frank_quotes
-INTO 'kafka://localhost/quotes-sink'
-WITH
-    (
-        schema_registry_url = 'http://localhost:8081'
-    );
+INTO KAFKA BROKER 'localhost' TOPIC 'frank-quotes-sink'
+FORMAT AVRO USING
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
 ## Related pages
