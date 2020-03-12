@@ -308,7 +308,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     );
                     let arranged = arranged.enter(region);
                     let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
-                    context.set_trace(&get_expr, &index_desc.keys, arranged);
+                    context.set_trace(*id, &get_expr, &index_desc.keys, arranged);
                     index_tokens.insert(id, Rc::new((button.press_on_drop(), token)));
                 } else {
                     panic!(
@@ -398,23 +398,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     Some(ArrangementFlavor::Local(local)) => {
                         manager.set(*export_id, WithDrop::new(local.trace.clone(), tokens));
                     }
-                    Some(ArrangementFlavor::Trace(_)) => {
-                        if let Some(existing_id) = dataflow
-                            .index_imports
-                            .iter()
-                            .filter_map(
-                                |(id, (desc, _))| if desc == index_desc { Some(id) } else { None },
-                            )
-                            .next()
-                        {
-                            // if the index being exported is a duplicate of an existing
-                            // one, just copy the existing one
-                            let trace = manager.get(existing_id).unwrap().clone();
-                            manager.set(*export_id, trace);
-                        }
-                        // Do nothing otherwise.
-                        // TODO: materialize#1985 Somehow this code branch is triggered
-                        // when materializing a view on `SELECT <constant>`
+                    Some(ArrangementFlavor::Trace(gid, _)) => {
+                        // Duplicate of existing arrangement with id `gid`, so
+                        // just create another handle to that arrangement.
+                        let trace = manager.get(&gid).unwrap().clone();
+                        manager.set(*export_id, trace);
                     }
                     None => {
                         panic!("Arrangement alarmingly absent!");
@@ -761,8 +749,8 @@ where
                         ArrangementFlavor::Local(local) => {
                             self.set_local(relation_expr, key_set, local);
                         }
-                        ArrangementFlavor::Trace(trace) => {
-                            self.set_trace(relation_expr, key_set, trace);
+                        ArrangementFlavor::Trace(gid, trace) => {
+                            self.set_trace(gid, relation_expr, key_set, trace);
                         }
                     }
                 }
@@ -947,7 +935,7 @@ where
                             ))
                         })
                     }
-                    Some(ArrangementFlavor::Trace(trace)) => {
+                    Some(ArrangementFlavor::Trace(_gid, trace)) => {
                         prev_keyed.join_core(&trace, move |_keys, old, new| {
                             let prev_datums = old.unpack();
                             let next_datums = new.unpack();
@@ -1195,7 +1183,7 @@ where
                             }
                         }
                     }),
-                Some(ArrangementFlavor::Trace(trace)) => trace
+                Some(ArrangementFlavor::Trace(_gid, trace)) => trace
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Threshold", move |_k, s, t| {
                         for (record, count) in s.iter() {
                             if *count > 0 {

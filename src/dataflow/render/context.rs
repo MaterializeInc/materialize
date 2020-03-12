@@ -22,7 +22,7 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
 
-use expr::ScalarExpr;
+use expr::{GlobalId, ScalarExpr};
 
 /// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
@@ -58,7 +58,7 @@ where
     pub local: HashMap<P, BTreeMap<Vec<ScalarExpr>, Arrangement<S, V>>>,
     /// Imported arrangements.
     #[allow(clippy::type_complexity)] // TODO(fms): fix or ignore lint globally.
-    pub trace: HashMap<P, BTreeMap<Vec<ScalarExpr>, ArrangementImport<S, V, T>>>,
+    pub trace: HashMap<P, BTreeMap<Vec<ScalarExpr>, (GlobalId, ArrangementImport<S, V, T>)>>,
 }
 
 impl<S: Scope, P, V: Data, T> Context<S, P, V, T>
@@ -109,6 +109,7 @@ where
                     .values()
                     .next()
                     .expect("Empty arrangement")
+                    .1
                     .as_collection(|_k, v| v.clone()),
             )
         } else {
@@ -140,8 +141,8 @@ where
     ) -> Option<ArrangementFlavor<S, V, T>> {
         if let Some(local) = self.get_local(relation_expr, keys) {
             Some(ArrangementFlavor::Local(local.clone()))
-        } else if let Some(trace) = self.get_trace(relation_expr, keys) {
-            Some(ArrangementFlavor::Trace(trace.clone()))
+        } else if let Some((gid, trace)) = self.get_trace(relation_expr, keys) {
+            Some(ArrangementFlavor::Trace(*gid, trace.clone()))
         } else {
             None
         }
@@ -184,7 +185,7 @@ where
         &self,
         relation_expr: &P,
         keys: &[ScalarExpr],
-    ) -> Option<&ArrangementImport<S, V, T>> {
+    ) -> Option<&(GlobalId, ArrangementImport<S, V, T>)> {
         self.trace.get(relation_expr).and_then(|x| x.get(keys))
     }
 
@@ -192,6 +193,7 @@ where
     #[allow(dead_code)]
     pub fn set_trace(
         &mut self,
+        gid: GlobalId,
         relation_expr: &P,
         keys: &[ScalarExpr],
         arranged: ArrangementImport<S, V, T>,
@@ -199,7 +201,7 @@ where
         self.trace
             .entry(relation_expr.clone())
             .or_insert_with(|| BTreeMap::new())
-            .insert(keys.to_vec(), arranged);
+            .insert(keys.to_vec(), (gid, arranged));
     }
 
     /// Clones from one key to another, as needed in let binding.
@@ -225,5 +227,5 @@ where
     /// A dataflow-local arrangement.
     Local(Arrangement<S, V>),
     /// An imported trace from outside the dataflow.
-    Trace(ArrangementImport<S, V, T>),
+    Trace(GlobalId, ArrangementImport<S, V, T>),
 }
