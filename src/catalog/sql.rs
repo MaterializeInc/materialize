@@ -48,9 +48,11 @@ CREATE TABLE items (
 CREATE TABLE timestamps (
     sid blob NOT NULL,
     vid blob NOT NULL,
+    pcount blob NOT NULL,
+    pid blob NOT NULL,
     timestamp integer NOT NULL,
     offset blob NOT NULL,
-    PRIMARY KEY (sid, vid, timestamp)
+    PRIMARY KEY (sid, vid, pid, timestamp)
 );
 
 INSERT INTO gid_alloc VALUES (1);

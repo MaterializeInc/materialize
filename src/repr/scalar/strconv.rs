@@ -148,12 +148,25 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, &str), failu
     if s.is_empty() {
         bail!("Timestamp string is empty!")
     }
+
+    // PostgreSQL special date-time inputs
+    // https://www.postgresql.org/docs/12/datatype-datetime.html#id-1.5.7.13.18.8
+    // We should add support for other values here, e.g. infinity
+    // which @quodlibetor is willing to add to the chrono package.
+    if s == "epoch" {
+        return Ok((
+            NaiveDate::from_ymd(1970, 1, 1),
+            NaiveTime::from_hms(0, 0, 0),
+            "",
+        ));
+    }
+
     let (ts_string, tz_string) = crate::datetime::split_timestamp_string(s);
 
     // Split timestamp into date and time components.
     let ts_value_split = ts_string.trim().split_whitespace().collect::<Vec<&str>>();
 
-    if ts_value_split.len() > 2 {
+    if ts_value_split.len() > 2 || ts_value_split.len() == 0 {
         bail!("unknown format")
     }
 
@@ -177,17 +190,14 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, &str), failu
         (_, _, _) => bail!("YEAR, MONTH, DAY are all required"),
     };
 
-    let time;
-
-    // Only parse time-component of TIMESTAMP if present.
-    if ts_value_split.len() == 2 {
+    let time = if ts_value_split.len() == 2 {
         match parse_time_string(ts_value_split[1]) {
-            Ok(t) => time = t,
+            Ok(t) => t,
             Err(e) => bail!("{}", e),
         }
     } else {
-        time = NaiveTime::from_hms(0, 0, 0);
-    }
+        NaiveTime::from_hms(0, 0, 0)
+    };
 
     Ok((date, time, tz_string))
 }
