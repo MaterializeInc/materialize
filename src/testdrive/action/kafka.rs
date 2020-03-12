@@ -16,6 +16,7 @@ use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use futures::executor::block_on;
 use futures::stream::{FuturesUnordered, TryStreamExt};
 use futures::{future, StreamExt};
+use rdkafka::admin::NewPartitions;
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::consumer::Consumer;
 use rdkafka::error::RDKafkaError;
@@ -60,7 +61,6 @@ impl Action for VerifyAction {
             .kafka_consumer
             .subscribe(&[&self.topic_prefix])
             .map_err(|e| e.to_string())?;
-
         let schema = interchange::avro::parse_schema(&self.schema)
             .map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut converted_expected_messages = Vec::new();
@@ -74,7 +74,6 @@ impl Action for VerifyAction {
                 .unwrap(),
             );
         }
-
         let mut message_stream = state.kafka_consumer.start();
         let mut actual_messages = Vec::new();
         for _i in 0..converted_expected_messages.len() {
@@ -118,7 +117,6 @@ impl Action for VerifyAction {
                 }
             }
         }
-
         // NB: We can't compare messages as they come in because
         // Kafka sinks do not currently support ordering.
         // Additionally, we do this bummer of a comparison because
@@ -161,6 +159,9 @@ fn get_values_in_first_list_not_in_second(
 
 pub struct IngestAction {
     topic_prefix: String,
+    partition: i32,
+    num_partition: i32,
+    add_partition: i32,
     message_format: RawSchema,
     timestamp: Option<i64>,
     publish: bool,
@@ -202,6 +203,9 @@ enum ParsedSchema {
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = cmd.args.string("format")?;
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
+    let partition = cmd.args.opt_parse::<i32>("partition")?.unwrap_or(0);
+    let num_partition = cmd.args.opt_parse::<i32>("num_partition")?.unwrap_or(1);
+    let add_partition = cmd.args.opt_parse::<i32>("add_partition")?.unwrap_or(0);
     let message_format = match format.as_ref() {
         "avro" => {
             let schema = cmd.args.string("schema")?;
@@ -220,10 +224,13 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let publish = cmd.args.opt_bool("publish")?;
     cmd.args.done()?;
     if !["protobuf", "avro", "raw"].contains(&&*format) {
-        return Err("formats besides avro are not supported".into());
+        return Err("formats besides avro, protobuf or raw are not supported".into());
     }
     Ok(IngestAction {
         topic_prefix,
+        partition,
+        num_partition,
+        add_partition,
         message_format,
         timestamp,
         publish,
@@ -307,8 +314,8 @@ impl IngestAction {
     fn do_redo(&self, state: &mut State) -> Result<(), String> {
         let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
         println!("Ingesting data into Kafka topic {:?}", topic_name);
-        create_kafka_topic(&topic_name, &state)?;
-
+        create_kafka_topic(&topic_name, self.num_partition, &state)?;
+        add_partitions(&topic_name, self.add_partition, &state)?;
         let format = match &self.message_format {
             RawSchema::Avro { key_schema, schema } => {
                 let schema_id = if self.publish {
@@ -384,7 +391,9 @@ impl IngestAction {
                 }
             }
 
-            let mut record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&topic_name).payload(&buf);
+            let mut record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&topic_name)
+                .payload(&buf)
+                .partition(self.partition);
             if let Some(timestamp) = self.timestamp {
                 record = record.timestamp(timestamp);
             }
@@ -407,7 +416,84 @@ impl Action for IngestAction {
     }
 }
 
-fn create_kafka_topic(topic_name: &str, state: &State) -> Result<(), String> {
+fn add_partitions(topic_name: &str, num_partitions: i32, state: &State) -> Result<(), String> {
+    if num_partitions > 0 {
+        let partitions = NewPartitions::new(&topic_name, num_partitions as usize);
+        let res = block_on(
+            state
+                .kafka_admin
+                .create_partitions(&[partitions], &state.kafka_admin_opts),
+        );
+        let res = match res {
+            Err(err) => return Err(err.to_string()),
+            Ok(res) => res,
+        };
+        if res.len() != 1 {
+            return Err(format!(
+                "kafka topic creation returned {} results, but exactly one result was expected",
+                res.len()
+            ));
+        }
+        match res.into_element() {
+            Ok(_) => Ok(()),
+            Err((_, err)) => Err(err.to_string()),
+        }?;
+        // Topic creation is asynchronous, and if we don't wait for it to
+        // complete, we might produce a message (below) that causes it to
+        // get automatically created with multiple partitions. (Since
+        // multiple partitions have no ordering guarantees, this violates
+        // many assumptions that our tests make.)
+        let mut i = 0;
+        loop {
+            let res = (|| {
+                let metadata = state
+                    .kafka_consumer
+                    // N.B. It is extremely important not to ask specifically
+                    // about the topic here, even though the API supports it!
+                    // Asking about the topic will create it automatically...
+                    // with the wrong number of partitions. Yes, this is
+                    // unbelievably horrible.
+                    .fetch_metadata(None, Some(Duration::from_secs(1)))
+                    .map_err(|e| e.to_string())?;
+                if metadata.topics().is_empty() {
+                    return Err("metadata fetch returned no topics".to_string());
+                }
+                let topic = match metadata.topics().iter().find(|t| t.name() == topic_name) {
+                    Some(topic) => topic,
+                    None => {
+                        return Err(format!(
+                            "metadata fetch did not return topic {}",
+                            topic_name,
+                        ))
+                    }
+                };
+                if topic.partitions().is_empty() {
+                    return Err("metadata fetch returned a topic with no partitions".to_string());
+                } else if topic.partitions().len() as i32 != num_partitions {
+                    return Err(format!(
+                        "topic {} was created with {} partitions when exactly {} was expected",
+                        topic_name,
+                        topic.partitions().len(),
+                        num_partitions
+                    ));
+                }
+                Ok(())
+            })();
+            match res {
+                Ok(()) => break Ok(()),
+                Err(e) if i == 6 => break Err(e),
+                _ => {
+                    thread::sleep(Duration::from_millis(100 * 2_u64.pow(i)));
+                    i += 1;
+                }
+            }
+        }
+    } else {
+        Ok(())
+    }
+}
+
+fn create_kafka_topic(topic_name: &str, num_partitions: i32, state: &State) -> Result<(), String> {
     // NOTE(benesch): it is critical that we invent a new topic name on
     // every testdrive run. We previously tried to delete and recreate the
     // topic with a fixed name, but ran into serious race conditions in
@@ -457,7 +543,6 @@ fn create_kafka_topic(topic_name: &str, state: &State) -> Result<(), String> {
     // strategy.
     //
     // [0]: https://github.com/confluentinc/confluent-kafka-python/issues/524#issuecomment-456783176
-    let num_partitions = 1;
     let new_topic = NewTopic::new(&topic_name, num_partitions, TopicReplication::Fixed(1))
         // Disabling retention is very important! Our testdrive tests
         // use hardcoded timestamps that are immediately eligible for
@@ -516,11 +601,12 @@ fn create_kafka_topic(topic_name: &str, state: &State) -> Result<(), String> {
             };
             if topic.partitions().is_empty() {
                 return Err("metadata fetch returned a topic with no partitions".to_string());
-            } else if topic.partitions().len() != 1 {
+            } else if topic.partitions().len() as i32 != num_partitions {
                 return Err(format!(
-                    "topic {} was created with {} partitions when exactly one was expected",
+                    "topic {} was created with {} partitions when exactly {} was expected",
                     topic_name,
-                    topic.partitions().len()
+                    topic.partitions().len(),
+                    num_partitions
                 ));
             }
             Ok(())
