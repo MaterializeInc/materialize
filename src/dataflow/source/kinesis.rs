@@ -21,9 +21,6 @@ use rusoto_kinesis::{
     GetShardIteratorInput, GetShardIteratorOutput, Kinesis, KinesisClient, ListShardsInput,
     ListShardsOutput,
 };
-
-use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
-use expr::SourceInstanceId;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 
