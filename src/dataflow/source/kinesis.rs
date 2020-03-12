@@ -140,20 +140,7 @@ where
                     },
                 };
 
-                if let Some(millis) = get_records_output.millis_behind_latest {
-                    if millis == 0 {
-                        // This activation does the following:
-                        //      1. Ensures we poll Kinesis more often than the eviction timeout (5 minutes)
-                        //      2. Proactively and frequently reactivates this source, since we don't have a
-                        //         smarter solution atm.
-                        // todo@jldlaughlin: Improve Kinesis source activation #2195
-                        activator.activate_after(get_reactivation_duration(timer));
-                        return SourceStatus::Alive;
-                    }
-                }
-
                 for record in get_records_output.records {
-                    dbg!(&record);
                     // For now, use the system's current timestamp to downgrade
                     // capabilities.
                     // todo: Implement better offset tracking for Kinesis sources #2219
@@ -169,6 +156,18 @@ where
 
                     let data = record.data.as_ref().to_vec();
                     output.session(&cap).give((data, None))
+                }
+
+                if let Some(millis) = get_records_output.millis_behind_latest {
+                    if millis == 0 {
+                        // This activation does the following:
+                        //      1. Ensures we poll Kinesis more often than the eviction timeout (5 minutes)
+                        //      2. Proactively and frequently reactivates this source, since we don't have a
+                        //         smarter solution atm.
+                        // todo@jldlaughlin: Improve Kinesis source activation #2195
+                        activator.activate_after(get_reactivation_duration(timer));
+                        return SourceStatus::Alive;
+                    }
                 }
 
                 if timer.elapsed().as_millis() > 10 {
