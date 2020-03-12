@@ -10,7 +10,7 @@
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
-use std::str::{from_utf8, FromStr};
+use std::str::{self, FromStr};
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
@@ -640,19 +640,31 @@ fn round_decimal<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
 }
 
 fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let encoding_name = b.unwrap_str().to_lowercase();
-    if encoding_name != "utf8" {
-        return Err(EvalError::InvalidEncodingName(encoding_name));
+    // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
+    // which the encoding library uses[3].
+    // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
+    // [2]: https://encoding.spec.whatwg.org/
+    // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
+    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
+
+    match encoding_from_whatwg_label(&encoding_name) {
+        Some(enc) => {
+            // todo@jldlaughlin: #2282
+            if enc.name() != "utf-8" {
+                return Err(EvalError::InvalidEncodingName(encoding_name));
+            }
+        }
+        None => return Err(EvalError::InvalidEncodingName(encoding_name)),
     }
 
     let bytes = a.unwrap_bytes();
-    match from_utf8(bytes) {
+    match str::from_utf8(bytes) {
         Ok(from) => Ok(Datum::String(from)),
-        Err(_e) => {
+        Err(e) => {
             let mut byte_sequence = String::new();
             strconv::format_bytes(&mut byte_sequence, &bytes);
             Err(EvalError::InvalidByteSequence {
-                byte_sequence,
+                byte_sequence: e.to_string(),
                 encoding_name,
             })
         }
