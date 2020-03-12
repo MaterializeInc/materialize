@@ -526,27 +526,6 @@ a b
 1 2
 2 3
 
-$ kafka-ingest format=raw topic=test-bytes timestamp=1
-test-string
-
-> CREATE SOURCE test_bytes
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-test-bytes-${testdrive.seed}'
-  FORMAT BYTES;
-
-> CREATE MATERIALIZED VIEW test_bytes_view
-  AS SELECT * FROM test_bytes;
-
-# TODO@jldlaughlin: Change the testdrive implementation to not display a string here?
-> select data FROM test_bytes_view;
-"test-string"
-
-> select convert_from(data, 'utf8') FROM test_bytes_view;
-test-string
-
-> DROP VIEW test_bytes_view;
-
-> DROP SOURCE test_bytes;
-
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 
