@@ -21,12 +21,12 @@ use rusoto_kinesis::{
 
 use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
 use expr::SourceInstanceId;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 
 use super::util::source;
 use super::{SourceStatus, SourceToken};
 use crate::server::{TimestampChanges, TimestampHistories};
-use timely::dataflow::operators::Capability;
 
 #[allow(clippy::too_many_arguments)]
 pub fn kinesis<G>(
