@@ -26,6 +26,7 @@ use timely::dataflow::{Scope, Stream};
 use super::util::source;
 use super::{SourceStatus, SourceToken};
 use crate::server::{TimestampChanges, TimestampHistories};
+use timely::dataflow::operators::Capability;
 
 #[allow(clippy::too_many_arguments)]
 pub fn kinesis<G>(
@@ -112,6 +113,7 @@ where
             // If reading from Kinesis takes more than 10 milliseconds,
             // pause execution and reactivate later.
             let timer = std::time::Instant::now();
+            downgrade_capabilities(cap, &name);
 
             // When the next_shard_iterator is null, the shard has been closed and the
             // requested iterator does not return any more data.
@@ -141,21 +143,10 @@ where
                 };
 
                 for record in get_records_output.records {
-                    // For now, use the system's current timestamp to downgrade
-                    // capabilities.
-                    // todo: Implement better offset tracking for Kinesis sources #2219
-                    let cur = generate_timestamp();
-                    if cur > *cap.time() {
-                        cap.downgrade(&cur);
-                    } else {
-                        warn!(
-                            "{}: Unexpected - Kinesis source capability ahead of current system time ({} > {})",
-                            name, *cap.time(), cur
-                        );
-                    }
-
                     let data = record.data.as_ref().to_vec();
-                    output.session(&cap).give((data, None))
+                    output.session(&cap).give((data, None));
+
+                    downgrade_capabilities(cap, &name);
                 }
 
                 if let Some(0) = get_records_output.millis_behind_latest {
@@ -192,6 +183,26 @@ where
     }
 }
 
+fn downgrade_capabilities(cap: &mut Capability<u64>, name: &str) {
+    // For now, use the system's current timestamp to downgrade
+    // capabilities.
+    // todo: Implement better offset tracking for Kinesis sources #2219
+    let cur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_millis() as u64;
+    if cur > *cap.time() {
+        cap.downgrade(&cur);
+    } else {
+        warn!(
+            "{}: Unexpected - Kinesis source capability ahead of current system time ({} > {})",
+            name.to_string(),
+            *cap.time(),
+            cur
+        );
+    }
+}
+
 // Each Kinesis shard can support up to 5 read requests
 // per second. This delay in activation should help
 // throttle ourselves.
@@ -202,14 +213,6 @@ fn get_reactivation_duration(timer: Instant) -> Duration {
     } else {
         Duration::from_millis(200) - elapsed
     }
-}
-
-fn generate_timestamp() -> u64 {
-    let start = SystemTime::now();
-    start
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_millis() as u64
 }
 
 async fn get_records(
