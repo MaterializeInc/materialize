@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::ascii;
-use std::env;
+use std::cmp;
 use std::error::Error as _;
 use std::fmt::Write as _;
 use std::io::{self, Write};
@@ -26,24 +26,28 @@ use ore::collections::CollectionExt;
 use pgrepr::{Interval, Numeric};
 
 use crate::action::{Action, State};
-use crate::parser::{FailSqlCommand, SqlCommand};
+use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedResult};
 
 pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement,
+    timeout: Duration,
 }
 
-pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, String> {
+pub fn build_sql(mut cmd: SqlCommand, timeout: Duration) -> Result<SqlAction, String> {
     let stmts = SqlParser::parse_sql(cmd.query.clone())
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
         return Err(format!("expected one statement, but got {}", stmts.len()));
     }
-    // TODO(benesch): one day we'll support SQL queries where order matters.
-    cmd.expected_rows.sort();
+    if let SqlExpectedResult::Full { expected_rows, .. } = &mut cmd.expected_result {
+        // TODO(benesch): one day we'll support SQL queries where order matters.
+        expected_rows.sort();
+    }
     Ok(SqlAction {
         cmd,
         stmt: stmts.into_element(),
+        timeout,
     })
 }
 
@@ -77,34 +81,26 @@ impl Action for SqlAction {
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let query = &self.cmd.query;
         print_query(&query);
-        let max = match self.stmt {
-            // TODO(benesch): this is horrible. SELECT needs to learn to wait
-            // until it's up to date.
-            Statement::Query { .. } => env::var("MZ_TD_MAX_RETRIES")
-                .unwrap_or_else(|_| "7".into())
-                .parse()
-                .map_err(|e| format!("invalid MZ_TD_MAX_RETRIES: {}", e))?,
-            _ => 0,
-        };
-        let mut i = 0;
+        let mut total_backoff = Duration::from_millis(0);
+        let mut backoff = cmp::min(Duration::from_millis(100), self.timeout);
         loop {
-            let backoff = Duration::from_millis(100 * 2_u64.pow(i));
             match self.try_redo(&mut state.pgclient, &query) {
                 Ok(()) => {
-                    if i > 0 {
+                    if total_backoff > Duration::from_millis(0) {
                         println!();
                     }
                     println!("rows match; continuing");
                     break;
                 }
                 Err(err) => {
-                    if i == 0 {
+                    if total_backoff == Duration::from_millis(0) {
                         print!(
                             "rows didn't match; sleeping to see if dataflow catches up {:?}",
                             backoff
                         );
                         io::stdout().flush().unwrap();
-                    } else if i < max {
+                    } else if total_backoff < self.timeout {
+                        backoff = cmp::min(backoff * 2, self.timeout - total_backoff);
                         print!(" {:?}", backoff);
                         io::stdout().flush().unwrap();
                     } else {
@@ -114,7 +110,7 @@ impl Action for SqlAction {
                 }
             }
             thread::sleep(backoff);
-            i += 1;
+            total_backoff += backoff;
         }
 
         if let Some(data_dir) = &state.data_dir {
@@ -169,43 +165,71 @@ impl SqlAction {
             .map(decode_row)
             .collect::<Result<_, _>>()?;
         actual.sort();
-        if actual == self.cmd.expected_rows {
-            Ok(())
-        } else {
-            let (mut left, mut right) = (0, 0);
-            let expected = &self.cmd.expected_rows;
-            let mut buf = String::new();
-            while left < expected.len() && right < actual.len() {
-                // the ea logic below is complex enough without adding the indirection of Ordering::*
-                #[allow(clippy::comparison_chain)]
-                match (expected.get(left), actual.get(right)) {
-                    (Some(e), Some(a)) => {
-                        if e == a {
-                            left += 1;
-                            right += 1;
-                        } else if e > a {
-                            writeln!(buf, "extra row: {:?}", a).unwrap();
-                            right += 1;
-                        } else if e < a {
-                            writeln!(buf, "row missing: {:?}", e).unwrap();
-                            left += 1;
+        match &self.cmd.expected_result {
+            SqlExpectedResult::Full { expected_rows, .. } => {
+                if &actual == expected_rows {
+                    Ok(())
+                } else {
+                    let (mut left, mut right) = (0, 0);
+                    let mut buf = String::new();
+                    while left < expected_rows.len() && right < actual.len() {
+                        // the ea logic below is complex enough without adding the indirection of Ordering::*
+                        #[allow(clippy::comparison_chain)]
+                        match (expected_rows.get(left), actual.get(right)) {
+                            (Some(e), Some(a)) => {
+                                if e == a {
+                                    left += 1;
+                                    right += 1;
+                                } else if e > a {
+                                    writeln!(buf, "extra row: {:?}", a).unwrap();
+                                    right += 1;
+                                } else if e < a {
+                                    writeln!(buf, "row missing: {:?}", e).unwrap();
+                                    left += 1;
+                                }
+                            }
+                            (None, Some(a)) => {
+                                writeln!(buf, "extra row: {:?}", a).unwrap();
+                                right += 1;
+                            }
+                            (Some(e), None) => {
+                                writeln!(buf, "row missing: {:?}", e).unwrap();
+                                left += 1;
+                            }
+                            (None, None) => unreachable!("blocked by while condition"),
                         }
                     }
-                    (None, Some(a)) => {
-                        writeln!(buf, "extra row: {:?}", a).unwrap();
-                        right += 1;
-                    }
-                    (Some(e), None) => {
-                        writeln!(buf, "row missing: {:?}", e).unwrap();
-                        left += 1;
-                    }
-                    (None, None) => unreachable!("blocked by while condition"),
+                    Err(format!(
+                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
+                        expected_rows, actual, buf
+                    ))
                 }
             }
-            Err(format!(
-                "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
-                self.cmd.expected_rows, actual, buf
-            ))
+            SqlExpectedResult::Hashed { num_values, md5 } => {
+                if &actual.len() != num_values {
+                    Err(format!(
+                        "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
+                        actual.len(),
+                        num_values,
+                    ))
+                } else {
+                    let mut md5_context = md5::Context::new();
+                    for row in &actual {
+                        for entry in row {
+                            md5_context.consume(entry);
+                        }
+                    }
+                    let actual = format!("{:x}", md5_context.compute());
+                    if &actual != md5 {
+                        Err(format!(
+                            "wrong hash value: expected:{:?} got:{:?}",
+                            md5, actual
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
         }
     }
 }

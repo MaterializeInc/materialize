@@ -24,7 +24,9 @@ futures = "0.3"
 getopts = "0.2"
 interchange = { path = "../interchange" }
 lazy_static = "1.4.0"
+md5 = "0.7.0"
 ore = { path = "../ore" }
+parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }
 postgres = { version = "0.17", features = ["with-chrono-0_4", "with-serde_json-1"] }
 protobuf = "2.8"
