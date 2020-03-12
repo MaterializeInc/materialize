@@ -329,3 +329,13 @@ SELECT ..123
 
 statement error
 SELECT .1.23
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/2293.
+#
+# Verifies that errors propagate through decimal arithmetic properly.
+
+statement ok
+CREATE VIEW github_2293 AS SELECT 1 AS a
+
+query error division by zero
+SELECT 1::decimal(38,0) / 0 / a + 1 FROM github_2293;
