@@ -17,6 +17,7 @@ use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use serde::{Deserialize, Serialize};
 
+use ore::collections::CollectionExt;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
 use repr::regex::Regex;
@@ -2805,13 +2806,18 @@ impl VariadicFunc {
         use VariadicFunc::*;
         match self {
             Coalesce => {
-                let any_nullable = input_types.iter().any(|typ| typ.nullable);
-                for typ in input_types {
-                    if typ.scalar_type != ScalarType::Unknown {
-                        return typ.nullable(any_nullable);
-                    }
+                debug_assert!(
+                    input_types
+                        .windows(2)
+                        .all(|w| w[0].scalar_type == w[1].scalar_type),
+                    "coalesce inputs did not have uniform type: {:?}",
+                    input_types
+                );
+                if input_types.is_empty() {
+                    ColumnType::new(ScalarType::Unknown)
+                } else {
+                    input_types.into_first().nullable(true)
                 }
-                ColumnType::new(ScalarType::Unknown)
             }
             Concat => ColumnType::new(ScalarType::String).nullable(true),
             MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
