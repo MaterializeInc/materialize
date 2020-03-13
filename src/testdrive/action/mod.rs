@@ -307,10 +307,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             .unwrap_or_else(|| "localhost:9092");
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &addr);
-        config.set("session.timeout.ms", "6000");
-        config.set("auto.offset.reset", "earliest");
         config.set("group.id", "materialize-testdrive");
-        config.set("topic.metadata.refresh.interval.ms", "10");
 
         let admin: AdminClient<DefaultClientContext> =
             config.create().map_err(|e| Error::General {

@@ -7,11 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
-use expr::SourceInstanceId;
 use futures::executor::block_on;
 use log::{error, warn};
 use rusoto_core::{HttpClient, RusotoError};
@@ -21,6 +18,9 @@ use rusoto_kinesis::{
     GetShardIteratorInput, GetShardIteratorOutput, Kinesis, KinesisClient, ListShardsInput,
     ListShardsOutput,
 };
+
+use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
+use expr::SourceInstanceId;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 
@@ -53,9 +53,7 @@ where
     // Putting source information on the Timestamp channel lets this
     // Dataflow worker communicate that it has created a source.
     let ts = if read_kinesis {
-        let prev = timestamp_histories
-            .borrow_mut()
-            .insert(id.clone(), HashMap::new());
+        let prev = timestamp_histories.borrow_mut().insert(id.clone(), vec![]);
         assert!(prev.is_none());
         timestamp_tx.as_ref().borrow_mut().push((
             id,
