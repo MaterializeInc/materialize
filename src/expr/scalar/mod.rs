@@ -246,6 +246,13 @@ impl ScalarExpr {
         }
     }
 
+    pub fn is_literal_err(&self) -> bool {
+        match self {
+            ScalarExpr::Literal(Err(_), _typ) => true,
+            _ => false,
+        }
+    }
+
     /// Reduces a complex expression where possible.
     ///
     /// ```rust
@@ -325,7 +332,34 @@ impl ScalarExpr {
                 }
             }
             ScalarExpr::CallVariadic { func, exprs } => {
-                if exprs.iter().all(|e| e.is_literal()) {
+                if *func == VariadicFunc::Coalesce {
+                    // First throw away any literal nulls. These can never
+                    // affect the result.
+                    exprs.retain(|e| !e.is_literal_null());
+
+                    // Then find the first argument that is a literal or
+                    // non-nullable column. All arguments after this argument
+                    // will be ignored, so throw them away. This intentionally
+                    // throws away errors that can never happen.
+                    if let Some(i) = exprs
+                        .iter()
+                        .position(|e| e.is_literal() || !e.typ(&relation_type).nullable)
+                    {
+                        exprs.truncate(i + 1);
+                    }
+
+                    if let Some(expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
+                        // One of the remaining arguments is an error, so
+                        // just replace the entire coalesce with that error.
+                        *e = expr.take();
+                    } else if exprs.len() == 1 {
+                        // Only one argument, so the coalesce is a no-op.
+                        *e = exprs[0].take();
+                    } else if exprs.len() == 0 {
+                        // With no arguments coalesce always returns null.
+                        *e = ScalarExpr::literal_null(e.typ(&relation_type));
+                    }
+                } else if exprs.iter().all(|e| e.is_literal()) {
                     *e = eval(e);
                 } else if func.propagates_nulls() && exprs.iter().any(|e| e.is_literal_null()) {
                     *e = ScalarExpr::literal_null(e.typ(&relation_type));
@@ -448,3 +482,122 @@ pub enum EvalError {
 }
 
 impl std::error::Error for EvalError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reduce() {
+        let relation_type = RelationType::new(vec![
+            ColumnType::new(ScalarType::Int64).nullable(true),
+            ColumnType::new(ScalarType::Int64).nullable(true),
+            ColumnType::new(ScalarType::Int64).nullable(false),
+        ]);
+        let col = |i| ScalarExpr::Column(i);
+        let err = |e| ScalarExpr::literal(Err(e), ColumnType::new(ScalarType::Int64));
+        let lit = |i| ScalarExpr::literal_ok(Datum::Int64(i), ColumnType::new(ScalarType::Int64));
+        let null = || ScalarExpr::literal_null(ColumnType::new(ScalarType::Int64));
+
+        struct TestCase {
+            input: ScalarExpr,
+            output: ScalarExpr,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![],
+                },
+                output: ScalarExpr::literal_null(ColumnType::new(ScalarType::Unknown)),
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![lit(1)],
+                },
+                output: lit(1),
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![lit(1), lit(2)],
+                },
+                output: lit(1),
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![null(), lit(2), null()],
+                },
+                output: lit(2),
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![null(), col(0), null(), col(1), lit(2), lit(3)],
+                },
+                output: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![col(0), col(1), lit(2)],
+                },
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![col(0), col(2), col(1)],
+                },
+                output: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![col(0), col(2)],
+                },
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![lit(1), err(EvalError::DivisionByZero)],
+                },
+                output: lit(1),
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![col(0), err(EvalError::DivisionByZero)],
+                },
+                output: err(EvalError::DivisionByZero),
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![
+                        null(),
+                        err(EvalError::DivisionByZero),
+                        err(EvalError::NumericFieldOverflow),
+                    ],
+                },
+                output: err(EvalError::DivisionByZero),
+            },
+            TestCase {
+                input: ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![col(0), err(EvalError::DivisionByZero)],
+                },
+                output: err(EvalError::DivisionByZero),
+            },
+        ];
+
+        for tc in test_cases {
+            let eval_env = EvalEnv::default();
+            let mut actual = tc.input.clone();
+            actual.reduce(&relation_type, &eval_env);
+            assert!(
+                actual == tc.output,
+                "input: {}\nactual: {}\nexpected: {}",
+                tc.input,
+                actual,
+                tc.output
+            );
+        }
+    }
+}
