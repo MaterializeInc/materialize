@@ -115,7 +115,6 @@ where
             // If reading from Kinesis takes more than 10 milliseconds,
             // pause execution and reactivate later.
             let timer = std::time::Instant::now();
-            downgrade_capabilities(cap, &name);
 
             // When the next_shard_iterator is null, the shard has been closed and the
             // requested iterator does not return any more data.
@@ -147,9 +146,8 @@ where
                 for record in get_records_output.records {
                     let data = record.data.as_ref().to_vec();
                     output.session(&cap).give((data, None));
-
-                    downgrade_capabilities(cap, &name);
                 }
+                downgrade_capability(cap, &name);
 
                 if let Some(0) = get_records_output.millis_behind_latest {
                     // This activation does the following:
@@ -185,7 +183,7 @@ where
     }
 }
 
-fn downgrade_capabilities(cap: &mut Capability<u64>, name: &str) {
+fn downgrade_capability(cap: &mut Capability<u64>, name: &str) {
     // For now, use the system's current timestamp to downgrade
     // capabilities.
     // todo: Implement better offset tracking for Kinesis sources #2219
