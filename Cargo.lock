@@ -460,7 +460,6 @@ dependencies = [
  "expr",
  "failure",
  "futures",
- "itertools",
  "log",
  "ore",
  "pgrepr",
