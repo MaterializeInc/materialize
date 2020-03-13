@@ -32,6 +32,7 @@ use bytes::Bytes;
 use futures::sink::SinkErrInto;
 use futures::stream::{ErrInto, Fuse};
 use futures::{ready, Future, Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use log::debug;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -81,7 +82,7 @@ pub trait Connection: AsyncRead + AsyncWrite + Send + Unpin + 'static {
         Self: Sized;
 
     /// Returns the address of the peer that this connection is connected to.
-    fn addr(&self) -> Self::Addr;
+    fn addr(&self) -> Result<Self::Addr, io::Error>;
 
     /// Returns a thread-local pool for this connection type, if one exists.
     /// For use only within this crate.
@@ -104,8 +105,8 @@ impl Connection for TcpStream {
         }))
     }
 
-    fn addr(&self) -> Self::Addr {
-        self.peer_addr().unwrap()
+    fn addr(&self) -> Result<Self::Addr, io::Error> {
+        self.peer_addr()
     }
 
     fn pool() -> Option<Pool<Self>>
@@ -126,7 +127,7 @@ where
         Box::pin(C::connect(addr).map_ok(|conn| SniffingStream::new(conn).into_sniffed()))
     }
 
-    fn addr(&self) -> Self::Addr {
+    fn addr(&self) -> Result<Self::Addr, io::Error> {
         self.get_ref().addr()
     }
 }
@@ -138,12 +139,20 @@ impl Connection for UnixStream {
         Box::pin(UnixStream::connect(addr))
     }
 
-    fn addr(&self) -> Self::Addr {
-        self.peer_addr()
-            .unwrap()
-            .as_pathname()
-            .unwrap()
-            .to_path_buf()
+    fn addr(&self) -> Result<Self::Addr, io::Error> {
+        let addr = self.peer_addr()?;
+        match addr.as_pathname() {
+            Some(path) => Ok(path.to_path_buf()),
+            None => {
+                // Unix streams can be unnamed, bound to a file system pathname,
+                // or, on some platforms, bound to a name in an abstract
+                // namespace. Since we only construct Unix streams bound to a
+                // file system pathname, if `as_pathname` returns `None` here,
+                // that indicates the Unix stream was unexpectedly not bound to
+                // a file system pathname.
+                panic!("unix stream address not pathname: {:?}", addr);
+            }
+        }
     }
 }
 
@@ -231,11 +240,22 @@ where
 
     /// Returns a framed connection to the pool so that it can be reused.
     fn put(&mut self, conn: Framed<C>) {
-        let addr = conn.get_ref().addr();
-        self.0
-            .entry(addr)
-            .or_insert_with(|| VecDeque::new())
-            .push_back(conn)
+        match conn.get_ref().addr() {
+            Ok(addr) => self
+                .0
+                .entry(addr)
+                .or_insert_with(|| VecDeque::new())
+                .push_back(conn),
+            Err(e) => {
+                // An error while calling `peer_addr` typically indicates that
+                // the client closed the connection, so we can simply decline to
+                // recycle the connection. Note that there is no one error code
+                // we can check for. With disconnected TCP streams, for example,
+                // Linux returns `io::ErrorKind::NotConnected` while macOS
+                // returns `io::ErrorKind::InvalidInput`.
+                debug!("peer addr lookup failed when recycling connection: {}", e);
+            }
+        }
     }
 }
 
