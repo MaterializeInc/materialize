@@ -543,6 +543,11 @@ a b
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'test1-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+> SHOW CREATE SINK mat_source_sink
+Sink   Create Sink
+------------------
+materialize.public.mat_source_sink "CREATE SINK \"materialize\".\"public\".\"mat_source_sink\" FROM \"materialize\".\"public\".\"mat_data\" INTO KAFKA BROKER \'${testdrive.kafka-addr}\' TOPIC \'mat-sink\' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY \'${testdrive.schema-registry-url}\'"
+
 > DROP SINK source_sink
 
 > DROP SINK view_sink
