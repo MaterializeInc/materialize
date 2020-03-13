@@ -208,18 +208,22 @@ impl ScalarExpr {
         }
     }
 
+    pub fn as_literal_str(&self) -> Option<&str> {
+        match self.as_literal() {
+            Some(Ok(Datum::String(s))) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_literal_err(&self) -> Option<&EvalError> {
+        self.as_literal().and_then(|lit| lit.err())
+    }
+
     pub fn is_literal(&self) -> bool {
         if let ScalarExpr::Literal(_, _) = self {
             true
         } else {
             false
-        }
-    }
-
-    pub fn as_literal_str(&self) -> Option<&str> {
-        match self.as_literal() {
-            Some(Ok(Datum::String(s))) => Some(s),
-            _ => None,
         }
     }
 
@@ -238,13 +242,6 @@ impl ScalarExpr {
     pub fn is_literal_ok(&self) -> bool {
         match self {
             ScalarExpr::Literal(Ok(_), _typ) => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_literal_err(&self) -> bool {
-        match self {
-            ScalarExpr::Literal(Err(_), _typ) => true,
             _ => false,
         }
     }
@@ -291,10 +288,10 @@ impl ScalarExpr {
                     && func.propagates_nulls()
                 {
                     *e = ScalarExpr::literal_null(e.typ(relation_type));
-                } else if expr1.is_literal_err() {
-                    *e = expr1.take();
-                } else if expr2.is_literal_err() {
-                    *e = expr2.take();
+                } else if let Some(err) = expr1.as_literal_err() {
+                    *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
+                } else if let Some(err) = expr2.as_literal_err() {
+                    *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
                 } else if *func == BinaryFunc::MatchLikePattern && expr2.is_literal() {
                     // We can at least precompile the regex.
                     let pattern = expr2.as_literal_str().unwrap();
@@ -332,8 +329,8 @@ impl ScalarExpr {
                     *e = eval(e);
                 } else if func.propagates_nulls() && exprs.iter().any(|e| e.is_literal_null()) {
                     *e = ScalarExpr::literal_null(e.typ(&relation_type));
-                } else if let Some(err_expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
-                    *e = err_expr.take();
+                } else if let Some(err) = exprs.iter().find_map(|e| e.as_literal_err()) {
+                    *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
                 }
             }
             ScalarExpr::If { cond, then, els } => match cond.as_literal() {
