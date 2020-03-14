@@ -118,7 +118,7 @@ if [[ "$BUILDKITE_BRANCH" = master ]]; then
     # Step 1 - create a new version.
     COMMIT_INDEX=$(git rev-list HEAD | wc -l)
     COMMIT_HASH=$(git rev-parse HEAD)
-    curl -X POST -H "Content-Type: application/json" -d "
+    curl -f -X POST -H "Content-Type: application/json" -d "
         {
             \"name\": \"dev-$COMMIT_INDEX-$COMMIT_HASH\",
             \"desc\": \"git master\",
@@ -126,7 +126,7 @@ if [[ "$BUILDKITE_BRANCH" = master ]]; then
         }" -u ci@materialize:"$BINTRAY_API_KEY" \
         https://api.bintray.com/packages/materialize/materialized/materialized-unstable/version
     # Step 2 - upload the .deb for the version.
-    curl -T target/debian/materialized.deb -u ci@materialize:"$BINTRAY_API_KEY" "https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/materialized.deb;deb_distribution=generic;deb_component=main;deb_architecture=amd64"
+    curl -f -T target/debian/materialized.deb -u ci@materialize:"$BINTRAY_API_KEY" "https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/materialized-$COMMIT_HASH.deb;deb_distribution=generic;deb_component=main;deb_architecture=amd64"
 fi
 
 images=(
