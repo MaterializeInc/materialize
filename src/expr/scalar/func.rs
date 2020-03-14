@@ -1309,7 +1309,7 @@ fn extract_timestamptz_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.weekday().number_from_monday() as f64)
 }
 
-fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn date_trunc_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse::<DateTruncTo>() {
         Ok(DateTruncTo::Micros) => Ok(date_trunc_microseconds(b)),
@@ -1327,6 +1327,21 @@ fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         Ok(DateTruncTo::Millennium) => Ok(date_trunc_millennium(b)),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
+}
+
+// Timestamps and TimestampTzs are both stored as UTC datetimes (with semantically different types)
+// This lets us compute TimestampTz truncation by converting it to Timestamp, computing the
+// appropriate value, and converting back to TimestampTz
+fn date_trunc_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let tstz = b.unwrap_timestamptz();
+    let ts_datum = Datum::Timestamp(tstz.naive_utc());
+
+    let truncated_ts = date_trunc_timestamp(a, ts_datum)?;
+
+    Ok(Datum::TimestampTz(DateTime::<Utc>::from_utc(
+        truncated_ts.unwrap_timestamp(),
+        Utc,
+    )))
 }
 
 fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1590,7 +1605,8 @@ pub enum BinaryFunc {
     MatchLikePattern,
     ToCharTimestamp,
     ToCharTimestampTz,
-    DateTrunc,
+    DateTruncTimestamp,
+    DateTruncTimestampTz,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     TextConcat,
@@ -1730,7 +1746,8 @@ impl BinaryFunc {
             BinaryFunc::MatchLikePattern => eager!(match_like_pattern),
             BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
-            BinaryFunc::DateTrunc => eager!(date_trunc),
+            BinaryFunc::DateTruncTimestamp => eager!(date_trunc_timestamp),
+            BinaryFunc::DateTruncTimestampTz => eager!(date_trunc_timestamptz),
             BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
             BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
             BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
@@ -1849,9 +1866,11 @@ impl BinaryFunc {
             | AddTimeInterval
             | SubTimeInterval => input1_type,
 
-            AddDateInterval | SubDateInterval | AddDateTime | DateTrunc => {
+            AddDateInterval | SubDateInterval | AddDateTime | DateTruncTimestamp => {
                 ColumnType::new(ScalarType::Timestamp).nullable(true)
             }
+
+            DateTruncTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
 
             SubTime => ColumnType::new(ScalarType::Interval).nullable(true),
 
@@ -1934,8 +1953,9 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString
             | TextConcat => true,
-            MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTrunc
-            | CastFloat32ToDecimal | CastFloat64ToDecimal | RoundDecimal(_) | ConvertFrom => false,
+            MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTruncTimestamp
+            | DateTruncTimestampTz | CastFloat32ToDecimal | CastFloat64ToDecimal
+            | RoundDecimal(_) | ConvertFrom => false,
         }
     }
 }
@@ -1994,7 +2014,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MatchLikePattern => f.write_str("like"),
             BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
             BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
-            BinaryFunc::DateTrunc => f.write_str("date_trunc"),
+            BinaryFunc::DateTruncTimestamp => f.write_str("date_truncts"),
+            BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),

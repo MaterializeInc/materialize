@@ -306,7 +306,7 @@ impl ScalarExpr {
                         Ok(regex) => expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex))),
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     };
-                } else if *func == BinaryFunc::DateTrunc && expr1.is_literal() {
+                } else if *func == BinaryFunc::DateTruncTimestamp && expr1.is_literal() {
                     let units = expr1.as_literal_str().unwrap();
                     *e = match units.parse::<DateTruncTo>() {
                         Ok(to) => ScalarExpr::CallUnary {
