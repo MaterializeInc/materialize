@@ -19,3 +19,9 @@ aws s3 cp \
     ./materialized.deb
 
 curl -F package=@materialized.deb https://"$FURY_APT_PUSH_SECRET"@push.fury.io/materialize
+
+# Publish version that was already uploaded to Bintray
+# in ci/test/build.sh
+COMMIT_INDEX=$(git rev-list HEAD | wc -l)
+COMMIT_HASH=$(git rev-parse HEAD)
+curl -f -X POST "https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/publish"
