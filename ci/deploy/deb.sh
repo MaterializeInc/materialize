@@ -24,4 +24,4 @@ curl -F package=@materialized.deb https://"$FURY_APT_PUSH_SECRET"@push.fury.io/m
 # in ci/test/build.sh
 COMMIT_INDEX=$(git rev-list HEAD | wc -l)
 COMMIT_HASH=$(git rev-parse HEAD)
-curl -f -X POST https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/publish
+curl -f -X POST "https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/publish"
