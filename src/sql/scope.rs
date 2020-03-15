@@ -72,6 +72,12 @@ impl ScopeItem {
             nameable: true,
         }
     }
+
+    pub fn is_from_table(&self, table_name: &PartialName) -> bool {
+        self.names
+            .iter()
+            .any(|n| n.table_name.as_ref() == Some(&table_name))
+    }
 }
 
 impl Scope {

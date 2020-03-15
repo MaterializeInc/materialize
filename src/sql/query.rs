@@ -856,65 +856,51 @@ fn plan_select_item<'a>(
             };
             Ok(vec![(expr, scope_item)])
         }
-        SelectItem::Wildcard => select_all_scope
-            .items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let j = select_all_mapping.get(&i).ok_or_else(|| {
-                    format_err!("internal error: unable to resolve scope item {:?}", item)
-                })?;
-                let mut scope_item = item.clone();
-                scope_item.expr = None;
-                Ok((
-                    ScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: *j,
-                    }),
-                    scope_item,
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>(),
-        SelectItem::QualifiedWildcard(table_name) => {
-            let table_name = Some(match ecx.qcx.scx.resolve_name(table_name.clone()) {
-                Ok(table_name) => table_name.into(),
-                Err(err) => {
-                    if table_name.0.len() == 1 {
-                        PartialName {
-                            database: None,
-                            schema: None,
-                            item: normalize::ident(table_name.0[0].clone()),
-                        }
-                    } else {
-                        return Err(err);
-                    }
-                }
-            });
-            select_all_scope
+        SelectItem::Wildcard => {
+            let out = select_all_scope
                 .items
                 .iter()
                 .enumerate()
-                .filter_map(|(i, item)| {
-                    item.names
-                        .iter()
-                        .find(|name| name.table_name == table_name)
-                        .map(|_name| (i, item))
-                })
                 .map(|(i, item)| {
-                    let j = select_all_mapping.get(&i).ok_or_else(|| {
-                        format_err!("internal error: unable to resolve scope item {:?}", item)
-                    })?;
-                    let mut scope_item = item.clone();
-                    scope_item.expr = None;
-                    Ok((
-                        ScalarExpr::Column(ColumnRef {
-                            level: 0,
-                            column: *j,
-                        }),
-                        scope_item,
-                    ))
+                    let expr = ScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: *select_all_mapping.get(&i).ok_or_else(|| {
+                            format_err!("internal error: unable to resolve scope item {:?}", item)
+                        })?,
+                    });
+                    let mut out_item = item.clone();
+                    out_item.expr = None;
+                    Ok((expr, out_item))
                 })
-                .collect::<Result<Vec<_>, _>>()
+                .collect::<Result<Vec<_>, failure::Error>>()?;
+            if out.is_empty() {
+                bail!("SELECT * with no tables specified is not valid");
+            }
+            Ok(out)
+        }
+        SelectItem::QualifiedWildcard(table_name) => {
+            let table_name = normalize::object_name(table_name.clone())?;
+            let out = select_all_scope
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_i, item)| item.is_from_table(&table_name))
+                .map(|(i, item)| {
+                    let expr = ScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: *select_all_mapping.get(&i).ok_or_else(|| {
+                            format_err!("internal error: unable to resolve scope item {:?}", item)
+                        })?,
+                    });
+                    let mut out_item = item.clone();
+                    out_item.expr = None;
+                    Ok((expr, out_item))
+                })
+                .collect::<Result<Vec<_>, failure::Error>>()?;
+            if out.is_empty() {
+                bail!("no table named '{}' in scope", table_name);
+            }
+            Ok(out)
         }
     }
 }
