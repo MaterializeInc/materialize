@@ -13,6 +13,14 @@ This page details changes between versions of Materialize, including:
 
 For information about available versions, see our [Versions page](../versions).
 
+<span id="v0.1.4"></span>
+## 0.1.3 &rarr; 0.1.4 (unreleased)
+
+- Make formatting and parsing for `real` and `double precision` numbers more
+  consistent with PostgreSQL. The strings `NaN`, and `[+-]Infinity` are
+  accepted as input, to select the special not-a-number and infinity states
+  of floating-point numbers.
+
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3 (unreleased)
 

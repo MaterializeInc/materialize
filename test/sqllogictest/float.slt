@@ -1,0 +1,40 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+query TTTTT
+SELECT 'Inf'::float::text, 'Infinity'::float::text, 'inFinIty'::float::text, '+inf'::float::text, '+infinity'::float::text
+----
+Infinity  Infinity  Infinity  Infinity  Infinity
+
+query TTT
+SELECT '-Inf'::float::text, '-Infinity'::float::text, '-inFinIty'::float::text
+----
+-Infinity  -Infinity  -Infinity
+
+query TTT
+SELECT 'NaN'::float::text, 'nan'::float::text, 'nAN'::float::text
+----
+NaN  NaN  NaN
+
+query TTTTT
+SELECT 'Inf'::double precision::text, 'Infinity'::double precision::text, 'inFinIty'::double precision::text, '+inf'::double precision::text, '+infinity'::double precision::text
+----
+Infinity  Infinity  Infinity  Infinity  Infinity
+
+query TTT
+SELECT '-Inf'::double precision::text, '-Infinity'::double precision::text, '-inFinIty'::double precision::text
+----
+-Infinity  -Infinity  -Infinity
+
+query TTT
+SELECT 'NaN'::double precision::text, 'nan'::double precision::text, 'nAN'::double precision::text
+----
+NaN  NaN  NaN

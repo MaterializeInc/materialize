@@ -22,7 +22,29 @@ Type               | Aliases           | Size    | Range
 
 - Materialize assumes untyped numeric literals containing decimal points are [`decimal`](../decimal); to use `float`, you must explicitly cast them as we've done below.
 
-## Details
+### Special values
+
+Floating-point numbers have three special values, as specified in IEEE 754:
+
+Value       | Aliases                    | Represents
+------------|----------------------------|-----------
+`NaN`       |                            | Not a number
+`Infinity`  | `Inf`, `+Infinity`, `+Inf` | Positive infinity
+`-Infinity` | `-Inf`                     | Negative infinity
+
+To input these special values, write them as a string and cast that string to
+the desired floating-point type. For example:
+
+```sql
+SELECT 'NaN'::real AS nan
+```
+```nofmt
+ nan
+-----
+ NaN
+```
+
+The strings are recognized case insensitively.
 
 ### Valid casts
 
