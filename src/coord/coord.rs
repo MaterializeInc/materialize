@@ -1054,10 +1054,14 @@ where
                             match (memo, resp) {
                                 (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
                                     memo.extend(rows);
-                                    let out: Result<_, comm::Error> = Ok(PeekResponse::Rows(memo));
-                                    future::ready(out)
+                                    future::ok(PeekResponse::Rows(memo))
                                 }
-                                _ => future::ok(PeekResponse::Canceled),
+                                (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
+                                    future::ok(PeekResponse::Error(e))
+                                }
+                                (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
+                                    future::ok(PeekResponse::Canceled)
+                                }
                             }
                         })
                         .map_ok(move |mut resp| {
