@@ -1727,12 +1727,14 @@ where
                 // harmful. We should reconsider compaction policy with an eye
                 // towards minimizing unexpected screw-ups.
                 if let Some(compaction_latency_ms) = index_state.compaction_latency_ms {
-                    let mut since = Antichain::new();
+                    index_state.since.clear();
                     for time in index_state.upper.frontier().iter() {
-                        since.insert(time.saturating_sub(compaction_latency_ms));
+                        index_state
+                            .since
+                            .insert(time.saturating_sub(compaction_latency_ms));
                     }
                     self.since_updates
-                        .push((name.clone(), since.elements().to_vec()));
+                        .push((name.clone(), index_state.since.elements().to_vec()));
                 }
             }
         }
