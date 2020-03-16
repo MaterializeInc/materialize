@@ -394,6 +394,7 @@ impl State {
             data_directory: None,
             executor: &executor,
             timestamp: None,
+            logical_compaction_window: None,
         })?;
 
         let coord_thread = thread::spawn(move || coord.serve(cmd_rx)).join_on_drop();

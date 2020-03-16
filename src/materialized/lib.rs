@@ -76,6 +76,17 @@ pub struct Config {
     pub timestamp_frequency: Option<Duration>,
     /// The maximum size of a timestamp batch.
     pub max_increment_ts_size: i64,
+    /// The historical window in which distinctions are maintained for arrangements.
+    ///
+    /// As arrangements accept new timestamps they may optionally collapse prior
+    /// timestamps to the same value, retaining their effect but removing their
+    /// distinction. A large value or `None` results in a large amount of historical
+    /// detail for arrangements; this increases the logical times at which they can
+    /// be accurately queried, but consumes more memory. A low value reduces the
+    /// amount of memory required but also risks not being able to use the arrangement
+    /// in a query that has other constraints on the timestamps used (e.g. when joined
+    /// with other arrangements).
+    pub logical_compaction_window: Option<Duration>,
     /// The number of Timely worker threads that this process should host.
     pub threads: usize,
     /// The ID of this process in the cluster. IDs must be contiguously
@@ -260,6 +271,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                 }),
                 None => None,
             },
+            logical_compaction_window: config.logical_compaction_window,
             executor: &executor,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
