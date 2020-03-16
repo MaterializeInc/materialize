@@ -1171,6 +1171,85 @@ fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
+/// A timestamp with both a date and a time component, but not necessarily a
+/// timezone component.
+pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
+    /// Returns the weekday as a `usize` between 0 and 6, where 0 represents
+    /// Sunday and 6 represents Saturday.
+    fn weekday0(&self) -> usize {
+        self.weekday().num_days_from_sunday() as usize
+    }
+
+    /// Like [`chrono::Datelike::year_ce`], but works on the ISO week system.
+    fn iso_year_ce(&self) -> u32 {
+        let year = self.iso_week().year();
+        if year < 1 {
+            (1 - year) as u32
+        } else {
+            year as u32
+        }
+    }
+
+    fn extract_year(&self) -> f64 {
+        f64::from(self.year())
+    }
+
+    /// Returns a string representing the timezone's offset from UTC.
+    fn timezone_offset(&self) -> &'static str;
+
+    /// Returns a string representing the hour portion of the timezone's offset
+    /// from UTC.
+    fn timezone_hours(&self) -> &'static str;
+
+    /// Returns a string representing the minute portion of the timezone's
+    /// offset from UTC.
+    fn timezone_minutes(&self) -> &'static str;
+
+    /// Returns the abbreviated name of the timezone with the specified
+    /// capitalization.
+    fn timezone_name(&self, caps: bool) -> &'static str;
+}
+
+impl TimestampLike for chrono::NaiveDateTime {
+    fn timezone_offset(&self) -> &'static str {
+        "+00"
+    }
+
+    fn timezone_hours(&self) -> &'static str {
+        "+00"
+    }
+
+    fn timezone_minutes(&self) -> &'static str {
+        "00"
+    }
+
+    fn timezone_name(&self, _caps: bool) -> &'static str {
+        ""
+    }
+}
+
+impl TimestampLike for chrono::DateTime<chrono::Utc> {
+    fn timezone_offset(&self) -> &'static str {
+        "+00"
+    }
+
+    fn timezone_hours(&self) -> &'static str {
+        "+00"
+    }
+
+    fn timezone_minutes(&self) -> &'static str {
+        "00"
+    }
+
+    fn timezone_name(&self, caps: bool) -> &'static str {
+        if caps {
+            "UTC"
+        } else {
+            "utc"
+        }
+    }
+}
+
 fn extract_interval_year<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().years())
 }
@@ -1195,12 +1274,12 @@ fn extract_interval_second<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().seconds())
 }
 
-fn extract_timestamp_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().year()))
-}
-
-fn extract_timestamptz_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().year()))
+fn extract_timelike_year<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_year(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_year(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_year called on {:?}", a),
+    }
 }
 
 fn extract_timestamp_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -2256,7 +2335,9 @@ impl UnaryFunc {
             UnaryFunc::ExtractIntervalHour => Ok(extract_interval_hour(a)),
             UnaryFunc::ExtractIntervalMinute => Ok(extract_interval_minute(a)),
             UnaryFunc::ExtractIntervalSecond => Ok(extract_interval_second(a)),
-            UnaryFunc::ExtractTimestampYear => Ok(extract_timestamp_year(a)),
+            UnaryFunc::ExtractTimestampYear | UnaryFunc::ExtractTimestampTzYear => {
+                Ok(extract_timelike_year(a))
+            }
             UnaryFunc::ExtractTimestampQuarter => Ok(extract_timestamp_quarter(a)),
             UnaryFunc::ExtractTimestampMonth => Ok(extract_timestamp_month(a)),
             UnaryFunc::ExtractTimestampDay => Ok(extract_timestamp_day(a)),
@@ -2267,7 +2348,6 @@ impl UnaryFunc {
             UnaryFunc::ExtractTimestampDayOfYear => Ok(extract_timestamp_dayofyear(a)),
             UnaryFunc::ExtractTimestampDayOfWeek => Ok(extract_timestamp_dayofweek(a)),
             UnaryFunc::ExtractTimestampIsoDayOfWeek => Ok(extract_timestamp_isodayofweek(a)),
-            UnaryFunc::ExtractTimestampTzYear => Ok(extract_timestamptz_year(a)),
             UnaryFunc::ExtractTimestampTzQuarter => Ok(extract_timestamptz_quarter(a)),
             UnaryFunc::ExtractTimestampTzMonth => Ok(extract_timestamptz_month(a)),
             UnaryFunc::ExtractTimestampTzDay => Ok(extract_timestamptz_day(a)),

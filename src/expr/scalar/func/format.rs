@@ -18,6 +18,8 @@ use aho_corasick::AhoCorasickBuilder;
 use enum_iterator::IntoEnumIterator;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
+use crate::scalar::func::TimestampLike;
+
 /// The raw tokens that can appear in a format string. Many of these tokens
 /// overlap, in which case the longest matching token should be selected.
 #[allow(non_camel_case_types)]
@@ -617,7 +619,7 @@ const MONTHS_ROMAN_CAPS: [&str; 12] = [
 ];
 
 impl DateTimeFormatNode {
-    fn render(&self, buf: &mut impl fmt::Write, ts: &impl DateTime) -> Result<(), fmt::Error> {
+    fn render(&self, buf: &mut impl fmt::Write, ts: &impl TimestampLike) -> Result<(), fmt::Error> {
         use WordCaps::*;
         match self {
             DateTimeFormatNode::Literal(ch) => buf.write_char(*ch),
@@ -874,87 +876,12 @@ impl DateTimeFormat {
     /// Renders the format string using the timestamp `ts` as the input. The
     /// placeholders in the format string will be filled in appropriately
     /// according to the value of `ts`.
-    pub fn render(&self, ts: impl DateTime) -> String {
+    pub fn render(&self, ts: impl TimestampLike) -> String {
         let mut out = String::new();
         for node in &self.0 {
             node.render(&mut out, &ts)
                 .expect("rendering to string cannot fail");
         }
         out
-    }
-}
-
-/// A timestamp with both a date and a time component, but not necessarily a
-/// timezone component.
-pub trait DateTime: chrono::Datelike + chrono::Timelike {
-    /// Returns the weekday as a `usize` between 0 and 6, where 0 represents
-    /// Sunday and 6 represents Saturday.
-    fn weekday0(&self) -> usize {
-        self.weekday().num_days_from_sunday() as usize
-    }
-
-    /// Like [`chrono::Datelike::year_ce`], but works on the ISO week system.
-    fn iso_year_ce(&self) -> u32 {
-        let year = self.iso_week().year();
-        if year < 1 {
-            (1 - year) as u32
-        } else {
-            year as u32
-        }
-    }
-
-    /// Returns a string representing the timezone's offset from UTC.
-    fn timezone_offset(&self) -> &'static str;
-
-    /// Returns a string representing the hour portion of the timezone's offset
-    /// from UTC.
-    fn timezone_hours(&self) -> &'static str;
-
-    /// Returns a string representing the minute portion of the timezone's
-    /// offset from UTC.
-    fn timezone_minutes(&self) -> &'static str;
-
-    /// Returns the abbreviated name of the timezone with the specified
-    /// capitalization.
-    fn timezone_name(&self, caps: bool) -> &'static str;
-}
-
-impl DateTime for chrono::NaiveDateTime {
-    fn timezone_offset(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_hours(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_minutes(&self) -> &'static str {
-        "00"
-    }
-
-    fn timezone_name(&self, _caps: bool) -> &'static str {
-        ""
-    }
-}
-
-impl DateTime for chrono::DateTime<chrono::Utc> {
-    fn timezone_offset(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_hours(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_minutes(&self) -> &'static str {
-        "00"
-    }
-
-    fn timezone_name(&self, caps: bool) -> &'static str {
-        if caps {
-            "UTC"
-        } else {
-            "utc"
-        }
     }
 }
