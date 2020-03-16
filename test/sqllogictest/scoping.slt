@@ -57,3 +57,27 @@ query II
 SELECT v1.* FROM v1
 ----
 1  2
+
+# Test wildcards in SELECT list.
+
+query II
+SELECT v1.* FROM v1
+----
+1  2
+
+query II
+SELECT v.* FROM v1 v
+----
+1  2
+
+query error no table named 'v1' in scope
+SELECT v1.* FROM v1 v
+
+query error no table named 'totalgarbage' in scope
+SELECT totalgarbage.* FROM v1
+
+query error no table named 'totalgarbage' in scope
+SELECT totalgarbage.*
+
+query error SELECT \* with no tables specified is not valid
+SELECT *
