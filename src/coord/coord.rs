@@ -2048,8 +2048,12 @@ fn index_sql(
     .to_string()
 }
 
+/// Testdrive uses this method to check that the in-memory state of the catalog matches
+/// the state if you were to load a new materialized instance from that catalog.
 pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
     let (switchboard, runtime) = comm::Switchboard::local()?;
+    // The configuration does not have any requirements other than pointing at the data
+    // directory specified as an argument to the method.
     let coord = Coordinator::new(Config {
         switchboard,
         num_timely_workers: 1,
