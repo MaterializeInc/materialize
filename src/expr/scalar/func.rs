@@ -1194,6 +1194,52 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
         f64::from(self.year())
     }
 
+    fn extract_quarter(&self) -> f64 {
+        (f64::from(self.month()) / 3.0).ceil()
+    }
+
+    fn extract_month(&self) -> f64 {
+        f64::from(self.month())
+    }
+
+    fn extract_day(&self) -> f64 {
+        f64::from(self.day())
+    }
+
+    fn extract_hour(&self) -> f64 {
+        f64::from(self.hour())
+    }
+
+    fn extract_minute(&self) -> f64 {
+        f64::from(self.minute())
+    }
+
+    fn extract_second(&self) -> f64 {
+        let s = f64::from(self.second());
+        let ns = f64::from(self.nanosecond()) / 1e9;
+        (s + ns)
+    }
+
+    /// Extract the iso week of the year
+    ///
+    /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
+    /// 1 about half of the time
+    fn extract_week(&self) -> f64 {
+        f64::from(self.iso_week().week())
+    }
+
+    fn extract_dayofyear(&self) -> f64 {
+        f64::from(self.ordinal())
+    }
+
+    fn extract_dayofweek(&self) -> f64 {
+        f64::from(self.weekday().num_days_from_sunday())
+    }
+
+    fn extract_isodayofweek(&self) -> f64 {
+        f64::from(self.weekday().number_from_monday())
+    }
+
     /// Returns a string representing the timezone's offset from UTC.
     fn timezone_offset(&self) -> &'static str;
 
@@ -1282,110 +1328,101 @@ fn extract_timelike_year<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn extract_timestamp_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from((f64::from(a.unwrap_timestamp().month()) / 3.0).ceil())
+fn extract_timelike_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_quarter(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_quarter(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_quarter called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from((f64::from(a.unwrap_timestamptz().month()) / 3.0).ceil())
+fn extract_timelike_month<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_month(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_month(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_month called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().month()))
+fn extract_timelike_day<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_day(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_day(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_day called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().month()))
+fn extract_timelike_hour<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_hour(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_hour(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_hour called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().day()))
+fn extract_timelike_minute<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_minute(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_minute(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_minute called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().day()))
+fn extract_timelike_second<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_second(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_second(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_second called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().hour()))
+fn extract_timelike_week<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_week(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_week(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_week called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().hour()))
+fn extract_timelike_dayofyear<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_dayofyear(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_dayofyear(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_dayofyear called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().minute()))
+fn extract_timelike_dayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_dayofweek(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_dayofweek(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_dayofweek called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().minute()))
-}
-
-fn extract_timestamp_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    let s = f64::from(a.second());
-    let ns = f64::from(a.nanosecond()) / 1e9;
-    Datum::from(s + ns)
-}
-
-fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    let s = f64::from(a.second());
-    let ns = f64::from(a.nanosecond()) / 1e9;
-    Datum::from(s + ns)
-}
-
-/// Extract the iso week of the year
-///
-/// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
-/// 1 about half of the time
-fn extract_timestamp_week<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    Datum::from(f64::from(a.iso_week().week()))
-}
-
-/// Extract the iso week of the year
-///
-/// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
-/// 1 about half of the time
-fn extract_timestamptz_week<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    Datum::from(f64::from(a.iso_week().week()))
-}
-
-fn extract_timestamp_dayofyear<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    Datum::from(f64::from(a.ordinal()))
-}
-
-fn extract_timestamptz_dayofyear<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    Datum::from(f64::from(a.ordinal()))
-}
-
-/// extract day of week with monday = 1 sunday = 0
-fn extract_timestamp_dayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    Datum::from(a.weekday().num_days_from_sunday() as f64)
-}
-
-/// extract day of week with monday = 1 sunday = 0
-fn extract_timestamptz_dayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    Datum::from(a.weekday().num_days_from_sunday() as f64)
-}
-
-/// extract day of week with monday = 1 sunday = 7
-fn extract_timestamp_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    Datum::from(a.weekday().number_from_monday() as f64)
-}
-
-/// extract day of week with monday = 1 sunday = 7
-fn extract_timestamptz_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    Datum::from(a.weekday().number_from_monday() as f64)
+fn extract_timelike_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => {
+            Datum::from(TimestampLike::extract_isodayofweek(&a.unwrap_timestamp()))
+        }
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_isodayofweek(&a.unwrap_timestamptz()))
+        }
+        _ => panic!(
+            "scalar::func::extract_timelike_isodayofweek called on {:?}",
+            a
+        ),
+    }
 }
 
 fn date_trunc_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -2338,26 +2375,36 @@ impl UnaryFunc {
             UnaryFunc::ExtractTimestampYear | UnaryFunc::ExtractTimestampTzYear => {
                 Ok(extract_timelike_year(a))
             }
-            UnaryFunc::ExtractTimestampQuarter => Ok(extract_timestamp_quarter(a)),
-            UnaryFunc::ExtractTimestampMonth => Ok(extract_timestamp_month(a)),
-            UnaryFunc::ExtractTimestampDay => Ok(extract_timestamp_day(a)),
-            UnaryFunc::ExtractTimestampHour => Ok(extract_timestamp_hour(a)),
-            UnaryFunc::ExtractTimestampMinute => Ok(extract_timestamp_minute(a)),
-            UnaryFunc::ExtractTimestampSecond => Ok(extract_timestamp_second(a)),
-            UnaryFunc::ExtractTimestampWeek => Ok(extract_timestamp_week(a)),
-            UnaryFunc::ExtractTimestampDayOfYear => Ok(extract_timestamp_dayofyear(a)),
-            UnaryFunc::ExtractTimestampDayOfWeek => Ok(extract_timestamp_dayofweek(a)),
-            UnaryFunc::ExtractTimestampIsoDayOfWeek => Ok(extract_timestamp_isodayofweek(a)),
-            UnaryFunc::ExtractTimestampTzQuarter => Ok(extract_timestamptz_quarter(a)),
-            UnaryFunc::ExtractTimestampTzMonth => Ok(extract_timestamptz_month(a)),
-            UnaryFunc::ExtractTimestampTzDay => Ok(extract_timestamptz_day(a)),
-            UnaryFunc::ExtractTimestampTzHour => Ok(extract_timestamptz_hour(a)),
-            UnaryFunc::ExtractTimestampTzMinute => Ok(extract_timestamptz_minute(a)),
-            UnaryFunc::ExtractTimestampTzSecond => Ok(extract_timestamptz_second(a)),
-            UnaryFunc::ExtractTimestampTzWeek => Ok(extract_timestamptz_week(a)),
-            UnaryFunc::ExtractTimestampTzDayOfYear => Ok(extract_timestamptz_dayofyear(a)),
-            UnaryFunc::ExtractTimestampTzDayOfWeek => Ok(extract_timestamptz_dayofweek(a)),
-            UnaryFunc::ExtractTimestampTzIsoDayOfWeek => Ok(extract_timestamptz_isodayofweek(a)),
+            UnaryFunc::ExtractTimestampQuarter | UnaryFunc::ExtractTimestampTzQuarter => {
+                Ok(extract_timelike_quarter(a))
+            }
+            UnaryFunc::ExtractTimestampMonth | UnaryFunc::ExtractTimestampTzMonth => {
+                Ok(extract_timelike_month(a))
+            }
+            UnaryFunc::ExtractTimestampDay | UnaryFunc::ExtractTimestampTzDay => {
+                Ok(extract_timelike_day(a))
+            }
+            UnaryFunc::ExtractTimestampHour | UnaryFunc::ExtractTimestampTzHour => {
+                Ok(extract_timelike_hour(a))
+            }
+            UnaryFunc::ExtractTimestampMinute | UnaryFunc::ExtractTimestampTzMinute => {
+                Ok(extract_timelike_minute(a))
+            }
+            UnaryFunc::ExtractTimestampSecond | UnaryFunc::ExtractTimestampTzSecond => {
+                Ok(extract_timelike_second(a))
+            }
+            UnaryFunc::ExtractTimestampWeek | UnaryFunc::ExtractTimestampTzWeek => {
+                Ok(extract_timelike_week(a))
+            }
+            UnaryFunc::ExtractTimestampDayOfYear | UnaryFunc::ExtractTimestampTzDayOfYear => {
+                Ok(extract_timelike_dayofyear(a))
+            }
+            UnaryFunc::ExtractTimestampDayOfWeek | UnaryFunc::ExtractTimestampTzDayOfWeek => {
+                Ok(extract_timelike_dayofweek(a))
+            }
+            UnaryFunc::ExtractTimestampIsoDayOfWeek | UnaryFunc::ExtractTimestampTzIsoDayOfWeek => {
+                Ok(extract_timelike_isodayofweek(a))
+            }
             UnaryFunc::DateTrunc(to) => Ok(match to {
                 DateTruncTo::Micros => date_trunc_microseconds(a),
                 DateTruncTo::Millis => date_trunc_milliseconds(a),
