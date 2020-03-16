@@ -84,6 +84,7 @@ where
     pub data_directory: Option<&'a Path>,
     pub executor: &'a tokio::runtime::Handle,
     pub timestamp: Option<TimestampConfig>,
+    pub logical_compaction_window: Option<Duration>,
 }
 
 /// Glues the external world to the Timely workers.
@@ -107,6 +108,8 @@ where
     /// time.
     active_tails: HashMap<u32, GlobalId>,
     timestamp_config: Option<TimestampConfig>,
+    /// Delta from leading edge of an arrangement from which we allow compaction.
+    logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     local_input_time: Timestamp,
@@ -252,7 +255,16 @@ where
             } else {
                 Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
             };
-
+            let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
+                let millis = d.as_millis();
+                if millis > Timestamp::max_value() as u128 {
+                    Timestamp::max_value()
+                } else if millis < Timestamp::min_value() as u128 {
+                    Timestamp::min_value()
+                } else {
+                    millis as Timestamp
+                }
+            });
             let logging = config.logging;
             let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
             broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
@@ -271,6 +283,7 @@ where
                 log: config.logging.is_some(),
                 executor: config.executor.clone(),
                 timestamp_config: config.timestamp,
+                logical_compaction_window_ms,
                 feedback_rx: Some(rx),
             };
 
@@ -669,7 +682,7 @@ where
                                 advance_to: self.local_input_time,
                             },
                         );
-                        self.insert_index(index_id, &index, None);
+                        self.insert_index(index_id, &index, self.logical_compaction_window_ms);
                         Ok(ExecuteResponse::CreatedTable { existed: false })
                     }
                     Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1395,7 +1408,7 @@ where
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
         );
-        self.insert_index(*id, &index, None);
+        self.insert_index(*id, &index, self.logical_compaction_window_ms);
     }
 
     fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
@@ -1781,10 +1794,7 @@ where
                 self.propagate_queryability(&index.on);
             }
         } // else the view is temporary
-        let mut index_state = IndexState::new(self.num_timely_workers);
-        if latency_ms.is_some() {
-            index_state.set_compaction_latency(latency_ms);
-        }
+        let index_state = IndexState::new(self.num_timely_workers, latency_ms);
         if self.log {
             for time in index_state.upper.frontier().iter() {
                 broadcast(
@@ -1884,17 +1894,18 @@ pub struct IndexState {
 
 impl IndexState {
     /// Creates an empty index state from a number of workers.
-    pub fn new(workers: usize) -> Self {
+    pub fn new(workers: usize, compaction_latency_ms: Option<Timestamp>) -> Self {
         let mut upper = MutableAntichain::new();
         upper.update_iter(Some((0, workers as i64)));
         Self {
             upper,
             since: Antichain::from_elem(0),
-            compaction_latency_ms: Some(60_000),
+            compaction_latency_ms,
         }
     }
 
     /// Sets the latency behind the collection frontier at which compaction occurs.
+    #[allow(dead_code)]
     pub fn set_compaction_latency(&mut self, latency_ms: Option<Timestamp>) {
         self.compaction_latency_ms = latency_ms;
     }
@@ -2047,6 +2058,7 @@ pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
         logging: Some(&LoggingConfig::new(Duration::from_secs(0))),
         executor: runtime.handle(),
         timestamp: None,
+        logical_compaction_window: None,
     })?;
     Ok(coord.catalog.dump())
 }

@@ -71,6 +71,12 @@ fn run() -> Result<(), failure::Error> {
         "SIZE",
     );
     opts.optopt(
+        "",
+        "logical-compaction-window",
+        "historical detail maintained for arrangements (default 60s)",
+        "DURATION/\"off\"",
+    );
+    opts.optopt(
         "w",
         "threads",
         "number of per-process worker threads (default 1)",
@@ -150,6 +156,16 @@ fn run() -> Result<(), failure::Error> {
     let address_file = popts.opt_str("address-file");
     let gather_metrics = !popts.opt_present("no-prometheus");
 
+    let logical_compaction_window = match popts
+        .opt_str("logical-compaction-window")
+        .as_ref()
+        .map(|x| x.as_str())
+    {
+        None => Some(parse_duration::parse("60s")?),
+        Some("off") => None,
+        Some(d) => Some(parse_duration::parse(&d)?),
+    };
+
     if process >= processes {
         bail!("process ID {} is not between 0 and {}", process, processes);
     }
@@ -201,6 +217,7 @@ fn run() -> Result<(), failure::Error> {
         logging_granularity,
         timestamp_frequency,
         max_increment_ts_size,
+        logical_compaction_window,
         threads,
         process,
         addresses,
