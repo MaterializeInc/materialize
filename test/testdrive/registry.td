@@ -59,6 +59,8 @@ $ set schema_v2={
     ]
   }
 
+$ kafka-create-topic topic=data
+
 $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
 
@@ -122,6 +124,8 @@ $ set valid_key_schema={
     ]
   }
 
+$ kafka-create-topic topic=missing-data
+
 $ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing}
   publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
@@ -135,6 +139,8 @@ $ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${k
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 Value schema missing primary key column: b
+
+$ kafka-create-topic topic=mismatched-data
 
 $ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
   publish=true timestamp=3

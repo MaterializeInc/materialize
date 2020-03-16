@@ -29,6 +29,8 @@ $ set names-schema={
     ]
   }
 
+$ kafka-create-topic topic=names
+
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
 {"before": null, "after": {"num": 1, "name": "one"}}
 {"before": null, "after": {"num": 2, "name": "two"}}
@@ -55,6 +57,8 @@ $ set mods-schema={
       { "name": "after", "type": ["row", "null"] }
     ]
   }
+
+$ kafka-create-topic topic=mods
 
 $ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=1
 {"before": null, "after": {"num": 0, "mod": "even"}}

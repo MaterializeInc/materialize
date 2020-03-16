@@ -53,6 +53,7 @@ pub struct State {
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_consumer: rdkafka::consumer::StreamConsumer<rdkafka::consumer::DefaultConsumerContext>,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
+    kafka_topics: HashMap<String, i32>,
 }
 
 impl State {
@@ -144,6 +145,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                 match builtin.name.as_ref() {
                     "avro-ocf-write" => Box::new(avro_ocf::build_write(builtin).map_err(wrap_err)?),
                     "file-write" => Box::new(file::build_write(builtin).map_err(wrap_err)?),
+                    "kafka-create-topic" => {
+                        Box::new(kafka::build_create_topic(builtin).map_err(wrap_err)?)
+                    }
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
@@ -301,7 +305,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             ],
         })?);
 
-    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_consumer, kafka_producer) = {
+    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_consumer, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::client::DefaultClientContext;
         use rdkafka::config::ClientConfig;
@@ -340,7 +344,16 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             hints: vec![format!("connection string: {}", addr)],
         })?;
 
-        (addr.to_owned(), admin, admin_opts, consumer, producer)
+        let topics = HashMap::new();
+
+        (
+            addr.to_owned(),
+            admin,
+            admin_opts,
+            consumer,
+            producer,
+            topics,
+        )
     };
 
     Ok(State {
@@ -357,5 +370,6 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         kafka_admin_opts,
         kafka_consumer,
         kafka_producer,
+        kafka_topics,
     })
 }

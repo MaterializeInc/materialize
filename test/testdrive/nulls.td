@@ -28,6 +28,8 @@ $ set foo-schema={
     ]
   }
 
+$ kafka-create-topic topic=foo
+
 $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
 {"before": null, "after": {"a": 1}}
 {"before": null, "after": {"a": 2}}

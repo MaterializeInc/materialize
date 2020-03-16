@@ -29,13 +29,17 @@ $ set schema={
     ]
   }
 
+$ kafka-create-topic topic=data-consistency
+
 $ kafka-ingest format=raw topic=data-consistency timestamp=1
 dummy,1,0,0,0
 
-$ kafka-ingest num_partition=2 partition=0 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-create-topic topic=data partitions=2
+
+$ kafka-ingest partition=0 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 1}}
 
-$ kafka-ingest num_partition=2 partition=1 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 3, "b": 1}}
 
 > CREATE MATERIALIZED SOURCE data_byo
@@ -74,10 +78,10 @@ b  sum
 $ kafka-ingest format=raw topic=data-consistency timestamp=1
 testdrive-data-${testdrive.seed},2,0,2,2
 
-$ kafka-ingest num_partition=2 partition=0 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=0 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 2, "b": 1}}
 
-$ kafka-ingest num_partition=2 partition=1 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 2}}
 
 > SELECT * FROM view_byo
@@ -97,7 +101,7 @@ b  sum
 $ kafka-ingest format=raw topic=data-consistency timestamp=1
 testdrive-data-${testdrive.seed},2,1,3,5
 
-$ kafka-ingest num_partition=2 partition=1 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 3}}
 {"before": null, "after": {"a": 1, "b": 3}}
 {"before": null, "after": {"a": 1, "b": 3}}
@@ -131,7 +135,7 @@ $ kafka-ingest format=raw topic=data-consistency timestamp=1
 testdrive-data-${testdrive.seed},3,1,5,6
 testdrive-data-${testdrive.seed},3,0,5,3
 
-$ kafka-ingest num_partition=2 add_partition=3 partition=0 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest add_partition=3 partition=0 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 5}}
 
 > SELECT * FROM view_byo
@@ -141,7 +145,7 @@ b  sum
 2  1
 3  3
 
-$ kafka-ingest num_partition=3 partition=1 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 6}}
 
 > SELECT * FROM view_byo
@@ -152,7 +156,7 @@ b  sum
 3  3
 
 
-$ kafka-ingest num_partition=3 partition=2 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=2 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 7}}
 
 > SELECT * FROM view_byo
@@ -175,16 +179,16 @@ b  sum
 6  1
 7  1
 
-$ kafka-ingest num_partition=3 add_partition=4 partition=2 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest add_partition=4 partition=2 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 8}}
 
-$ kafka-ingest num_partition=4 partition=0 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=0 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 9}}
 
-$ kafka-ingest num_partition=4 partition=1 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 10}}
 
-$ kafka-ingest num_partition=4 partition=3 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest partition=3 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 11}}
 
 $ kafka-ingest format=raw topic=data-consistency timestamp=1

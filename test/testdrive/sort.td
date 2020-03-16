@@ -29,6 +29,8 @@ $ set schema={
     ]
   }
 
+$ kafka-create-topic topic=foobar
+
 > CREATE MATERIALIZED SOURCE foobar FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foobar-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'

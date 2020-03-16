@@ -29,14 +29,20 @@ $ set schema={
     ]
   }
 
+$ kafka-create-topic topic=data-consistency
+
 $ kafka-ingest format=raw topic=data-consistency timestamp=1
 dummy,1,0,0,0
+
+$ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 1}}
 {"before": null, "after": {"a": 2, "b": 1}}
 {"before": null, "after": {"a": 3, "b": 1}}
 {"before": null, "after": {"a": 1, "b": 2}}
+
+$ kafka-create-topic topic=data2
 
 $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 1}}
