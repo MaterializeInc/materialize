@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-aho-corasick = "0.7.9"
+aho-corasick = "0.7.10"
 chrono = "0.4"
 csv = "1.1"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
