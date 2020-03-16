@@ -575,7 +575,10 @@ impl Action for IngestAction {
                 topic_name
             ));
         }
-        println!("Ingesting data into Kafka topic {:?}", topic_name);
+        println!(
+            "Ingesting data into partition {} of Kafka topic {}",
+            self.partition, topic_name
+        );
         let format = match &self.message_format {
             RawSchema::Avro { key_schema, schema } => {
                 let schema_id = if self.publish {
@@ -665,7 +668,9 @@ impl Action for IngestAction {
         }
         state
             .tokio_runtime
-            .block_on(futs.try_for_each(|_| future::ok(())))
-            .map_err(|e| e.to_string())
+            .block_on(futs.map_err(|e| e.to_string()).try_for_each(|r| match r {
+                Ok(_) => future::ok(()),
+                Err((e, _)) => future::err(e.to_string()),
+            }))
     }
 }
