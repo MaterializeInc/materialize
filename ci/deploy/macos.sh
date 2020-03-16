@@ -25,14 +25,14 @@ mkdir -p scratch/materialized/{bin,etc/materialized}
 cp target/release/materialized scratch/materialized/bin
 tar czf materialized.tar.gz -C scratch materialized
 
-aws s3 cp \
+runv aws s3 cp \
     --acl=public-read \
     "materialized.tar.gz" \
     "s3://downloads.mtrlz.dev/materialized-$version-x86_64-apple-darwin.tar.gz"
 
 if [[ -z ${BUILDKITE_TAG:-} ]]; then
     echo -n > empty
-    aws s3 cp \
+    runv aws s3 cp \
         --website-redirect="/materialized-$version-x86_64-apple-darwin.tar.gz" \
         --acl=public-read \
         empty \

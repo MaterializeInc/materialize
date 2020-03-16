@@ -42,14 +42,14 @@ runv docker run --rm --entrypoint bash materialize/materialized -c "
     tar cz materialized
 " > materialized.tar.gz
 
-aws s3 cp \
+runv aws s3 cp \
     --acl=public-read \
     "materialized.tar.gz" \
     "s3://downloads.mtrlz.dev/materialized-$version-x86_64-unknown-linux-gnu.tar.gz"
 
 if [[ -z $BUILDKITE_TAG ]]; then
     echo -n > empty
-    aws s3 cp \
+    runv aws s3 cp \
         --website-redirect="/materialized-$version-x86_64-unknown-linux-gnu.tar.gz" \
         --acl=public-read \
         empty \

@@ -14,8 +14,10 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+the_deb="s3://downloads.mtrlz.dev/materialized-$MATERIALIZED_IMAGE_ID-x86_64.deb"
+echo "Downloading deb from s3: $the_deb"
 aws s3 cp \
-    "s3://downloads.mtrlz.dev/materialized-$MATERIALIZED_IMAGE_ID-x86_64.deb" \
+    "$the_deb" \
     ./materialized.deb
 
 curl -F package=@materialized.deb https://"$FURY_APT_PUSH_SECRET"@push.fury.io/materialize
@@ -24,4 +26,7 @@ curl -F package=@materialized.deb https://"$FURY_APT_PUSH_SECRET"@push.fury.io/m
 # in ci/test/build.sh
 COMMIT_INDEX=$(git rev-list HEAD | wc -l)
 COMMIT_HASH=$(git rev-parse HEAD)
-curl -f -X POST -u ci@materialize:"$BINTRAY_API_KEY" "https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/publish"
+upload="https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/publish"
+echo "Marking release public in bintray: $upload"
+
+curl -f -X POST -u ci@materialize:"$BINTRAY_API_KEY" "$upload"
