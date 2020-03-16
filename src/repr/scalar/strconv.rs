@@ -23,6 +23,8 @@
 //! string representations for the corresponding PostgreSQL type. Deviations
 //! should be considered a bug.
 
+use std::{f32, f64};
+
 use chrono::offset::TimeZone;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use failure::bail;
@@ -100,7 +102,12 @@ where
 
 /// Parses an `f32` from `s`.
 pub fn parse_float32(s: &str) -> Result<f32, failure::Error> {
-    Ok(s.trim().to_lowercase().parse()?)
+    Ok(match s.trim().to_lowercase().as_str() {
+        "inf" | "infinity" | "+inf" | "+infinity" => f32::INFINITY,
+        "-inf" | "-infinity" => f32::NEG_INFINITY,
+        "nan" => f32::NAN,
+        s => s.parse()?,
+    })
 }
 
 /// Writes an `f32` to `buf`.
@@ -108,12 +115,25 @@ pub fn format_float32<F>(buf: &mut F, f: f32)
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", f)
+    if f.is_infinite() {
+        if f.is_sign_negative() {
+            buf.write_str("-Infinity")
+        } else {
+            buf.write_str("Infinity")
+        }
+    } else {
+        write!(buf, "{}", f)
+    }
 }
 
 /// Parses an `f64` from `s`.
 pub fn parse_float64(s: &str) -> Result<f64, failure::Error> {
-    Ok(s.trim().to_lowercase().parse()?)
+    Ok(match s.trim().to_lowercase().as_str() {
+        "inf" | "infinity" | "+inf" | "+infinity" => f64::INFINITY,
+        "-inf" | "-infinity" => f64::NEG_INFINITY,
+        "nan" => f64::NAN,
+        s => s.parse()?,
+    })
 }
 
 /// Writes an `f64` to `buf`.
@@ -121,7 +141,15 @@ pub fn format_float64<F>(buf: &mut F, f: f64)
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", f)
+    if f.is_infinite() {
+        if f.is_sign_negative() {
+            buf.write_str("-Infinity")
+        } else {
+            buf.write_str("Infinity")
+        }
+    } else {
+        write!(buf, "{}", f)
+    }
 }
 
 /// Use the following grammar to parse `s` into:
