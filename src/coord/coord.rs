@@ -1885,7 +1885,6 @@ pub struct IndexState {
     /// The compaction frontier.
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
-    #[allow(dead_code)]
     since: Antichain<Timestamp>,
     /// Compaction delay.
     ///
