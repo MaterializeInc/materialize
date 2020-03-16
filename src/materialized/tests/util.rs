@@ -43,6 +43,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
     let server = Server(materialized::serve(materialized::Config {
         logging_granularity: config.logging_granularity,
         timestamp_frequency: None,
+        logical_compaction_window: None,
         max_increment_ts_size: 1000,
         threads: 1,
         process: 0,
