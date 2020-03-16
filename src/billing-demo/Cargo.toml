@@ -7,7 +7,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.26"
+anyhow = "1.0.27"
 bytes = "0.5.4"
 chrono = "0.4.11"
 csv = "1.1.3"
