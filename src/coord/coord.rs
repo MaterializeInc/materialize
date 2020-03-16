@@ -2048,8 +2048,10 @@ fn index_sql(
     .to_string()
 }
 
-/// Testdrive uses this method to check that the in-memory state of the catalog matches
-/// the state if you were to load a new materialized instance from that catalog.
+/// Loads the catalog stored at `data_directory` and returns its serialized state.
+///
+/// There are no guarantees about the format of the serialized state, except that
+/// the serialized state for two identical catalogs will compare identically.
 pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
     let (switchboard, runtime) = comm::Switchboard::local()?;
     // The configuration does not have any requirements other than pointing at the data

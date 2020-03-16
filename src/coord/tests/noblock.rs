@@ -36,6 +36,7 @@ fn no_block() {
         data_directory: None,
         executor: &executor,
         timestamp: None,
+        logical_compaction_window: None,
     })
     .unwrap();
 
