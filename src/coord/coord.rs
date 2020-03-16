@@ -1727,14 +1727,21 @@ where
                 // harmful. We should reconsider compaction policy with an eye
                 // towards minimizing unexpected screw-ups.
                 if let Some(compaction_latency_ms) = index_state.compaction_latency_ms {
-                    index_state.since.clear();
-                    for time in index_state.upper.frontier().iter() {
-                        index_state
-                            .since
-                            .insert(time.saturating_sub(compaction_latency_ms));
+                    // Decline to compact complete collections. This would have the
+                    // effect of making the collection unusable. Instead, we would
+                    // prefer to compact collections only when we believe it would
+                    // reduce the volume of the collection, but we don't have that
+                    // information here.
+                    if !index_state.upper.frontier().is_empty() {
+                        index_state.since.clear();
+                        for time in index_state.upper.frontier().iter() {
+                            index_state
+                                .since
+                                .insert(time.saturating_sub(compaction_latency_ms));
+                        }
+                        self.since_updates
+                            .push((name.clone(), index_state.since.elements().to_vec()));
                     }
-                    self.since_updates
-                        .push((name.clone(), index_state.since.elements().to_vec()));
                 }
             }
         }
