@@ -135,7 +135,9 @@ $ kafka-ingest format=raw topic=data-consistency timestamp=1
 testdrive-data-${testdrive.seed},3,1,5,6
 testdrive-data-${testdrive.seed},3,0,5,3
 
-$ kafka-ingest add_partition=3 partition=0 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-add-partitions topic=data total-partitions=3
+
+$ kafka-ingest partition=0 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 5}}
 
 > SELECT * FROM view_byo
@@ -179,7 +181,9 @@ b  sum
 6  1
 7  1
 
-$ kafka-ingest add_partition=4 partition=2 format=avro topic=data schema=${schema} timestamp=1
+$ kafka-add-partitions topic=data total-partitions=4
+
+$ kafka-ingest partition=2 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 8}}
 
 $ kafka-ingest partition=0 format=avro topic=data schema=${schema} timestamp=1

@@ -22,6 +22,7 @@ use rdkafka::error::RDKafkaError;
 use rdkafka::message::Message;
 use rdkafka::producer::FutureRecord;
 
+use ore::cast::CastFrom;
 use ore::collections::CollectionExt;
 
 use crate::action::{Action, State};
@@ -234,6 +235,104 @@ impl Action for CreateTopicAction {
     }
 }
 
+pub struct AddPartitionsAction {
+    topic_prefix: String,
+    partitions: i32,
+}
+
+pub fn build_add_partitions(mut cmd: BuiltinCommand) -> Result<AddPartitionsAction, String> {
+    let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
+    let partitions = cmd.args.opt_parse("total-partitions")?.unwrap_or(1);
+    cmd.args.done()?;
+
+    Ok(AddPartitionsAction {
+        topic_prefix,
+        partitions,
+    })
+}
+
+impl Action for AddPartitionsAction {
+    fn undo(&self, _: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn redo(&self, state: &mut State) -> Result<(), String> {
+        let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
+        println!(
+            "Raising partition count of Kafka topic {} to {}",
+            topic_name, self.partitions
+        );
+
+        match state.kafka_topics.get(&topic_name) {
+            Some(partitions) => {
+                if self.partitions <= *partitions {
+                    return Err(format!(
+                        "new partition count {} is not greater than current partition count {}",
+                        self.partitions, partitions
+                    ));
+                }
+            }
+            None => {
+                return Err(format!(
+                    "topic {} not created by kafka-create-topic",
+                    topic_name
+                ))
+            }
+        }
+
+        let partitions = NewPartitions::new(&topic_name, usize::cast_from(self.partitions));
+        let res = state.tokio_runtime.block_on(
+            state
+                .kafka_admin
+                .create_partitions(&[partitions], &state.kafka_admin_opts)
+                .map_err(|e| e.to_string()),
+        )?;
+        if res.len() != 1 {
+            return Err(format!(
+                "kafka partition addition returned {} results, but exactly one result was expected",
+                res.len()
+            ));
+        }
+        if let Err((_topic_name, e)) = res.into_element() {
+            return Err(e.to_string());
+        }
+
+        let mut i = 0;
+        loop {
+            let res = (|| {
+                let metadata = state
+                    .kafka_consumer
+                    .fetch_metadata(Some(&topic_name), Some(Duration::from_secs(1)))
+                    .map_err(|e| e.to_string())?;
+                if metadata.topics().len() != 1 {
+                    return Err("metadata fetch returned no topics".to_string());
+                }
+                let topic = metadata.topics().into_element();
+                if topic.partitions().len() as i32 != self.partitions {
+                    return Err(format!(
+                        "topic {} has {} partitions when exactly {} was expected",
+                        topic_name,
+                        topic.partitions().len(),
+                        self.partitions,
+                    ));
+                }
+                Ok(())
+            })();
+            match res {
+                Ok(()) => break,
+                Err(e) if i == 6 => return Err(e),
+                _ => {
+                    thread::sleep(Duration::from_millis(100 * 2_u64.pow(i)));
+                    i += 1;
+                }
+            }
+        }
+
+        state.kafka_topics.insert(topic_name, self.partitions);
+        Ok(())
+    }
+}
+
 pub struct VerifyAction {
     topic_prefix: String,
     schema: String,
@@ -366,7 +465,6 @@ fn get_values_in_first_list_not_in_second(
 pub struct IngestAction {
     topic_prefix: String,
     partition: i32,
-    add_partition: i32,
     message_format: RawSchema,
     timestamp: Option<i64>,
     publish: bool,
@@ -409,7 +507,6 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = cmd.args.string("format")?;
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partition = cmd.args.opt_parse::<i32>("partition")?.unwrap_or(0);
-    let add_partition = cmd.args.opt_parse::<i32>("add_partition")?.unwrap_or(0);
     let message_format = match format.as_ref() {
         "avro" => {
             let schema = cmd.args.string("schema")?;
@@ -433,7 +530,6 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     Ok(IngestAction {
         topic_prefix,
         partition,
-        add_partition,
         message_format,
         timestamp,
         publish,
@@ -480,7 +576,6 @@ impl Action for IngestAction {
             ));
         }
         println!("Ingesting data into Kafka topic {:?}", topic_name);
-        add_partitions(&topic_name, self.add_partition, state)?;
         let format = match &self.message_format {
             RawSchema::Avro { key_schema, schema } => {
                 let schema_id = if self.publish {
@@ -572,82 +667,5 @@ impl Action for IngestAction {
             .tokio_runtime
             .block_on(futs.try_for_each(|_| future::ok(())))
             .map_err(|e| e.to_string())
-    }
-}
-
-fn add_partitions(topic_name: &str, num_partitions: i32, state: &mut State) -> Result<(), String> {
-    if num_partitions > 0 {
-        let partitions = NewPartitions::new(&topic_name, num_partitions as usize);
-        let res = state.tokio_runtime.block_on(
-            state
-                .kafka_admin
-                .create_partitions(&[partitions], &state.kafka_admin_opts),
-        );
-        let res = match res {
-            Err(err) => return Err(err.to_string()),
-            Ok(res) => res,
-        };
-        if res.len() != 1 {
-            return Err(format!(
-                "kafka topic creation returned {} results, but exactly one result was expected",
-                res.len()
-            ));
-        }
-        match res.into_element() {
-            Ok(_) => Ok(()),
-            Err((_, err)) => Err(err.to_string()),
-        }?;
-        // Topic creation is asynchronous, and if we don't wait for it to
-        // complete, we might produce a message (below) that causes it to
-        // get automatically created with multiple partitions. (Since
-        // multiple partitions have no ordering guarantees, this violates
-        // many assumptions that our tests make.)
-        let mut i = 0;
-        loop {
-            let res = (|| {
-                let metadata = state
-                    .kafka_consumer
-                    // N.B. It is extremely important not to ask specifically
-                    // about the topic here, even though the API supports it!
-                    // Asking about the topic will create it automatically...
-                    // with the wrong number of partitions. Yes, this is
-                    // unbelievably horrible.
-                    .fetch_metadata(None, Some(Duration::from_secs(1)))
-                    .map_err(|e| e.to_string())?;
-                if metadata.topics().is_empty() {
-                    return Err("metadata fetch returned no topics".to_string());
-                }
-                let topic = match metadata.topics().iter().find(|t| t.name() == topic_name) {
-                    Some(topic) => topic,
-                    None => {
-                        return Err(format!(
-                            "metadata fetch did not return topic {}",
-                            topic_name,
-                        ))
-                    }
-                };
-                if topic.partitions().is_empty() {
-                    return Err("metadata fetch returned a topic with no partitions".to_string());
-                } else if topic.partitions().len() as i32 != num_partitions {
-                    return Err(format!(
-                        "topic {} was created with {} partitions when exactly {} was expected",
-                        topic_name,
-                        topic.partitions().len(),
-                        num_partitions
-                    ));
-                }
-                Ok(())
-            })();
-            match res {
-                Ok(()) => break Ok(()),
-                Err(e) if i == 6 => break Err(e),
-                _ => {
-                    thread::sleep(Duration::from_millis(100 * 2_u64.pow(i)));
-                    i += 1;
-                }
-            }
-        }
-    } else {
-        Ok(())
     }
 }
