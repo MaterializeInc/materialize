@@ -9,7 +9,7 @@
 
 $ kafka-create-topic topic=bytes
 
-$ kafka-ingest format=raw topic=bytes timestamp=1
+$ kafka-ingest format=bytes topic=bytes timestamp=1
 ©1
 ©2
 

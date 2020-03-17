@@ -57,7 +57,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
             let message = cmd.args.string("message")?;
             Format::Proto { message }
         }
-        "raw" => Format::Bytes,
+        "bytes" => Format::Bytes,
         f => return Err(format!("unknown message format: {}", f)),
     };
     let timestamp = cmd.args.opt_parse("timestamp")?;
