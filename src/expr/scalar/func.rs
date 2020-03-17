@@ -1570,22 +1570,30 @@ fn extract_timelike_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
+fn date_trunc_inner<'a>(to: DateTruncTo, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    match to {
+        DateTruncTo::Micros => Ok(date_trunc_microseconds(b)),
+        DateTruncTo::Millis => Ok(date_trunc_milliseconds(b)),
+        DateTruncTo::Second => Ok(date_trunc_second(b)),
+        DateTruncTo::Minute => Ok(date_trunc_minute(b)),
+        DateTruncTo::Hour => Ok(date_trunc_hour(b)),
+        DateTruncTo::Day => Ok(date_trunc_day(b)),
+        DateTruncTo::Week => Ok(date_trunc_week(b)),
+        DateTruncTo::Month => Ok(date_trunc_month(b)),
+        DateTruncTo::Quarter => Ok(date_trunc_quarter(b)),
+        DateTruncTo::Year => Ok(date_trunc_year(b)),
+        DateTruncTo::Decade => Ok(date_trunc_decade(b)),
+        DateTruncTo::Century => Ok(date_trunc_century(b)),
+        DateTruncTo::Millennium => Ok(date_trunc_millennium(b)),
+    }
+}
+
 fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
-    match units.parse::<DateTruncTo>() {
-        Ok(DateTruncTo::Micros) => Ok(date_trunc_microseconds(b)),
-        Ok(DateTruncTo::Millis) => Ok(date_trunc_milliseconds(b)),
-        Ok(DateTruncTo::Second) => Ok(date_trunc_second(b)),
-        Ok(DateTruncTo::Minute) => Ok(date_trunc_minute(b)),
-        Ok(DateTruncTo::Hour) => Ok(date_trunc_hour(b)),
-        Ok(DateTruncTo::Day) => Ok(date_trunc_day(b)),
-        Ok(DateTruncTo::Week) => Ok(date_trunc_week(b)),
-        Ok(DateTruncTo::Month) => Ok(date_trunc_month(b)),
-        Ok(DateTruncTo::Quarter) => Ok(date_trunc_quarter(b)),
-        Ok(DateTruncTo::Year) => Ok(date_trunc_year(b)),
-        Ok(DateTruncTo::Decade) => Ok(date_trunc_decade(b)),
-        Ok(DateTruncTo::Century) => Ok(date_trunc_century(b)),
-        Ok(DateTruncTo::Millennium) => Ok(date_trunc_millennium(b)),
+    let to = units.parse::<DateTruncTo>();
+
+    match to {
+        Ok(to) => date_trunc_inner(to, b),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
@@ -2382,7 +2390,8 @@ pub enum UnaryFunc {
     ExtractTimestampTzDayOfYear,
     ExtractTimestampTzDayOfWeek,
     ExtractTimestampTzIsoDayOfWeek,
-    DateTrunc(DateTruncTo),
+    DateTruncTimestamp(DateTruncTo),
+    DateTruncTimestampTz(DateTruncTo),
     ToTimestamp,
     JsonbArrayLength,
     JsonbTypeof,
@@ -2527,21 +2536,8 @@ impl UnaryFunc {
             UnaryFunc::ExtractTimestampIsoDayOfWeek | UnaryFunc::ExtractTimestampTzIsoDayOfWeek => {
                 Ok(extract_timelike_isodayofweek(a))
             }
-            UnaryFunc::DateTrunc(to) => Ok(match to {
-                DateTruncTo::Micros => date_trunc_microseconds(a),
-                DateTruncTo::Millis => date_trunc_milliseconds(a),
-                DateTruncTo::Second => date_trunc_second(a),
-                DateTruncTo::Minute => date_trunc_minute(a),
-                DateTruncTo::Hour => date_trunc_hour(a),
-                DateTruncTo::Day => date_trunc_day(a),
-                DateTruncTo::Week => date_trunc_week(a),
-                DateTruncTo::Month => date_trunc_month(a),
-                DateTruncTo::Quarter => date_trunc_quarter(a),
-                DateTruncTo::Year => date_trunc_year(a),
-                DateTruncTo::Decade => date_trunc_decade(a),
-                DateTruncTo::Century => date_trunc_century(a),
-                DateTruncTo::Millennium => date_trunc_millennium(a),
-            }),
+            UnaryFunc::DateTruncTimestamp(to) => date_trunc_inner(*to, a),
+            UnaryFunc::DateTruncTimestampTz(to) => date_trunc_inner(*to, a),
             UnaryFunc::ToTimestamp => Ok(to_timestamp(a)),
             UnaryFunc::JsonbArrayLength => Ok(jsonb_array_length(a)),
             UnaryFunc::JsonbTypeof => Ok(jsonb_typeof(a)),
@@ -2693,7 +2689,8 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
 
-            DateTrunc(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
+            DateTruncTimestamp(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
+            DateTruncTimestampTz(_) => ColumnType::new(ScalarType::TimestampTz).nullable(false),
 
             ToTimestamp => ColumnType::new(ScalarType::TimestampTz).nullable(true),
 
@@ -2849,8 +2846,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::ExtractTimestampTzDayOfYear => f.write_str("tstzextractdayofyear"),
             UnaryFunc::ExtractTimestampTzDayOfWeek => f.write_str("tstzextractdayofweek"),
             UnaryFunc::ExtractTimestampTzIsoDayOfWeek => f.write_str("tstzextractisodayofweek"),
-            UnaryFunc::DateTrunc(to) => {
-                f.write_str("date_trunc_")?;
+            UnaryFunc::DateTruncTimestamp(to) => {
+                f.write_str("date_truncts_")?;
+                f.write_str(&format!("{:?}", to).to_lowercase())
+            }
+            UnaryFunc::DateTruncTimestampTz(to) => {
+                f.write_str("date_trunctstz_")?;
                 f.write_str(&format!("{:?}", to).to_lowercase())
             }
             UnaryFunc::ToTimestamp => f.write_str("tots"),

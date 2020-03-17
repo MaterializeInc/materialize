@@ -310,7 +310,16 @@ impl ScalarExpr {
                     let units = expr1.as_literal_str().unwrap();
                     *e = match units.parse::<DateTruncTo>() {
                         Ok(to) => ScalarExpr::CallUnary {
-                            func: UnaryFunc::DateTrunc(to),
+                            func: UnaryFunc::DateTruncTimestamp(to),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::DateTruncTimestampTz && expr1.is_literal() {
+                    let units = expr1.as_literal_str().unwrap();
+                    *e = match units.parse::<DateTruncTo>() {
+                        Ok(to) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::DateTruncTimestampTz(to),
                             expr: Box::new(expr2.take()),
                         },
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
