@@ -114,7 +114,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         state.temp_dir.path().display().to_string(),
     );
     {
-        let protobuf_descriptors = crate::protobuf::gen::descriptors()
+        let protobuf_descriptors = crate::format::protobuf::gen::descriptors()
             .write_to_bytes()
             .unwrap();
         vars.insert("testdrive.protobuf-descriptors".into(), {

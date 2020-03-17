@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
+
 use avro::Schema;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::executor::block_on;
@@ -15,9 +17,9 @@ use futures::stream::{FuturesUnordered, TryStreamExt};
 use rdkafka::producer::FutureRecord;
 
 use crate::action::{Action, State};
+use crate::format::protobuf;
+use crate::format::protobuf::native::{Batch, Struct};
 use crate::parser::BuiltinCommand;
-use crate::protobuf::native::{Batch, Struct};
-use crate::protobuf::{decode, json_to_protobuf};
 
 pub struct IngestAction {
     topic_prefix: String,
@@ -109,10 +111,8 @@ impl Action for IngestAction {
                 schema_id: i32,
             },
             Proto {
-                parser:
-                    &'static dyn Fn(&str) -> Result<crate::protobuf::DynMessage, failure::Error>,
-                validator:
-                    &'static dyn Fn(&[u8]) -> Result<Box<dyn std::fmt::Debug>, failure::Error>,
+                parser: &'static dyn Fn(&str) -> Result<protobuf::DynMessage, failure::Error>,
+                validator: &'static dyn Fn(&[u8]) -> Result<Box<dyn fmt::Debug>, failure::Error>,
             },
             Bytes,
         }
@@ -160,12 +160,12 @@ impl Action for IngestAction {
             }
             Format::Proto { message } => match message.as_ref() {
                 ".Struct" => Encoder::Proto {
-                    parser: &json_to_protobuf::<Struct>,
-                    validator: &decode::<Struct>,
+                    parser: &protobuf::json_to_protobuf::<Struct>,
+                    validator: &protobuf::decode::<Struct>,
                 },
                 ".Batch" => Encoder::Proto {
-                    parser: &json_to_protobuf::<Batch>,
-                    validator: &decode::<Batch>,
+                    parser: &protobuf::json_to_protobuf::<Batch>,
+                    validator: &protobuf::decode::<Batch>,
                 },
                 _ => return Err(format!("unknown testdrive protobuf message: {}", message)),
             },
@@ -177,7 +177,7 @@ impl Action for IngestAction {
             let mut buf = Vec::new();
             match &encoder {
                 Encoder::Avro { schema, schema_id } => {
-                    let val = crate::avro::json_to_avro(
+                    let val = crate::format::avro::json_to_avro(
                         &serde_json::from_str(row)
                             .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
                         &schema,

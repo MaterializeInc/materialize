@@ -55,7 +55,7 @@ impl Action for VerifyAction {
         let mut converted_expected_messages = Vec::new();
         for expected in &self.expected_messages {
             converted_expected_messages.push(
-                crate::avro::json_to_avro(
+                crate::format::avro::json_to_avro(
                     &serde_json::from_str(expected)
                         .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
                     &schema,
