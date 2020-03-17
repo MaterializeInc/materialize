@@ -113,9 +113,9 @@ fn run() -> Result<(), failure::Error> {
         "PATH",
     );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
-    opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
+    opts.optflag("", "no-prometheus", "do not gather prometheus metrics");
     if cfg!(debug_assertions) {
-        opts.optflag("", "dev", "Allow running the dev (unoptimized) build");
+        opts.optflag("", "dev", "allow running this dev (unoptimized) build");
     }
 
     let popts = opts.parse(&args[1..])?;
@@ -159,8 +159,12 @@ fn run() -> Result<(), failure::Error> {
     let address_file = popts.opt_str("address-file");
     let gather_metrics = !popts.opt_present("no-prometheus");
 
-    if cfg!(debug_assertions) && popts.opt_present("dev") {
-        bail!("Cannot run dev build without '--dev'");
+    if cfg!(debug_assertions) && !popts.opt_present("dev") && !ore::env::is_var_truthy("MZ_DEV") {
+        bail!(
+            "refusing to run dev (unoptimized) binary without explicit opt-in\n\
+             hint: Pass the '--dev' option or set the MZ_DEV environment variable to opt in.\n\
+             hint: Or perhaps you meant to use a release binary?"
+        );
     }
 
     let logical_compaction_window = match popts

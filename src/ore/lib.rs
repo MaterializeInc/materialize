@@ -17,6 +17,7 @@
 
 pub mod cast;
 pub mod collections;
+pub mod env;
 pub mod fmt;
 pub mod future;
 pub mod hash;
