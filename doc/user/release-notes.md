@@ -22,7 +22,9 @@ For information about available versions, see our [Versions page](../versions).
   of floating-point numbers.
 
 <span id="v0.1.3"></span>
-## 0.1.2 &rarr; 0.1.3 (unreleased)
+## 0.1.2 &rarr; 0.1.3
+
+- Support Amazon Kinesis Data Stream sources
 
 - Support the number functions `round(x: N)` and `round(x: N, y: N)`, which
   round `x` to the `y`th digit after the decimal. (Default 0).
