@@ -114,6 +114,9 @@ fn run() -> Result<(), failure::Error> {
     );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
+    if cfg!(debug_assertions) {
+        opts.optflag("", "dev", "Allow running the dev (unoptimized) build");
+    }
 
     let popts = opts.parse(&args[1..])?;
     if popts.opt_present("h") {
@@ -155,6 +158,10 @@ fn run() -> Result<(), failure::Error> {
     let processes = popts.opt_get_default("processes", 1)?;
     let address_file = popts.opt_str("address-file");
     let gather_metrics = !popts.opt_present("no-prometheus");
+
+    if cfg!(debug_assertions) && popts.opt_present("dev") {
+        bail!("Cannot run dev build without '--dev'");
+    }
 
     let logical_compaction_window = match popts
         .opt_str("logical-compaction-window")
