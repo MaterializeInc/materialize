@@ -1239,7 +1239,7 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
     fn extract_isodayofweek(&self) -> f64 {
         f64::from(self.weekday().number_from_monday())
     }
-    
+
     fn truncate_microseconds(&self) -> NaiveDateTime {
         let time = NaiveTime::from_hms_micro(
             self.hour(),
@@ -1261,13 +1261,9 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
 
         NaiveDateTime::new(self.date(), time)
     }
-    
+
     fn truncate_second(&self) -> NaiveDateTime {
-        let time = NaiveTime::from_hms(
-            self.hour(),
-            self.minute(),
-            self.second(),
-        );
+        let time = NaiveTime::from_hms(self.hour(), self.minute(), self.second());
 
         NaiveDateTime::new(self.date(), time)
     }
@@ -1275,40 +1271,29 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
     fn truncate_minute(&self) -> NaiveDateTime {
         NaiveDateTime::new(
             self.date(),
-            NaiveTime::from_hms(self.hour(), self.minute(), 0))
+            NaiveTime::from_hms(self.hour(), self.minute(), 0),
+        )
     }
-    
+
     fn truncate_hour(&self) -> NaiveDateTime {
-        NaiveDateTime::new(
-            self.date(),
-            NaiveTime::from_hms(self.hour(), 0, 0))
+        NaiveDateTime::new(self.date(), NaiveTime::from_hms(self.hour(), 0, 0))
     }
-    
+
     fn truncate_day(&self) -> NaiveDateTime {
-        NaiveDateTime::new(
-            self.date(),
-            NaiveTime::from_hms(0, 0, 0))
+        NaiveDateTime::new(self.date(), NaiveTime::from_hms(0, 0, 0))
     }
 
     fn truncate_week(&self) -> NaiveDateTime {
         let num_days_from_monday = self.date().weekday().num_days_from_monday();
         NaiveDateTime::new(
-            NaiveDate::from_ymd(
-                self.year(),
-                self.month(),
-                self.day() - num_days_from_monday,
-            ),
+            NaiveDate::from_ymd(self.year(), self.month(), self.day() - num_days_from_monday),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
-    
+
     fn truncate_month(&self) -> NaiveDateTime {
         NaiveDateTime::new(
-            NaiveDate::from_ymd(
-                self.year(),
-                self.month(),
-                1,
-            ),
+            NaiveDate::from_ymd(self.year(), self.month(), 1),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
@@ -1333,43 +1318,27 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
 
     fn truncate_year(&self) -> NaiveDateTime {
         NaiveDateTime::new(
-            NaiveDate::from_ymd(
-                self.year(),
-                1,
-                1,
-            ),
+            NaiveDate::from_ymd(self.year(), 1, 1),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
     fn truncate_decade(&self) -> NaiveDateTime {
         NaiveDateTime::new(
-            NaiveDate::from_ymd(
-                self.year() - (self.year() % 10),
-                1,
-                1,
-            ),
+            NaiveDate::from_ymd(self.year() - (self.year() % 10), 1, 1),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
     fn truncate_century(&self) -> NaiveDateTime {
         // Expects the first year of the century, meaning 2001 instead of 2000.
         NaiveDateTime::new(
-            NaiveDate::from_ymd(
-                self.year() - (self.year() % 100) + 1,
-                1,
-                1,
-            ),
+            NaiveDate::from_ymd(self.year() - (self.year() % 100) + 1, 1, 1),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
     fn truncate_millennium(&self) -> NaiveDateTime {
         // Expects the first year of the millennium, meaning 2001 instead of 2000.
         NaiveDateTime::new(
-            NaiveDate::from_ymd(
-                self.year() - (self.year() % 1_000) + 1,
-                1,
-                1,
-            ),
+            NaiveDate::from_ymd(self.year() - (self.year() % 1_000) + 1, 1, 1),
             NaiveTime::from_hms(0, 0, 0),
         )
     }
@@ -1600,20 +1569,24 @@ fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
-        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_microseconds(&a.unwrap_timestamp())),
-        Datum::TimestampTz(_) => {
-            Datum::timestamptz(TimestampLike::truncate_microseconds(&a.unwrap_timestamptz()))
+        Datum::Timestamp(_) => {
+            Datum::from(TimestampLike::truncate_microseconds(&a.unwrap_timestamp()))
         }
+        Datum::TimestampTz(_) => Datum::timestamptz(TimestampLike::truncate_microseconds(
+            &a.unwrap_timestamptz(),
+        )),
         _ => panic!("scalar::func::date_trunc_microseconds called on {:?}", a),
     }
 }
 
 fn date_trunc_milliseconds<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
-        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_milliseconds(&a.unwrap_timestamp())),
-        Datum::TimestampTz(_) => {
-            Datum::timestamptz(TimestampLike::truncate_milliseconds(&a.unwrap_timestamptz()))
+        Datum::Timestamp(_) => {
+            Datum::from(TimestampLike::truncate_milliseconds(&a.unwrap_timestamp()))
         }
+        Datum::TimestampTz(_) => Datum::timestamptz(TimestampLike::truncate_milliseconds(
+            &a.unwrap_timestamptz(),
+        )),
         _ => panic!("scalar::func::date_trunc_millisecondss called on {:?}", a),
     }
 }
@@ -1720,7 +1693,9 @@ fn date_trunc_century<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
     match a {
-        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_millennium(&a.unwrap_timestamp())),
+        Datum::Timestamp(_) => {
+            Datum::from(TimestampLike::truncate_millennium(&a.unwrap_timestamp()))
+        }
         Datum::TimestampTz(_) => {
             Datum::timestamptz(TimestampLike::truncate_millennium(&a.unwrap_timestamptz()))
         }

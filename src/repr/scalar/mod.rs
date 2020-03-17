@@ -285,10 +285,7 @@ impl<'a> Datum<'a> {
     }
 
     pub fn timestamptz(ndt: NaiveDateTime) -> Datum<'static> {
-        Datum::TimestampTz(DateTime::<Utc>::from_utc(
-            ndt,
-            Utc,
-        ))
+        Datum::TimestampTz(DateTime::<Utc>::from_utc(ndt, Utc))
     }
 
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
