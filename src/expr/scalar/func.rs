@@ -1239,6 +1239,143 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
     fn extract_isodayofweek(&self) -> f64 {
         f64::from(self.weekday().number_from_monday())
     }
+    
+    fn truncate_microseconds(&self) -> NaiveDateTime {
+        let time = NaiveTime::from_hms_micro(
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nanosecond() / 1_000,
+        );
+
+        NaiveDateTime::new(self.date(), time)
+    }
+
+    fn truncate_milliseconds(&self) -> NaiveDateTime {
+        let time = NaiveTime::from_hms_milli(
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nanosecond() / 1_000_000,
+        );
+
+        NaiveDateTime::new(self.date(), time)
+    }
+    
+    fn truncate_second(&self) -> NaiveDateTime {
+        let time = NaiveTime::from_hms(
+            self.hour(),
+            self.minute(),
+            self.second(),
+        );
+
+        NaiveDateTime::new(self.date(), time)
+    }
+
+    fn truncate_minute(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            self.date(),
+            NaiveTime::from_hms(self.hour(), self.minute(), 0))
+    }
+    
+    fn truncate_hour(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            self.date(),
+            NaiveTime::from_hms(self.hour(), 0, 0))
+    }
+    
+    fn truncate_day(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            self.date(),
+            NaiveTime::from_hms(0, 0, 0))
+    }
+
+    fn truncate_week(&self) -> NaiveDateTime {
+        let num_days_from_monday = self.date().weekday().num_days_from_monday();
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(
+                self.year(),
+                self.month(),
+                self.day() - num_days_from_monday,
+            ),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+    
+    fn truncate_month(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(
+                self.year(),
+                self.month(),
+                1,
+            ),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+
+    fn truncate_quarter(&self) -> NaiveDateTime {
+        let month = self.month();
+        let quarter = if month <= 3 {
+            1
+        } else if month <= 6 {
+            4
+        } else if month <= 9 {
+            7
+        } else {
+            10
+        };
+
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(self.year(), quarter, 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+
+    fn truncate_year(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(
+                self.year(),
+                1,
+                1,
+            ),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+    fn truncate_decade(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(
+                self.year() - (self.year() % 10),
+                1,
+                1,
+            ),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+    fn truncate_century(&self) -> NaiveDateTime {
+        // Expects the first year of the century, meaning 2001 instead of 2000.
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(
+                self.year() - (self.year() % 100) + 1,
+                1,
+                1,
+            ),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+    fn truncate_millennium(&self) -> NaiveDateTime {
+        // Expects the first year of the millennium, meaning 2001 instead of 2000.
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(
+                self.year() - (self.year() % 1_000) + 1,
+                1,
+                1,
+            ),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+
+    /// Return the date component of the timestamp
+    fn date(&self) -> NaiveDate;
 
     /// Returns a string representing the timezone's offset from UTC.
     fn timezone_offset(&self) -> &'static str;
@@ -1257,6 +1394,10 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
 }
 
 impl TimestampLike for chrono::NaiveDateTime {
+    fn date(&self) -> NaiveDate {
+        self.date()
+    }
+
     fn timezone_offset(&self) -> &'static str {
         "+00"
     }
@@ -1275,6 +1416,10 @@ impl TimestampLike for chrono::NaiveDateTime {
 }
 
 impl TimestampLike for chrono::DateTime<chrono::Utc> {
+    fn date(&self) -> NaiveDate {
+        self.naive_utc().date()
+    }
+
     fn timezone_offset(&self) -> &'static str {
         "+00"
     }
@@ -1425,7 +1570,7 @@ fn extract_timelike_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn date_trunc_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse::<DateTruncTo>() {
         Ok(DateTruncTo::Micros) => Ok(date_trunc_microseconds(b)),
@@ -1445,157 +1590,134 @@ fn date_trunc_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, Eva
     }
 }
 
-// Timestamps and TimestampTzs are both stored as UTC datetimes (with semantically different types)
-// This lets us compute TimestampTz truncation by converting it to Timestamp, computing the
-// appropriate value, and converting back to TimestampTz
-fn date_trunc_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let tstz = b.unwrap_timestamptz();
-    let ts_datum = Datum::Timestamp(tstz.naive_utc());
-
-    let truncated_ts = date_trunc_timestamp(a, ts_datum)?;
-
-    Ok(Datum::TimestampTz(DateTime::<Utc>::from_utc(
-        truncated_ts.unwrap_timestamp(),
-        Utc,
-    )))
-}
-
 fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    let time = NaiveTime::from_hms_micro(
-        source_timestamp.hour(),
-        source_timestamp.minute(),
-        source_timestamp.second(),
-        source_timestamp.nanosecond() / 1_000,
-    );
-    Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_microseconds(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_microseconds(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_microseconds called on {:?}", a),
+    }
 }
 
 fn date_trunc_milliseconds<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    let time = NaiveTime::from_hms_milli(
-        source_timestamp.hour(),
-        source_timestamp.minute(),
-        source_timestamp.second(),
-        source_timestamp.nanosecond() / 1_000_000,
-    );
-    Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_milliseconds(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_milliseconds(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_millisecondss called on {:?}", a),
+    }
 }
 
 fn date_trunc_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        source_timestamp.date(),
-        NaiveTime::from_hms(
-            source_timestamp.hour(),
-            source_timestamp.minute(),
-            source_timestamp.second(),
-        ),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_second(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_second(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_second called on {:?}", a),
+    }
 }
 
 fn date_trunc_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        source_timestamp.date(),
-        NaiveTime::from_hms(source_timestamp.hour(), source_timestamp.minute(), 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_minute(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_minute(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_minute called on {:?}", a),
+    }
 }
 
 fn date_trunc_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        source_timestamp.date(),
-        NaiveTime::from_hms(source_timestamp.hour(), 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_hour(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_hour(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_hour called on {:?}", a),
+    }
 }
 
 fn date_trunc_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        source_timestamp.date(),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_day(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_day(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_day called on {:?}", a),
+    }
 }
 
 fn date_trunc_week<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    let num_days_from_monday = source_timestamp.date().weekday().num_days_from_monday();
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(
-            source_timestamp.year(),
-            source_timestamp.month(),
-            source_timestamp.day() - num_days_from_monday,
-        ),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_week(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_week(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_week called on {:?}", a),
+    }
 }
 
 fn date_trunc_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(source_timestamp.year(), source_timestamp.month(), 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_month(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_month(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_month called on {:?}", a),
+    }
 }
 
 fn date_trunc_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    let month = source_timestamp.month();
-    let quarter = if month <= 3 {
-        1
-    } else if month <= 6 {
-        4
-    } else if month <= 9 {
-        7
-    } else {
-        10
-    };
-
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(source_timestamp.year(), quarter, 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_quarter(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_quarter(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_quarter called on {:?}", a),
+    }
 }
 
 fn date_trunc_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(source_timestamp.year(), 1, 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_year(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_year(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_year called on {:?}", a),
+    }
 }
 
 fn date_trunc_decade<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(
-            source_timestamp.year() - (source_timestamp.year() % 10),
-            1,
-            1,
-        ),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_decade(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_decade(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_decade called on {:?}", a),
+    }
 }
 
 fn date_trunc_century<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    // Expects the first year of the century, meaning 2001 instead of 2000.
-    let century = source_timestamp.year() - ((source_timestamp.year() % 100) - 1);
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(century, 1, 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_century(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_century(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_century called on {:?}", a),
+    }
 }
 
 fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    // Expects the first year of the millennium, meaning 2001 instead of 2000.
-    let millennium = source_timestamp.year() - ((source_timestamp.year() % 1000) - 1);
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(millennium, 1, 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_millennium(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_millennium(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_millennium called on {:?}", a),
+    }
 }
 
 fn to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1862,8 +1984,8 @@ impl BinaryFunc {
             BinaryFunc::MatchLikePattern => eager!(match_like_pattern),
             BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
-            BinaryFunc::DateTruncTimestamp => eager!(date_trunc_timestamp),
-            BinaryFunc::DateTruncTimestampTz => eager!(date_trunc_timestamptz),
+            BinaryFunc::DateTruncTimestamp => eager!(date_trunc),
+            BinaryFunc::DateTruncTimestampTz => eager!(date_trunc),
             BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
             BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
             BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),

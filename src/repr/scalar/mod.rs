@@ -284,6 +284,13 @@ impl<'a> Datum<'a> {
         }
     }
 
+    pub fn timestamptz(ndt: NaiveDateTime) -> Datum<'static> {
+        Datum::TimestampTz(DateTime::<Utc>::from_utc(
+            ndt,
+            Utc,
+        ))
+    }
+
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: ScalarType) -> bool {
             if let ScalarType::Jsonb = scalar_type {
