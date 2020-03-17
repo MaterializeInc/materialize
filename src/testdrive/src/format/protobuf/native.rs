@@ -14,8 +14,8 @@
 use protobuf::RepeatedField;
 use serde::Deserialize;
 
-use crate::protobuf::gen::{billing, simple};
-use crate::protobuf::{DbgMsg, DynMessage, FromMessage, ToMessage};
+use crate::format::protobuf::gen::{billing, simple};
+use crate::format::protobuf::{DbgMsg, DynMessage, FromMessage, ToMessage};
 
 // Billing demo
 

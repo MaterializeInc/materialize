@@ -35,6 +35,8 @@ $ set schema={
     ]
   }
 
+$ kafka-create-topic topic=data
+
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": null}
 
@@ -56,8 +58,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-#$ kafka-verify format=avro topic=data-sink schema=${schema}
-#${"before": null, "after": {"a": 1, "b": 1}}
-#${"before": null, "after": {"a": 2, "b": 1}}
-#${"before": null, "after": {"a": 3, "b": 1}}
-#${"before": null, "after": {"a": 1, "b": 2}}
+$ kafka-verify format=avro topic=data-sink schema=${schema}
+{"before": null, "after": {"a": 1, "b": 1}}
+{"before": null, "after": {"a": 2, "b": 1}}
+{"before": null, "after": {"a": 3, "b": 1}}
+{"before": null, "after": {"a": 1, "b": 2}}

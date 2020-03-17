@@ -40,6 +40,8 @@ $ set schema={
     ]
   }
 
+$ kafka-create-topic topic=data
+
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=100
 {"before": null, "after": {"u64": 1, "str": "foo"}}
 {"before": null, "after": {"u64": 2, "str": "bar"}}

@@ -29,14 +29,20 @@ $ set schema={
     ]
   }
 
-$ kafka-ingest format=raw topic=data-consistency timestamp=1
+$ kafka-create-topic topic=data-consistency
+
+$ kafka-ingest format=bytes topic=data-consistency timestamp=1
 dummy,1,0,0,0
+
+$ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 1}}
 {"before": null, "after": {"a": 2, "b": 1}}
 {"before": null, "after": {"a": 3, "b": 1}}
 {"before": null, "after": {"a": 1, "b": 2}}
+
+$ kafka-create-topic topic=data2
 
 $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 1}}
@@ -85,7 +91,7 @@ $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 ! SELECT * FROM view_byo;
 At least one input has no complete timestamps yet.
 
-$ kafka-ingest format=raw topic=data-consistency timestamp=1
+$ kafka-ingest format=bytes topic=data-consistency timestamp=1
 testdrive-data-${testdrive.seed},1,0,1,1
 testdrive-data2-${testdrive.seed},1,0,1,4
 
@@ -100,7 +106,7 @@ b  sum
 1  6
 2  1
 
-$ kafka-ingest format=raw topic=data-consistency timestamp=2
+$ kafka-ingest format=bytes topic=data-consistency timestamp=2
 testdrive-data-${testdrive.seed},1,0,2,4
 
 > SELECT * FROM view2_byo
@@ -112,7 +118,7 @@ b  sum
 !SELECT * FROM view_empty
 At least one input has no complete timestamps yet.
 
-$ kafka-ingest format=raw topic=data-consistency timestamp=2
+$ kafka-ingest format=bytes topic=data-consistency timestamp=2
 testdrive-data3-${testdrive.seed},1,0,10,0
 
 > SELECT * FROM view_empty

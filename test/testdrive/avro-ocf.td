@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set writer_schema={
+$ set writer-schema={
     "name": "row",
     "type": "record",
     "fields": [
@@ -16,7 +16,7 @@ $ set writer_schema={
     ]
   }
 
-$ avro-ocf-write path=data.ocf schema=${writer_schema}
+$ avro-ocf-write path=data.ocf schema=${writer-schema}
 {"a": 1, "b": 2}
 {"a": 3, "b": 4}
 
@@ -37,7 +37,7 @@ b          NO        int4
 mz_obj_no  NO        int8
 
 
-$ set reader_schema={
+$ set reader-schema={
     "name": "row",
     "type": "record",
     "fields": [
@@ -48,7 +48,7 @@ $ set reader_schema={
 
 > CREATE MATERIALIZED SOURCE reader_schema
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
-  WITH (reader_schema = '${reader_schema}')
+  WITH (reader_schema = '${reader-schema}')
 
 > SELECT * FROM reader_schema
 a  b  mz_obj_no

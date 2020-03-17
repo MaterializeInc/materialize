@@ -36,6 +36,13 @@ impl CastFrom<u32> for usize {
 }
 
 #[cfg(target_pointer_width = "64")]
+impl CastFrom<i32> for usize {
+    fn cast_from(from: i32) -> usize {
+        from as usize
+    }
+}
+
+#[cfg(target_pointer_width = "64")]
 impl CastFrom<u64> for usize {
     fn cast_from(from: u64) -> usize {
         from as usize

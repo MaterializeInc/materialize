@@ -43,15 +43,16 @@ pub struct State {
     seed: u32,
     temp_dir: tempfile::TempDir,
     data_dir: Option<PathBuf>,
+    tokio_runtime: tokio::runtime::Runtime,
     materialized_addr: String,
     pgclient: postgres::Client,
     schema_registry_url: String,
-    ccsr_client: ccsr::Client,
+    ccsr_client: ccsr::AsyncClient,
     kafka_addr: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
-    kafka_consumer: rdkafka::consumer::StreamConsumer<rdkafka::consumer::DefaultConsumerContext>,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
+    kafka_topics: HashMap<String, i32>,
 }
 
 impl State {
@@ -113,7 +114,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         state.temp_dir.path().display().to_string(),
     );
     {
-        let protobuf_descriptors = crate::protobuf::gen::descriptors()
+        let protobuf_descriptors = crate::format::protobuf::gen::descriptors()
             .write_to_bytes()
             .unwrap();
         vars.insert("testdrive.protobuf-descriptors".into(), {
@@ -143,6 +144,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                 match builtin.name.as_ref() {
                     "avro-ocf-write" => Box::new(avro_ocf::build_write(builtin).map_err(wrap_err)?),
                     "file-write" => Box::new(file::build_write(builtin).map_err(wrap_err)?),
+                    "kafka-add-partitions" => {
+                        Box::new(kafka::build_add_partitions(builtin).map_err(wrap_err)?)
+                    }
+                    "kafka-create-topic" => {
+                        Box::new(kafka::build_create_topic(builtin).map_err(wrap_err)?)
+                    }
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
@@ -247,6 +254,12 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         None
     };
 
+    let tokio_runtime = tokio::runtime::Runtime::new().map_err(|e| Error::General {
+        ctx: "creating Tokio runtime".into(),
+        cause: Some(Box::new(e)),
+        hints: vec![],
+    })?;
+
     let (materialized_addr, pgclient) = {
         let url = config
             .materialized_url
@@ -285,7 +298,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         .to_owned();
 
     let ccsr_client =
-        ccsr::Client::new(schema_registry_url.parse().map_err(|e| Error::General {
+        ccsr::AsyncClient::new(schema_registry_url.parse().map_err(|e| Error::General {
             ctx: "opening schema registry connection".into(),
             cause: Some(Box::new(e)),
             hints: vec![
@@ -294,23 +307,19 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             ],
         })?);
 
-    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_consumer, kafka_producer) = {
+    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::client::DefaultClientContext;
         use rdkafka::config::ClientConfig;
-        use rdkafka::consumer::StreamConsumer;
         use rdkafka::producer::FutureProducer;
 
         let addr = config
             .kafka_addr
             .as_deref()
             .unwrap_or_else(|| "localhost:9092");
+
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &addr);
-        config.set("session.timeout.ms", "6000");
-        config.set("auto.offset.reset", "earliest");
-        config.set("group.id", "materialize-testdrive");
-        config.set("topic.metadata.refresh.interval.ms", "10");
 
         let admin: AdminClient<DefaultClientContext> =
             config.create().map_err(|e| Error::General {
@@ -321,25 +330,22 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
 
-        let consumer: StreamConsumer = config.create().map_err(|e| Error::General {
-            ctx: "opening Kafka consumer connection".into(),
-            cause: Some(Box::new(e)),
-            hints: vec![format!("connection string: {}", addr)],
-        })?;
-
         let producer: FutureProducer = config.create().map_err(|e| Error::General {
             ctx: "opening Kafka producer connection".into(),
             cause: Some(Box::new(e)),
             hints: vec![format!("connection string: {}", addr)],
         })?;
 
-        (addr.to_owned(), admin, admin_opts, consumer, producer)
+        let topics = HashMap::new();
+
+        (addr.to_owned(), admin, admin_opts, producer, topics)
     };
 
     Ok(State {
         seed,
         temp_dir,
         data_dir,
+        tokio_runtime,
         materialized_addr,
         pgclient,
         schema_registry_url,
@@ -347,7 +353,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         kafka_addr,
         kafka_admin,
         kafka_admin_opts,
-        kafka_consumer,
         kafka_producer,
+        kafka_topics,
     })
 }

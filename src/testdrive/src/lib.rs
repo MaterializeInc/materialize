@@ -16,9 +16,8 @@ use self::error::{Error, InputError, ResultExt};
 use self::parser::LineReader;
 
 mod action;
-mod avro;
+mod format;
 mod parser;
-mod protobuf;
 
 pub mod error;
 

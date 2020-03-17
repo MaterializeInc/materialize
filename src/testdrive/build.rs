@@ -15,7 +15,10 @@ use std::fs;
 
 fn main() {
     let out_dir = "protobuf/gen";
-    let input = &["resources/simple.proto", "resources/billing.proto"];
+    let input = &[
+        "src/format/protobuf/billing.proto",
+        "src/format/protobuf/simple.proto",
+    ];
 
     for fname in input {
         println!("cargo:rerun-if-changed={}", fname);

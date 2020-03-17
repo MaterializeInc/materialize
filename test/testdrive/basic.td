@@ -42,6 +42,8 @@ $ set schema={
     ]
   }
 
+$ kafka-create-topic topic=data
+
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": null}
 
@@ -386,6 +388,8 @@ $ set mat={
     ]
   }
 
+$ kafka-create-topic topic=mat
+
 $ kafka-ingest format=avro topic=mat schema=${mat} timestamp=1
 {"before": null, "after": null}
 
@@ -508,6 +512,8 @@ $ set schema={
        {"name": "b", "type": "long"}
      ]
    }
+
+$ kafka-create-topic topic=non-dbz-data
 
 $ kafka-ingest format=avro topic=non-dbz-data schema=${schema} timestamp=1
 {"a": 1, "b": 2}

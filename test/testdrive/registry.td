@@ -16,7 +16,7 @@
   ENVELOPE DEBEZIUM
 fetching latest schema for subject 'testdrive-noexist-${testdrive.seed}-value' from registry: subject not found
 
-$ set schema_v1={
+$ set schema-v1={
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -37,7 +37,7 @@ $ set schema_v1={
     ]
   }
 
-$ set schema_v2={
+$ set schema-v2={
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -59,10 +59,12 @@ $ set schema_v2={
     ]
   }
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=1
+$ kafka-create-topic topic=data
+
+$ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=2
+$ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=2
 {"before": null, "after": null}
 
 > CREATE MATERIALIZED SOURCE data_v1
@@ -75,10 +77,10 @@ a
 ---
 1
 
-$ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp=3
+$ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=3
 {"before": null, "after": {"a": 2, "b": -1}}
 
-$ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp=4
+$ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=4
 {"before": null, "after": null}
 
 > CREATE MATERIALIZED SOURCE data_v2
@@ -98,7 +100,7 @@ a b
 1 42
 2 -1
 
-$ set key_schema_missing={
+$ set key-schema-missing={
     "type": "record",
     "name": "Key",
     "fields": [
@@ -106,7 +108,7 @@ $ set key_schema_missing={
     ]
   }
 
-$ set key_schema_wrong_type={
+$ set key-schema-wrong-type={
     "type": "record",
     "name": "Key",
     "fields": [
@@ -114,7 +116,7 @@ $ set key_schema_wrong_type={
     ]
   }
 
-$ set valid_key_schema={
+$ set valid-key-schema={
     "type": "record",
     "name": "Key",
     "fields": [
@@ -122,11 +124,13 @@ $ set valid_key_schema={
     ]
   }
 
-$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing}
+$ kafka-create-topic topic=missing-data
+
+$ kafka-ingest format=avro topic=missing-data schema=${schema-v1} key-schema=${key-schema-missing}
   publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing}
+$ kafka-ingest format=avro topic=missing-data schema=${schema-v1} key-schema=${key-schema-missing}
   publish=true timestamp=2
 {"before": null, "after": null}
 
@@ -136,11 +140,13 @@ $ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${k
   ENVELOPE DEBEZIUM
 Value schema missing primary key column: b
 
-$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
+$ kafka-create-topic topic=mismatched-data
+
+$ kafka-ingest format=avro topic=mismatched-data schema=${schema-v1} key-schema=${key-schema-wrong-type}
   publish=true timestamp=3
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
+$ kafka-ingest format=avro topic=mismatched-data schema=${schema-v1} key-schema=${key-schema-wrong-type}
   publish=true timestamp=4
 {"before": null, "after": null}
 
@@ -150,11 +156,11 @@ $ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=
   ENVELOPE DEBEZIUM
 key and value column types do not match
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
+$ kafka-ingest format=avro topic=data schema=${schema-v1} key-schema=${valid-key-schema}
   publish=true timestamp=5
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
+$ kafka-ingest format=avro topic=data schema=${schema-v1} key-schema=${valid-key-schema}
   publish=true timestamp=6
 {"before": null, "after": null}
 
