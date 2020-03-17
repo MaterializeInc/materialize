@@ -13,12 +13,12 @@ bincode = "1.2"
 bytes = "0.5"
 futures = "0.3"
 log = "0.4.8"
-num_enum = "0.4.2"
+num_enum = "0.4.3"
 ore = { path = "../ore" }
 rand = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "0.2", features = ["dns", "macros", "rt-threaded", "stream", "time", "uds"] }
-tokio-serde = { version = "0.6", features = ["bincode"] }
+tokio-serde = { version = "0.6.1", features = ["bincode"] }
 tokio-util = { version = "0.2", features = ["codec"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
 

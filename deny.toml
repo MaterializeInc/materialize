@@ -12,12 +12,6 @@ skip = [
     { name = "miow", version = "0.2.1" },
     { name = "winapi", version = "0.2.8" },
 
-    # Waiting on https://github.com/mcarton/rust-derivative/pull/50.
-    { name = "proc-macro2", version = "0.4.30" },
-    { name = "quote", version = "0.6.12" },
-    { name = "syn", version = "0.15.44" },
-    { name = "unicode-xid", version = "0.1.0" },
-
     # Waiting on chrono, hyper, reqwest, and rusqlite to migrate to time v0.2.
     # time v0.2 is a total rewrite of time v0.1, so this doesn't seem likely
     # to happen any time soon.
@@ -40,7 +34,6 @@ private = { ignore = true }
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
-    "https://github.com/MaterializeInc/avro-rs.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
     "https://github.com/MaterializeInc/serde-protobuf.git",
     "https://github.com/TimelyDataflow/timely-dataflow",
