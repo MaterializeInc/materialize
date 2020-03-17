@@ -51,7 +51,6 @@ pub struct State {
     kafka_addr: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
-    kafka_consumer: rdkafka::consumer::StreamConsumer<rdkafka::consumer::DefaultConsumerContext>,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
     kafka_topics: HashMap<String, i32>,
 }
@@ -308,23 +307,19 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             ],
         })?);
 
-    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_consumer, kafka_producer, kafka_topics) = {
+    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::client::DefaultClientContext;
         use rdkafka::config::ClientConfig;
-        use rdkafka::consumer::StreamConsumer;
         use rdkafka::producer::FutureProducer;
 
         let addr = config
             .kafka_addr
             .as_deref()
             .unwrap_or_else(|| "localhost:9092");
+
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &addr);
-        config.set("session.timeout.ms", "6000");
-        config.set("auto.offset.reset", "earliest");
-        config.set("group.id", "materialize-testdrive");
-        config.set("topic.metadata.refresh.interval.ms", "10");
 
         let admin: AdminClient<DefaultClientContext> =
             config.create().map_err(|e| Error::General {
@@ -335,12 +330,6 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
 
-        let consumer: StreamConsumer = config.create().map_err(|e| Error::General {
-            ctx: "opening Kafka consumer connection".into(),
-            cause: Some(Box::new(e)),
-            hints: vec![format!("connection string: {}", addr)],
-        })?;
-
         let producer: FutureProducer = config.create().map_err(|e| Error::General {
             ctx: "opening Kafka producer connection".into(),
             cause: Some(Box::new(e)),
@@ -349,14 +338,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
         let topics = HashMap::new();
 
-        (
-            addr.to_owned(),
-            admin,
-            admin_opts,
-            consumer,
-            producer,
-            topics,
-        )
+        (addr.to_owned(), admin, admin_opts, producer, topics)
     };
 
     Ok(State {
@@ -371,7 +353,6 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         kafka_addr,
         kafka_admin,
         kafka_admin_opts,
-        kafka_consumer,
         kafka_producer,
         kafka_topics,
     })

@@ -17,7 +17,8 @@ use futures::future::{self, TryFutureExt};
 use futures::stream::{FuturesUnordered, StreamExt, TryStreamExt};
 use rdkafka::admin::NewPartitions;
 use rdkafka::admin::{NewTopic, TopicReplication};
-use rdkafka::consumer::Consumer;
+use rdkafka::config::ClientConfig;
+use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::RDKafkaError;
 use rdkafka::message::Message;
 use rdkafka::producer::FutureRecord;
@@ -49,7 +50,8 @@ pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, 
 impl Action for CreateTopicAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
         let metadata = state
-            .kafka_consumer
+            .kafka_producer
+            .client()
             .fetch_metadata(None, Some(Duration::from_secs(1)))
             .map_err(|e| e.to_string())?;
 
@@ -189,7 +191,8 @@ impl Action for CreateTopicAction {
         loop {
             let res = (|| {
                 let metadata = state
-                    .kafka_consumer
+                    .kafka_producer
+                    .client()
                     // N.B. It is extremely important not to ask specifically
                     // about the topic here, even though the API supports it!
                     // Asking about the topic will create it automatically...
@@ -301,7 +304,8 @@ impl Action for AddPartitionsAction {
         loop {
             let res = (|| {
                 let metadata = state
-                    .kafka_consumer
+                    .kafka_producer
+                    .client()
                     .fetch_metadata(Some(&topic_name), Some(Duration::from_secs(1)))
                     .map_err(|e| e.to_string())?;
                 if metadata.topics().len() != 1 {
@@ -360,10 +364,11 @@ impl Action for VerifyAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        state
-            .kafka_consumer
-            .subscribe(&[&self.topic_prefix])
-            .map_err(|e| e.to_string())?;
+        let mut config = ClientConfig::new();
+        config.set("bootstrap.servers", &state.kafka_addr);
+        config.set("auto.offset.reset", "earliest");
+        config.set("group.id", "materialize-testdrive");
+
         let schema = interchange::avro::parse_schema(&self.schema)
             .map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut converted_expected_messages = Vec::new();
@@ -377,7 +382,13 @@ impl Action for VerifyAction {
                 .unwrap(),
             );
         }
-        let mut message_stream = state.kafka_consumer.start();
+        let consumer: StreamConsumer = config
+            .create()
+            .map_err(|e| format!("creating kafka consumer: {}", e))?;
+        consumer
+            .subscribe(&[&self.topic_prefix])
+            .map_err(|e| e.to_string())?;
+        let mut message_stream = consumer.start();
         let mut actual_messages = Vec::new();
         for _i in 0..converted_expected_messages.len() {
             let output = state.tokio_runtime.block_on(message_stream.next());
