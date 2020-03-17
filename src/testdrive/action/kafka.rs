@@ -13,9 +13,8 @@ use std::time::Duration;
 use avro::types::Value as AvroValue;
 use avro::Schema;
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
-use futures::executor::block_on;
-use futures::stream::{FuturesUnordered, TryStreamExt};
-use futures::{future, StreamExt};
+use futures::future::{self, TryFutureExt};
+use futures::stream::{FuturesUnordered, StreamExt, TryStreamExt};
 use rdkafka::admin::NewPartitions;
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::consumer::Consumer;
@@ -77,7 +76,7 @@ impl Action for VerifyAction {
         let mut message_stream = state.kafka_consumer.start();
         let mut actual_messages = Vec::new();
         for _i in 0..converted_expected_messages.len() {
-            let output = block_on(message_stream.next());
+            let output = state.tokio_runtime.block_on(message_stream.next());
             match output {
                 Some(result) => match result {
                     Ok(m) => match m.payload() {
@@ -99,7 +98,9 @@ impl Action for VerifyAction {
                                 ));
                             }
                             actual_messages.push(
-                                block_on(avro::from_avro_datum(&schema, &mut bytes, None))
+                                state
+                                    .tokio_runtime
+                                    .block_on(avro::from_avro_datum(&schema, &mut bytes, None))
                                     .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?,
                             );
                         }
@@ -238,8 +239,8 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     })
 }
 
-impl IngestAction {
-    fn do_undo(&self, state: &mut State) -> Result<(), String> {
+impl Action for IngestAction {
+    fn undo(&self, state: &mut State) -> Result<(), String> {
         let metadata = state
             .kafka_consumer
             .fetch_metadata(None, Some(Duration::from_secs(1)))
@@ -262,7 +263,7 @@ impl IngestAction {
                 "Deleting stale Kafka topics {}",
                 stale_kafka_topics.join(", ")
             );
-            let res = block_on(
+            let res = state.tokio_runtime.block_on(
                 state
                     .kafka_admin
                     .delete_topics(&stale_kafka_topics, &state.kafka_admin_opts),
@@ -289,10 +290,12 @@ impl IngestAction {
         }
 
         if self.publish {
-            let subjects = state
-                .ccsr_client
-                .list_subjects()
-                .map_err(|e| format!("unable to list subjects in schema registry: {}", e))?;
+            let subjects = state.tokio_runtime.block_on(
+                state
+                    .ccsr_client
+                    .list_subjects()
+                    .map_err(|e| format!("unable to list subjects in schema registry: {}", e)),
+            )?;
 
             let stale_subjects: Vec<_> = subjects
                 .iter()
@@ -301,7 +304,10 @@ impl IngestAction {
 
             for subject in stale_subjects {
                 println!("Deleting stale schema registry subject {}", subject);
-                match state.ccsr_client.delete_subject(&subject) {
+                match state
+                    .tokio_runtime
+                    .block_on(state.ccsr_client.delete_subject(&subject))
+                {
                     Ok(()) | Err(ccsr::DeleteError::SubjectNotFound) => (),
                     Err(e) => return Err(e.to_string()),
                 }
@@ -311,25 +317,29 @@ impl IngestAction {
         Ok(())
     }
 
-    fn do_redo(&self, state: &mut State) -> Result<(), String> {
+    fn redo(&self, state: &mut State) -> Result<(), String> {
         let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
         println!("Ingesting data into Kafka topic {:?}", topic_name);
-        create_kafka_topic(&topic_name, self.num_partition, &state)?;
-        add_partitions(&topic_name, self.add_partition, &state)?;
+        create_kafka_topic(&topic_name, self.num_partition, state)?;
+        add_partitions(&topic_name, self.add_partition, state)?;
         let format = match &self.message_format {
             RawSchema::Avro { key_schema, schema } => {
                 let schema_id = if self.publish {
                     let ccsr_subject = format!("{}-value", topic_name);
-                    let schema_id = state
-                        .ccsr_client
-                        .publish_schema(&ccsr_subject, &schema)
-                        .map_err(|e| format!("schema registry error: {}", e))?;
-                    if let Some(key_schema) = key_schema {
-                        let key_subject = format!("{}-key", topic_name);
+                    let schema_id = state.tokio_runtime.block_on(
                         state
                             .ccsr_client
-                            .publish_schema(&key_subject, &key_schema)
-                            .map_err(|e| format!("schema registry error: {}", e))?;
+                            .publish_schema(&ccsr_subject, &schema)
+                            .map_err(|e| format!("schema registry error: {}", e)),
+                    )?;
+                    if let Some(key_schema) = key_schema {
+                        let key_subject = format!("{}-key", topic_name);
+                        state.tokio_runtime.block_on(
+                            state
+                                .ccsr_client
+                                .publish_schema(&key_subject, &key_schema)
+                                .map_err(|e| format!("schema registry error: {}", e)),
+                        )?;
                     }
                     schema_id
                 } else {
@@ -399,27 +409,17 @@ impl IngestAction {
             }
             futs.push(state.kafka_producer.send(record, 1000 /* block_ms */));
         }
-        block_on(futs.try_for_each(|_| future::ok(()))).map_err(|e| e.to_string())
+        state
+            .tokio_runtime
+            .block_on(futs.try_for_each(|_| future::ok(())))
+            .map_err(|e| e.to_string())
     }
 }
 
-impl Action for IngestAction {
-    fn undo(&self, state: &mut State) -> Result<(), String> {
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .enter(|| self.do_undo(state))
-    }
-    fn redo(&self, state: &mut State) -> Result<(), String> {
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .enter(|| self.do_redo(state))
-    }
-}
-
-fn add_partitions(topic_name: &str, num_partitions: i32, state: &State) -> Result<(), String> {
+fn add_partitions(topic_name: &str, num_partitions: i32, state: &mut State) -> Result<(), String> {
     if num_partitions > 0 {
         let partitions = NewPartitions::new(&topic_name, num_partitions as usize);
-        let res = block_on(
+        let res = state.tokio_runtime.block_on(
             state
                 .kafka_admin
                 .create_partitions(&[partitions], &state.kafka_admin_opts),
@@ -493,7 +493,11 @@ fn add_partitions(topic_name: &str, num_partitions: i32, state: &State) -> Resul
     }
 }
 
-fn create_kafka_topic(topic_name: &str, num_partitions: i32, state: &State) -> Result<(), String> {
+fn create_kafka_topic(
+    topic_name: &str,
+    num_partitions: i32,
+    state: &mut State,
+) -> Result<(), String> {
     // NOTE(benesch): it is critical that we invent a new topic name on
     // every testdrive run. We previously tried to delete and recreate the
     // topic with a fixed name, but ran into serious race conditions in
@@ -550,7 +554,7 @@ fn create_kafka_topic(topic_name: &str, num_partitions: i32, state: &State) -> R
         // "1" is interpreted as January 1, 1970 00:00:01, which is
         // breaches the default 7-day retention policy.
         .set("retention.ms", "-1");
-    let res = block_on(
+    let res = state.tokio_runtime.block_on(
         state
             .kafka_admin
             .create_topics(&[new_topic], &state.kafka_admin_opts),

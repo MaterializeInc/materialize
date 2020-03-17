@@ -43,10 +43,11 @@ pub struct State {
     seed: u32,
     temp_dir: tempfile::TempDir,
     data_dir: Option<PathBuf>,
+    tokio_runtime: tokio::runtime::Runtime,
     materialized_addr: String,
     pgclient: postgres::Client,
     schema_registry_url: String,
-    ccsr_client: ccsr::Client,
+    ccsr_client: ccsr::AsyncClient,
     kafka_addr: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
@@ -247,6 +248,12 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         None
     };
 
+    let tokio_runtime = tokio::runtime::Runtime::new().map_err(|e| Error::General {
+        ctx: "creating Tokio runtime".into(),
+        cause: Some(Box::new(e)),
+        hints: vec![],
+    })?;
+
     let (materialized_addr, pgclient) = {
         let url = config
             .materialized_url
@@ -285,7 +292,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         .to_owned();
 
     let ccsr_client =
-        ccsr::Client::new(schema_registry_url.parse().map_err(|e| Error::General {
+        ccsr::AsyncClient::new(schema_registry_url.parse().map_err(|e| Error::General {
             ctx: "opening schema registry connection".into(),
             cause: Some(Box::new(e)),
             hints: vec![
@@ -340,6 +347,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         seed,
         temp_dir,
         data_dir,
+        tokio_runtime,
         materialized_addr,
         pgclient,
         schema_registry_url,
