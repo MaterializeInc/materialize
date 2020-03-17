@@ -32,7 +32,7 @@ prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prome
 rdkafka = { version = "0.23.1", features = ["cmake-build", "ssl-vendored"] }
 regex = "1.3.5"
 repr = { path = "../repr" }
-rusoto_core = "0.43.0-beta.1"
+rusoto_core = "0.43.0"
 rusoto_credential = "0.43.0-beta.1"
 rusoto_kinesis = "0.43.0-beta.1"
 serde = { version = "1.0", features = ["derive"] }
