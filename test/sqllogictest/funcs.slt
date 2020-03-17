@@ -83,6 +83,19 @@ SELECT date_trunc('millennium', TIMESTAMP '2019-11-26 15:56:46.241150')
 query error unknown units 'bad'
 SELECT date_trunc('bad', TIMESTAMP '2019-11-26 15:56:46.241150')
 
+query T
+SELECT date_trunc('minute', TIMESTAMPTZ '1999-12-31 16:16:01+02:30')
+----
+1999-12-31 13:46:00+00
+
+query T
+SELECT date_trunc('day', TIMESTAMPTZ '1999-12-31 16:16:01+02:30')
+----
+1999-12-31 00:00:00+00
+
+query error unknown units 'bad'
+SELECT date_trunc('bad', TIMESTAMPTZ '1999-12-31 16:16:01+02:30')
+
 statement ok
 CREATE TABLE date_trunc_fields (
     field text
@@ -112,7 +125,7 @@ EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
 0 =
 | Get materialize.public.date_trunc_timestamps (u5)
-| Map date_trunc_day(#0)
+| Map date_truncts_day(#0)
 | Project (#1)
 
 EOF
@@ -132,7 +145,7 @@ EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc
 | | implementation = Differential %1 %0.()
 | | demand for %0 = (#0)
 | | demand for %1 = (#0)
-| Map date_trunc(#0, #1)
+| Map date_truncts(#0, #1)
 | Project (#2)
 
 EOF

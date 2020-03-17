@@ -1171,6 +1171,245 @@ fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
+/// A timestamp with both a date and a time component, but not necessarily a
+/// timezone component.
+pub trait TimestampLike: chrono::Datelike + chrono::Timelike {
+    /// Returns the weekday as a `usize` between 0 and 6, where 0 represents
+    /// Sunday and 6 represents Saturday.
+    fn weekday0(&self) -> usize {
+        self.weekday().num_days_from_sunday() as usize
+    }
+
+    /// Like [`chrono::Datelike::year_ce`], but works on the ISO week system.
+    fn iso_year_ce(&self) -> u32 {
+        let year = self.iso_week().year();
+        if year < 1 {
+            (1 - year) as u32
+        } else {
+            year as u32
+        }
+    }
+
+    fn extract_year(&self) -> f64 {
+        f64::from(self.year())
+    }
+
+    fn extract_quarter(&self) -> f64 {
+        (f64::from(self.month()) / 3.0).ceil()
+    }
+
+    fn extract_month(&self) -> f64 {
+        f64::from(self.month())
+    }
+
+    fn extract_day(&self) -> f64 {
+        f64::from(self.day())
+    }
+
+    fn extract_hour(&self) -> f64 {
+        f64::from(self.hour())
+    }
+
+    fn extract_minute(&self) -> f64 {
+        f64::from(self.minute())
+    }
+
+    fn extract_second(&self) -> f64 {
+        let s = f64::from(self.second());
+        let ns = f64::from(self.nanosecond()) / 1e9;
+        (s + ns)
+    }
+
+    /// Extract the iso week of the year
+    ///
+    /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
+    /// 1 about half of the time
+    fn extract_week(&self) -> f64 {
+        f64::from(self.iso_week().week())
+    }
+
+    fn extract_dayofyear(&self) -> f64 {
+        f64::from(self.ordinal())
+    }
+
+    fn extract_dayofweek(&self) -> f64 {
+        f64::from(self.weekday().num_days_from_sunday())
+    }
+
+    fn extract_isodayofweek(&self) -> f64 {
+        f64::from(self.weekday().number_from_monday())
+    }
+
+    fn truncate_microseconds(&self) -> NaiveDateTime {
+        let time = NaiveTime::from_hms_micro(
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nanosecond() / 1_000,
+        );
+
+        NaiveDateTime::new(self.date(), time)
+    }
+
+    fn truncate_milliseconds(&self) -> NaiveDateTime {
+        let time = NaiveTime::from_hms_milli(
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nanosecond() / 1_000_000,
+        );
+
+        NaiveDateTime::new(self.date(), time)
+    }
+
+    fn truncate_second(&self) -> NaiveDateTime {
+        let time = NaiveTime::from_hms(self.hour(), self.minute(), self.second());
+
+        NaiveDateTime::new(self.date(), time)
+    }
+
+    fn truncate_minute(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            self.date(),
+            NaiveTime::from_hms(self.hour(), self.minute(), 0),
+        )
+    }
+
+    fn truncate_hour(&self) -> NaiveDateTime {
+        NaiveDateTime::new(self.date(), NaiveTime::from_hms(self.hour(), 0, 0))
+    }
+
+    fn truncate_day(&self) -> NaiveDateTime {
+        NaiveDateTime::new(self.date(), NaiveTime::from_hms(0, 0, 0))
+    }
+
+    fn truncate_week(&self) -> NaiveDateTime {
+        let num_days_from_monday = self.date().weekday().num_days_from_monday();
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(self.year(), self.month(), self.day() - num_days_from_monday),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+
+    fn truncate_month(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(self.year(), self.month(), 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+
+    fn truncate_quarter(&self) -> NaiveDateTime {
+        let month = self.month();
+        let quarter = if month <= 3 {
+            1
+        } else if month <= 6 {
+            4
+        } else if month <= 9 {
+            7
+        } else {
+            10
+        };
+
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(self.year(), quarter, 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+
+    fn truncate_year(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(self.year(), 1, 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+    fn truncate_decade(&self) -> NaiveDateTime {
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(self.year() - (self.year() % 10), 1, 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+    fn truncate_century(&self) -> NaiveDateTime {
+        // Expects the first year of the century, meaning 2001 instead of 2000.
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(self.year() - (self.year() % 100) + 1, 1, 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+    fn truncate_millennium(&self) -> NaiveDateTime {
+        // Expects the first year of the millennium, meaning 2001 instead of 2000.
+        NaiveDateTime::new(
+            NaiveDate::from_ymd(self.year() - (self.year() % 1_000) + 1, 1, 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )
+    }
+
+    /// Return the date component of the timestamp
+    fn date(&self) -> NaiveDate;
+
+    /// Returns a string representing the timezone's offset from UTC.
+    fn timezone_offset(&self) -> &'static str;
+
+    /// Returns a string representing the hour portion of the timezone's offset
+    /// from UTC.
+    fn timezone_hours(&self) -> &'static str;
+
+    /// Returns a string representing the minute portion of the timezone's
+    /// offset from UTC.
+    fn timezone_minutes(&self) -> &'static str;
+
+    /// Returns the abbreviated name of the timezone with the specified
+    /// capitalization.
+    fn timezone_name(&self, caps: bool) -> &'static str;
+}
+
+impl TimestampLike for chrono::NaiveDateTime {
+    fn date(&self) -> NaiveDate {
+        self.date()
+    }
+
+    fn timezone_offset(&self) -> &'static str {
+        "+00"
+    }
+
+    fn timezone_hours(&self) -> &'static str {
+        "+00"
+    }
+
+    fn timezone_minutes(&self) -> &'static str {
+        "00"
+    }
+
+    fn timezone_name(&self, _caps: bool) -> &'static str {
+        ""
+    }
+}
+
+impl TimestampLike for chrono::DateTime<chrono::Utc> {
+    fn date(&self) -> NaiveDate {
+        self.naive_utc().date()
+    }
+
+    fn timezone_offset(&self) -> &'static str {
+        "+00"
+    }
+
+    fn timezone_hours(&self) -> &'static str {
+        "+00"
+    }
+
+    fn timezone_minutes(&self) -> &'static str {
+        "00"
+    }
+
+    fn timezone_name(&self, caps: bool) -> &'static str {
+        if caps {
+            "UTC"
+        } else {
+            "utc"
+        }
+    }
+}
+
 fn extract_interval_year<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().years())
 }
@@ -1195,276 +1434,273 @@ fn extract_interval_second<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().seconds())
 }
 
-fn extract_timestamp_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().year()))
+fn extract_timelike_year<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_year(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_year(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_year called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().year()))
+fn extract_timelike_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_quarter(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_quarter(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_quarter called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from((f64::from(a.unwrap_timestamp().month()) / 3.0).ceil())
+fn extract_timelike_month<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_month(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_month(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_month called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from((f64::from(a.unwrap_timestamptz().month()) / 3.0).ceil())
+fn extract_timelike_day<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_day(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_day(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_day called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().month()))
+fn extract_timelike_hour<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_hour(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_hour(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_hour called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().month()))
+fn extract_timelike_minute<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_minute(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_minute(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_minute called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().day()))
+fn extract_timelike_second<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_second(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_second(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_second called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().day()))
+fn extract_timelike_week<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_week(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => Datum::from(TimestampLike::extract_week(&a.unwrap_timestamptz())),
+        _ => panic!("scalar::func::extract_timelike_week called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().hour()))
+fn extract_timelike_dayofyear<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_dayofyear(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_dayofyear(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_dayofyear called on {:?}", a),
+    }
 }
 
-fn extract_timestamptz_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().hour()))
+fn extract_timelike_dayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::extract_dayofweek(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_dayofweek(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::extract_timelike_dayofweek called on {:?}", a),
+    }
 }
 
-fn extract_timestamp_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamp().minute()))
+fn extract_timelike_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a {
+        Datum::Timestamp(_) => {
+            Datum::from(TimestampLike::extract_isodayofweek(&a.unwrap_timestamp()))
+        }
+        Datum::TimestampTz(_) => {
+            Datum::from(TimestampLike::extract_isodayofweek(&a.unwrap_timestamptz()))
+        }
+        _ => panic!(
+            "scalar::func::extract_timelike_isodayofweek called on {:?}",
+            a
+        ),
+    }
 }
 
-fn extract_timestamptz_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(f64::from(a.unwrap_timestamptz().minute()))
-}
-
-fn extract_timestamp_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    let s = f64::from(a.second());
-    let ns = f64::from(a.nanosecond()) / 1e9;
-    Datum::from(s + ns)
-}
-
-fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    let s = f64::from(a.second());
-    let ns = f64::from(a.nanosecond()) / 1e9;
-    Datum::from(s + ns)
-}
-
-/// Extract the iso week of the year
-///
-/// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
-/// 1 about half of the time
-fn extract_timestamp_week<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    Datum::from(f64::from(a.iso_week().week()))
-}
-
-/// Extract the iso week of the year
-///
-/// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
-/// 1 about half of the time
-fn extract_timestamptz_week<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    Datum::from(f64::from(a.iso_week().week()))
-}
-
-fn extract_timestamp_dayofyear<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    Datum::from(f64::from(a.ordinal()))
-}
-
-fn extract_timestamptz_dayofyear<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    Datum::from(f64::from(a.ordinal()))
-}
-
-/// extract day of week with monday = 1 sunday = 0
-fn extract_timestamp_dayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    Datum::from(a.weekday().num_days_from_sunday() as f64)
-}
-
-/// extract day of week with monday = 1 sunday = 0
-fn extract_timestamptz_dayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    Datum::from(a.weekday().num_days_from_sunday() as f64)
-}
-
-/// extract day of week with monday = 1 sunday = 7
-fn extract_timestamp_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamp();
-    Datum::from(a.weekday().number_from_monday() as f64)
-}
-
-/// extract day of week with monday = 1 sunday = 7
-fn extract_timestamptz_isodayofweek<'a>(a: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_timestamptz();
-    Datum::from(a.weekday().number_from_monday() as f64)
+fn date_trunc_inner<'a>(to: DateTruncTo, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    match to {
+        DateTruncTo::Micros => Ok(date_trunc_microseconds(b)),
+        DateTruncTo::Millis => Ok(date_trunc_milliseconds(b)),
+        DateTruncTo::Second => Ok(date_trunc_second(b)),
+        DateTruncTo::Minute => Ok(date_trunc_minute(b)),
+        DateTruncTo::Hour => Ok(date_trunc_hour(b)),
+        DateTruncTo::Day => Ok(date_trunc_day(b)),
+        DateTruncTo::Week => Ok(date_trunc_week(b)),
+        DateTruncTo::Month => Ok(date_trunc_month(b)),
+        DateTruncTo::Quarter => Ok(date_trunc_quarter(b)),
+        DateTruncTo::Year => Ok(date_trunc_year(b)),
+        DateTruncTo::Decade => Ok(date_trunc_decade(b)),
+        DateTruncTo::Century => Ok(date_trunc_century(b)),
+        DateTruncTo::Millennium => Ok(date_trunc_millennium(b)),
+    }
 }
 
 fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
-    match units.parse::<DateTruncTo>() {
-        Ok(DateTruncTo::Micros) => Ok(date_trunc_microseconds(b)),
-        Ok(DateTruncTo::Millis) => Ok(date_trunc_milliseconds(b)),
-        Ok(DateTruncTo::Second) => Ok(date_trunc_second(b)),
-        Ok(DateTruncTo::Minute) => Ok(date_trunc_minute(b)),
-        Ok(DateTruncTo::Hour) => Ok(date_trunc_hour(b)),
-        Ok(DateTruncTo::Day) => Ok(date_trunc_day(b)),
-        Ok(DateTruncTo::Week) => Ok(date_trunc_week(b)),
-        Ok(DateTruncTo::Month) => Ok(date_trunc_month(b)),
-        Ok(DateTruncTo::Quarter) => Ok(date_trunc_quarter(b)),
-        Ok(DateTruncTo::Year) => Ok(date_trunc_year(b)),
-        Ok(DateTruncTo::Decade) => Ok(date_trunc_decade(b)),
-        Ok(DateTruncTo::Century) => Ok(date_trunc_century(b)),
-        Ok(DateTruncTo::Millennium) => Ok(date_trunc_millennium(b)),
+    let to = units.parse::<DateTruncTo>();
+
+    match to {
+        Ok(to) => date_trunc_inner(to, b),
         Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
     }
 }
 
 fn date_trunc_microseconds<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    let time = NaiveTime::from_hms_micro(
-        source_timestamp.hour(),
-        source_timestamp.minute(),
-        source_timestamp.second(),
-        source_timestamp.nanosecond() / 1_000,
-    );
-    Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+    match a {
+        Datum::Timestamp(_) => {
+            Datum::from(TimestampLike::truncate_microseconds(&a.unwrap_timestamp()))
+        }
+        Datum::TimestampTz(_) => Datum::timestamptz(TimestampLike::truncate_microseconds(
+            &a.unwrap_timestamptz(),
+        )),
+        _ => panic!("scalar::func::date_trunc_microseconds called on {:?}", a),
+    }
 }
 
 fn date_trunc_milliseconds<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    let time = NaiveTime::from_hms_milli(
-        source_timestamp.hour(),
-        source_timestamp.minute(),
-        source_timestamp.second(),
-        source_timestamp.nanosecond() / 1_000_000,
-    );
-    Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+    match a {
+        Datum::Timestamp(_) => {
+            Datum::from(TimestampLike::truncate_milliseconds(&a.unwrap_timestamp()))
+        }
+        Datum::TimestampTz(_) => Datum::timestamptz(TimestampLike::truncate_milliseconds(
+            &a.unwrap_timestamptz(),
+        )),
+        _ => panic!("scalar::func::date_trunc_millisecondss called on {:?}", a),
+    }
 }
 
 fn date_trunc_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        source_timestamp.date(),
-        NaiveTime::from_hms(
-            source_timestamp.hour(),
-            source_timestamp.minute(),
-            source_timestamp.second(),
-        ),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_second(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_second(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_second called on {:?}", a),
+    }
 }
 
 fn date_trunc_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        source_timestamp.date(),
-        NaiveTime::from_hms(source_timestamp.hour(), source_timestamp.minute(), 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_minute(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_minute(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_minute called on {:?}", a),
+    }
 }
 
 fn date_trunc_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        source_timestamp.date(),
-        NaiveTime::from_hms(source_timestamp.hour(), 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_hour(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_hour(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_hour called on {:?}", a),
+    }
 }
 
 fn date_trunc_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        source_timestamp.date(),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_day(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_day(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_day called on {:?}", a),
+    }
 }
 
 fn date_trunc_week<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    let num_days_from_monday = source_timestamp.date().weekday().num_days_from_monday();
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(
-            source_timestamp.year(),
-            source_timestamp.month(),
-            source_timestamp.day() - num_days_from_monday,
-        ),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_week(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_week(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_week called on {:?}", a),
+    }
 }
 
 fn date_trunc_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(source_timestamp.year(), source_timestamp.month(), 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_month(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_month(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_month called on {:?}", a),
+    }
 }
 
 fn date_trunc_quarter<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    let month = source_timestamp.month();
-    let quarter = if month <= 3 {
-        1
-    } else if month <= 6 {
-        4
-    } else if month <= 9 {
-        7
-    } else {
-        10
-    };
-
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(source_timestamp.year(), quarter, 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_quarter(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_quarter(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_quarter called on {:?}", a),
+    }
 }
 
 fn date_trunc_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(source_timestamp.year(), 1, 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_year(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_year(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_year called on {:?}", a),
+    }
 }
 
 fn date_trunc_decade<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(
-            source_timestamp.year() - (source_timestamp.year() % 10),
-            1,
-            1,
-        ),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_decade(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_decade(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_decade called on {:?}", a),
+    }
 }
 
 fn date_trunc_century<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    // Expects the first year of the century, meaning 2001 instead of 2000.
-    let century = source_timestamp.year() - ((source_timestamp.year() % 100) - 1);
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(century, 1, 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => Datum::from(TimestampLike::truncate_century(&a.unwrap_timestamp())),
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_century(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_century called on {:?}", a),
+    }
 }
 
 fn date_trunc_millennium<'a>(a: Datum<'a>) -> Datum<'a> {
-    let source_timestamp = a.unwrap_timestamp();
-    // Expects the first year of the millennium, meaning 2001 instead of 2000.
-    let millennium = source_timestamp.year() - ((source_timestamp.year() % 1000) - 1);
-    Datum::Timestamp(NaiveDateTime::new(
-        NaiveDate::from_ymd(millennium, 1, 1),
-        NaiveTime::from_hms(0, 0, 0),
-    ))
+    match a {
+        Datum::Timestamp(_) => {
+            Datum::from(TimestampLike::truncate_millennium(&a.unwrap_timestamp()))
+        }
+        Datum::TimestampTz(_) => {
+            Datum::timestamptz(TimestampLike::truncate_millennium(&a.unwrap_timestamptz()))
+        }
+        _ => panic!("scalar::func::date_trunc_millennium called on {:?}", a),
+    }
 }
 
 fn to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1590,7 +1826,8 @@ pub enum BinaryFunc {
     MatchLikePattern,
     ToCharTimestamp,
     ToCharTimestampTz,
-    DateTrunc,
+    DateTruncTimestamp,
+    DateTruncTimestampTz,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     TextConcat,
@@ -1730,7 +1967,8 @@ impl BinaryFunc {
             BinaryFunc::MatchLikePattern => eager!(match_like_pattern),
             BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
-            BinaryFunc::DateTrunc => eager!(date_trunc),
+            BinaryFunc::DateTruncTimestamp => eager!(date_trunc),
+            BinaryFunc::DateTruncTimestampTz => eager!(date_trunc),
             BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
             BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
             BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
@@ -1849,9 +2087,11 @@ impl BinaryFunc {
             | AddTimeInterval
             | SubTimeInterval => input1_type,
 
-            AddDateInterval | SubDateInterval | AddDateTime | DateTrunc => {
+            AddDateInterval | SubDateInterval | AddDateTime | DateTruncTimestamp => {
                 ColumnType::new(ScalarType::Timestamp).nullable(true)
             }
+
+            DateTruncTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
 
             SubTime => ColumnType::new(ScalarType::Interval).nullable(true),
 
@@ -1934,8 +2174,9 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString
             | TextConcat => true,
-            MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTrunc
-            | CastFloat32ToDecimal | CastFloat64ToDecimal | RoundDecimal(_) | ConvertFrom => false,
+            MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTruncTimestamp
+            | DateTruncTimestampTz | CastFloat32ToDecimal | CastFloat64ToDecimal
+            | RoundDecimal(_) | ConvertFrom => false,
         }
     }
 }
@@ -1994,7 +2235,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MatchLikePattern => f.write_str("like"),
             BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
             BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
-            BinaryFunc::DateTrunc => f.write_str("date_trunc"),
+            BinaryFunc::DateTruncTimestamp => f.write_str("date_truncts"),
+            BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),
@@ -2123,7 +2365,8 @@ pub enum UnaryFunc {
     ExtractTimestampTzDayOfYear,
     ExtractTimestampTzDayOfWeek,
     ExtractTimestampTzIsoDayOfWeek,
-    DateTrunc(DateTruncTo),
+    DateTruncTimestamp(DateTruncTo),
+    DateTruncTimestampTz(DateTruncTo),
     ToTimestamp,
     JsonbArrayLength,
     JsonbTypeof,
@@ -2235,43 +2478,41 @@ impl UnaryFunc {
             UnaryFunc::ExtractIntervalHour => Ok(extract_interval_hour(a)),
             UnaryFunc::ExtractIntervalMinute => Ok(extract_interval_minute(a)),
             UnaryFunc::ExtractIntervalSecond => Ok(extract_interval_second(a)),
-            UnaryFunc::ExtractTimestampYear => Ok(extract_timestamp_year(a)),
-            UnaryFunc::ExtractTimestampQuarter => Ok(extract_timestamp_quarter(a)),
-            UnaryFunc::ExtractTimestampMonth => Ok(extract_timestamp_month(a)),
-            UnaryFunc::ExtractTimestampDay => Ok(extract_timestamp_day(a)),
-            UnaryFunc::ExtractTimestampHour => Ok(extract_timestamp_hour(a)),
-            UnaryFunc::ExtractTimestampMinute => Ok(extract_timestamp_minute(a)),
-            UnaryFunc::ExtractTimestampSecond => Ok(extract_timestamp_second(a)),
-            UnaryFunc::ExtractTimestampWeek => Ok(extract_timestamp_week(a)),
-            UnaryFunc::ExtractTimestampDayOfYear => Ok(extract_timestamp_dayofyear(a)),
-            UnaryFunc::ExtractTimestampDayOfWeek => Ok(extract_timestamp_dayofweek(a)),
-            UnaryFunc::ExtractTimestampIsoDayOfWeek => Ok(extract_timestamp_isodayofweek(a)),
-            UnaryFunc::ExtractTimestampTzYear => Ok(extract_timestamptz_year(a)),
-            UnaryFunc::ExtractTimestampTzQuarter => Ok(extract_timestamptz_quarter(a)),
-            UnaryFunc::ExtractTimestampTzMonth => Ok(extract_timestamptz_month(a)),
-            UnaryFunc::ExtractTimestampTzDay => Ok(extract_timestamptz_day(a)),
-            UnaryFunc::ExtractTimestampTzHour => Ok(extract_timestamptz_hour(a)),
-            UnaryFunc::ExtractTimestampTzMinute => Ok(extract_timestamptz_minute(a)),
-            UnaryFunc::ExtractTimestampTzSecond => Ok(extract_timestamptz_second(a)),
-            UnaryFunc::ExtractTimestampTzWeek => Ok(extract_timestamptz_week(a)),
-            UnaryFunc::ExtractTimestampTzDayOfYear => Ok(extract_timestamptz_dayofyear(a)),
-            UnaryFunc::ExtractTimestampTzDayOfWeek => Ok(extract_timestamptz_dayofweek(a)),
-            UnaryFunc::ExtractTimestampTzIsoDayOfWeek => Ok(extract_timestamptz_isodayofweek(a)),
-            UnaryFunc::DateTrunc(to) => Ok(match to {
-                DateTruncTo::Micros => date_trunc_microseconds(a),
-                DateTruncTo::Millis => date_trunc_milliseconds(a),
-                DateTruncTo::Second => date_trunc_second(a),
-                DateTruncTo::Minute => date_trunc_minute(a),
-                DateTruncTo::Hour => date_trunc_hour(a),
-                DateTruncTo::Day => date_trunc_day(a),
-                DateTruncTo::Week => date_trunc_week(a),
-                DateTruncTo::Month => date_trunc_month(a),
-                DateTruncTo::Quarter => date_trunc_quarter(a),
-                DateTruncTo::Year => date_trunc_year(a),
-                DateTruncTo::Decade => date_trunc_decade(a),
-                DateTruncTo::Century => date_trunc_century(a),
-                DateTruncTo::Millennium => date_trunc_millennium(a),
-            }),
+            UnaryFunc::ExtractTimestampYear | UnaryFunc::ExtractTimestampTzYear => {
+                Ok(extract_timelike_year(a))
+            }
+            UnaryFunc::ExtractTimestampQuarter | UnaryFunc::ExtractTimestampTzQuarter => {
+                Ok(extract_timelike_quarter(a))
+            }
+            UnaryFunc::ExtractTimestampMonth | UnaryFunc::ExtractTimestampTzMonth => {
+                Ok(extract_timelike_month(a))
+            }
+            UnaryFunc::ExtractTimestampDay | UnaryFunc::ExtractTimestampTzDay => {
+                Ok(extract_timelike_day(a))
+            }
+            UnaryFunc::ExtractTimestampHour | UnaryFunc::ExtractTimestampTzHour => {
+                Ok(extract_timelike_hour(a))
+            }
+            UnaryFunc::ExtractTimestampMinute | UnaryFunc::ExtractTimestampTzMinute => {
+                Ok(extract_timelike_minute(a))
+            }
+            UnaryFunc::ExtractTimestampSecond | UnaryFunc::ExtractTimestampTzSecond => {
+                Ok(extract_timelike_second(a))
+            }
+            UnaryFunc::ExtractTimestampWeek | UnaryFunc::ExtractTimestampTzWeek => {
+                Ok(extract_timelike_week(a))
+            }
+            UnaryFunc::ExtractTimestampDayOfYear | UnaryFunc::ExtractTimestampTzDayOfYear => {
+                Ok(extract_timelike_dayofyear(a))
+            }
+            UnaryFunc::ExtractTimestampDayOfWeek | UnaryFunc::ExtractTimestampTzDayOfWeek => {
+                Ok(extract_timelike_dayofweek(a))
+            }
+            UnaryFunc::ExtractTimestampIsoDayOfWeek | UnaryFunc::ExtractTimestampTzIsoDayOfWeek => {
+                Ok(extract_timelike_isodayofweek(a))
+            }
+            UnaryFunc::DateTruncTimestamp(to) => date_trunc_inner(*to, a),
+            UnaryFunc::DateTruncTimestampTz(to) => date_trunc_inner(*to, a),
             UnaryFunc::ToTimestamp => Ok(to_timestamp(a)),
             UnaryFunc::JsonbArrayLength => Ok(jsonb_array_length(a)),
             UnaryFunc::JsonbTypeof => Ok(jsonb_typeof(a)),
@@ -2423,7 +2664,8 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
 
-            DateTrunc(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
+            DateTruncTimestamp(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
+            DateTruncTimestampTz(_) => ColumnType::new(ScalarType::TimestampTz).nullable(false),
 
             ToTimestamp => ColumnType::new(ScalarType::TimestampTz).nullable(true),
 
@@ -2579,8 +2821,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::ExtractTimestampTzDayOfYear => f.write_str("tstzextractdayofyear"),
             UnaryFunc::ExtractTimestampTzDayOfWeek => f.write_str("tstzextractdayofweek"),
             UnaryFunc::ExtractTimestampTzIsoDayOfWeek => f.write_str("tstzextractisodayofweek"),
-            UnaryFunc::DateTrunc(to) => {
-                f.write_str("date_trunc_")?;
+            UnaryFunc::DateTruncTimestamp(to) => {
+                f.write_str("date_truncts_")?;
+                f.write_str(&format!("{:?}", to).to_lowercase())
+            }
+            UnaryFunc::DateTruncTimestampTz(to) => {
+                f.write_str("date_trunctstz_")?;
                 f.write_str(&format!("{:?}", to).to_lowercase())
             }
             UnaryFunc::ToTimestamp => f.write_str("tots"),

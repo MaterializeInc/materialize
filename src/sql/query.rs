@@ -1707,17 +1707,26 @@ fn plan_function<'a>(
                 }
 
                 let source_timestamp =
-                    plan_expr(ecx, &sql_func.args[1], Some(ScalarType::Timestamp))?;
+                    plan_expr(ecx, &sql_func.args[1], Some(ScalarType::TimestampTz))?;
                 let typ = ecx.column_type(&source_timestamp);
-                if typ.scalar_type != ScalarType::Timestamp {
-                    bail!("date_trunc() is currently only implemented for TIMESTAMPs");
-                }
 
-                let expr = ScalarExpr::CallBinary {
-                    func: BinaryFunc::DateTrunc,
-                    expr1: Box::new(precision_field),
-                    expr2: Box::new(source_timestamp),
-                };
+                let expr = match typ.scalar_type {
+                    ScalarType::Timestamp => {
+                        ScalarExpr::CallBinary {
+                            func: BinaryFunc::DateTruncTimestamp,
+                            expr1: Box::new(precision_field),
+                            expr2: Box::new(source_timestamp),
+                        }
+                   }
+                    ScalarType::TimestampTz => {
+                        ScalarExpr::CallBinary {
+                            func: BinaryFunc::DateTruncTimestampTz,
+                            expr1: Box::new(precision_field),
+                            expr2: Box::new(source_timestamp),
+                        }
+                  }
+                  _ => bail!("date_trunc() is currently only implemented for TIMESTAMPs and TIMESTAMPTZs"),
+               };
 
                 Ok(expr)
             }
