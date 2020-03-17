@@ -44,7 +44,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let partition = cmd.args.opt_parse::<i32>("partition")?.unwrap_or(0);
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => {
-            let key_schema = cmd.args.opt_string("key_schema");
+            let key_schema = cmd.args.opt_string("key-schema");
             let value_schema = cmd.args.string("schema")?;
             Format::Avro {
                 key_schema,

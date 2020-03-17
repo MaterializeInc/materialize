@@ -109,6 +109,19 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
                 pos,
             });
         }
+        lazy_static! {
+            static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9\\-]*$").unwrap();
+        }
+        if !VALID_KEY_REGEX.is_match(pieces[0]) {
+            return Err(InputError {
+                msg: format!(
+                    "invalid builtin argument name '{}': \
+                     only lowercase letters, numbers, and hyphens allowed",
+                    pieces[0]
+                ),
+                pos,
+            });
+        }
         args.insert(pieces[0].to_owned(), pieces[1].to_owned());
     }
     Ok(BuiltinCommand {
