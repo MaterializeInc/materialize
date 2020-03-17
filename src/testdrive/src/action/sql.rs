@@ -15,15 +15,16 @@ use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
+use md5::{Digest, Md5};
 use postgres::error::DbError;
 use postgres::row::Row;
 use postgres::types::{Json, Type};
 use serde_json::Value;
-use sql_parser::ast::Statement;
-use sql_parser::parser::Parser as SqlParser;
 
 use ore::collections::CollectionExt;
 use pgrepr::{Interval, Numeric};
+use sql_parser::ast::Statement;
+use sql_parser::parser::Parser as SqlParser;
 
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedResult};
@@ -213,13 +214,13 @@ impl SqlAction {
                         num_values,
                     ))
                 } else {
-                    let mut md5_context = md5::Context::new();
+                    let mut hasher = Md5::new();
                     for row in &actual {
                         for entry in row {
-                            md5_context.consume(entry);
+                            hasher.input(entry);
                         }
                     }
-                    let actual = format!("{:x}", md5_context.compute());
+                    let actual = format!("{:x}", hasher.result());
                     if &actual != md5 {
                         Err(format!(
                             "wrong hash value: expected:{:?} got:{:?}",

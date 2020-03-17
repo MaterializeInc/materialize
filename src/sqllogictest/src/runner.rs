@@ -39,6 +39,7 @@ use failure::{bail, ResultExt};
 use futures::executor::block_on;
 use itertools::izip;
 use lazy_static::lazy_static;
+use md5::{Digest, Md5};
 use regex::Regex;
 
 use coord::ExecuteResponse;
@@ -677,12 +678,12 @@ impl State {
                 num_values,
                 md5: expected_md5,
             } => {
-                let mut md5_context = md5::Context::new();
+                let mut hasher = Md5::new();
                 for value in &values {
-                    md5_context.consume(value);
-                    md5_context.consume("\n");
+                    hasher.input(value);
+                    hasher.input("\n");
                 }
-                let md5 = format!("{:x}", md5_context.compute());
+                let md5 = format!("{:x}", hasher.result());
                 if values.len() != *num_values || md5 != *expected_md5 {
                     return Ok(Outcome::OutputFailure {
                         expected_output,
