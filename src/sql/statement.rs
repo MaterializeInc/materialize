@@ -12,6 +12,7 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_arn::{Resource, ARN};
 use failure::{bail, format_err, ResultExt};
@@ -669,13 +670,21 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     // Validate that we can actually encode this stream as Avro.
     let relation_desc = catalog_entry.desc()?.clone();
     let _ = interchange::avro::encode_schema(&relation_desc)?;
+    let topic_name = format!(
+        "{}-{}",
+        topic,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Failed to get system time while creating sink")
+            .as_secs()
+    );
 
     let sink = Sink {
         create_sql,
         from: catalog_entry.id(),
         connector: SinkConnector::Kafka(KafkaSinkConnector {
             url,
-            topic,
+            topic: topic_name,
             schema_registry_url: schema_registry_url.parse()?,
         }),
     };
