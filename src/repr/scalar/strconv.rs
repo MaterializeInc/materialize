@@ -190,9 +190,15 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, &str), failu
     }
 
     let (ts_string, tz_string) = crate::datetime::split_timestamp_string(s);
+    let ts_string = ts_string.to_uppercase();
 
     // Split timestamp into date and time components.
-    let ts_value_split = ts_string.trim().split_whitespace().collect::<Vec<&str>>();
+    let mut ts_value_split = ts_string.trim().split_whitespace().collect::<Vec<&str>>();
+
+    // Support ISO-formatted timestamps by splitting on 'T' instead of space.
+    if ts_value_split.len() == 1 {
+        ts_value_split = ts_string.split('T').collect::<Vec<&str>>();
+    }
 
     if ts_value_split.len() > 2 || ts_value_split.len() == 0 {
         bail!("unknown format")
