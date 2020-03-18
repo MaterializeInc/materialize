@@ -7,10 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::VecDeque;
+use std::convert::TryInto;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
+use chrono::{NaiveDate, NaiveTime};
 use failure::{bail, ensure, format_err};
 
 use super::Interval;
@@ -188,10 +191,7 @@ impl Default for ParsedDateTime {
 }
 
 impl ParsedDateTime {
-    /// Compute an Interval from an IntervalValue. This could be adapted
-    /// to `impl TryFrom<IntervalValue> for Interval` but is slightly more
-    /// ergononmic because it doesn't require exposing all of the private
-    /// functions this method calls.
+    /// Compute an Interval from an ParsedDateTime.
     ///
     /// # Errors
     /// - If any component overflows a parameter (i.e. i64).
@@ -334,6 +334,52 @@ impl ParsedDateTime {
         }
     }
 
+    /// Compute a chrono::NaiveDate from an ParsedDateTime.
+    ///
+    /// # Errors
+    /// - If year, month, or day overflows their respective parameter in
+    ///   [chrono::naive::date::NaiveDate::from_ymd](https://docs.rs/chrono/0.3.0/chrono/naive/date/struct.NaiveDate.html).
+    pub fn compute_date(&self) -> Result<chrono::NaiveDate> {
+        match (self.year, self.month, self.day) {
+            (Some(year), Some(month), Some(day)) => {
+                let p_err = |e, field| format_err!("{} in date is invalid: {}", field, e);
+                let year = year.unit.try_into().map_err(|e| p_err(e, "Year"))?;
+                let month = month.unit.try_into().map_err(|e| p_err(e, "Month"))?;
+                let day = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
+                Ok(NaiveDate::from_ymd(year, month, day))
+            }
+            (_, _, _) => bail!("YEAR, MONTH, DAY are all required"),
+        }
+    }
+
+    /// Compute a chrono::NaiveDate from an ParsedDateTime.
+    ///
+    /// # Errors
+    /// - If hour, minute, or second (both `unit` and `fraction`) overflow `u32`.
+    pub fn compute_time(&self) -> Result<chrono::NaiveTime> {
+        let p_err = |e, field| format_err!("invalid {}: {}", field, e);
+        let hour = match self.hour {
+            Some(hour) => hour.unit.try_into().map_err(|e| p_err(e, "HOUR"))?,
+            None => 0,
+        };
+        let minute = match self.minute {
+            Some(minute) => minute.unit.try_into().map_err(|e| p_err(e, "MINUTE"))?,
+            None => 0,
+        };
+        let (second, nano) = match self.second {
+            Some(second) => {
+                let nano: u32 = second
+                    .fraction
+                    .try_into()
+                    .map_err({ |e| p_err(e, "NANOSECOND") })?;
+                let second: u32 = second.unit.try_into().map_err(|e| p_err(e, "MINUTE"))?;
+                (second, nano)
+            }
+            None => (0, 0),
+        };
+        Ok(NaiveTime::from_hms_nano(hour, minute, second, nano))
+    }
+
     /// Builds a ParsedDateTime from an interval string (`value`).
     ///
     /// # Arguments
@@ -350,23 +396,21 @@ impl ParsedDateTime {
 
         let mut pdt = ParsedDateTime::default();
 
-        let mut value_parts = Vec::new();
+        let mut value_parts = VecDeque::new();
 
         let value_split = value.trim().split_whitespace().collect::<Vec<&str>>();
         for s in value_split {
-            value_parts.push(tokenize_time_str(s)?);
+            value_parts.push_back(tokenize_time_str(s)?);
         }
-
-        let mut value_parts = value_parts.iter().peekable();
 
         let mut annotated_parts = Vec::new();
 
-        while let Some(part) = value_parts.next() {
+        while let Some(part) = value_parts.pop_front() {
             let mut fmt = determine_format_w_datetimefield(&part)?;
             // If you cannot determine the format of this part, try to infer its
             // format.
             if fmt.is_none() {
-                fmt = match value_parts.next() {
+                fmt = match value_parts.pop_front() {
                     Some(next_part) => {
                         match determine_format_w_datetimefield(&next_part)? {
                             Some(TimePartFormat::SqlStandard(f)) => {
@@ -413,52 +457,34 @@ impl ParsedDateTime {
             }
         }
 
-        for ap in annotated_parts {
+        for mut ap in annotated_parts {
             match ap.fmt {
                 TimePartFormat::SqlStandard(f) => {
-                    fill_pdt_sql_standard(&ap.tokens, f, &mut pdt)?;
+                    fill_pdt_interval_sql(&mut ap.tokens, f, &mut pdt)?;
                     pdt.check_interval_bounds(f)?;
                 }
-                TimePartFormat::PostgreSql(f) => fill_pdt_pg(&ap.tokens, f, &mut pdt)?,
+                TimePartFormat::PostgreSql(f) => fill_pdt_interval_pg(&mut ap.tokens, f, &mut pdt)?,
             }
         }
 
         Ok(pdt)
     }
-    /// Builds a ParsedDateTime from a DATE string (`value`).
+    /// Builds a ParsedDateTime from a TIMESTAMP string (`value`).
     ///
     /// # Arguments
     ///
-    /// * `value` is a SQL-formatted DATE string.
-    pub fn build_parsed_datetime_date(value: &str) -> Result<ParsedDateTime> {
-        use TimeStrToken::*;
-
+    /// * `value` is a SQL-formatted TIMESTAMP string.
+    pub fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime> {
         let mut pdt = ParsedDateTime::default();
 
-        let date_actual = tokenize_time_str(value)?;
+        let mut ts_actual = tokenize_time_str(value)?;
 
-        let mut date_actual = date_actual.iter().peekable();
-        // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
-        while let Some(Colon) = date_actual.peek() {
-            date_actual.next();
+        fill_pdt_date(&mut pdt, &mut ts_actual)?;
+
+        if ts_actual.len() > 0 {
+            fill_pdt_time(&mut pdt, &mut ts_actual)?;
         }
-
-        let date_expected = [
-            Num(0), // year
-            Dash,
-            Num(0), // month
-            Dash,
-            Num(0), // day
-        ];
-        let mut date_expected = date_expected.iter().peekable();
-
-        fill_pdt_from_tokens(
-            &mut pdt,
-            &mut date_actual,
-            &mut date_expected,
-            DateTimeField::Year,
-            1,
-        )?;
+        pdt.check_datelike_bounds()?;
 
         Ok(pdt)
     }
@@ -470,17 +496,13 @@ impl ParsedDateTime {
     pub fn build_parsed_datetime_time(value: &str) -> Result<ParsedDateTime> {
         let mut pdt = ParsedDateTime::default();
 
-        let time_actual = tokenize_time_str(value)?;
-
-        match determine_format_w_datetimefield(&time_actual.clone())? {
-            Some(TimePartFormat::SqlStandard(leading_field)) => {
-                fill_pdt_sql_standard(&time_actual, leading_field, &mut pdt)?
-            }
-            _ => bail!("Unknown format"),
-        }
+        let mut time_actual = tokenize_time_str(value)?;
+        fill_pdt_time(&mut pdt, &mut time_actual)?;
+        pdt.check_datelike_bounds()?;
 
         Ok(pdt)
     }
+
     /// Write to the specified field of a ParsedDateTime iff it is currently set
     /// to None; otherwise generate an error to propagate to the user.
     pub fn write_field_iff_none(
@@ -597,6 +619,7 @@ impl ParsedDateTime {
 
         Ok(())
     }
+
     /// Retrieve any value that we parsed out of the literal string for the
     /// `field`.
     fn units_of(&self, field: DateTimeField) -> Option<DateTimeFieldValue> {
@@ -622,6 +645,61 @@ fn seconds_multiplier(field: DateTimeField) -> i64 {
     }
 }
 
+/// Fills the year, month, and day fields of `pdt` using the `TimeStrToken`s in
+/// `actual`.
+///
+/// # Args
+///
+/// - `pdt`: The ParsedDateTime to fill.
+/// - `actual`: The queue of tokens representing the string you want use to fill
+///   `pdt`'s fields.
+fn fill_pdt_date(
+    mut pdt: &mut ParsedDateTime,
+    mut actual: &mut VecDeque<TimeStrToken>,
+) -> Result<()> {
+    use TimeStrToken::*;
+
+    let expected = vec![
+        Num(0), // year
+        Dash,
+        Num(0), // month
+        Dash,
+        Num(0), // day
+        Space,
+        DateTimeDelimiter,
+    ];
+
+    let mut expected = VecDeque::from(expected);
+
+    fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, DateTimeField::Year, 1)?;
+
+    Ok(())
+}
+
+/// Fills the hour, minute, and second fields of `pdt` using the `TimeStrToken`s in
+/// `actual`.
+///
+/// # Args
+///
+/// - `pdt`: The ParsedDateTime to fill.
+/// - `actual`: The queue of tokens representing the string you want use to fill
+///   `pdt`'s fields.
+fn fill_pdt_time(
+    mut pdt: &mut ParsedDateTime,
+    mut actual: &mut VecDeque<TimeStrToken>,
+) -> Result<()> {
+    match determine_format_w_datetimefield(actual)? {
+        Some(TimePartFormat::SqlStandard(leading_field)) => {
+            let mut expected = expected_dur_like_tokens(leading_field)?;
+
+            fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, 1)?;
+
+            Ok(())
+        }
+        _ => bail!("Unknown format"),
+    }
+}
+
 /// Fills a ParsedDateTime's fields when encountering SQL standard-style interval
 /// parts, e.g. `1-2` for Y-M `4:5:6.7` for H:M:S.NS.
 ///
@@ -632,8 +710,8 @@ fn seconds_multiplier(field: DateTimeField) -> i64 {
 /// - Single digits, e.g. `3` in `3 4:5:6.7` could be parsed as SQL standard
 ///   tokens, but end up being parsed as PostgreSQL-style tokens because of their
 ///   greater expressivity, in that they allow fractions, and otherwise-equivalence.
-fn fill_pdt_sql_standard(
-    v: &[TimeStrToken],
+fn fill_pdt_interval_sql(
+    mut actual: &mut VecDeque<TimeStrToken>,
     leading_field: DateTimeField,
     mut pdt: &mut ParsedDateTime,
 ) -> Result<()> {
@@ -658,18 +736,15 @@ fn fill_pdt_sql_standard(
         }
     }
 
-    let mut actual = v.iter().peekable();
-    let expected = expected_sql_standard_interval_tokens(leading_field);
-    let mut expected = expected.iter().peekable();
+    let mut expected = expected_sql_standard_interval_tokens(leading_field);
 
-    let sign = trim_interval_chars_return_sign(&mut actual);
+    let sign = trim_and_return_sign(&mut actual);
 
     fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, sign)?;
 
-    // Do not allow any fields in the group to be modified afterward, and check
-    // that values are valid. SQL standard-style interval parts do not allow
-    // non-leading group components to "overflow" into the next-greatest
-    // component, e.g. months cannot overflow into years.
+    // Write default values to any unwritten member of the `leading_field`'s group.
+    // This will ensure that those fields cannot be written to at a later time, which
+    // is part of the SQL standard behavior for timelike components.
     match leading_field {
         Year | Month => {
             if pdt.year.is_none() {
@@ -710,21 +785,19 @@ fn fill_pdt_sql_standard(
 ///   AnnotatedIntervalPart, passed in as `time_unit`.
 /// - Only PostgreSQL-style parts can use fractional components in positions
 ///   other than seconds, e.g. `1.5 months`.
-fn fill_pdt_pg(
-    tokens: &[TimeStrToken],
+fn fill_pdt_interval_pg(
+    mut actual: &mut VecDeque<TimeStrToken>,
     time_unit: DateTimeField,
     mut pdt: &mut ParsedDateTime,
 ) -> Result<()> {
     use TimeStrToken::*;
 
-    let mut actual = tokens.iter().peekable();
     // We remove all spaces during tokenization, so TimeUnit only shows up if
     // there is no space between the number and the TimeUnit, e.g. `1y 2d 3h`, which
     // PostgreSQL allows.
-    let expected = vec![Num(0), Dot, Nanos(0), TimeUnit(DateTimeField::Year)];
-    let mut expected = expected.iter().peekable();
+    let mut expected = VecDeque::from(vec![Num(0), Dot, Nanos(0), TimeUnit(DateTimeField::Year)]);
 
-    let sign = trim_interval_chars_return_sign(&mut actual);
+    let sign = trim_and_return_sign(&mut actual);
 
     fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, time_unit, sign)?;
 
@@ -743,8 +816,8 @@ fn fill_pdt_pg(
 ///     at DateTimeField::Second.
 fn fill_pdt_from_tokens(
     pdt: &mut ParsedDateTime,
-    actual: &mut std::iter::Peekable<std::slice::Iter<'_, TimeStrToken>>,
-    expected: &mut std::iter::Peekable<std::slice::Iter<'_, TimeStrToken>>,
+    actual: &mut VecDeque<TimeStrToken>,
+    expected: &mut VecDeque<TimeStrToken>,
     leading_field: DateTimeField,
     sign: i64,
 ) -> Result<()> {
@@ -755,8 +828,10 @@ fn fill_pdt_from_tokens(
 
     let mut unit_buf: Option<DateTimeFieldValue> = None;
 
-    while let Some(atok) = actual.peek() {
-        if let Some(etok) = expected.next() {
+    let mut seen_datetimedelimiter = false;
+
+    while let Some(atok) = actual.front() {
+        if let Some(etok) = expected.front() {
             match (atok, etok) {
                 // The following forms of puncutation signal the end of a field and can
                 // trigger a write.
@@ -764,50 +839,75 @@ fn fill_pdt_from_tokens(
                     pdt.write_field_iff_none(current_field, unit_buf)?;
                     unit_buf = None;
                     current_field = current_field.next_smallest();
-                    actual.next();
                 }
                 (Space, Space) => {
                     pdt.write_field_iff_none(current_field, unit_buf)?;
                     unit_buf = None;
                     current_field = current_field.next_smallest();
-                    actual.next();
-                    // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
-                    while let Some(Colon) = actual.peek() {
-                        actual.next();
+
+                    // Spaces require special processing to allow users to enter an arbitrary
+                    // number of spaces wherever spaces are allowed.
+                    actual.pop_front();
+                    expected.pop_front();
+                    i += 1;
+
+                    while let Some(Space) = actual.front() {
+                        actual.pop_front();
                     }
+
+                    continue;
+                }
+                (TimeUnit(f), TimeUnit(_)) if unit_buf.is_some() => {
+                    if *f != current_field {
+                        failure::bail!(
+                            "Invalid syntax at offset {}: provided TimeUnit({}) but expected TimeUnit({})",
+                            i,
+                            f,
+                            current_field
+                        );
+                    }
+                }
+                (TimeUnit(f), TimeUnit(_)) if unit_buf.is_none() => {
+                    failure::bail!(
+                        "Invalid syntax: {} must be preceeded by a number, e.g. \'1{}\'",
+                        f,
+                        f
+                    );
                 }
                 // Dots do not denote terminating a field, so should not trigger a write.
-                (Dot, Dot) => {
-                    actual.next();
+                (Dot, Dot) => {}
+                // break after all expected DateTimeDelimiters to allow more characters
+                // after the delimiter. This is a special case for `timestamp` data.
+                (DateTimeDelimiter, DateTimeDelimiter) if !seen_datetimedelimiter => {
+                    seen_datetimedelimiter = true;
+                    actual.pop_front();
+                    break;
                 }
-                (Num(val), Num(_)) => {
-                    match unit_buf {
-                        Some(_) => failure::bail!(
-                            "Invalid syntax; parts must be separated by '-', ':', or ' '"
-                        ),
-                        None => {
-                            unit_buf = Some(DateTimeFieldValue {
-                                unit: *val * sign,
-                                fraction: 0,
-                            });
-                        }
+                (_, DateTimeDelimiter) if !seen_datetimedelimiter => {
+                    break;
+                }
+                (Num(val), Num(_)) => match unit_buf {
+                    Some(_) => failure::bail!(
+                        "Invalid syntax; parts must be separated by '-', ':', or ' '"
+                    ),
+                    None => {
+                        unit_buf = Some(DateTimeFieldValue {
+                            unit: *val * sign,
+                            fraction: 0,
+                        });
                     }
-                    actual.next();
-                }
-                (Nanos(val), Nanos(_)) => {
-                    match unit_buf {
-                        Some(ref mut u) => {
-                            u.fraction = *val * sign;
-                        }
-                        None => {
-                            unit_buf = Some(DateTimeFieldValue {
-                                unit: 0,
-                                fraction: *val * sign,
-                            });
-                        }
+                },
+                (Nanos(val), Nanos(_)) => match unit_buf {
+                    Some(ref mut u) => {
+                        u.fraction = *val * sign;
                     }
-                    actual.next();
-                }
+                    None => {
+                        unit_buf = Some(DateTimeFieldValue {
+                            unit: 0,
+                            fraction: *val * sign,
+                        });
+                    }
+                },
                 (Num(n), Nanos(_)) => {
                     // Create disposable copy of n.
                     let mut nc = *n;
@@ -843,28 +943,12 @@ fn fill_pdt_from_tokens(
                             });
                         }
                     }
-                    actual.next();
                 }
-                // Prevents PostgreSQL shorthand-style intervals (`'1h'`) from
-                // having the 'h' token parse if not preceded by a number or
-                // nano position, while still allowing those fields to be
-                // skipped over.
-                (TimeUnit(f), TimeUnit(_)) if unit_buf.is_none() => {
-                    failure::bail!("{:?} must be preceeded by a number, e.g. '1{:?}'", f, f)
+                // Allow skipping expected spaces, numbers, dots, and nanoseconds.
+                (_, Num(_)) | (_, Dot) | (_, Nanos(_)) | (_, Space) => {
+                    expected.pop_front();
+                    continue;
                 }
-                (TimeUnit(f), TimeUnit(_)) => {
-                    if *f != current_field {
-                        failure::bail!(
-                            "Invalid syntax at offset {}: provided {:?} but expected {:?}'",
-                            i,
-                            current_field,
-                            f
-                        )
-                    }
-                    actual.next();
-                }
-                // Allow skipping expected numbers, dots, and nanoseconds.
-                (_, Num(_)) | (_, Dot) | (_, Nanos(_)) => {}
                 (provided, expected) => failure::bail!(
                     "Invalid syntax at offset {}: provided {:?} but expected {:?}",
                     i,
@@ -872,6 +956,7 @@ fn fill_pdt_from_tokens(
                     expected
                 ),
             }
+            i += 1;
         } else {
             // actual has more tokens than expected.
             failure::bail!(
@@ -881,10 +966,20 @@ fn fill_pdt_from_tokens(
             )
         };
 
-        i += 1;
+        actual.pop_front();
+        expected.pop_front();
     }
 
     pdt.write_field_iff_none(current_field, unit_buf)?;
+
+    // Trim all spaces and at most one DateTimeDelimeter off of end.
+    while let Some(t) = actual.front() {
+        match t {
+            Space => actual.pop_front(),
+            DateTimeDelimiter if !seen_datetimedelimiter => actual.pop_front(),
+            _ => break,
+        };
+    }
 
     Ok(())
 }
@@ -904,7 +999,7 @@ enum TimePartFormat {
 /// AnnotatedIntervalPart contains the tokens to be parsed, as well as the format
 /// to parse them.
 struct AnnotatedIntervalPart {
-    pub tokens: std::vec::Vec<TimeStrToken>,
+    pub tokens: VecDeque<TimeStrToken>,
     pub fmt: TimePartFormat,
 }
 
@@ -914,29 +1009,31 @@ struct AnnotatedIntervalPart {
 /// generate the string's semantics.
 ///
 /// Note that `toks` should _not_ contain space
-fn determine_format_w_datetimefield(toks: &[TimeStrToken]) -> Result<Option<TimePartFormat>> {
+fn determine_format_w_datetimefield(
+    toks: &VecDeque<TimeStrToken>,
+) -> Result<Option<TimePartFormat>> {
     use DateTimeField::*;
     use TimePartFormat::*;
     use TimeStrToken::*;
 
-    let mut toks = toks.iter().peekable();
+    let mut toks = toks.clone();
 
-    trim_interval_chars_return_sign(&mut toks);
+    trim_and_return_sign(&mut toks);
 
-    if let Some(Num(_)) = toks.peek() {
-        toks.next();
+    if let Some(Num(_)) = toks.front() {
+        toks.pop_front();
     }
 
-    match toks.next() {
+    match toks.pop_front() {
         // Implies {?}{?}{?}, ambiguous case.
         None | Some(Space) => Ok(None),
         Some(Dot) => {
-            if let Some(Num(_)) = toks.peek() {
-                toks.next();
+            if let Some(Num(_)) = toks.front() {
+                toks.pop_front();
             }
-            match toks.peek() {
+            match toks.pop_front() {
                 // Implies {Num.NumTimeUnit}
-                Some(TimeUnit(f)) => Ok(Some(PostgreSql(*f))),
+                Some(TimeUnit(f)) => Ok(Some(PostgreSql(f))),
                 // Implies {?}{?}{?}, ambiguous case.
                 _ => Ok(None),
             }
@@ -945,10 +1042,10 @@ fn determine_format_w_datetimefield(toks: &[TimeStrToken]) -> Result<Option<Time
         Some(Dash) => Ok(Some(SqlStandard(Year))),
         // Implies {}{}{?:...}
         Some(Colon) => {
-            if let Some(Num(_)) = toks.peek() {
-                toks.next();
+            if let Some(Num(_)) = toks.front() {
+                toks.pop_front();
             }
-            match toks.peek() {
+            match toks.pop_front() {
                 // Implies {H:M:?...}
                 Some(Colon) | Some(Space) | None => Ok(Some(SqlStandard(Hour))),
                 // Implies {M:S.NS}
@@ -957,15 +1054,18 @@ fn determine_format_w_datetimefield(toks: &[TimeStrToken]) -> Result<Option<Time
             }
         }
         // Implies {Num}?{TimeUnit}
-        Some(TimeUnit(f)) => Ok(Some(PostgreSql(*f))),
+        Some(TimeUnit(f)) => Ok(Some(PostgreSql(f))),
         _ => bail!("Cannot determine format of all parts"),
     }
 }
 
 /// Get the expected TimeStrTokens to parse SQL Standard time-like
 /// DateTimeFields, i.e. HOUR, MINUTE, SECOND. This is used for INTERVAL,
-/// TIMESTAMP, and will eventually be used for TIME.
-fn expected_dur_like_tokens(from: DateTimeField) -> Vec<TimeStrToken> {
+/// TIMESTAMP, and TIME.
+///
+/// # Errors
+/// - If `from` is YEAR, MONTH, or DAY.
+fn expected_dur_like_tokens(from: DateTimeField) -> Result<VecDeque<TimeStrToken>> {
     use DateTimeField::*;
     use TimeStrToken::*;
 
@@ -982,19 +1082,20 @@ fn expected_dur_like_tokens(from: DateTimeField) -> Vec<TimeStrToken> {
         Hour => 0,
         Minute => 2,
         Second => 4,
-        _ => panic!(
+        _ => bail!(
             "expected_dur_like_tokens can only be called with HOUR, MINUTE, SECOND; got {}",
             from
         ),
     };
-    all_toks[start..all_toks.len()].to_vec()
+
+    Ok(VecDeque::from(all_toks[start..all_toks.len()].to_vec()))
 }
 
 /// Get the expected TimeStrTokens to parse TimePartFormat::SqlStandard parts,
 /// starting from some `DateTimeField`. Space tokens are never actually included
 /// in the output, but are illustrative of what the expected input of SQL
 /// Standard interval values looks like.
-fn expected_sql_standard_interval_tokens(from: DateTimeField) -> Vec<TimeStrToken> {
+fn expected_sql_standard_interval_tokens(from: DateTimeField) -> VecDeque<TimeStrToken> {
     use DateTimeField::*;
     use TimeStrToken::*;
 
@@ -1006,33 +1107,30 @@ fn expected_sql_standard_interval_tokens(from: DateTimeField) -> Vec<TimeStrToke
         Num(0), // day
         Space,
     ];
-    match from {
-        Year => all_toks[0..4].to_vec(),
-        Month => all_toks[2..4].to_vec(),
-        Day => all_toks[4..6].to_vec(),
-        hms => expected_dur_like_tokens(hms),
-    }
+
+    let (start, end) = match from {
+        Year => (0, 4),
+        Month => (2, 4),
+        Day => (4, 6),
+        hms => {
+            return expected_dur_like_tokens(hms)
+                .expect("input to expected_dur_like_tokens shown to be valid");
+        }
+    };
+
+    VecDeque::from(all_toks[start..end].to_vec())
 }
 
-/// Trims tokens equivalent to regex `(:*(+|-)?)` and returns a value reflecting
-/// the expressed sign: 1 for positive, -1 for negative.
-fn trim_interval_chars_return_sign(
-    z: &mut std::iter::Peekable<std::slice::Iter<'_, TimeStrToken>>,
-) -> i64 {
+fn trim_and_return_sign(z: &mut VecDeque<TimeStrToken>) -> i64 {
     use TimeStrToken::*;
 
-    // PostgreSQL inexplicably trims all leading colons from interval parts.
-    while let Some(Colon) = z.peek() {
-        z.next();
-    }
-
-    match z.peek() {
+    match z.front() {
         Some(Dash) => {
-            z.next();
+            z.pop_front();
             -1
         }
         Some(Plus) => {
-            z.next();
+            z.pop_front();
             1
         }
         _ => 1,
@@ -1055,6 +1153,8 @@ pub(crate) enum TimeStrToken {
     TzName(String),
     // Tokenized version of a DateTimeField string e.g. 'YEAR'
     TimeUnit(DateTimeField),
+    // Used to support ISO-formatted timestamps.
+    DateTimeDelimiter,
 }
 
 /// Convert a string from a time-like datatype (INTERVAL, TIMESTAMP/TZ, DATE, and TIME)
@@ -1068,8 +1168,8 @@ pub(crate) enum TimeStrToken {
 /// - Any sequence of alphabetic characters cannot be cast into a DateTimeField.
 /// - Any sequence of numeric characters cannot be cast into an i64.
 /// - Any non-alpha numeric character cannot be cast into a TimeStrToken, e.g. `%`.
-pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>> {
-    let mut toks = vec![];
+pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
+    let mut toks = VecDeque::new();
     let mut num_buf = String::with_capacity(4);
     let mut char_buf = String::with_capacity(7);
     fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken> {
@@ -1077,22 +1177,31 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>> {
             format_err!("Unable to parse value as a number at index {}: {}", idx, e)
         })?))
     };
-    fn maybe_tokenize_num_buf(n: &mut String, i: usize, t: &mut Vec<TimeStrToken>) -> Result<()> {
+    fn maybe_tokenize_num_buf(
+        n: &mut String,
+        i: usize,
+        t: &mut VecDeque<TimeStrToken>,
+    ) -> Result<()> {
         if !n.is_empty() {
-            t.push(parse_num(&n, i)?);
+            t.push_back(parse_num(&n, i)?);
             n.clear();
         }
         Ok(())
     }
-    fn maybe_tokenize_char_buf(c: &mut String, t: &mut Vec<TimeStrToken>) -> Result<()> {
+    fn maybe_tokenize_char_buf(c: &mut String, t: &mut VecDeque<TimeStrToken>) -> Result<()> {
         if !c.is_empty() {
-            let tu = match DateTimeField::from_str(&c.to_uppercase()) {
-                Ok(tu) => tu,
-                // DateTimeField::from_str's errors are String, but we
-                // need failure::Error, so cannot rely on ? for conversion.
-                Err(e) => bail!("{}", e),
-            };
-            t.push(TimeStrToken::TimeUnit(tu));
+            // Supports ISO-formatted datetime strings.
+            if c == "T" || c == "t" {
+                t.push_back(TimeStrToken::DateTimeDelimiter);
+            } else {
+                let tu = match DateTimeField::from_str(&c.to_uppercase()) {
+                    Ok(tu) => tu,
+                    // DateTimeField::from_str's errors are String, but we
+                    // need failure::Error, so cannot rely on ? for conversion.
+                    Err(e) => bail!("{}", e),
+                };
+                t.push_back(TimeStrToken::TimeUnit(tu));
+            }
             c.clear();
         }
         Ok(())
@@ -1106,27 +1215,27 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>> {
             '+' => {
                 maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
-                toks.push(TimeStrToken::Plus);
+                toks.push_back(TimeStrToken::Plus);
             }
             '-' => {
                 maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
-                toks.push(TimeStrToken::Dash);
+                toks.push_back(TimeStrToken::Dash);
             }
             ' ' => {
                 maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
-                toks.push(TimeStrToken::Space);
+                toks.push_back(TimeStrToken::Space);
             }
             ':' => {
                 maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
-                toks.push(TimeStrToken::Colon);
+                toks.push_back(TimeStrToken::Colon);
             }
             '.' => {
                 maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
-                toks.push(TimeStrToken::Dot);
+                toks.push_back(TimeStrToken::Dot);
                 last_field_is_frac = true;
             }
             chr if chr.is_digit(10) => {
@@ -1142,7 +1251,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>> {
     }
     if !num_buf.is_empty() {
         if !last_field_is_frac {
-            toks.push(parse_num(&num_buf, 0)?);
+            toks.push_back(parse_num(&num_buf, 0)?);
         } else {
             // this is guaranteed to be ascii, so len is fine
             let mut chars = num_buf.len();
@@ -1157,11 +1266,17 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<Vec<TimeStrToken>> {
                 .map_err(|e| format_err!("couldn't parse fraction {}: {}", num_buf, e))?;
             let multiplicand = 1_000_000_000 / 10_i64.pow(chars as u32);
 
-            toks.push(TimeStrToken::Nanos(raw * multiplicand));
+            toks.push_back(TimeStrToken::Nanos(raw * multiplicand));
         }
     } else {
         maybe_tokenize_char_buf(&mut char_buf, &mut toks)?
     }
+
+    // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
+    while let Some(TimeStrToken::Colon) = toks.front() {
+        toks.pop_front();
+    }
+
     Ok(toks)
 }
 
@@ -1459,23 +1574,21 @@ mod test {
         );
     }
     #[test]
-    fn test_trim_interval_chars_return_sign() {
+    fn test_trim_and_return_sign() {
         let test_cases = [
-            ("::::-2", -1, "2"),
-            ("-3", -1, "3"),
-            ("::::+4", 1, "4"),
+            ("-2", -1, "2"),
+            ("3", 1, "3"),
             ("+5", 1, "5"),
-            ("-::::", -1, ":"),
+            ("-", -1, ""),
             ("-YEAR", -1, "YEAR"),
             ("YEAR", 1, "YEAR"),
         ];
 
         for test in test_cases.iter() {
-            let s = tokenize_time_str(test.0).unwrap();
-            let mut s = s.iter().peekable();
+            let mut s = tokenize_time_str(test.0).unwrap();
 
-            assert_eq!(trim_interval_chars_return_sign(&mut s), test.1);
-            assert_eq!(**s.peek().unwrap(), tokenize_time_str(test.2).unwrap()[0]);
+            assert_eq!(trim_and_return_sign(&mut s), test.1);
+            assert_eq!(s.front(), tokenize_time_str(test.2).unwrap().front());
         }
     }
     #[test]
@@ -1703,10 +1816,8 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let actual = tokenize_time_str(test.1).unwrap();
-            let mut actual = actual.iter().peekable();
-            let expected = tokenize_time_str(test.2).unwrap();
-            let mut expected = expected.iter().peekable();
+            let mut actual = tokenize_time_str(test.1).unwrap();
+            let mut expected = tokenize_time_str(test.2).unwrap();
 
             fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.3, test.4).unwrap();
 
@@ -1732,22 +1843,17 @@ mod test {
                 "0 0.0YEAR",
                 Year,
                 1,
-                "Invalid syntax at offset 5: provided Nanos(300000000) but expected TimeUnit(Year)",
+                "Invalid syntax at offset 4: provided Nanos(300000000) but expected TimeUnit(Year)",
             ),
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let actual = tokenize_time_str(test.0).unwrap();
-            let mut actual = actual.iter().peekable();
-            let expected = tokenize_time_str(test.1).unwrap();
-            let mut expected = expected.iter().peekable();
+            let mut actual = tokenize_time_str(test.0).unwrap();
+            let mut expected = tokenize_time_str(test.1).unwrap();
 
             match fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.2, test.3) {
                 Err(e) => assert_eq!(e.to_string(), test.4),
-                Ok(_) => panic!(
-                    "Test passed when expected to fail, generated ParsedDateTime {:?}",
-                    pdt
-                ),
+                Ok(_) => panic!("Test passed when expected to fail, generated {:?}", pdt),
             };
         }
     }
@@ -1761,10 +1867,8 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let actual = tokenize_time_str(test.0).unwrap();
-            let mut actual = actual.iter().peekable();
-            let expected = tokenize_time_str(test.1).unwrap();
-            let mut expected = expected.iter().peekable();
+            let mut actual = tokenize_time_str(test.0).unwrap();
+            let mut expected = tokenize_time_str(test.1).unwrap();
 
             if fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.2, test.3).is_ok() {
                 panic!(
@@ -1777,7 +1881,7 @@ mod test {
     }
 
     #[test]
-    fn test_fill_pdt_pg() {
+    fn test_fill_pdt_interval_pg() {
         use DateTimeField::*;
         let test_cases = [
             (
@@ -1895,15 +1999,15 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let actual = tokenize_time_str(test.1).unwrap();
-            fill_pdt_pg(&actual, test.2, &mut pdt).unwrap();
+            let mut actual = tokenize_time_str(test.1).unwrap();
+            fill_pdt_interval_pg(&mut actual, test.2, &mut pdt).unwrap();
 
             assert_eq!(pdt, test.0);
         }
     }
 
     #[test]
-    fn fill_pdt_pg_errors() {
+    fn fill_pdt_interval_pg_errors() {
         use DateTimeField::*;
         let test_cases = [
             // Invalid syntax
@@ -1915,31 +2019,31 @@ mod test {
             (
                 "YEAR",
                 Year,
-                "Year must be preceeded by a number, e.g. \'1Year\'",
+                "Invalid syntax: YEAR must be preceeded by a number, e.g. \'1YEAR\'",
             ),
             // Running into this error means that determine_format_w_datetimefield
             // failed.
             (
                 "1YEAR",
                 Month,
-                "Invalid syntax at offset 3: provided Month but expected Year\'",
+                "Invalid syntax at offset 1: provided TimeUnit(YEAR) but expected TimeUnit(MONTH)",
             ),
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let actual = tokenize_time_str(test.0).unwrap();
-            match fill_pdt_pg(&actual, test.1, &mut pdt) {
+            let mut actual = tokenize_time_str(test.0).unwrap();
+            match fill_pdt_interval_pg(&mut actual, test.1, &mut pdt) {
                 Err(e) => assert_eq!(e.to_string(), test.2),
                 Ok(_) => panic!(
-                    "Test passed when expected to fail, generated ParsedDateTime {:?}",
-                    pdt
+                    "Test passed when expected to fail, generated {:?}, expected error {}",
+                    pdt, test.2,
                 ),
             };
         }
     }
 
     #[test]
-    fn test_fill_pdt_sql_standard() {
+    fn test_fill_pdt_interval_sql() {
         use DateTimeField::*;
         let test_cases = [
             (
@@ -2061,15 +2165,15 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let actual = tokenize_time_str(test.1).unwrap();
-            fill_pdt_sql_standard(&actual, test.2, &mut pdt).unwrap();
+            let mut actual = tokenize_time_str(test.1).unwrap();
+            fill_pdt_interval_sql(&mut actual, test.2, &mut pdt).unwrap();
 
             assert_eq!(pdt, test.0);
         }
     }
 
     #[test]
-    fn test_fill_pdt_sql_standard_errors() {
+    fn test_fill_pdt_interval_sql_errors() {
         use DateTimeField::*;
         let test_cases = [
             // Invalid syntax
@@ -2096,49 +2200,11 @@ mod test {
         ];
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
-            let actual = tokenize_time_str(test.0).unwrap();
-            match fill_pdt_sql_standard(&actual, test.1, &mut pdt) {
+            let mut actual = tokenize_time_str(test.0).unwrap();
+            match fill_pdt_interval_sql(&mut actual, test.1, &mut pdt) {
                 Err(e) => assert_eq!(e.to_string(), test.2),
-                Ok(_) => panic!(
-                    "Test passed when expected to fail, generated ParsedDateTime {:?}",
-                    pdt
-                ),
+                Ok(_) => panic!("Test passed when expected to fail, generated {:?}", pdt),
             };
-        }
-    }
-
-    #[test]
-    fn test_build_parsed_datetime_date() {
-        run_test_build_parsed_datetime_date(
-            "2000-01-02",
-            ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(2000, 0)),
-                month: Some(DateTimeFieldValue::new(1, 0)),
-                day: Some(DateTimeFieldValue::new(2, 0)),
-                ..Default::default()
-            },
-        );
-        run_test_build_parsed_datetime_date(
-            "2000",
-            ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(2000, 0)),
-                ..Default::default()
-            },
-        );
-        run_test_build_parsed_datetime_date(
-            "2000-1-",
-            ParsedDateTime {
-                year: Some(DateTimeFieldValue::new(2000, 0)),
-                month: Some(DateTimeFieldValue::new(1, 0)),
-                ..Default::default()
-            },
-        );
-
-        fn run_test_build_parsed_datetime_date(test: &str, res: ParsedDateTime) {
-            assert_eq!(
-                ParsedDateTime::build_parsed_datetime_date(test).unwrap(),
-                res
-            );
         }
     }
 
@@ -2158,14 +2224,12 @@ mod test {
             ParsedDateTime {
                 hour: Some(DateTimeFieldValue::new(3, 0)),
                 minute: Some(DateTimeFieldValue::new(4, 0)),
-                second: Some(DateTimeFieldValue::new(0, 0)),
                 ..Default::default()
             },
         );
         run_test_build_parsed_datetime_time(
             "3:4.5",
             ParsedDateTime {
-                hour: Some(DateTimeFieldValue::new(0, 0)),
                 minute: Some(DateTimeFieldValue::new(3, 0)),
                 second: Some(DateTimeFieldValue::new(4, 500_000_000)),
                 ..Default::default()
@@ -2175,7 +2239,6 @@ mod test {
             "0::4.5",
             ParsedDateTime {
                 hour: Some(DateTimeFieldValue::new(0, 0)),
-                minute: Some(DateTimeFieldValue::new(0, 0)),
                 second: Some(DateTimeFieldValue::new(4, 500_000_000)),
                 ..Default::default()
             },
@@ -2184,7 +2247,6 @@ mod test {
             "0::.5",
             ParsedDateTime {
                 hour: Some(DateTimeFieldValue::new(0, 0)),
-                minute: Some(DateTimeFieldValue::new(0, 0)),
                 second: Some(DateTimeFieldValue::new(0, 500_000_000)),
                 ..Default::default()
             },
@@ -2193,6 +2255,65 @@ mod test {
         fn run_test_build_parsed_datetime_time(test: &str, res: ParsedDateTime) {
             assert_eq!(
                 ParsedDateTime::build_parsed_datetime_time(test).unwrap(),
+                res
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_parsed_datetime_timestamp() {
+        run_test_build_parsed_datetime_timestamp(
+            "2000-01-02",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000-1-",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000-01-02 3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "2000-01-02T3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+
+        fn run_test_build_parsed_datetime_timestamp(test: &str, res: ParsedDateTime) {
+            assert_eq!(
+                ParsedDateTime::build_parsed_datetime_timestamp(test).unwrap(),
                 res
             );
         }
@@ -2635,8 +2756,7 @@ mod test {
             (
                 "-:::::1.27",
                 Second,
-                "Invalid syntax at \
-                offset 7: provided Colon but expected None",
+                "Invalid syntax at offset 2: provided Colon but expected None",
             ),
             (
                 "-1 ::.27",
@@ -2667,12 +2787,12 @@ mod test {
             (
                 "1-2 hour",
                 Second,
-                "Hour must be preceeded by a number, e.g. '1Hour'",
+                "Invalid syntax: HOUR must be preceeded by a number, e.g. '1HOUR'",
             ),
             (
                 "1-2hour",
                 Second,
-                "Invalid syntax at offset 3: provided TimeUnit(Hour) but expected Space",
+                "Invalid syntax at offset 3: provided TimeUnit(Hour) but expected None",
             ),
             (
                 "1-2 3:4 5 second",
