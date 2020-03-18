@@ -17,7 +17,7 @@ futures = "0.3"
 getopts = "0.2"
 itertools = "0.8.2"
 lazy_static = "1"
-md5 = "0.7.0"
+md-5 = "0.8"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 regex = "1"
