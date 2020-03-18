@@ -14,7 +14,7 @@ FROM materialize/ci-materialized:$BUILDKITE_BUILD_NUMBER AS edge
 FROM materialize/ci-testdrive:$BUILDKITE_BUILD_NUMBER AS testdrive
 FROM ubuntu:bionic
 
-RUN apt-get update && apt-get install -y curl postgresql-client-10 wait-for-it sqlite3
+RUN apt-get update && apt-get install -y curl postgresql-client-10 wait-for-it
 
 COPY --from=golden /usr/local/bin/materialized /usr/local/bin/materialized-golden
 COPY --from=edge /usr/local/bin/materialized /usr/local/bin/materialized-edge

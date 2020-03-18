@@ -309,6 +309,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "ore",
  "regex",
  "repr",
  "rusqlite",
