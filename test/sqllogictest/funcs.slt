@@ -125,7 +125,7 @@ EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
 0 =
 | Get materialize.public.date_trunc_timestamps (u5)
-| Map date_truncts_day(#0)
+| Map date_trunc_day_ts(#0)
 | Project (#1)
 
 EOF
