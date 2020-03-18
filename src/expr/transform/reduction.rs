@@ -41,6 +41,7 @@ impl FoldConstants {
     }
 
     pub fn action(&self, relation: &mut RelationExpr, env: &EvalEnv) -> Result<(), TransformError> {
+        let relation_type = relation.typ();
         match relation {
             RelationExpr::Constant { .. } => { /* handled after match */ }
             RelationExpr::Get { .. } => {}
@@ -138,8 +139,22 @@ impl FoldConstants {
                 }
             }
             RelationExpr::Map { input, scalars } => {
-                for scalar in scalars.iter_mut() {
-                    scalar.reduce(&input.typ(), env);
+                // Before reducing the scalar expressions, we need to form an appropriate
+                // RelationType to provide to each. Each expression needs a different
+                // relation type; although we could in principle use `relation_type` here,
+                // we shouldn't rely on `reduce` not looking at its cardinality to assess
+                // the number of columns.
+                let input_arity = input.arity();
+                for (index, scalar) in scalars.iter_mut().enumerate() {
+                    let mut current_type = repr::RelationType::new(
+                        relation_type.column_types[..(input_arity + index)].to_vec(),
+                    );
+                    for key in relation_type.keys.iter() {
+                        if key.iter().all(|i| *i < input_arity + index) {
+                            current_type = current_type.add_keys(key.clone());
+                        }
+                    }
+                    scalar.reduce(&current_type, env);
                 }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
