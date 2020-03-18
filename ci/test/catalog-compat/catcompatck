@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test that a catalog created by materialized v0.1.0 is compatible with the
+# version of materialized under test.
+
+set -euo pipefail
+
+say() {
+    echo "### $* ###"
+}
+
+testdrive() {
+    command testdrive --kafka-addr kafka:9092
+}
+
+launch_materialized() {
+    "materialized-$1" "$@" &
+    materialized_pid=$?
+    wait-for-it -q localhost:6875
+    psql -h localhost -p 6875 materialize -c "SELECT 1" > /dev/null
+}
+
+wait-for-it kafka:9092
+
+say "launching materialized-golden"
+launch_materialized golden
+
+say "building golden catalog"
+testdrive <<'EOF'
+$ set schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] }
+    ]
+  }
+
+$ kafka-create-topic topic=real-time
+
+$ kafka-ingest format=avro topic=real-time schema=${schema} timestamp=1
+{"before": null, "after": {"a": 1, "b": 1}}
+{"before": null, "after": {"a": 2, "b": 1}}
+{"before": null, "after": {"a": 3, "b": 1}}
+{"before": null, "after": {"a": 1, "b": 2}}
+
+> CREATE SOURCE real_time_src
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-real-time-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+> CREATE MATERIALIZED VIEW real_time AS SELECT * FROM real_time_src
+
+> SELECT * FROM real_time
+a  b
+----
+1  1
+2  1
+3  1
+1  2
+EOF
+
+say "killing materialized-golden"
+kill "$materialized_pid"
+wait 2> /dev/null
+
+say "launching materialized-edge with golden catalog"
+launch_materialized edge --log-file=stderr
+
+say "validating edge state"
+testdrive <<EOF
+> SELECT * FROM real_time
+a  b
+----
+1  1
+2  1
+3  1
+1  2
+EOF
