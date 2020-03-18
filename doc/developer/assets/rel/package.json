@@ -1,18 +1,15 @@
 {
-  "name": "graphdemo",
-  "version": "1.0.0",
-  "description": "demo git graph",
-  "main": "index.js",
+  "name": "mz-doc-assets-release",
+  "version": "0.1.0",
+  "description": "Diagram generator for the Materialize release process documentation",
+  "license": "See license in LICENSE",
+  "private": true,
   "scripts": {
-    "serve": "parcel git-release-graph.html"
+    "build": "./build.js"
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "@gitgraph/js": "^1.3.3",
-    "parcel": "^1.12.4"
-  },
-  "devDependencies": {
-    "typescript": "^3.7.5"
+    "puppeteer": "^2.1.1",
+    "svgo": "^1.3.2"
   }
 }
