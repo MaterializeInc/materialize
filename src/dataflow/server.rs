@@ -9,8 +9,6 @@
 
 //! An interactive dataflow server.
 
-use differential_dataflow::trace::cursor::Cursor;
-use differential_dataflow::trace::TraceReader;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -20,41 +18,42 @@ use std::rc::Rc;
 use std::rc::Weak;
 use std::sync::Mutex;
 
+use differential_dataflow::operators::arrange::arrangement::Arrange;
+use differential_dataflow::trace::cursor::Cursor;
+use differential_dataflow::trace::TraceReader;
+use differential_dataflow::Collection;
+use futures::channel::mpsc::UnboundedReceiver;
+use futures::executor::block_on;
+use futures::future::TryFutureExt;
+use futures::sink::{Sink, SinkExt};
 use lazy_static::lazy_static;
+use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
+use serde::{Deserialize, Serialize};
 use timely::communication::allocator::generic::GenericBuilder;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::ActivateCapability;
+use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 
-use futures::channel::mpsc::UnboundedReceiver;
-use futures::executor::block_on;
-use futures::future::TryFutureExt;
-use futures::sink::{Sink, SinkExt};
-use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
-use serde::{Deserialize, Serialize};
-
-use super::render;
-use crate::arrangement::{
-    manager::{KeysValsHandle, WithDrop},
-    TraceManager,
-};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     compare_columns, Consistency, DataflowDesc, Diff, ExternalSourceConnector, IndexDesc,
     PeekResponse, RowSetFinishing, Timestamp, Update,
 };
-use expr::{EvalEnv, GlobalId, SourceInstanceId};
+use expr::{EvalEnv, EvalError, GlobalId, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
+use super::render;
+use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
-
+use crate::operator::CollectionExt;
 use crate::source::SourceToken;
 
 lazy_static! {
@@ -352,19 +351,28 @@ where
                     move |time, data| m_logger.publish_batch(time, data),
                 );
 
+            let errs = self.inner.dataflow::<Timestamp, _, _>(|scope| {
+                Collection::<_, EvalError, isize>::empty(scope)
+                    .arrange()
+                    .trace
+            });
+
             // Install traces as maintained indexes
             for (log, (_, trace)) in t_traces {
-                self.traces.set(log.index_id(), WithDrop::from(trace));
+                self.traces
+                    .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
             for (log, (_, trace)) in d_traces {
-                self.traces.set(log.index_id(), WithDrop::from(trace));
+                self.traces
+                    .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
             for (log, (_, trace)) in m_traces {
-                self.traces.set(log.index_id(), WithDrop::from(trace));
+                self.traces
+                    .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
@@ -463,9 +471,9 @@ where
             let mut progress = Vec::new();
             let ids = self.traces.traces.keys().cloned().collect::<Vec<_>>();
             for id in ids {
-                if let Some(trace) = self.traces.get(&id) {
+                if let Some(traces) = self.traces.get_mut(&id) {
                     // Read the upper frontier and compare to what we've reported.
-                    trace.clone().read_upper(&mut upper);
+                    traces.oks_mut().read_upper(&mut upper);
                     let lower = self
                         .reported_frontiers
                         .get_mut(&id)
@@ -556,9 +564,11 @@ where
                 eval_env,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace = self.traces.get(&id).unwrap().clone();
-                trace.advance_by(&[timestamp]);
-                trace.distinguish_since(&[]);
+                let mut trace_bundle = self.traces.get(&id).unwrap().clone();
+                trace_bundle.oks_mut().advance_by(&[timestamp]);
+                trace_bundle.errs_mut().advance_by(&[timestamp]);
+                trace_bundle.oks_mut().distinguish_since(&[]);
+                trace_bundle.errs_mut().distinguish_since(&[]);
                 // Prepare a description of the peek work to do.
                 let mut peek = PendingPeek {
                     id,
@@ -566,7 +576,7 @@ where
                     tx,
                     timestamp,
                     finishing,
-                    trace,
+                    trace_bundle,
                     project,
                     filter,
                     eval_env,
@@ -759,7 +769,7 @@ struct PendingPeek {
     filter: Vec<expr::ScalarExpr>,
     eval_env: EvalEnv,
     /// The data from which the trace derives.
-    trace: WithDrop<KeysValsHandle>,
+    trace_bundle: TraceBundle,
 }
 
 impl PendingPeek {
@@ -781,25 +791,49 @@ impl PendingPeek {
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
     fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> bool {
-        self.trace.read_upper(upper);
-        if !upper.less_equal(&self.timestamp) {
-            let response = match self.collect_finished_data() {
-                Ok(rows) => PeekResponse::Rows(rows),
-                Err(text) => PeekResponse::Error(text),
-            };
-
-            let mut tx = block_on(self.tx.connect()).unwrap();
-            block_on(tx.send(response)).unwrap();
-
-            true
-        } else {
-            false
+        self.trace_bundle.oks_mut().read_upper(upper);
+        if upper.less_equal(&self.timestamp) {
+            return false;
         }
+        self.trace_bundle.errs_mut().read_upper(upper);
+        if upper.less_equal(&self.timestamp) {
+            return false;
+        }
+        let response = match self.collect_finished_data() {
+            Ok(rows) => PeekResponse::Rows(rows),
+            Err(text) => PeekResponse::Error(text),
+        };
+        let mut tx = block_on(self.tx.connect()).unwrap();
+        block_on(tx.send(response)).unwrap();
+        true
     }
 
     /// Collects data for a known-complete peek.
     fn collect_finished_data(&mut self) -> Result<Vec<Row>, String> {
-        let (mut cursor, storage) = self.trace.cursor();
+        // Check if there exist any errors and, if so, return whatever one we
+        // find first.
+        let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
+        while cursor.key_valid(&storage) {
+            let mut copies = 0;
+            cursor.map_times(&storage, |time, diff| {
+                if time.less_equal(&self.timestamp) {
+                    copies += diff;
+                }
+            });
+            if copies < 0 {
+                return Err(format!(
+                    "Negative multiplicity: {} for {}",
+                    copies,
+                    cursor.key(&storage),
+                ));
+            }
+            if copies > 0 {
+                return Err(cursor.key(&storage).to_string());
+            }
+            cursor.step_key(&storage);
+        }
+
+        let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
         let mut results = Vec::new();
 
         // We can limit the record enumeration if i. there is a limit set,
@@ -816,26 +850,30 @@ impl PendingPeek {
                 let datums = row.unpack();
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
-                if self.filter.iter().all(|predicate| {
-                    let temp_storage = RowArena::new();
-                    predicate
+                let mut retain = true;
+                let temp_storage = RowArena::new();
+                for predicate in &self.filter {
+                    let d = predicate
                         .eval(&datums, &self.eval_env, &temp_storage)
-                        .unwrap_or(Datum::Null)
-                        == Datum::True
-                }) {
+                        .map_err(|e| e.to_string())?;
+                    if d != Datum::True {
+                        retain = false;
+                        break;
+                    }
+                }
+                if retain {
                     // Differential dataflow represents collections with binary counts,
                     // but our output representation is unary (as many rows as reported
                     // by the count). We should determine this count, and especially if
                     // it is non-zero, before producing any output data.
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {
-                        use timely::order::PartialOrder;
                         if time.less_equal(&self.timestamp) {
                             copies += diff;
                         }
                     });
                     if copies < 0 {
-                        return Result::Err(format!(
+                        return Err(format!(
                             "Negative multiplicity: {} for {:?}",
                             copies,
                             row.unpack(),

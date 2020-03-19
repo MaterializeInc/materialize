@@ -25,7 +25,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
 use dataflow_types::*;
-use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{EvalEnv, EvalError, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
 use futures::stream::StreamExt;
 use repr::{Datum, RelationType, Row, RowArena};
 use tokio_util::codec::{FramedRead, LinesCodec};
@@ -35,9 +35,10 @@ use super::sink;
 use super::source;
 use super::source::FileReadStyle;
 use super::source::SourceToken;
-use crate::arrangement::manager::{TraceManager, WithDrop};
+use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode, decode_avro_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
+use crate::operator::CollectionExt;
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
 use avro::Schema;
@@ -66,9 +67,10 @@ pub(crate) fn build_local_input<A: Allocate>(
                 local_inputs.insert(index.on_id, LocalInput { handle, capability });
             }
             let get_expr = RelationExpr::global_get(index.on_id, on_type);
+            let err_collection = Collection::empty(region);
             context
                 .collections
-                .insert(get_expr.clone(), stream.as_collection());
+                .insert(get_expr.clone(), (stream.as_collection(), err_collection));
             context.render_arranged(
                 &get_expr.clone().arrange_by(&[index.keys.clone()]),
                 &EvalEnv::default(),
@@ -77,11 +79,8 @@ pub(crate) fn build_local_input<A: Allocate>(
                 Some(&index_id.to_string()),
             );
             match context.arrangement(&get_expr, &index.keys) {
-                Some(ArrangementFlavor::Local(local)) => {
-                    manager.set(
-                        index_id,
-                        WithDrop::new(local.trace, Rc::new(None::<source::SourceToken>)),
-                    );
+                Some(ArrangementFlavor::Local(oks, errs)) => {
+                    manager.set(index_id, TraceBundle::new(oks.trace, errs.trace));
                 }
                 _ => {
                     panic!("Arrangement alarmingly absent!");
@@ -275,10 +274,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         }
                     };
 
+                    let err_collection = Collection::empty(region);
+
                     // Introduce the stream by name, as an unarranged collection.
                     context.collections.insert(
                         RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
-                        collection,
+                        (collection, err_collection),
                     );
                     let token = Rc::new(capability);
                     source_tokens.insert(src_id.sid, token.clone());
@@ -299,17 +300,31 @@ pub(crate) fn build_dataflow<A: Allocate>(
             let mut index_tokens = HashMap::new();
 
             for (id, (index_desc, typ)) in dataflow.index_imports.iter() {
-                if let Some(trace) = manager.get_mut(id) {
-                    let token = trace.to_drop().clone();
-                    let (arranged, button) = trace.import_frontier_core(
+                if let Some(traces) = manager.get_mut(id) {
+                    let token = traces.to_drop().clone();
+                    let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                         scope,
                         &format!("Index({}, {:?})", index_desc.on_id, index_desc.keys),
                         as_of.clone(),
                     );
-                    let arranged = arranged.enter(region);
+                    let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
+                        scope,
+                        &format!("ErrIndex({}, {:?})", index_desc.on_id, index_desc.keys),
+                        as_of.clone(),
+                    );
+                    let ok_arranged = ok_arranged.enter(region);
+                    let err_arranged = err_arranged.enter(region);
                     let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
-                    context.set_trace(*id, &get_expr, &index_desc.keys, arranged);
-                    index_tokens.insert(id, Rc::new((button.press_on_drop(), token)));
+                    context.set_trace(
+                        *id,
+                        &get_expr,
+                        &index_desc.keys,
+                        (ok_arranged, err_arranged),
+                    );
+                    index_tokens.insert(
+                        id,
+                        Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
+                    );
                 } else {
                     panic!(
                         "import of index {} failed while building dataflow {}",
@@ -395,10 +410,14 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 let tokens = Rc::new((needed_source_tokens, needed_index_tokens));
                 let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
                 match context.arrangement(&get_expr, &index_desc.keys) {
-                    Some(ArrangementFlavor::Local(local)) => {
-                        manager.set(*export_id, WithDrop::new(local.trace.clone(), tokens));
+                    Some(ArrangementFlavor::Local(oks, errs)) => {
+                        manager.set(
+                            *export_id,
+                            TraceBundle::new(oks.trace.clone(), errs.trace.clone())
+                                .with_drop(tokens),
+                        );
                     }
-                    Some(ArrangementFlavor::Trace(gid, _)) => {
+                    Some(ArrangementFlavor::Trace(gid, _, _)) => {
                         // Duplicate of existing arrangement with id `gid`, so
                         // just create another handle to that arrangement.
                         let trace = manager.get(&gid).unwrap().clone();
@@ -422,12 +441,15 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     }
                 }
                 let tokens = Rc::new((needed_source_tokens, needed_index_tokens));
-                let collection = context
+                let (collection, _err_collection) = context
                     .collection(&RelationExpr::global_get(
                         sink.from.0,
                         sink.from.1.typ().clone(),
                     ))
                     .expect("No arrangements");
+
+                // TODO(benesch): errors should stream out through the sink,
+                // if we figure out a protocol for that.
 
                 match sink.connector {
                     SinkConnector::Kafka(c) => {
@@ -480,7 +502,10 @@ where
                         .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
                         .as_collection();
 
-                    self.collections.insert(relation_expr.clone(), collection);
+                    let err_collection = Collection::empty(scope);
+
+                    self.collections
+                        .insert(relation_expr.clone(), (collection, err_collection));
                 }
 
                 // A get should have been loaded into the context, and it is surprising to
@@ -510,32 +535,37 @@ where
                 RelationExpr::Project { input, outputs } => {
                     self.ensure_rendered(input, env, scope, worker_index);
                     let outputs = outputs.clone();
-                    let collection = self.collection(input).unwrap().map(move |row| {
+                    let (ok_collection, err_collection) = self.collection(input).unwrap();
+                    let ok_collection = ok_collection.map(move |row| {
                         let datums = row.unpack();
                         Row::pack(outputs.iter().map(|i| datums[*i]))
                     });
 
-                    self.collections.insert(relation_expr.clone(), collection);
+                    self.collections
+                        .insert(relation_expr.clone(), (ok_collection, err_collection));
                 }
 
                 RelationExpr::Map { input, scalars } => {
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
                     let scalars = scalars.clone();
-                    let collection = self.collection(input).unwrap().map(move |input_row| {
-                        let mut datums = input_row.unpack();
-                        let temp_storage = RowArena::new();
-                        for scalar in &scalars {
-                            let datum = scalar.eval(&datums, &env, &temp_storage);
-                            // Scalar is allowed to see the outputs of previous scalars.
-                            // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
-                            // Note that this doesn't mutate input_row.
-                            datums.push(datum.unwrap_or(Datum::Null));
-                        }
-                        Row::pack(&*datums)
-                    });
-
-                    self.collections.insert(relation_expr.clone(), collection);
+                    let (ok_collection, err_collection) = self.collection(input).unwrap();
+                    let (ok_collection, new_err_collection) =
+                        ok_collection.map_fallible(move |input_row| {
+                            let mut datums = input_row.unpack();
+                            let temp_storage = RowArena::new();
+                            for scalar in &scalars {
+                                let datum = scalar.eval(&datums, &env, &temp_storage)?;
+                                // Scalar is allowed to see the outputs of previous scalars.
+                                // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
+                                // Note that this doesn't mutate input_row.
+                                datums.push(datum);
+                            }
+                            Ok::<_, EvalError>(Row::pack(&*datums))
+                        });
+                    let err_collection = err_collection.concat(&new_err_collection);
+                    self.collections
+                        .insert(relation_expr.clone(), (ok_collection, err_collection));
                 }
 
                 RelationExpr::FlatMapUnary {
@@ -572,44 +602,49 @@ where
                         })
                         .collect::<Vec<_>>();
 
-                    let collection = self.collection(input).unwrap().flat_map(move |input_row| {
-                        let datums = input_row.unpack();
-                        let replace = replace.clone();
-                        let temp_storage = RowArena::new();
-                        let expr = expr
-                            .eval(&datums, &env, &temp_storage)
-                            .unwrap_or(Datum::Null);
-                        let output_rows = func.eval(expr, &env, &temp_storage);
-                        output_rows
-                            .into_iter()
-                            .map(move |output_row| {
-                                Row::pack(
-                                    datums
-                                        .iter()
-                                        .cloned()
-                                        .chain(output_row.iter())
-                                        .zip(replace.iter())
-                                        .map(|(datum, demand)| {
-                                            if let Some(bogus) = demand {
-                                                bogus.clone()
-                                            } else {
-                                                datum
-                                            }
-                                        }),
-                                )
-                            })
-                            // The collection avoids the lifetime issues of the `datums` borrow,
-                            // which allows us to avoid multiple unpackings of `input_row`. We
-                            // could avoid this allocation with a custom iterator that understands
-                            // the borrowing, but it probably isn't the leading order issue here.
-                            .collect::<Vec<_>>()
-                    });
+                    let (ok_collection, err_collection) = self.collection(input).unwrap();
+                    let (ok_collection, new_err_collection) =
+                        ok_collection.flat_map_fallible(move |input_row| {
+                            let datums = input_row.unpack();
+                            let replace = replace.clone();
+                            let temp_storage = RowArena::new();
+                            let expr = match expr.eval(&datums, &env, &temp_storage) {
+                                Ok(expr) => expr,
+                                Err(e) => return vec![Err(e)],
+                            };
+                            let output_rows = func.eval(expr, &env, &temp_storage);
+                            output_rows
+                                .into_iter()
+                                .map(move |output_row| {
+                                    Ok::<_, EvalError>(Row::pack(
+                                        datums
+                                            .iter()
+                                            .cloned()
+                                            .chain(output_row.iter())
+                                            .zip(replace.iter())
+                                            .map(|(datum, demand)| {
+                                                if let Some(bogus) = demand {
+                                                    bogus.clone()
+                                                } else {
+                                                    datum
+                                                }
+                                            }),
+                                    ))
+                                })
+                                // The collection avoids the lifetime issues of the `datums` borrow,
+                                // which allows us to avoid multiple unpackings of `input_row`. We
+                                // could avoid this allocation with a custom iterator that understands
+                                // the borrowing, but it probably isn't the leading order issue here.
+                                .collect::<Vec<_>>()
+                        });
+                    let err_collection = err_collection.concat(&new_err_collection);
 
-                    self.collections.insert(relation_expr.clone(), collection);
+                    self.collections
+                        .insert(relation_expr.clone(), (ok_collection, err_collection));
                 }
 
                 RelationExpr::Filter { input, predicates } => {
-                    let collection = if let RelationExpr::Join { implementation, .. } = &**input {
+                    let collections = if let RelationExpr::Join { implementation, .. } = &**input {
                         match implementation {
                             expr::JoinImplementation::Differential(_start, _order) => {
                                 self.render_join(input, predicates, env, scope, worker_index)
@@ -632,21 +667,21 @@ where
                         let env = env.clone();
                         let temp_storage = RowArena::new();
                         let predicates = predicates.clone();
-                        self.collection(input).unwrap().filter(move |input_row| {
-                            let datums = input_row.unpack();
-                            predicates.iter().all(|predicate| {
-                                match predicate
-                                    .eval(&datums, &env, &temp_storage)
-                                    .unwrap_or(Datum::Null)
-                                {
-                                    Datum::True => true,
-                                    Datum::False | Datum::Null => false,
-                                    _ => unreachable!(),
+                        let (ok_collection, err_collection) = self.collection(input).unwrap();
+                        let (ok_collection, new_err_collection) =
+                            ok_collection.filter_fallible(move |input_row| {
+                                let datums = input_row.unpack();
+                                for p in &predicates {
+                                    if p.eval(&datums, &env, &temp_storage)? != Datum::True {
+                                        return Ok(false);
+                                    }
                                 }
-                            })
-                        })
+                                Ok::<_, EvalError>(true)
+                            });
+                        let err_collection = err_collection.concat(&new_err_collection);
+                        (ok_collection, err_collection)
                     };
-                    self.collections.insert(relation_expr.clone(), collection);
+                    self.collections.insert(relation_expr.clone(), collections);
                 }
 
                 RelationExpr::Join { implementation, .. } => match implementation {
@@ -681,8 +716,10 @@ where
 
                 RelationExpr::Negate { input } => {
                     self.ensure_rendered(input, env, scope, worker_index);
-                    let collection = self.collection(input).unwrap().negate();
-                    self.collections.insert(relation_expr.clone(), collection);
+                    let (ok_collection, err_collection) = self.collection(input).unwrap();
+                    let ok_collection = ok_collection.negate();
+                    self.collections
+                        .insert(relation_expr.clone(), (ok_collection, err_collection));
                 }
 
                 RelationExpr::Threshold { .. } => {
@@ -693,11 +730,13 @@ where
                     self.ensure_rendered(left, env, scope, worker_index);
                     self.ensure_rendered(right, env, scope, worker_index);
 
-                    let input1 = self.collection(left).unwrap();
-                    let input2 = self.collection(right).unwrap();
+                    let (ok1, err1) = self.collection(left).unwrap();
+                    let (ok2, err2) = self.collection(right).unwrap();
 
-                    self.collections
-                        .insert(relation_expr.clone(), input1.concat(&input2));
+                    let ok = ok1.concat(&ok2);
+                    let err = err1.concat(&err2);
+
+                    self.collections.insert(relation_expr.clone(), (ok, err));
                 }
 
                 RelationExpr::ArrangeBy { .. } => {
@@ -724,7 +763,7 @@ where
             for key_set in keys {
                 if self.arrangement(&input, &key_set).is_none() {
                     self.ensure_rendered(input, env, scope, worker_index);
-                    let built = self.collection(input).unwrap();
+                    let (ok_built, err_built) = self.collection(input).unwrap();
                     let keys2 = key_set.clone();
                     let env = env.clone();
                     let name = if let Some(id) = id {
@@ -732,25 +771,28 @@ where
                     } else {
                         "Arrange".to_string()
                     };
-                    let keyed = built
-                        .map(move |row| {
-                            let datums = row.unpack();
-                            let temp_storage = RowArena::new();
-                            let key_row = Row::pack(keys2.iter().map(|k| {
-                                k.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)
-                            }));
-                            (key_row, row)
-                        })
-                        .arrange_named::<OrdValSpine<_, _, _, _>>(&name);
-                    self.set_local(&input, key_set, keyed);
+                    let (ok_collection, err_collection) = ok_built.map_fallible(move |row| {
+                        let datums = row.unpack();
+                        let temp_storage = RowArena::new();
+                        let key_row = Row::try_pack(
+                            keys2.iter().map(|k| k.eval(&datums, &env, &temp_storage)),
+                        )?;
+                        Ok::<_, EvalError>((key_row, row))
+                    });
+                    let err_collection = err_built.concat(&err_collection);
+                    let ok_arrangement =
+                        ok_collection.arrange_named::<OrdValSpine<_, _, _, _>>(&name);
+                    let err_arrangement = err_collection
+                        .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("{}-errors", name));
+                    self.set_local(&input, key_set, (ok_arrangement, err_arrangement));
                 }
                 if self.arrangement(relation_expr, key_set).is_none() {
                     match self.arrangement(&input, key_set).unwrap() {
-                        ArrangementFlavor::Local(local) => {
-                            self.set_local(relation_expr, key_set, local);
+                        ArrangementFlavor::Local(oks, errs) => {
+                            self.set_local(relation_expr, key_set, (oks, errs));
                         }
-                        ArrangementFlavor::Trace(gid, trace) => {
-                            self.set_trace(gid, relation_expr, key_set, trace);
+                        ArrangementFlavor::Trace(gid, oks, errs) => {
+                            self.set_trace(gid, relation_expr, key_set, (oks, errs));
                         }
                     }
                 }
@@ -765,7 +807,7 @@ where
         env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
-    ) -> Collection<G, Row> {
+    ) -> (Collection<G, Row>, Collection<G, EvalError>) {
         if let RelationExpr::Join {
             inputs,
             variables,
@@ -822,7 +864,7 @@ where
             };
 
             // This collection will evolve as we join in more inputs.
-            let mut joined = self.collection(&inputs[*start]).unwrap();
+            let (mut joined, mut errs) = self.collection(&inputs[*start]).unwrap();
 
             // Maintain sources of each in-progress column.
             let mut columns = (0..arities[*start])
@@ -921,9 +963,9 @@ where
                     })
                     .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", input));
 
-                joined = match self.arrangement(&inputs[*input], &next_keys[..]) {
-                    Some(ArrangementFlavor::Local(local)) => {
-                        prev_keyed.join_core(&local, move |_keys, old, new| {
+                match self.arrangement(&inputs[*input], &next_keys[..]) {
+                    Some(ArrangementFlavor::Local(oks, es)) => {
+                        joined = prev_keyed.join_core(&oks, move |_keys, old, new| {
                             let prev_datums = old.unpack();
                             let next_datums = new.unpack();
                             // TODO: We could in principle apply some predicates here, and avoid
@@ -933,10 +975,11 @@ where
                                     .iter()
                                     .chain(next_outputs.iter().map(|i| &next_datums[*i])),
                             ))
-                        })
+                        });
+                        errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
                     }
-                    Some(ArrangementFlavor::Trace(_gid, trace)) => {
-                        prev_keyed.join_core(&trace, move |_keys, old, new| {
+                    Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
+                        joined = prev_keyed.join_core(&oks, move |_keys, old, new| {
                             let prev_datums = old.unpack();
                             let next_datums = new.unpack();
                             // TODO: We could in principle apply some predicates here, and avoid
@@ -946,7 +989,8 @@ where
                                     .iter()
                                     .chain(next_outputs.iter().map(|i| &next_datums[*i])),
                             ))
-                        })
+                        });
+                        errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
                     }
                     None => {
                         panic!("Arrangement alarmingly absent!");
@@ -987,13 +1031,16 @@ where
                 }
             }
 
-            joined.map(move |row| {
-                let datums = row.unpack();
-                Row::pack(position_or.iter().map(|pos_or| match pos_or {
-                    Result::Ok(index) => datums[*index],
-                    Result::Err(datum) => *datum,
-                }))
-            })
+            (
+                joined.map(move |row| {
+                    let datums = row.unpack();
+                    Row::pack(position_or.iter().map(|pos_or| match pos_or {
+                        Result::Ok(index) => datums[*index],
+                        Result::Err(datum) => *datum,
+                    }))
+                }),
+                errs,
+            )
         } else {
             panic!("render_join called on invalid expression.")
         }
@@ -1017,7 +1064,7 @@ where
             use differential_dataflow::operators::reduce::Reduce;
 
             self.ensure_rendered(input, env, scope, worker_index);
-            let input = self.collection(input).unwrap();
+            let (ok_input, err_input) = self.collection(input).unwrap();
 
             // To provide a robust incremental orderby-limit experience, we want to avoid grouping
             // *all* records (or even large groups) and then applying the ordering and limit. Instead,
@@ -1105,7 +1152,7 @@ where
             }
 
             let group_clone = group_key.to_vec();
-            let mut collection = input.map(move |row| {
+            let mut collection = ok_input.map(move |row| {
                 use differential_dataflow::hashable::Hashable;
                 let row_hash = row.hashed();
                 let datums = row.unpack();
@@ -1141,7 +1188,8 @@ where
             // formed groups.
             let result = build_topk_stage(collection, order_key, 1u64, *offset, *limit)
                 .map(|((_key, _hash), row)| row);
-            self.collections.insert(relation_expr.clone(), result);
+            self.collections
+                .insert(relation_expr.clone(), (result, err_input));
         }
     }
 
@@ -1160,44 +1208,55 @@ where
             // TODO: easier idioms for detecting, re-using, and stashing.
             if self.arrangement_columns(&input, &keys[..]).is_none() {
                 self.ensure_rendered(input, env, scope, worker_index);
-                let built = self.collection(input).unwrap();
+                let (ok_built, err_built) = self.collection(input).unwrap();
                 let keys2 = keys.clone();
-                let keyed = built
+                let ok_keyed = ok_built
                     .map(move |row| {
                         let datums = row.unpack();
                         let key_row = Row::pack(keys2.iter().map(|i| datums[*i]));
                         (key_row, row)
                     })
                     .arrange_by_key();
-                self.set_local_columns(&input, &keys[..], keyed);
+                self.set_local_columns(&input, &keys[..], (ok_keyed, err_built.arrange()));
             }
 
             use differential_dataflow::operators::reduce::ReduceCore;
 
-            let arranged = match self.arrangement_columns(&input, &keys[..]) {
-                Some(ArrangementFlavor::Local(local)) => local
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Threshold", move |_k, s, t| {
-                        for (record, count) in s.iter() {
-                            if *count > 0 {
-                                t.push(((*record).clone(), *count));
+            let (ok_arranged, err_arranged) = match self.arrangement_columns(&input, &keys[..]) {
+                Some(ArrangementFlavor::Local(oks, errs)) => (
+                    oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                        "Threshold",
+                        move |_k, s, t| {
+                            for (record, count) in s.iter() {
+                                if *count > 0 {
+                                    t.push(((*record).clone(), *count));
+                                }
                             }
-                        }
-                    }),
-                Some(ArrangementFlavor::Trace(_gid, trace)) => trace
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Threshold", move |_k, s, t| {
-                        for (record, count) in s.iter() {
-                            if *count > 0 {
-                                t.push(((*record).clone(), *count));
+                        },
+                    ),
+                    errs,
+                ),
+                Some(ArrangementFlavor::Trace(_gid, oks, errs)) => (
+                    oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                        "Threshold",
+                        move |_k, s, t| {
+                            for (record, count) in s.iter() {
+                                if *count > 0 {
+                                    t.push(((*record).clone(), *count));
+                                }
                             }
-                        }
-                    }),
+                        },
+                    ),
+                    // XXX: bad?
+                    errs.as_collection(|k, _v| k.clone()).arrange(),
+                ),
                 None => {
                     panic!("Arrangement alarmingly absent!");
                 }
             };
 
             let index = (0..keys.len()).collect::<Vec<_>>();
-            self.set_local_columns(relation_expr, &index[..], arranged);
+            self.set_local_columns(relation_expr, &index[..], (ok_arranged, err_arranged));
         }
     }
 }

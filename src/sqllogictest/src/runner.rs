@@ -35,7 +35,7 @@ use std::path::Path;
 use std::str;
 use std::thread;
 
-use failure::{bail, ResultExt};
+use failure::{bail, format_err, ResultExt};
 use futures::executor::block_on;
 use itertools::izip;
 use lazy_static::lazy_static;
@@ -43,6 +43,7 @@ use md5::{Digest, Md5};
 use regex::Regex;
 
 use coord::ExecuteResponse;
+use dataflow_types::PeekResponse;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::jsonb::Jsonb;
@@ -537,11 +538,18 @@ impl State {
         }
 
         // send plan, read response
-        let (desc, rows_rx) = match self.run_sql(sql) {
-            Ok((desc, ExecuteResponse::SendRows(rx))) => (
-                desc.expect("RelationDesc missing for query that returns rows"),
-                rx,
-            ),
+        let (desc, rows) = match self.run_sql(sql) {
+            Ok((desc, ExecuteResponse::SendRows(rx))) => {
+                let desc = desc.expect("RelationDesc missing for query that returns rows");
+                let rows = match block_on(rx)? {
+                    PeekResponse::Rows(rows) => Ok(rows),
+                    PeekResponse::Error(e) => Err(format_err!("{}", e)),
+                    PeekResponse::Canceled => {
+                        panic!("sqllogictest query cannot possibly be canceled")
+                    }
+                };
+                (desc, rows)
+            }
             Ok(other) => {
                 return Ok(Outcome::PlanFailure {
                     error: failure::format_err!(
@@ -550,6 +558,11 @@ impl State {
                     ),
                 });
             }
+            Err(e) => (RelationDesc::empty(), Err(e)),
+        };
+
+        let raw_output = match rows {
+            Ok(rows) => rows,
             Err(error) => {
                 return match output {
                     Ok(_) => {
@@ -571,9 +584,6 @@ impl State {
                 };
             }
         };
-
-        // get actual output
-        let raw_output = block_on(rows_rx)?.unwrap_rows();
 
         // unpack expected output
         let QueryOutput {

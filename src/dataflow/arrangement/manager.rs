@@ -9,31 +9,28 @@
 
 //! Management of arrangements across dataflows.
 
-use differential_dataflow::operators::arrange::TraceAgent;
+use std::any::Any;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use dataflow_types::{Diff, Timestamp};
-use expr::GlobalId;
-use repr::Row;
-
+use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
 use differential_dataflow::trace::implementations::spine_fueled_neu::Spine;
-use std::rc::Rc;
-pub type OrdValSpine<K, V, T, R, O = usize> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R, O>>>;
+use differential_dataflow::trace::TraceReader;
 
-#[allow(dead_code)]
-pub type KeysValsSpine = OrdValSpine<Row, Row, Timestamp, Diff>;
+use dataflow_types::{Diff, Timestamp};
+use expr::{EvalError, GlobalId};
+use repr::Row;
+
+pub type OrdValSpine<K, V, T, R, O = usize> = Spine<K, V, T, R, Rc<OrdValBatch<K, V, T, R, O>>>;
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
+pub type ErrsHandle = TraceValHandle<EvalError, (), Timestamp, Diff>;
 
-/// A map from collection names to cached arrangements.
-///
-/// A `TraceManager` stores maps from global identifiers to various arranged
-/// representations of a collection. These arrangements can either be unkeyed,
-/// or keyed by some expression.
+/// A `TraceManager` stores maps from global identifiers to the primary arranged
+/// representation of that collection.
 pub struct TraceManager {
-    /// A map from global identifiers to maintained traces.
-    pub traces: HashMap<GlobalId, WithDrop<KeysValsHandle>>,
+    pub traces: HashMap<GlobalId, TraceBundle>,
 }
 
 impl Default for TraceManager {
@@ -54,10 +51,11 @@ impl TraceManager {
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
         let mut antichain = timely::progress::frontier::Antichain::new();
-        for handle in self.traces.values_mut() {
-            use differential_dataflow::trace::TraceReader;
-            handle.read_upper(&mut antichain);
-            handle.distinguish_since(antichain.elements());
+        for bundle in self.traces.values_mut() {
+            bundle.oks.read_upper(&mut antichain);
+            bundle.oks.distinguish_since(antichain.elements());
+            bundle.errs.read_upper(&mut antichain);
+            bundle.errs.distinguish_since(antichain.elements());
         }
     }
 
@@ -68,87 +66,83 @@ impl TraceManager {
     /// not in advance of `frontier`. Users should take care to only rely on
     /// accumulations at times in advance of `frontier`.
     pub fn allow_compaction(&mut self, id: GlobalId, frontier: &[Timestamp]) {
-        use differential_dataflow::trace::TraceReader;
-        if let Some(val) = self.traces.get_mut(&id) {
-            val.advance_by(frontier);
+        if let Some(bundle) = self.traces.get_mut(&id) {
+            bundle.oks.advance_by(frontier);
+            bundle.errs.advance_by(frontier);
         }
     }
 
-    /// Returns a copy of a by_key arrangement, should it exist.
-    #[allow(dead_code)]
-    pub fn get(&self, id: &GlobalId) -> Option<&WithDrop<KeysValsHandle>> {
+    /// Returns a reference to the trace for `id`, should it exist.
+    pub fn get(&self, id: &GlobalId) -> Option<&TraceBundle> {
         self.traces.get(&id)
     }
 
-    /// Returns a copy of a by_key arrangement, should it exist.
-    #[allow(dead_code)]
-    pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut WithDrop<KeysValsHandle>> {
+    /// Returns a mutable reference to the trace for `id`, should it
+    /// exist.
+    pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut TraceBundle> {
         self.traces.get_mut(&id)
     }
 
-    /// Binds a by_keys arrangement.
-    #[allow(dead_code)]
-    pub fn set(&mut self, id: GlobalId, trace: WithDrop<KeysValsHandle>) {
-        //Currently it is assumed that the first arrangement for a collection is the one
-        //keyed by the primary keys
+    /// Binds the arrangement for `id` to `trace`.
+    pub fn set(&mut self, id: GlobalId, trace: TraceBundle) {
         self.traces.insert(id, trace);
     }
 
-    /// Removes a trace
+    /// Removes the trace for `id`.
     pub fn del_trace(&mut self, id: &GlobalId) -> bool {
         self.traces.remove(&id).is_some()
     }
 
-    /// Removes all remnants of all named traces.
+    /// Removes all managed traces.
     pub fn del_all_traces(&mut self) {
         self.traces.clear();
     }
 }
 
-/// A thin wrapper containing an associated item to drop.
-///
-/// This type is used for controlled shutdown of dataflows as handles are dropped.
-/// The associated `to_drop` will be dropped with the element, and can be observed
-/// by other bits of clean-up code.
+/// Bundles together traces for the successful computations (`oks`), the
+/// failed computations (`errs`), and additional tokens that should share
+/// the lifetime of the bundled traces (`to_drop`).
 #[derive(Clone)]
-pub struct WithDrop<T> {
-    element: T,
-    to_drop: Option<std::rc::Rc<Box<dyn std::any::Any>>>,
+pub struct TraceBundle {
+    oks: KeysValsHandle,
+    errs: ErrsHandle,
+    to_drop: Option<Rc<Box<dyn Any>>>,
 }
 
-impl<T> WithDrop<T> {
-    /// Creates a new wrapper with an item to drop.
-    pub fn new<S: std::any::Any>(element: T, to_drop: S) -> Self {
-        Self {
-            element,
-            to_drop: Some(std::rc::Rc::new(Box::new(to_drop))),
-        }
-    }
-
-    /// Read access to the drop token, so that others can clone it.
-    pub fn to_drop(&self) -> &Option<std::rc::Rc<Box<dyn std::any::Any>>> {
-        &self.to_drop
-    }
-}
-
-impl<T> From<T> for WithDrop<T> {
-    fn from(element: T) -> Self {
-        Self {
-            element,
+impl TraceBundle {
+    /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
+    pub fn new(oks: KeysValsHandle, errs: ErrsHandle) -> TraceBundle {
+        TraceBundle {
+            oks,
+            errs,
             to_drop: None,
         }
     }
-}
 
-impl<T> std::ops::Deref for WithDrop<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.element
+    /// Adds tokens to be dropped when the trace bundle is dropped.
+    pub fn with_drop<T>(self, to_drop: T) -> TraceBundle
+    where
+        T: 'static,
+    {
+        TraceBundle {
+            oks: self.oks,
+            errs: self.errs,
+            to_drop: Some(Rc::new(Box::new(to_drop))),
+        }
     }
-}
 
-impl<T> std::ops::DerefMut for WithDrop<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.element
+    /// Returns a mutable reference to the `oks` trace.
+    pub fn oks_mut(&mut self) -> &mut KeysValsHandle {
+        &mut self.oks
+    }
+
+    /// Returns a mutable reference to the `errs` trace.
+    pub fn errs_mut(&mut self) -> &mut ErrsHandle {
+        &mut self.errs
+    }
+
+    /// Returns a reference to the `to_drop` tokens.
+    pub fn to_drop(&self) -> &Option<Rc<Box<dyn Any>>> {
+        &self.to_drop
     }
 }

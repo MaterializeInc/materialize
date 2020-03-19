@@ -9,17 +9,16 @@
 
 #![allow(clippy::op_ref)]
 
+use differential_dataflow::lattice::Lattice;
+use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
 
-use differential_dataflow::lattice::Lattice;
-
-use dogsdogsdogs::altneu::AltNeu;
-
 use dataflow_types::Timestamp;
-use expr::{EvalEnv, RelationExpr, ScalarExpr};
+use expr::{EvalEnv, EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row};
 
 use super::context::{ArrangementFlavor, Context};
+use crate::operator::CollectionExt;
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
@@ -34,7 +33,7 @@ where
         scope: &mut G,
         worker_index: usize,
         subtract: F,
-    ) -> Collection<G, Row>
+    ) -> (Collection<G, Row>, Collection<G, EvalError>)
     where
         F: Fn(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
@@ -87,17 +86,18 @@ where
                             offset += arities[input];
                         }
 
+                        let mut err_streams = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
                             // This collection determines changes that result from updates inbound
                             // from `inputs[relation]` and reflects all strictly prior updates and
                             // concurrent updates from relations prior to `relation`.
                             let delta_query = inner.clone().region(|region| {
                                 // Ensure this input is rendered, and extract its update stream.
-                                let mut update_stream = self
+                                let (update_stream, errs) = self
                                     .collection(&inputs[relation])
-                                    .expect("Failed to render update stream")
-                                    .enter(inner)
-                                    .enter(region);
+                                    .expect("Failed to render update stream");
+                                let mut update_stream = update_stream.enter(inner).enter(region);
+                                err_streams.push(errs);
 
                                 // We track the sources of each column in our update stream.
                                 let mut update_column_sources = (0..arities[relation])
@@ -164,46 +164,48 @@ where
                                                 &next_key[..]
                                             )
                                         }) {
-                                        ArrangementFlavor::Local(local) => {
+                                        ArrangementFlavor::Local(oks, errs) => {
+                                            err_streams.push(errs.as_collection(|k, _v| k.clone()));
                                             if other > &relation {
-                                                let local = local
+                                                let oks = oks
                                                     .enter_at(
                                                         inner,
                                                         |_, _, t| AltNeu::alt(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, local, prev_key)
+                                                build_lookup(update_stream, oks, prev_key)
                                             } else {
-                                                let local = local
+                                                let oks = oks
                                                     .enter_at(
                                                         inner,
                                                         |_, _, t| AltNeu::neu(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, local, prev_key)
+                                                build_lookup(update_stream, oks, prev_key)
                                             }
                                         }
-                                        ArrangementFlavor::Trace(_gid, trace) => {
+                                        ArrangementFlavor::Trace(_gid, oks, errs) => {
+                                            err_streams.push(errs.as_collection(|k, _v| k.clone()));
                                             if other > &relation {
-                                                let trace = trace
+                                                let oks = oks
                                                     .enter_at(
                                                         inner,
                                                         |_, _, t| AltNeu::alt(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, trace, prev_key)
+                                                build_lookup(update_stream, oks, prev_key)
                                             } else {
-                                                let trace = trace
+                                                let oks = oks
                                                     .enter_at(
                                                         inner,
                                                         |_, _, t| AltNeu::neu(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, trace, prev_key)
+                                                build_lookup(update_stream, oks, prev_key)
                                             }
                                         }
                                     };
@@ -240,7 +242,11 @@ where
                         }
 
                         // Concatenate the results of each delta query as the accumulated results.
-                        differential_dataflow::collection::concatenate(inner, delta_queries).leave()
+                        (
+                            differential_dataflow::collection::concatenate(inner, delta_queries)
+                                .leave(),
+                            differential_dataflow::collection::concatenate(scope, err_streams),
+                        )
                     });
             results
         } else {
@@ -337,18 +343,16 @@ where
     } else {
         let env = env.clone();
         let temp_storage = repr::RowArena::new();
-        updates.filter(move |input_row| {
+        let (ok_collection, err_collection) = updates.filter_fallible(move |input_row| {
             let datums = input_row.unpack();
-            ready_to_go.iter().all(|predicate| {
-                match predicate
-                    .eval(&datums, &env, &temp_storage)
-                    .unwrap_or(Datum::Null)
-                {
-                    Datum::True => true,
-                    Datum::False | Datum::Null => false,
-                    _ => unreachable!(),
+            for p in &ready_to_go {
+                if p.eval(&datums, &env, &temp_storage)? != Datum::True {
+                    return Ok(false);
                 }
-            })
-        })
+            }
+            Ok::<_, EvalError>(true)
+        });
+        err_collection.inspect(|e| println!("delta join filter err: {:?}", e));
+        ok_collection
     }
 }
