@@ -25,7 +25,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
 use dataflow_types::*;
-use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{EvalEnv, EvalError, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
 use futures::stream::StreamExt;
 use repr::{Datum, RelationType, Row, RowArena};
 use tokio_util::codec::{FramedRead, LinesCodec};
@@ -38,6 +38,7 @@ use super::source::SourceToken;
 use crate::arrangement::manager::{TraceManager, WithDrop};
 use crate::decode::{decode, decode_avro_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
+use crate::operator::CollectionExt;
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
 use avro::Schema;
@@ -522,20 +523,26 @@ where
                     self.ensure_rendered(input, env, scope, worker_index);
                     let env = env.clone();
                     let scalars = scalars.clone();
-                    let collection = self.collection(input).unwrap().map(move |input_row| {
-                        let mut datums = input_row.unpack();
-                        let temp_storage = RowArena::new();
-                        for scalar in &scalars {
-                            let datum = scalar.eval(&datums, &env, &temp_storage);
-                            // Scalar is allowed to see the outputs of previous scalars.
-                            // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
-                            // Note that this doesn't mutate input_row.
-                            datums.push(datum.unwrap_or(Datum::Null));
-                        }
-                        Row::pack(&*datums)
-                    });
+                    let (ok_collection, err_collection) = self
+                        .collection(input)
+                        .unwrap()
+                        .map_fallible(move |input_row| {
+                            let mut datums = input_row.unpack();
+                            let temp_storage = RowArena::new();
+                            for scalar in &scalars {
+                                let datum = scalar.eval(&datums, &env, &temp_storage)?;
+                                // Scalar is allowed to see the outputs of previous scalars.
+                                // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
+                                // Note that this doesn't mutate input_row.
+                                datums.push(datum);
+                            }
+                            Ok::<_, EvalError>(Row::pack(&*datums))
+                        });
 
-                    self.collections.insert(relation_expr.clone(), collection);
+                    err_collection.inspect(|e| println!("map err: {:?}", e));
+
+                    self.collections
+                        .insert(relation_expr.clone(), ok_collection);
                 }
 
                 RelationExpr::FlatMapUnary {
@@ -572,40 +579,47 @@ where
                         })
                         .collect::<Vec<_>>();
 
-                    let collection = self.collection(input).unwrap().flat_map(move |input_row| {
-                        let datums = input_row.unpack();
-                        let replace = replace.clone();
-                        let temp_storage = RowArena::new();
-                        let expr = expr
-                            .eval(&datums, &env, &temp_storage)
-                            .unwrap_or(Datum::Null);
-                        let output_rows = func.eval(expr, &env, &temp_storage);
-                        output_rows
-                            .into_iter()
-                            .map(move |output_row| {
-                                Row::pack(
-                                    datums
-                                        .iter()
-                                        .cloned()
-                                        .chain(output_row.iter())
-                                        .zip(replace.iter())
-                                        .map(|(datum, demand)| {
-                                            if let Some(bogus) = demand {
-                                                bogus.clone()
-                                            } else {
-                                                datum
-                                            }
-                                        }),
-                                )
-                            })
-                            // The collection avoids the lifetime issues of the `datums` borrow,
-                            // which allows us to avoid multiple unpackings of `input_row`. We
-                            // could avoid this allocation with a custom iterator that understands
-                            // the borrowing, but it probably isn't the leading order issue here.
-                            .collect::<Vec<_>>()
-                    });
+                    let (ok_collection, err_collection) = self
+                        .collection(input)
+                        .unwrap()
+                        .flat_map_fallible(move |input_row| {
+                            let datums = input_row.unpack();
+                            let replace = replace.clone();
+                            let temp_storage = RowArena::new();
+                            let expr = match expr.eval(&datums, &env, &temp_storage) {
+                                Ok(expr) => expr,
+                                Err(e) => return vec![Err(e)],
+                            };
+                            let output_rows = func.eval(expr, &env, &temp_storage);
+                            output_rows
+                                .into_iter()
+                                .map(move |output_row| {
+                                    Ok::<_, EvalError>(Row::pack(
+                                        datums
+                                            .iter()
+                                            .cloned()
+                                            .chain(output_row.iter())
+                                            .zip(replace.iter())
+                                            .map(|(datum, demand)| {
+                                                if let Some(bogus) = demand {
+                                                    bogus.clone()
+                                                } else {
+                                                    datum
+                                                }
+                                            }),
+                                    ))
+                                })
+                                // The collection avoids the lifetime issues of the `datums` borrow,
+                                // which allows us to avoid multiple unpackings of `input_row`. We
+                                // could avoid this allocation with a custom iterator that understands
+                                // the borrowing, but it probably isn't the leading order issue here.
+                                .collect::<Vec<_>>()
+                        });
 
-                    self.collections.insert(relation_expr.clone(), collection);
+                    err_collection.inspect(|e| println!("flat map err: {:?}", e));
+
+                    self.collections
+                        .insert(relation_expr.clone(), ok_collection);
                 }
 
                 RelationExpr::Filter { input, predicates } => {
@@ -632,19 +646,22 @@ where
                         let env = env.clone();
                         let temp_storage = RowArena::new();
                         let predicates = predicates.clone();
-                        self.collection(input).unwrap().filter(move |input_row| {
-                            let datums = input_row.unpack();
-                            predicates.iter().all(|predicate| {
-                                match predicate
-                                    .eval(&datums, &env, &temp_storage)
-                                    .unwrap_or(Datum::Null)
-                                {
-                                    Datum::True => true,
-                                    Datum::False | Datum::Null => false,
-                                    _ => unreachable!(),
+                        let (ok_collection, err_collection) = self
+                            .collection(input)
+                            .unwrap()
+                            .filter_fallible(move |input_row| {
+                                let datums = input_row.unpack();
+                                for p in &predicates {
+                                    if p.eval(&datums, &env, &temp_storage)? != Datum::True {
+                                        return Ok(false);
+                                    }
                                 }
-                            })
-                        })
+                                Ok::<_, EvalError>(true)
+                            });
+
+                        err_collection.inspect(|e| println!("filter err: {:?}", e));
+
+                        ok_collection
                     };
                     self.collections.insert(relation_expr.clone(), collection);
                 }
@@ -732,16 +749,16 @@ where
                     } else {
                         "Arrange".to_string()
                     };
-                    let keyed = built
-                        .map(move |row| {
-                            let datums = row.unpack();
-                            let temp_storage = RowArena::new();
-                            let key_row = Row::pack(keys2.iter().map(|k| {
-                                k.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)
-                            }));
-                            (key_row, row)
-                        })
-                        .arrange_named::<OrdValSpine<_, _, _, _>>(&name);
+                    let (ok_collection, err_collection) = built.map_fallible(move |row| {
+                        let datums = row.unpack();
+                        let temp_storage = RowArena::new();
+                        let key_row = Row::try_pack(
+                            keys2.iter().map(|k| k.eval(&datums, &env, &temp_storage)),
+                        )?;
+                        Ok::<_, EvalError>((key_row, row))
+                    });
+                    err_collection.inspect(|e| println!("map err: {:?}", e));
+                    let keyed = ok_collection.arrange_named::<OrdValSpine<_, _, _, _>>(&name);
                     self.set_local(&input, key_set, keyed);
                 }
                 if self.arrangement(relation_expr, key_set).is_none() {

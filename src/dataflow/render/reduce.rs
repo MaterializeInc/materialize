@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use timely::dataflow::Scope;
+use std::iter;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::DiffPair;
@@ -17,12 +17,14 @@ use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
+use timely::dataflow::Scope;
 
 use dataflow_types::Timestamp;
-use expr::{AggregateExpr, AggregateFunc, EvalEnv, RelationExpr, ScalarExpr};
+use expr::{AggregateExpr, AggregateFunc, EvalEnv, EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
+use crate::operator::CollectionExt;
 use crate::render::context::Arrangement;
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
@@ -72,26 +74,26 @@ where
             // In this case, we use a special implementation that does not rely on
             // collating aggregates.
             let arrangement = if aggregates.is_empty() {
-                input
-                    .map({
-                        let env = env.clone();
-                        let group_key = group_key.clone();
-                        move |row| {
-                            let temp_storage = RowArena::new();
-                            let datums = row.unpack();
-                            (
-                                Row::pack(group_key.iter().map(|i| {
-                                    i.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)
-                                })),
-                                (),
-                            )
-                        }
-                    })
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
-                        |key, _input, output| {
-                            output.push((key.clone(), 1));
-                        }
-                    })
+                let (ok_collection, err_collection) = input.map_fallible({
+                    let env = env.clone();
+                    let group_key = group_key.clone();
+                    move |row| {
+                        let temp_storage = RowArena::new();
+                        let datums = row.unpack();
+                        let key = Row::try_pack(
+                            group_key
+                                .iter()
+                                .map(|i| i.eval(&datums, &env, &temp_storage)),
+                        )?;
+                        Ok::<_, EvalError>((key, ()))
+                    }
+                });
+                err_collection.inspect(|e| println!("map err: {:?}", e));
+                ok_collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
+                    |key, _input, output| {
+                        output.push((key.clone(), 1));
+                    }
+                })
             } else if aggregates.len() == 1 {
                 // If we have a single aggregate, we need not stage aggregations separately.
                 build_aggregate_stage(input, group_key, &aggregates[0], env, true)
@@ -168,25 +170,23 @@ where
     } = aggr.clone();
 
     // The `partial` collection contains `(key, val)` pairs.
-    let mut partial = input.map({
+    let (mut partial, err_partial) = input.map_fallible({
         let env = env.clone();
         let group_key = group_key.to_vec();
         move |row| {
             let temp_storage = RowArena::new();
             let datums = row.unpack();
-            (
-                Row::pack(
+            Ok::<_, EvalError>((
+                Row::try_pack(
                     group_key
                         .iter()
-                        .map(|i| i.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)),
-                ),
-                Row::pack(Some(
-                    expr.eval(&datums, &env, &temp_storage)
-                        .unwrap_or(Datum::Null),
-                )),
-            )
+                        .map(|i| i.eval(&datums, &env, &temp_storage)),
+                )?,
+                Row::try_pack(iter::once(expr.eval(&datums, &env, &temp_storage)))?,
+            ))
         }
     });
+    err_partial.inspect(|e| println!("reduce aggregate stage err: {:?}", e));
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {

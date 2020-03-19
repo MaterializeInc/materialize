@@ -816,13 +816,18 @@ impl PendingPeek {
                 let datums = row.unpack();
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
-                if self.filter.iter().all(|predicate| {
-                    let temp_storage = RowArena::new();
-                    predicate
+                let mut retain = true;
+                let temp_storage = RowArena::new();
+                for predicate in &self.filter {
+                    let d = predicate
                         .eval(&datums, &self.eval_env, &temp_storage)
-                        .unwrap_or(Datum::Null)
-                        == Datum::True
-                }) {
+                        .map_err(|e| e.to_string())?;
+                    if d != Datum::True {
+                        retain = false;
+                        break;
+                    }
+                }
+                if retain {
                     // Differential dataflow represents collections with binary counts,
                     // but our output representation is unary (as many rows as reported
                     // by the count). We should determine this count, and especially if

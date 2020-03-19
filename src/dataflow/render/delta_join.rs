@@ -9,17 +9,16 @@
 
 #![allow(clippy::op_ref)]
 
+use differential_dataflow::lattice::Lattice;
+use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
 
-use differential_dataflow::lattice::Lattice;
-
-use dogsdogsdogs::altneu::AltNeu;
-
 use dataflow_types::Timestamp;
-use expr::{EvalEnv, RelationExpr, ScalarExpr};
+use expr::{EvalEnv, EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row};
 
 use super::context::{ArrangementFlavor, Context};
+use crate::operator::CollectionExt;
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
@@ -337,18 +336,16 @@ where
     } else {
         let env = env.clone();
         let temp_storage = repr::RowArena::new();
-        updates.filter(move |input_row| {
+        let (ok_collection, err_collection) = updates.filter_fallible(move |input_row| {
             let datums = input_row.unpack();
-            ready_to_go.iter().all(|predicate| {
-                match predicate
-                    .eval(&datums, &env, &temp_storage)
-                    .unwrap_or(Datum::Null)
-                {
-                    Datum::True => true,
-                    Datum::False | Datum::Null => false,
-                    _ => unreachable!(),
+            for p in &ready_to_go {
+                if p.eval(&datums, &env, &temp_storage)? != Datum::True {
+                    return Ok(false);
                 }
-            })
-        })
+            }
+            Ok::<_, EvalError>(true)
+        });
+        err_collection.inspect(|e| println!("delta join filter err: {:?}", e));
+        ok_collection
     }
 }
