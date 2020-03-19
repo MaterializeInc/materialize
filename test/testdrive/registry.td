@@ -128,11 +128,11 @@ $ kafka-create-topic topic=missing-data
 
 $ kafka-ingest format=avro topic=missing-data schema=${schema-v1} key-schema=${key-schema-missing}
   publish=true timestamp=1
-{"before": null, "after": {"a": 1}}
+{"b": 42} {"before": null, "after": {"a": 1}}
 
 $ kafka-ingest format=avro topic=missing-data schema=${schema-v1} key-schema=${key-schema-missing}
   publish=true timestamp=2
-{"before": null, "after": null}
+{"b": 42} {"before": null, "after": null}
 
 ! CREATE SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-missing-data-${testdrive.seed}'
@@ -144,11 +144,11 @@ $ kafka-create-topic topic=mismatched-data
 
 $ kafka-ingest format=avro topic=mismatched-data schema=${schema-v1} key-schema=${key-schema-wrong-type}
   publish=true timestamp=3
-{"before": null, "after": {"a": 1}}
+{"a": 1} {"before": null, "after": {"a": 1}}
 
 $ kafka-ingest format=avro topic=mismatched-data schema=${schema-v1} key-schema=${key-schema-wrong-type}
   publish=true timestamp=4
-{"before": null, "after": null}
+{"a": 0} {"before": null, "after": null}
 
 ! CREATE SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mismatched-data-${testdrive.seed}'
@@ -158,11 +158,11 @@ key and value column types do not match
 
 $ kafka-ingest format=avro topic=data schema=${schema-v1} key-schema=${valid-key-schema}
   publish=true timestamp=5
-{"before": null, "after": {"a": 1}}
+{"a": 1} {"before": null, "after": {"a": 1}}
 
 $ kafka-ingest format=avro topic=data schema=${schema-v1} key-schema=${valid-key-schema}
   publish=true timestamp=6
-{"before": null, "after": null}
+{"a": 0} {"before": null, "after": null}
 
 > CREATE MATERIALIZED SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'

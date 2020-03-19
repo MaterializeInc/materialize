@@ -388,41 +388,61 @@ impl<'a> Iterator for BuiltinReader<'a> {
         }
 
         let mut token = String::new();
-        let mut nesting = 0;
+        let mut nesting = Vec::new();
         let mut done = false;
         for (i, c) in iter {
-            if c == ' ' && nesting == 0 {
+            if c == ' ' && nesting.is_empty() {
                 done = true;
                 continue;
             } else if done {
-                if nesting > 0 {
+                if let Some(nested) = nesting.last() {
                     return Some(Err(InputError {
                         pos: self.pos + i,
-                        msg: "command argument has unterminated open brace".into(),
+                        msg: format!(
+                            "command argument has unterminated open {}",
+                            if nested == &'{' { "brace" } else { "bracket" }
+                        ),
                     }));
                 }
                 let pos = self.pos;
                 self.pos += i;
                 self.inner = &self.inner[i..];
                 return Some(Ok((pos, token)));
-            } else if c == '{' {
-                nesting += 1
-            } else if c == '}' {
-                if nesting == 0 {
+            } else if c == '{' || c == '[' {
+                nesting.push(c);
+            } else if c == '}' || c == ']' {
+                if let Some(nested) = nesting.last() {
+                    if (nested == &'{' && c == '}') || (nested == &'[' && c == ']') {
+                        nesting.pop();
+                    } else {
+                        return Some(Err(InputError {
+                            pos: self.pos + i,
+                            msg: format!(
+                                "command argument has unterminated open {}",
+                                if nested == &'{' { "brace" } else { "bracket" }
+                            ),
+                        }));
+                    }
+                } else {
                     return Some(Err(InputError {
                         pos: self.pos + i,
-                        msg: "command argument has unbalanced close brace".into(),
+                        msg: format!(
+                            "command argument has unbalanced close {}",
+                            if c == '}' { "brace" } else { "bracket" }
+                        ),
                     }));
                 }
-                nesting -= 1
             }
             token.push(c);
         }
 
-        if nesting > 0 {
+        if let Some(nested) = nesting.last() {
             return Some(Err(InputError {
                 pos: self.pos + self.inner.len() - 1,
-                msg: "command argument has unterminated open brace".into(),
+                msg: format!(
+                    "command argument has unterminated open {}",
+                    if nested == &'{' { "brace" } else { "bracket" }
+                ),
             }));
         }
 

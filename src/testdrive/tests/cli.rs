@@ -75,7 +75,7 @@ fn test_cmd_arg_missing_value() {
 }
 
 #[test]
-fn test_cmd_arg_bad_nesting_close() {
+fn test_cmd_arg_bad_nesting_brace_close() {
     cmd()
         .write_stdin("$ cmd arg={}}")
         .assert()
@@ -90,7 +90,7 @@ fn test_cmd_arg_bad_nesting_close() {
 }
 
 #[test]
-fn test_cmd_arg_bad_nesting_open() {
+fn test_cmd_arg_bad_nesting_brace_open() {
     cmd()
         .write_stdin("$ cmd arg={{one} two three")
         .assert()
@@ -100,6 +100,66 @@ fn test_cmd_arg_bad_nesting_open() {
      |
    1 | $ cmd arg={{one} two three
      |                          ^
+"#,
+        );
+}
+
+#[test]
+fn test_cmd_arg_bad_nesting_bracket_close() {
+    cmd()
+        .write_stdin("$ cmd arg=[{} things ] more]")
+        .assert()
+        .failure()
+        .stderr(
+            r#"<stdin>:1:28: error: command argument has unbalanced close bracket
+     |
+   1 | $ cmd arg=[{} things ] more]
+     |                            ^
+"#,
+        );
+}
+
+#[test]
+fn test_cmd_arg_bad_nesting_bracket_open() {
+    cmd()
+        .write_stdin("$ cmd arg=[{one} two three")
+        .assert()
+        .failure()
+        .stderr(
+            r#"<stdin>:1:26: error: command argument has unterminated open bracket
+     |
+   1 | $ cmd arg=[{one} two three
+     |                          ^
+"#,
+        );
+}
+
+#[test]
+fn test_cmd_arg_bad_nesting_intersect1() {
+    cmd()
+        .write_stdin("$ cmd arg=[{one]} two three")
+        .assert()
+        .failure()
+        .stderr(
+            r#"<stdin>:1:16: error: command argument has unterminated open brace
+     |
+   1 | $ cmd arg=[{one]} two three
+     |                ^
+"#,
+        );
+}
+
+#[test]
+fn test_cmd_arg_bad_nesting_intersect2() {
+    cmd()
+        .write_stdin("$ cmd arg=[{one {} two} [ three}]")
+        .assert()
+        .failure()
+        .stderr(
+            r#"<stdin>:1:32: error: command argument has unterminated open bracket
+     |
+   1 | $ cmd arg=[{one {} two} [ three}]
+     |                                ^
 "#,
         );
 }

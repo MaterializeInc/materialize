@@ -15,6 +15,7 @@ use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::stream::{FuturesUnordered, TryStreamExt};
 use rdkafka::producer::FutureRecord;
+use serde_json::{Deserializer, Value};
 
 use crate::action::{Action, State};
 use crate::format::protobuf;
@@ -107,8 +108,9 @@ impl Action for IngestAction {
     fn redo(&self, state: &mut State) -> Result<(), String> {
         enum Encoder {
             Avro {
-                schema: Schema,
-                schema_id: i32,
+                key_encode: Option<(Schema, i32)>,
+                value_schema: Schema,
+                value_schema_id: i32,
             },
             Proto {
                 parser: &'static dyn Fn(&str) -> Result<protobuf::DynMessage, failure::Error>,
@@ -133,7 +135,7 @@ impl Action for IngestAction {
                 key_schema,
                 value_schema,
             } => {
-                let schema_id = if self.publish {
+                let value_schema_id = if self.publish {
                     let ccsr_subject = format!("{}-value", topic_name);
                     let schema_id = state.tokio_runtime.block_on(
                         state
@@ -141,22 +143,35 @@ impl Action for IngestAction {
                             .publish_schema(&ccsr_subject, &value_schema)
                             .map_err(|e| format!("schema registry error: {}", e)),
                     )?;
-                    if let Some(key_schema) = key_schema {
+                    schema_id
+                } else {
+                    1
+                };
+                let key_encode = if let Some(key_schema) = key_schema {
+                    let schema = interchange::avro::parse_schema(&key_schema)
+                        .map_err(|e| format!("parsing avro schema: {}", e))?;
+                    if self.publish {
                         let key_subject = format!("{}-key", topic_name);
-                        state.tokio_runtime.block_on(
+                        let schema_id = state.tokio_runtime.block_on(
                             state
                                 .ccsr_client
                                 .publish_schema(&key_subject, &key_schema)
                                 .map_err(|e| format!("schema registry error: {}", e)),
                         )?;
+                        Some((schema, schema_id))
+                    } else {
+                        Some((schema, 2))
                     }
-                    schema_id
                 } else {
-                    1
+                    None
                 };
-                let schema = interchange::avro::parse_schema(&value_schema)
+                let value_schema = interchange::avro::parse_schema(&value_schema)
                     .map_err(|e| format!("parsing avro schema: {}", e))?;
-                Encoder::Avro { schema, schema_id }
+                Encoder::Avro {
+                    key_encode,
+                    value_schema,
+                    value_schema_id,
+                }
             }
             Format::Proto { message } => match message.as_ref() {
                 ".Struct" => Encoder::Proto {
@@ -174,45 +189,90 @@ impl Action for IngestAction {
 
         let futs = FuturesUnordered::new();
         for row in &self.rows {
-            let mut buf = Vec::new();
+            let mut val_buf = Vec::new();
+            let mut key_buf = Vec::new();
             match &encoder {
-                Encoder::Avro { schema, schema_id } => {
+                Encoder::Avro {
+                    key_encode,
+                    value_schema,
+                    value_schema_id,
+                } => {
+                    let (key_row, val_row) = if key_encode.is_some() {
+                        let mut tokens = Deserializer::from_str(row).into_iter::<Value>();
+                        let key_row = tokens.next();
+                        let val_row = tokens.next();
+
+                        if tokens.next().is_some() || key_row.is_none() || val_row.is_none() {
+                            return Err(format!(
+                                "invalid row: {}; testdrive expects two json objects",
+                                row
+                            ));
+                        }
+
+                        (Some(key_row.unwrap()), val_row.unwrap())
+                    } else {
+                        (None, serde_json::from_str(row))
+                    };
                     let val = crate::format::avro::json_to_avro(
-                        &serde_json::from_str(row)
-                            .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
-                        &schema,
+                        &val_row.map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
+                        &value_schema,
                     )?
-                    .resolve(&schema)
+                    .resolve(&value_schema)
                     .map_err(|e| format!("resolving avro schema: {}", e))?;
                     // The first byte is a magic byte (0) that indicates the Confluent
                     // serialization format version, and the next four bytes are a
                     // 32-bit schema ID.
                     //
                     // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-                    buf.write_u8(0).unwrap();
-                    buf.write_i32::<NetworkEndian>(*schema_id).unwrap();
-                    buf.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
+                    val_buf.write_u8(0).unwrap();
+                    val_buf
+                        .write_i32::<NetworkEndian>(*value_schema_id)
+                        .unwrap();
+                    val_buf.extend(
+                        avro::to_avro_datum(&value_schema, val).map_err(|e| e.to_string())?,
+                    );
+                    if let Some((key_schema, key_schema_id)) = key_encode {
+                        let key = crate::format::avro::json_to_avro(
+                            &key_row
+                                .unwrap()
+                                .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
+                            &key_schema,
+                        )?;
+                        key_buf.write_u8(0).unwrap();
+                        key_buf.write_i32::<NetworkEndian>(*key_schema_id).unwrap();
+                        key_buf.extend(
+                            avro::to_avro_datum(&key_schema, key).map_err(|e| e.to_string())?,
+                        );
+                    }
                 }
                 Encoder::Proto { parser, validator } => {
                     let msg = parser(row)
                         .map_err(|e| format!("converting row to type {} -> {}", row, e))?;
-                    buf = msg
+                    val_buf = msg
                         .write_to_bytes()
                         .map_err(|e| format!("writing protobuf message for {}: {}", row, e))?;
                     // There are a variety of `write_*` methods on `Message` that don't
                     // seem to automatically do the right thing. This should always
                     // succeed, otherwise there is no chance for the server.
-                    let _parsed = validator(&buf)
+                    let _parsed = validator(&val_buf)
                         .map_err(|e| format!("error validating proto row={}\nerror={}", row, e))?;
                 }
                 Encoder::Bytes => {
-                    buf = row.as_bytes().to_vec();
+                    val_buf = row.as_bytes().to_vec();
                 }
             }
 
-            let mut record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&topic_name)
-                .payload(&buf)
+            let mut record: FutureRecord<_, _> = FutureRecord::to(&topic_name)
+                .payload(&val_buf)
                 .partition(self.partition);
+
+            if let Format::Avro {
+                key_schema: Some(_key_schema),
+                ..
+            } = &self.format
+            {
+                record = record.key(&key_buf);
+            }
             if let Some(timestamp) = self.timestamp {
                 record = record.timestamp(timestamp);
             }
