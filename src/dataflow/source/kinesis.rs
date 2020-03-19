@@ -18,8 +18,8 @@ use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
     GetRecordsError, GetRecordsInput, GetRecordsOutput, GetShardIteratorError,
-    GetShardIteratorInput, GetShardIteratorOutput, Kinesis, KinesisClient, ListShardsInput,
-    ListShardsOutput,
+    GetShardIteratorInput, GetShardIteratorOutput, Kinesis, KinesisClient, ListShardsError,
+    ListShardsInput, ListShardsOutput,
 };
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
@@ -70,48 +70,86 @@ where
         let activator = scope.activator_for(&info.address[..]);
 
         // Create a new AWS Kinesis Client.
-        let request_dispatcher = HttpClient::new().unwrap();
-        let provider = StaticProvider::new(access_key, secret_access_key, None, None);
-        let client = KinesisClient::new_with(request_dispatcher, provider, region);
-
-        // todo@jldlaughlin: Read from multiple shards! #2222
-        let shards = block_on(get_shards_list(&client, &stream_name));
-        let shard = match shards.shards {
-            Some(shards) => match shards.len() {
-                1 => Some(shards[0].clone()),
-                _ => {
-                    error!("Materialize currently only supports reading from a single shard. Found: {}", shards.len());
+        let client = {
+            match HttpClient::new() {
+                Ok(http_client) => {
+                    let provider = StaticProvider::new(access_key, secret_access_key, None, None);
+                    Some(KinesisClient::new_with(http_client, provider, region))
+                }
+                Err(tls_err) => {
+                    error!("{}", tls_err);
                     None
                 }
-            },
-            None => {
-                error!("Did not find any shards in Kinesis stream: {}", stream_name);
-                None
             }
         };
-        let mut shard_iterator = match &shard {
-            Some(shard) => {
-                match block_on(get_shard_iterator(
-                    &client,
-                    &shard.shard_id,
-                    &stream_name,
-                    "TRIM_HORIZON",
-                )) {
-                    Ok(output) => output.shard_iterator,
-                    Err(rusoto_err) => {
-                        // todo: Better error handling here! Not all errors mean we're done/can't progress.
-                        error!("{}", rusoto_err);
+
+        let shard = match &client {
+            Some(client) => {
+                match block_on(get_shards_list(&client, &stream_name)) {
+                    Ok(shards_output) => {
+                        match shards_output.shards {
+                            // todo@jldlaughlin: Read from multiple shards! #2222
+                            Some(shards) => match shards.len() {
+                                1 => Some(shards[0].clone()),
+                                _ => {
+                                    error!("Materialize currently only supports reading from a single shard. Found: {}", shards.len());
+                                    None
+                                }
+                            },
+                            None => {
+                                error!(
+                                    "Did not find any shards in Kinesis stream: {}",
+                                    stream_name
+                                );
+                                None
+                            }
+                        }
+                    }
+                    Err(shards_err) => {
+                        error!("{}", shards_err);
                         None
                     }
                 }
             }
-            None => {
-                // Same error as not finding a shard above.
-                None
+            None => None,
+        };
+
+        let mut shard_iterator = match &client {
+            Some(client) => {
+                match &shard {
+                    Some(shard) => {
+                        match block_on(get_shard_iterator(
+                            &client,
+                            &shard.shard_id,
+                            &stream_name,
+                            "TRIM_HORIZON",
+                        )) {
+                            Ok(output) => output.shard_iterator,
+                            Err(rusoto_err) => {
+                                // todo: Better error handling here! Not all errors mean we're done/can't progress.
+                                error!("{}", rusoto_err);
+                                None
+                            }
+                        }
+                    }
+                    None => {
+                        // Same error as not finding a shard above.
+                        None
+                    }
+                }
             }
+            None => None,
         };
 
         move |cap, output| {
+            let client = match &client {
+                Some(client) => client,
+                None => {
+                    error!("Unable to proceed with Kinesis source without a client. Marking source as done.");
+                    return SourceStatus::Done;
+                }
+            };
+
             // If reading from Kinesis takes more than 10 milliseconds,
             // pause execution and reactivate later.
             let timer = std::time::Instant::now();
@@ -242,7 +280,10 @@ async fn get_shard_iterator(
     client.get_shard_iterator(get_shard_iterator).await
 }
 
-async fn get_shards_list(client: &KinesisClient, stream_name: &str) -> ListShardsOutput {
+async fn get_shards_list(
+    client: &KinesisClient,
+    stream_name: &str,
+) -> Result<ListShardsOutput, RusotoError<ListShardsError>> {
     let list_shards_input = ListShardsInput {
         exclusive_start_shard_id: None,
         max_results: None,
@@ -250,5 +291,5 @@ async fn get_shards_list(client: &KinesisClient, stream_name: &str) -> ListShard
         stream_creation_timestamp: None,
         stream_name: Some(String::from(stream_name)),
     };
-    client.list_shards(list_shards_input).await.unwrap()
+    client.list_shards(list_shards_input).await
 }
