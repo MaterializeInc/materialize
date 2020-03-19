@@ -428,6 +428,21 @@ impl Row {
         packer.finish()
     }
 
+    /// Like [`Row::pack`], but the provided iterator is allowed to produce an
+    /// error, in which case the packing operation is aborted and the error
+    /// returned.
+    pub fn try_pack<'a, I, D, E>(iter: I) -> Result<Row, E>
+    where
+        I: IntoIterator<Item = Result<D, E>>,
+        D: Borrow<Datum<'a>>,
+    {
+        // make a big buffer up front to avoid resizing
+        let mut packer = RowPacker::new();
+        packer.try_extend(iter)?;
+        // drop the excess capacity
+        Ok(packer.finish())
+    }
+
     /// Pack a slice of `Datum`s into a `Row`.
     ///
     /// This method has the advantage over `pack` that it can determine the required
@@ -622,6 +637,7 @@ impl RowPacker {
         push_datum(&mut self.data, datum)
     }
 
+    /// Extends `self` with the contents of an iterator.
     pub fn extend<'a, I, D>(&mut self, iter: I)
     where
         I: IntoIterator<Item = D>,
@@ -630,6 +646,23 @@ impl RowPacker {
         for datum in iter {
             self.push(*datum.borrow());
         }
+    }
+
+    /// Like [`RowPacker::extend`], but the provided iterator is allowed to
+    /// produce an error.
+    ///
+    /// `try_extend` is not atomic, so if the iterator produces an error `self`
+    /// will still be extended with all elements the iterator produces before
+    /// the error.
+    pub fn try_extend<'a, I, E, D>(&mut self, iter: I) -> Result<(), E>
+    where
+        I: IntoIterator<Item = Result<D, E>>,
+        D: Borrow<Datum<'a>>,
+    {
+        for datum in iter {
+            self.push(*datum?.borrow());
+        }
+        Ok(())
     }
 
     /// Appends the datums of an entire `Row`.

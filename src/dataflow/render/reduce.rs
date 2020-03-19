@@ -7,22 +7,25 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use timely::dataflow::Scope;
+use std::iter;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
+use timely::dataflow::Scope;
 
 use dataflow_types::Timestamp;
-use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr};
+use expr::{AggregateExpr, AggregateFunc, EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
+use crate::operator::CollectionExt;
 use crate::render::context::Arrangement;
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
@@ -65,39 +68,40 @@ where
             let keys_clone = group_key.clone();
 
             self.ensure_rendered(input, scope, worker_index);
-            let input = self.collection(input).unwrap();
+            let (ok_input, err_input) = self.collection(input).unwrap();
 
             // Distinct is a special case, as there are no aggregates to aggregate.
             // In this case, we use a special implementation that does not rely on
             // collating aggregates.
-            let arrangement = if aggregates.is_empty() {
-                input
-                    .map({
-                        let group_key = group_key.clone();
-                        move |row| {
-                            let temp_storage = RowArena::new();
-                            let datums = row.unpack();
-                            (
-                                Row::pack(group_key.iter().map(|i| {
-                                    i.eval(&datums, &temp_storage).unwrap_or(Datum::Null)
-                                })),
-                                (),
-                            )
-                        }
-                    })
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
+            let (oks, errs) = if aggregates.is_empty() {
+                let (ok_collection, err_collection) = ok_input.map_fallible({
+                    let group_key = group_key.clone();
+                    move |row| {
+                        let temp_storage = RowArena::new();
+                        let datums = row.unpack();
+                        let key = Row::try_pack(
+                            group_key.iter().map(|i| i.eval(&datums, &temp_storage)),
+                        )?;
+                        Ok::<_, EvalError>((key, ()))
+                    }
+                });
+                (
+                    ok_collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
                         |key, _input, output| {
                             output.push((key.clone(), 1));
                         }
-                    })
+                    }),
+                    err_input.concat(&err_collection),
+                )
             } else if aggregates.len() == 1 {
                 // If we have a single aggregate, we need not stage aggregations separately.
-                build_aggregate_stage(input, group_key, &aggregates[0], true)
+                build_aggregate_stage(ok_input, err_input, group_key, &aggregates[0], true)
             } else {
                 // We'll accumulate partial aggregates here, where each contains updates
                 // of the form `(key, (index, value))`. This is eventually concatenated,
                 // and fed into a final reduce to put the elements in order.
-                let mut partials = Vec::with_capacity(aggregates.len());
+                let mut ok_partials = Vec::with_capacity(aggregates.len());
+                let mut err_partials = Vec::with_capacity(aggregates.len());
                 // Bound the complex dataflow in a region, for better interpretability.
                 scope.region(|region| {
                     // Create an iterator over collections, where each is the application
@@ -105,11 +109,19 @@ where
                     // position in the final results. To be followed by a merge reduction.
                     for (index, aggr) in aggregates.iter().enumerate() {
                         // Collect the now-aggregated partial result, annotated with its position.
-                        partials.push(
-                            build_aggregate_stage(input.enter(region), group_key, aggr, false)
+                        let (ok_partial, err_partial) = build_aggregate_stage(
+                            ok_input.enter(region),
+                            err_input.enter(region),
+                            group_key,
+                            aggr,
+                            false,
+                        );
+                        ok_partials.push(
+                            ok_partial
                                 .as_collection(move |key, val| (key.clone(), (index, val.clone())))
                                 .leave(),
                         );
+                        err_partials.push(err_partial.leave());
                     }
                 });
 
@@ -120,7 +132,7 @@ where
                 // aggregates, which we check with assertions; this is true independent of transient
                 // change and inconsistency in the inputs; if this is not the case there is a defect
                 // in differential dataflow.
-                differential_dataflow::collection::concatenate::<_, _, _, _>(scope, partials)
+                let oks = differential_dataflow::collection::concatenate(scope, ok_partials)
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
                     let aggregates_len = aggregates.len();
                     move |key, input, output| {
@@ -136,10 +148,12 @@ where
                         }
                         output.push((result.finish(), 1));
                     }
-                })
+                });
+                let errs = differential_dataflow::collection::concatenate(scope, err_partials);
+                (oks, errs)
             };
             let index = (0..keys_clone.len()).collect::<Vec<_>>();
-            self.set_local_columns(relation_expr, &index[..], arrangement);
+            self.set_local_columns(relation_expr, &index[..], (oks, errs.arrange()));
         }
     }
 }
@@ -149,11 +163,12 @@ where
 /// This method accommodates in-place aggregations like sums, hierarchical aggregations like min and max,
 /// and other aggregations that may be neither of those things. It also applies distinctness if required.
 fn build_aggregate_stage<G>(
-    input: Collection<G, Row>,
+    ok_input: Collection<G, Row>,
+    err_input: Collection<G, EvalError>,
     group_key: &[ScalarExpr],
     aggr: &AggregateExpr,
     prepend_key: bool,
-) -> Arrangement<G, Row>
+) -> (Arrangement<G, Row>, Collection<G, EvalError>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -165,21 +180,15 @@ where
     } = aggr.clone();
 
     // The `partial` collection contains `(key, val)` pairs.
-    let mut partial = input.map({
+    let (mut partial, err_partial) = ok_input.map_fallible({
         let group_key = group_key.to_vec();
         move |row| {
             let temp_storage = RowArena::new();
             let datums = row.unpack();
-            (
-                Row::pack(
-                    group_key
-                        .iter()
-                        .map(|i| i.eval(&datums, &temp_storage).unwrap_or(Datum::Null)),
-                ),
-                Row::pack(Some(
-                    expr.eval(&datums, &temp_storage).unwrap_or(Datum::Null),
-                )),
-            )
+            Ok::<_, EvalError>((
+                Row::try_pack(group_key.iter().map(|i| i.eval(&datums, &temp_storage)))?,
+                Row::try_pack(iter::once(expr.eval(&datums, &temp_storage)))?,
+            ))
         }
     });
 
@@ -193,7 +202,7 @@ where
     // are one of the two, but this should work even with methods that are neither.
     let (accumulable, hierarchical) = accumulable_hierarchical(&func);
 
-    if accumulable {
+    let ok_out = if accumulable {
         build_accumulable(partial, func, prepend_key)
     } else {
         // If hierarchical, we can repeatedly digest the groups, to minimize the incremental
@@ -220,7 +229,9 @@ where
                 target.push((packer.finish(), 1));
             }
         })
-    }
+    };
+
+    (ok_out, err_input.concat(&err_partial))
 }
 
 /// Builds the dataflow for a reduction that can be performed in-place.
