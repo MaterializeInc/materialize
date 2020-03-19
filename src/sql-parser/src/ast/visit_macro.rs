@@ -640,8 +640,8 @@ macro_rules! make_visitor {
                 visit_tail(self, name)
             }
 
-            fn visit_explain(&mut self, stage: &'ast $($mut)* Stage, query: &'ast $($mut)* Query) {
-                visit_explain(self, stage, query)
+            fn visit_explain(&mut self, stage: &'ast $($mut)* Stage, explainee: &'ast $($mut)* Explainee) {
+                visit_explain(self, stage, explainee)
             }
         }
 
@@ -755,7 +755,7 @@ macro_rules! make_visitor {
                 Statement::Tail { name } => {
                     visitor.visit_tail(name);
                 }
-                Statement::Explain { stage, query } => visitor.visit_explain(stage, query),
+                Statement::Explain { stage, explainee } => visitor.visit_explain(stage, explainee),
             }
         }
 
@@ -1801,8 +1801,11 @@ macro_rules! make_visitor {
             visitor.visit_object_name(name);
         }
 
-        pub fn visit_explain<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, _stage: &'ast $($mut)* Stage, query: &'ast $($mut)* Query) {
-            visitor.visit_query(query);
+        pub fn visit_explain<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, _stage: &'ast $($mut)* Stage, explainee: &'ast $($mut)* Explainee) {
+            match explainee {
+                Explainee::View(name) => visitor.visit_object_name(name),
+                Explainee::Query(query) => visitor.visit_query(query),
+            }
         }
     }
 }

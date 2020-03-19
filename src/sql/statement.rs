@@ -31,8 +31,8 @@ use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, CsrSeed, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, Query,
-    SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
+    AvroSchema, Connector, CsrSeed, Explainee, Format, Ident, IfExistsBehavior, ObjectName,
+    ObjectType, Query, SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
 };
 
 use crate::query::QueryLifetime;
@@ -264,7 +264,7 @@ pub fn handle_statement(
         Statement::ShowCreateView { view_name } => handle_show_create_view(scx, view_name),
         Statement::ShowCreateSource { source_name } => handle_show_create_source(scx, source_name),
         Statement::ShowCreateSink { sink_name } => handle_show_create_sink(scx, sink_name),
-        Statement::Explain { stage, query } => handle_explain(scx, stage, *query, params),
+        Statement::Explain { stage, explainee } => handle_explain(scx, stage, explainee, params),
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
     }
@@ -1311,11 +1311,13 @@ fn handle_select(
 fn handle_explain(
     scx: &StatementContext,
     stage: Stage,
-    query: Query,
+    explainee: Explainee,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _desc, _finishing) =
-        handle_query(scx, query, params, QueryLifetime::OneShot)?;
+    let (relation_expr, _desc, _finishing) = match explainee {
+        Explainee::View(name) => panic!("TODO(jamii)"),
+        Explainee::Query(query) => handle_query(scx, *query, params, QueryLifetime::OneShot)?,
+    };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {

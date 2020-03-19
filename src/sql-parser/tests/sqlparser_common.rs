@@ -3988,7 +3988,7 @@ fn parse_explain() {
         ast,
         Statement::Explain {
             stage: Stage::Dataflow,
-            query: Box::new(verified_query("SELECT 665")),
+            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
         }
     );
 
@@ -3997,7 +3997,19 @@ fn parse_explain() {
         ast,
         Statement::Explain {
             stage: Stage::Plan,
-            query: Box::new(verified_query("SELECT 665")),
+            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+        }
+    );
+
+    let ast = verified_stmt("EXPLAIN PLAN FOR VIEW FOO");
+    assert_eq!(
+        ast,
+        Statement::Explain {
+            stage: Stage::Plan,
+            explainee: Explainee::View(ObjectName(vec![Ident {
+                value: "FOO".to_owned(),
+                quote_style: None
+            }])),
         }
     );
 }

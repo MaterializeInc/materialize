@@ -2762,10 +2762,13 @@ impl Parser {
         };
         self.expect_keyword("FOR")?;
 
-        Ok(Statement::Explain {
-            stage,
-            query: Box::new(self.parse_query()?),
-        })
+        let explainee = if self.parse_keyword("VIEW") {
+            Explainee::View(self.parse_object_name()?)
+        } else {
+            Explainee::Query(Box::new(self.parse_query()?))
+        };
+
+        Ok(Statement::Explain { stage, explainee })
     }
 }
 
