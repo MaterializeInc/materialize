@@ -309,6 +309,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "ore",
  "regex",
  "repr",
  "rusqlite",
@@ -1549,7 +1550,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
 name = "materialized"
-version = "0.1.3-dev"
+version = "0.1.4-dev"
 dependencies = [
  "avro",
  "backtrace",
@@ -3056,7 +3057,7 @@ dependencies = [
  "getopts",
  "itertools",
  "lazy_static",
- "md5",
+ "md-5",
  "ore",
  "pgrepr",
  "regex",
@@ -3237,7 +3238,7 @@ dependencies = [
  "getopts",
  "interchange",
  "lazy_static",
- "md5",
+ "md-5",
  "ore",
  "parse_duration",
  "pgrepr",

@@ -125,7 +125,7 @@ EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
 0 =
 | Get materialize.public.date_trunc_timestamps (u5)
-| Map date_truncts_day(#0)
+| Map date_trunc_day_ts(#0)
 | Project (#1)
 
 EOF
@@ -300,3 +300,17 @@ query T
 SELECT coalesce(1, 1 / 0, a) FROM v
 ----
 1
+
+# Tests issue #2355, that type information for Maps are correctly constructed
+# before being passed to expressions for optimization.
+statement ok
+CREATE VIEW bytes AS SELECT null::bytea AS data
+
+query T
+SELECT
+    COALESCE(data::jsonb->>'field1', data::jsonb->>'field2')
+FROM (
+    SELECT CONVERT_FROM(data, 'utf8') AS data FROM bytes
+)
+----
+NULL

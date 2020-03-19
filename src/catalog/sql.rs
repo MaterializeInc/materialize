@@ -14,54 +14,89 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use serde::{Deserialize, Serialize};
 
 use expr::GlobalId;
+use ore::cast::CastFrom;
 
 use crate::error::{Error, ErrorKind};
 use crate::names::{DatabaseSpecifier, FullName};
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
 
-const SCHEMA: &str = "
-CREATE TABLE gid_alloc (
-    next_gid integer NOT NULL
-);
+/// Schema migrations for the on-disk state.
+const MIGRATIONS: &[&str] = &[
+    // Creates initial schema.
+    //
+    // Introduced for v0.1.0.
+    "CREATE TABLE gid_alloc (
+         next_gid integer NOT NULL
+     );
 
-CREATE TABLE databases (
-    id   integer PRIMARY KEY,
-    name text NOT NULL UNIQUE
-);
+     CREATE TABLE databases (
+         id   integer PRIMARY KEY,
+         name text NOT NULL UNIQUE
+     );
 
-CREATE TABLE schemas (
-    id          integer PRIMARY KEY,
-    database_id integer REFERENCES databases,
-    name        text NOT NULL,
-    UNIQUE (database_id, name)
-);
+     CREATE TABLE schemas (
+         id          integer PRIMARY KEY,
+         database_id integer REFERENCES databases,
+         name        text NOT NULL,
+         UNIQUE (database_id, name)
+     );
 
-CREATE TABLE items (
-    gid        blob PRIMARY KEY,
-    schema_id  integer REFERENCES schemas,
-    name       text NOT NULL,
-    definition blob NOT NULL,
-    UNIQUE (schema_id, name)
-);
+     CREATE TABLE items (
+         gid        blob PRIMARY KEY,
+         schema_id  integer REFERENCES schemas,
+         name       text NOT NULL,
+         definition blob NOT NULL,
+         UNIQUE (schema_id, name)
+     );
 
-CREATE TABLE timestamps (
-    sid blob NOT NULL,
-    vid blob NOT NULL,
-    pcount blob NOT NULL,
-    pid blob NOT NULL,
-    timestamp integer NOT NULL,
-    offset blob NOT NULL,
-    PRIMARY KEY (sid, vid, pid, timestamp)
-);
+     CREATE TABLE timestamps (
+         sid blob NOT NULL,
+         vid blob NOT NULL,
+         timestamp integer NOT NULL,
+         offset blob NOT NULL,
+         PRIMARY KEY (sid, vid, timestamp)
+     );
 
-INSERT INTO gid_alloc VALUES (1);
-INSERT INTO databases VALUES (1, 'materialize');
-INSERT INTO schemas VALUES
-    (1, NULL, 'mz_catalog'),
-    (2, NULL, 'pg_catalog'),
-    (3, 1, 'public');
-";
+     INSERT INTO gid_alloc VALUES (1);
+     INSERT INTO databases VALUES (1, 'materialize');
+     INSERT INTO schemas VALUES
+         (1, NULL, 'mz_catalog'),
+         (2, NULL, 'pg_catalog'),
+         (3, 1, 'public');",
+    // Adjusts timestamp table to support multi-partition Kafka topics.
+    //
+    // Introduced for v0.1.4.
+    //
+    // ATTENTION: this migration blows away data and must not be used as a model
+    // for future migrations! It is only acceptable now because we have not yet
+    // made any consistency promises to users.
+    "DROP TABLE timestamps;
+     CREATE TABLE timestamps (
+        sid blob NOT NULL,
+        vid blob NOT NULL,
+        pcount blob NOT NULL,
+        pid blob NOT NULL,
+        timestamp integer NOT NULL,
+        offset blob NOT NULL,
+        PRIMARY KEY (sid, vid, pid, timestamp)
+    );",
+    // Add new migrations here.
+    //
+    // Migrations should be preceded with a comment of the following form:
+    //
+    //     > Short summary of migration's purpose.
+    //     >
+    //     > Introduced in <VERSION>.
+    //     >
+    //     > Optional additional commentary about safety or approach.
+    //
+    // Please include @benesch on any code reviews that add or edit migrations.
+    // Migrations must preserve backwards compatibility with all past releases
+    // of materialized. Migrations can be edited up until they ship in a
+    // release, after which they must never be removed, only patched by future
+    // migrations.
+];
 
 #[derive(Debug)]
 pub struct Connection {
@@ -74,24 +109,37 @@ impl Connection {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
         };
+
+        // Validate application ID.
         let tx = sqlite.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
         if app_id == 0 {
-            tx.execute(
-                &format!("PRAGMA application_id = {}", APPLICATION_ID),
-                params![],
-            )?;
-            // Create the on-disk schema, since it doesn't already exist.
-            tx.execute_batch(&SCHEMA)?;
-            true
-        } else if app_id == APPLICATION_ID {
-            false
-        } else {
+            // Fresh catalog, so install the correct ID. We also apply the
+            // zeroth migration for historical reasons: the default
+            // `user_version` of zero indicates that the zeroth migration has
+            // been applied.
+            tx.execute_batch(&format!("PRAGMA application_id = {}", APPLICATION_ID))?;
+            tx.execute_batch(MIGRATIONS[0])?;
+        } else if app_id != APPLICATION_ID {
             return Err(Error::new(ErrorKind::Corruption {
                 detail: "catalog file has incorrect application_id".into(),
             }));
         };
         tx.commit()?;
+
+        // Run unapplied migrations. The `user_version` field stores the index
+        // of the last migration that was run.
+        let version: i32 = sqlite.query_row("PRAGMA user_version", params![], |row| row.get(0))?;
+        for (i, sql) in MIGRATIONS
+            .iter()
+            .enumerate()
+            .skip(usize::cast_from(version) + 1)
+        {
+            let tx = sqlite.transaction()?;
+            tx.execute_batch(sql)?;
+            tx.execute_batch(&format!("PRAGMA user_version = {}", i))?;
+            tx.commit()?;
+        }
 
         Ok(Connection { inner: sqlite })
     }

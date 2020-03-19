@@ -39,6 +39,7 @@ pub mod reduction_pushdown;
 pub mod redundant_join;
 pub mod simplify;
 pub mod split_predicates;
+pub mod topk_elision;
 pub mod update_let;
 // pub mod use_indexes;
 
@@ -188,6 +189,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::constant_join::InsertConstantJoin),
                     Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::transform::redundant_join::RedundantJoin),
+                    Box::new(crate::transform::topk_elision::TopKElision),
                 ],
             }),
             // TODO (wangandi): materialize#616 the FilterEqualLiteral transform

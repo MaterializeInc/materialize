@@ -113,6 +113,17 @@ steps:
           run: billing-demo
     if: $CHANGED_RUST
 
+  - id: catalog-compat
+    label: ":book: catalog compatibility check"
+    depends_on: build
+    timeout_in_minutes: 30
+    plugins:
+      - MaterializeInc/uid#master: ~
+      - docker-compose#v3.0.3:
+          config: ci/test/catalog-compat.compose.yml
+          run: catalog-compat
+    if: $CHANGED_RUST
+
   - id: metabase-demo
     label: "metabase-demo"
     depends_on: build
