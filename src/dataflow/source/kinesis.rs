@@ -10,8 +10,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
-use expr::SourceInstanceId;
+use failure::{bail, ResultExt};
 use futures::executor::block_on;
 use log::{error, warn};
 use rusoto_core::{HttpClient, RusotoError};
@@ -21,6 +20,9 @@ use rusoto_kinesis::{
     GetShardIteratorInput, GetShardIteratorOutput, Kinesis, KinesisClient, ListShardsError,
     ListShardsInput, ListShardsOutput,
 };
+
+use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
+use expr::SourceInstanceId;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 
@@ -43,13 +45,6 @@ pub fn kinesis<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let KinesisSourceConnector {
-        stream_name,
-        region,
-        access_key,
-        secret_access_key,
-    } = connector.clone();
-
     // Putting source information on the Timestamp channel lets this
     // Dataflow worker communicate that it has created a source.
     let ts = if read_kinesis {
@@ -59,81 +54,26 @@ where
         assert!(prev.is_none());
         timestamp_tx.as_ref().borrow_mut().push((
             id,
-            Some((ExternalSourceConnector::Kinesis(connector), consistency)),
+            Some((
+                ExternalSourceConnector::Kinesis(connector.clone()),
+                consistency,
+            )),
         ));
         Some(timestamp_tx)
     } else {
         None
     };
 
+    let mut state = create_state(connector);
+
     let (stream, capability) = source(id, ts, scope, &name.clone(), move |info| {
         let activator = scope.activator_for(&info.address[..]);
 
-        // Create a new AWS Kinesis Client.
-        let client = {
-            match HttpClient::new() {
-                Ok(http_client) => {
-                    let provider = StaticProvider::new(access_key, secret_access_key, None, None);
-                    Some(KinesisClient::new_with(http_client, provider, region))
-                }
-                Err(tls_err) => {
-                    error!("{}", tls_err);
-                    None
-                }
-            }
-        };
-
-        let mut shard_iterator = match &client {
-            Some(client) => {
-                match block_on(get_shards_list(&client, &stream_name)) {
-                    Ok(shards_output) => {
-                        match shards_output.shards {
-                            // todo@jldlaughlin: Read from multiple shards! #2222
-                            Some(shards) => match shards.len() {
-                                1 => {
-                                    let shard = shards[0].clone();
-                                    match block_on(get_shard_iterator(
-                                        &client,
-                                        &shard.shard_id,
-                                        &stream_name,
-                                        "TRIM_HORIZON",
-                                    )) {
-                                        Ok(output) => output.shard_iterator,
-                                        Err(rusoto_err) => {
-                                            // todo: Better error handling here! Not all errors mean we're done/can't progress.
-                                            error!("{}", rusoto_err);
-                                            None
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    error!("Materialize currently only supports reading from a single shard. Found: {}", shards.len());
-                                    None
-                                }
-                            },
-                            None => {
-                                error!(
-                                    "Did not find any shards in Kinesis stream: {}",
-                                    stream_name
-                                );
-                                None
-                            }
-                        }
-                    }
-                    Err(shards_err) => {
-                        error!("{}", shards_err);
-                        None
-                    }
-                }
-            }
-            None => None,
-        };
-
         move |cap, output| {
-            let client = match &client {
-                Some(client) => client,
-                None => {
-                    error!("Unable to proceed with Kinesis source without a client. Marking source as done.");
+            let (client, shard_iterator) = match &mut state {
+                Ok(state) => state,
+                Err(e) => {
+                    error!("failed to create Kinesis state: {}", e);
                     return SourceStatus::Done;
                 }
             };
@@ -148,7 +88,7 @@ where
                 // todo: Better error handling here! Not getting a response != being done.
                 let get_records_output = match block_on(get_records(&client, &iterator)) {
                     Ok(output) => {
-                        shard_iterator = output.next_shard_iterator.clone();
+                        *shard_iterator = output.next_shard_iterator.clone();
                         output
                     }
                     Err(rusoto_err) => match rusoto_err {
@@ -207,6 +147,35 @@ where
     } else {
         (stream, None)
     }
+}
+
+fn create_state(
+    c: KinesisSourceConnector,
+) -> Result<(KinesisClient, Option<String>), failure::Error> {
+    let http_client = HttpClient::new()?;
+    let provider = StaticProvider::new(c.access_key, c.secret_access_key, None, None);
+    let client = KinesisClient::new_with(http_client, provider, c.region);
+
+    let shards_output = block_on(get_shards_list(&client, &c.stream_name))
+        .with_context(|e| format!("fetching shard list: {}", e))?;
+    let shard_iterator = match shards_output.shards.as_deref() {
+        Some([shard]) => {
+            // todo: Better error handling here! Not all errors mean we're done/can't progress.
+            let output = block_on(get_shard_iterator(
+                &client,
+                &shard.shard_id,
+                &c.stream_name,
+                "TRIM_HORIZON",
+            ))
+            .with_context(|e| format!("fetching shard iterator: {}", e))?;
+            output.shard_iterator
+        }
+        None | Some(_) => {
+            bail!("kinesis stream did not have exactly one shard");
+        }
+    };
+
+    Ok((client, shard_iterator))
 }
 
 fn downgrade_capability(cap: &mut Capability<u64>, name: &str) {
