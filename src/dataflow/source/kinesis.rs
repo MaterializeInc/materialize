@@ -83,14 +83,29 @@ where
             }
         };
 
-        let shard = match &client {
+        let mut shard_iterator = match &client {
             Some(client) => {
                 match block_on(get_shards_list(&client, &stream_name)) {
                     Ok(shards_output) => {
                         match shards_output.shards {
                             // todo@jldlaughlin: Read from multiple shards! #2222
                             Some(shards) => match shards.len() {
-                                1 => Some(shards[0].clone()),
+                                1 => {
+                                    let shard = shards[0].clone();
+                                    match block_on(get_shard_iterator(
+                                        &client,
+                                        &shard.shard_id,
+                                        &stream_name,
+                                        "TRIM_HORIZON",
+                                    )) {
+                                        Ok(output) => output.shard_iterator,
+                                        Err(rusoto_err) => {
+                                            // todo: Better error handling here! Not all errors mean we're done/can't progress.
+                                            error!("{}", rusoto_err);
+                                            None
+                                        }
+                                    }
+                                }
                                 _ => {
                                     error!("Materialize currently only supports reading from a single shard. Found: {}", shards.len());
                                     None
@@ -107,33 +122,6 @@ where
                     }
                     Err(shards_err) => {
                         error!("{}", shards_err);
-                        None
-                    }
-                }
-            }
-            None => None,
-        };
-
-        let mut shard_iterator = match &client {
-            Some(client) => {
-                match &shard {
-                    Some(shard) => {
-                        match block_on(get_shard_iterator(
-                            &client,
-                            &shard.shard_id,
-                            &stream_name,
-                            "TRIM_HORIZON",
-                        )) {
-                            Ok(output) => output.shard_iterator,
-                            Err(rusoto_err) => {
-                                // todo: Better error handling here! Not all errors mean we're done/can't progress.
-                                error!("{}", rusoto_err);
-                                None
-                            }
-                        }
-                    }
-                    None => {
-                        // Same error as not finding a shard above.
                         None
                     }
                 }
