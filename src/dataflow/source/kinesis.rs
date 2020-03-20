@@ -85,24 +85,45 @@ where
             // When the next_shard_iterator is null, the shard has been closed and the
             // requested iterator does not return any more data.
             while let Some(iterator) = &shard_iterator {
-                // todo: Better error handling here! Not getting a response != being done.
                 let get_records_output = match block_on(get_records(&client, &iterator)) {
                     Ok(output) => {
                         *shard_iterator = output.next_shard_iterator.clone();
                         output
                     }
                     Err(rusoto_err) => match rusoto_err {
+                        RusotoError::HttpDispatch(dispatch_err) => {
+                            // todo@jldlaughlin: Parse this to determine fatal/retriable?
+                            error!("{}", dispatch_err);
+                            activator.activate_after(get_reactivation_duration(timer));
+                            return SourceStatus::Alive;
+                        }
                         RusotoError::Service(service_err) => match service_err {
+                            GetRecordsError::ExpiredIterator(expired_err) => {
+                                // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
+                                error!("{}", expired_err);
+                                return SourceStatus::Done;
+                            }
                             GetRecordsError::ProvisionedThroughputExceeded(_s) => {
                                 activator.activate_after(get_reactivation_duration(timer));
                                 return SourceStatus::Alive;
                             }
                             _ => {
+                                // Fatal service errors:
+                                //  - InvalidArgument
+                                //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
+                                //    KMSOptInRequired, KMSThrottling
+                                //  - ResourceNotFound
                                 error!("{}", service_err);
                                 return SourceStatus::Done;
                             }
                         },
                         _ => {
+                            // Fatal Rusoto errors:
+                            // - Credentials
+                            // - Validation
+                            // - ParseError
+                            // - Unknown (raw HTTP provided)
+                            // - Blocking
                             error!("{}", rusoto_err);
                             return SourceStatus::Done;
                         }
