@@ -168,6 +168,7 @@ impl Demand {
                 let mut demand_vec = columns.iter().map(|c| permutation[*c]).collect::<Vec<_>>();
                 demand_vec.sort();
                 *demand = Some(demand_vec);
+                let should_permute = columns.iter().any(|c| permutation[*c] != *c);
 
                 // Each equivalence class imposes internal demand for columns.
                 for equivalence in equivalences.iter() {
@@ -188,7 +189,9 @@ impl Demand {
                     self.action(input, columns, gets);
                 }
 
-                if columns.into_iter().any(|i| permutation[i] != i) {
+                // Install a permutation if any demanded column is not the
+                // canonical column.
+                if should_permute {
                     *relation = relation.take_dangerous().project(permutation);
                 }
             }

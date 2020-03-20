@@ -143,8 +143,7 @@ EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc
 2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand for %0 = (#0)
-| | demand for %1 = (#0)
+| | demand = (#0, #1)
 | Map date_truncts(#0, #1)
 | Project (#2)
 
