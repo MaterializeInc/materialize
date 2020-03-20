@@ -60,6 +60,19 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 - Progress tracking for Kafka sinks is not supported
   ([#1442](https://github.com/MaterializeInc/materialize/issues/1442))
 
+### Kinesis
+
+- Kinesis sources with more than one shard are not supported
+  ([#2222](https://github.com/MaterializeInc/materialize/issues/2222))
+- Consistent Kinesis sources are not supported
+  ([#2191](https://github.com/MaterializeInc/materialize/issues/2191))
+- Enhanced fan-out Kinesis consumers are not supported
+  ([#2192](https://github.com/MaterializeInc/materialize/issues/2192))
+- Reading from a Kinesis stream as of a sequence number or timestamp is not supported
+  ([#2294](https://github.com/MaterializeInc/materialize/issues/2294))
+- Kinesis sinks are not supported
+  ([#2372](https://github.com/MaterializeInc/materialize/issues/2372))
+
 ### File sources
 
 - CSV files with header rows are not supported
