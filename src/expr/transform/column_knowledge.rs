@@ -139,7 +139,7 @@ impl ColumnKnowledge {
             } => {
                 let mut knowledges = Vec::new();
                 for input in inputs.iter_mut() {
-                    for knowledge in ColumnKnowledge::harvest(i, env, knowledge)? {
+                    for knowledge in ColumnKnowledge::harvest(input, env, knowledge)? {
                         knowledges.push(knowledge);
                     }
                 }

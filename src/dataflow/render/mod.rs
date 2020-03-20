@@ -799,11 +799,11 @@ where
                 prior_arities.push(offset);
                 offset += arities[input];
             }
-            let input_relation = arities
-                .iter()
-                .enumerate()
-                .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                .collect::<Vec<_>>();
+            // let input_relation = arities
+            //     .iter()
+            //     .enumerate()
+            //     .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+            //     .collect::<Vec<_>>();
 
             // Unwrap demand
             // TODO: If we pushed predicates into the operator, we could have a
@@ -829,10 +829,19 @@ where
             );
 
             for (input, next_keys) in order.iter() {
+                let mut next_keys_rebased = next_keys.clone();
+                for expr in next_keys_rebased.iter_mut() {
+                    expr.visit_mut(&mut |e| {
+                        if let ScalarExpr::Column(c) = e {
+                            *c += prior_arities[*input];
+                        }
+                    });
+                }
+
                 // Keys for the next input to be joined must be produced from
                 // ScalarExprs found in `equivalences`, re-written to bind the
                 // appropriate columns (as `joined` has permuted columns).
-                let prev_keys = next_keys
+                let prev_keys = next_keys_rebased
                     .iter()
                     .map(|expr| {
                         // We expect to find `expr` in some `equivalence` which
@@ -872,7 +881,7 @@ where
                 // as each *should* now be a redundant constraint. We do this so that
                 // the demand analysis does not require these columns be produced.
                 for equivalence in equivalences.iter_mut() {
-                    equivalence.retain(|expr| !next_keys.contains(expr));
+                    equivalence.retain(|expr| !next_keys_rebased.contains(expr));
                 }
                 equivalences.retain(|e| e.len() > 1);
 
@@ -901,18 +910,14 @@ where
                     })
                     .collect::<Vec<_>>();
                 let next_vals = (0..arities[*input])
-                    .filter(|c| column_demand.contains(&c))
+                    .filter(|c| column_demand.contains(&(prior_arities[*input] + c)))
                     .collect::<Vec<_>>();
 
                 // Identify the columns we intend to retain.
                 source_columns = prev_vals
                     .iter()
                     .map(|i| source_columns[*i])
-                    .chain(
-                        next_vals
-                            .iter()
-                            .map(|i| prior_arities[input_relation[*i]] + *i),
-                    )
+                    .chain(next_vals.iter().map(|i| prior_arities[*input] + *i))
                     .collect();
 
                 // We exploit the demand information to restrict `prev` to its demanded columns.
@@ -922,11 +927,10 @@ where
                         move |row| {
                             let datums = row.unpack();
                             let temp_storage = RowArena::new();
-                            let key = Row::pack(
-                                prev_keys
-                                    .iter()
-                                    .map(|e| e.eval(&datums, &env_clone, &temp_storage)),
-                            );
+                            let key = Row::pack(prev_keys.iter().map(|e| {
+                                e.eval(&datums, &env_clone, &temp_storage)
+                                    .unwrap_or(Datum::Null)
+                            }));
                             let row = Row::pack(prev_vals.iter().map(|i| datums[*i]));
                             (key, row)
                         }

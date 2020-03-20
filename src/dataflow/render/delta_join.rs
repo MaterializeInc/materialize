@@ -286,7 +286,7 @@ where
             *key = Row::pack(
                 prev_key
                     .iter()
-                    .map(|e| e.eval(&datums, &env, &temp_storage)),
+                    .map(|e| e.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)),
             );
         },
         |prev_row, diff1, next_row, diff2| {
