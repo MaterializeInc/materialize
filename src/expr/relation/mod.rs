@@ -320,9 +320,7 @@ impl RelationExpr {
                         }) {
                             for expr in equivalence {
                                 if let ScalarExpr::Column(c) = expr {
-                                    if input_relation[*c] == index {
-                                        prior_bound.push(c);
-                                    }
+                                    prior_bound.push(c);
                                 }
                             }
                         }
