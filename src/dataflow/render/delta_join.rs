@@ -115,9 +115,17 @@ where
                                 // Repeatedly update `update_stream` to reflect joins with more and more
                                 // other relations, in the specified order.
                                 for (other, next_key) in order.iter() {
+
+                                    let mut next_key_rebased = next_key.clone();
+                                    for expr in next_key_rebased.iter_mut() {
+                                        expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
+                                            *c += prior_arities[*other];
+                                        });
+                                    }
+
                                     // Keys for the incoming updates are determined by locating
                                     // the elements of `next_keys` among the existing `columns`.
-                                    let prev_key = next_key
+                                    let prev_key = next_key_rebased
                                         .iter()
                                         .map(|expr| {
                                             // We expect to find `expr` in some `equivalence` which
@@ -150,7 +158,7 @@ where
                                     // as each *should* now be a redundant constraint. We do this so that
                                     // the demand analysis does not require these columns be produced.
                                     for equivalence in equivalences.iter_mut() {
-                                        equivalence.retain(|expr| !next_key.contains(expr));
+                                        equivalence.retain(|expr| !next_key_rebased.contains(expr));
                                     }
                                     equivalences.retain(|e| e.len() > 1);
 
