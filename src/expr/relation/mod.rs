@@ -297,6 +297,13 @@ impl RelationExpr {
                     .map(|i| i.column_types.len())
                     .collect::<Vec<_>>();
 
+                let mut offset = 0;
+                let mut prior_arities = Vec::new();
+                for input in 0..inputs.len() {
+                    prior_arities.push(offset);
+                    offset += input_arities[input];
+                }
+
                 let input_relation = input_arities
                     .iter()
                     .enumerate()
@@ -325,10 +332,10 @@ impl RelationExpr {
                             }
                         }
                     }
-                    input_types[index]
-                        .keys
-                        .iter()
-                        .any(|ks| ks.iter().all(|k| prior_bound.contains(&k)))
+                    input_types[index].keys.iter().any(|ks| {
+                        ks.iter()
+                            .all(|k| prior_bound.contains(&&(prior_arities[index] + k)))
+                    })
                 });
                 if remains_unique && !inputs.is_empty() {
                     for keys in input_types[0].keys.iter() {

@@ -390,7 +390,6 @@ ORDER BY o_ol_cnt
 
 1 =
 | Get %0
-| ArrangeBy (#0, #1, #2, #4)
 
 2 =
 | Get %0
@@ -405,10 +404,12 @@ ORDER BY o_ol_cnt
 | | implementation = DeltaQuery %2 %3.(#2, #1, #0) | %3 %2.(#0, #1, #2)
 | | demand = (#0..#2, #4, #14)
 | Filter (#14 >= #4)
+| Distinct group=(#0, #1, #2, #4)
+| ArrangeBy (#0, #1, #2, #3)
 
 5 =
-| Join %1 %4 (= #0 #8) (= #1 #9) (= #2 #10) (= #4 #12)
-| | implementation = Differential %4 %1.(#0, #1, #2, #4)
+| Join %1 %4 (= #0 #8) (= #1 #9) (= #2 #10) (= #4 #11)
+| | implementation = Differential %1 %4.(#0, #1, #2, #3)
 | | demand = (#6)
 | Reduce group=(#6) countall(null)
 
@@ -861,7 +862,7 @@ ORDER BY custdist DESC, c_count DESC
 2 =
 | Join %0 %1 (= #2 #24) (= #1 #23) (= #0 #25)
 | | implementation = DeltaQuery %0 %1.(#2, #1, #3) | %1 %0.(#0, #1, #2)
-| | demand = (#0, #22, #27)
+| | demand = (#0..#22, #27)
 | Filter (#27 > 8)
 
 3 =
@@ -869,8 +870,8 @@ ORDER BY custdist DESC, c_count DESC
 
 4 =
 | Get %2
+| Distinct group=(#0, #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21)
 | Negate
-| Project (#0..#21)
 
 5 =
 | Get materialize.public.customer (u6)
@@ -1049,7 +1050,7 @@ ORDER BY supplier_cnt DESC
 | Join %4 %5
 | | implementation = Differential %5 %4.()
 | | demand = (#0, #1)
-| Map (#0 != #1)
+| Reduce group=(#0) all((#0 != #1))
 
 7 =
 | Get %2
@@ -1057,8 +1058,7 @@ ORDER BY supplier_cnt DESC
 
 8 =
 | Get %6
-| Filter #8
-| Project (#0, #8)
+| Filter #1
 
 9 =
 | Get %6
@@ -1284,7 +1284,6 @@ ORDER BY su_name
 
 3 =
 | Get %2
-| Distinct group=(#0)
 | ArrangeBy ()
 
 4 =
@@ -1295,21 +1294,21 @@ ORDER BY su_name
 | ArrangeBy (#4)
 
 6 =
-| Join %3 %4 %5 (= #1 #23)
+| Join %3 %4 %5 (= #11 #33)
 | | implementation = Differential %4 %5.(#4) %3.()
-| | demand = (#0..#3, #25, #26)
-| Filter (datetots(#25) > 2010-05-23 12:00:00)
+| | demand = (#0, #11..#13, #35, #36)
+| Filter (datetots(#35) > 2010-05-23 12:00:00)
 
 7 =
 | Get %2
 
 8 =
 | Get %6
-| Filter (#0 = ((#1 * #2) % 10000))
+| Filter (#0 = ((#11 * #12) % 10000))
 
 9 =
 | Get %6
-| Distinct group=(#1)
+| Distinct group=(#11)
 | ArrangeBy (#0)
 
 10 =
@@ -1317,25 +1316,18 @@ ORDER BY su_name
 | ArrangeBy (#0)
 
 11 =
-| Join %9 %10 (= #0 #1)
-| | implementation = DeltaQuery %9 %10.(#0) | %10 %9.(#0)
-| | demand = (#0, #5)
-| Filter "^co.*$" ~(#5)
-| Map (#0 = #1)
-| ArrangeBy (#0)
-
-12 =
-| Join %8 %11 (= #1 #29)
-| | implementation = Differential %8 %11.(#0)
-| | demand = (#0..#3, #26)
-| Reduce group=(#0, #1, #2, #3) sum(#26)
+| Join %8 %9 %10 (= #11 #39 #40)
+| | implementation = Differential %8 %9.(#0) %10.(#0)
+| | demand = (#0, #11..#13, #36, #44)
+| Filter "^co.*$" ~(#44)
+| Reduce group=(#0, #11, #12, #13) sum(#36)
 | Filter ((2 * #3) > #4)
 | Reduce group=(#0) any(true)
 | ArrangeBy (#0)
 
-13 =
-| Join %7 %12 (= #0 #11)
-| | implementation = Differential %7 %12.(#0)
+12 =
+| Join %7 %11 (= #0 #11)
+| | implementation = Differential %7 %11.(#0)
 | | demand = (#1, #2)
 | Project (#1, #2)
 
@@ -1413,6 +1405,7 @@ ORDER BY numwait DESC, su_name
 | | implementation = Differential %8 %9.(#2, #1, #0)
 | | demand = (#0..#3, #10)
 | Filter (#10 > #3)
+| Distinct group=(#0, #1, #2, #3)
 | Map true
 | Negate
 | Project (#0..#3)
@@ -1487,6 +1480,7 @@ ORDER BY substr(c_state, 1, 1)
 | Join %4 %5 (= #0 #28) (= #1 #26) (= #2 #27)
 | | implementation = DeltaQuery %4 %5.(#2, #1, #3) | %5 %4.(#0, #1, #2)
 | | demand = (#0..#2)
+| Distinct group=(#0, #1, #2)
 | Map true
 | Negate
 | Project (#0..#2)
