@@ -26,7 +26,7 @@ Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
 **FROM** _connector&lowbar;spec_ | A specification of how to connect to the external resource providing the data. For more detail, see [Connector specifications](#connector-specifications).
-**FORMAT** _format&lowbar;spec_ | A description of the format of data in the source. For more detail, see [Format specifications](#format-spec).
+**FORMAT** _format&lowbar;spec_ | A description of the format of data in the source. For more detail, see [Format specifications](#format-specifications).
 **ENVELOPE** _envelope_ | The envelope type.<br/><br/> &#8226; **NONE** implies that each record appends to the source. <br/><br/>&#8226; **DEBEZIUM** requires records have the [appropriate fields](#format-implications), which allow deletes, inserts, and updates. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [Debezium envelope details](#debezium-envelope-details).
 
 ### Connector specifications
