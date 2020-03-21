@@ -1,0 +1,4 @@
+create_source ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'FROM' 'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' 'CSV WITH' n 'COLUMNS' ('DELIMITED BY' char)?

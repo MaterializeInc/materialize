@@ -1,0 +1,6 @@
+create_source ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic
+  'FORMAT' ('CONFLUENT SCHEMA REGISTRY' url |
+    'SCHEMA' ('FILE' schema_file_path | inline_schema))
+  ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
