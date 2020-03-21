@@ -869,6 +869,10 @@ pub enum Statement {
     ShowCreateSource {
         source_name: ObjectName,
     },
+    /// `SHOW CREATE SINK <sink>`
+    ShowCreateSink {
+        sink_name: ObjectName,
+    },
     /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
     StartTransaction {
         modes: Vec<TransactionMode>,
@@ -1217,14 +1221,11 @@ impl fmt::Display for Statement {
                 }
                 Ok(())
             }
-            Statement::ShowCreateView { view_name } => {
-                f.write_str("SHOW CREATE VIEW ")?;
-                write!(f, "{}", view_name)
-            }
+            Statement::ShowCreateView { view_name } => write!(f, "SHOW CREATE VIEW {}", view_name),
             Statement::ShowCreateSource { source_name } => {
-                f.write_str("SHOW CREATE SOURCE ")?;
-                write!(f, "{}", source_name)
+                write!(f, "SHOW CREATE SOURCE {}", source_name)
             }
+            Statement::ShowCreateSink { sink_name } => write!(f, "SHOW CREATE SINK {}", sink_name),
             Statement::StartTransaction { modes } => {
                 write!(f, "START TRANSACTION")?;
                 if !modes.is_empty() {
