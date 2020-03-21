@@ -13,7 +13,7 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use std::collections::HashMap;
 
 use dataflow_types::{Diff, Timestamp};
-use expr::GlobalId;
+use expr::{EvalError, GlobalId};
 use repr::Row;
 
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
@@ -25,6 +25,7 @@ pub type OrdValSpine<K, V, T, R, O = usize> = Spine<K, V, T, R, Rc<OrdValBatch<K
 pub type KeysValsSpine = OrdValSpine<Row, Row, Timestamp, Diff>;
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
+pub type ErrsHandle = TraceValHandle<EvalError, (), Timestamp, Diff>;
 
 /// A map from collection names to cached arrangements.
 ///
@@ -33,7 +34,7 @@ pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 /// or keyed by some expression.
 pub struct TraceManager {
     /// A map from global identifiers to maintained traces.
-    pub traces: HashMap<GlobalId, WithDrop<KeysValsHandle>>,
+    pub traces: HashMap<GlobalId, WithDrop<(KeysValsHandle, ErrsHandle)>>,
 }
 
 impl Default for TraceManager {
@@ -54,10 +55,10 @@ impl TraceManager {
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
         let mut antichain = timely::progress::frontier::Antichain::new();
-        for handle in self.traces.values_mut() {
+        for traces in self.traces.values_mut() {
             use differential_dataflow::trace::TraceReader;
-            handle.read_upper(&mut antichain);
-            handle.distinguish_since(antichain.elements());
+            traces.0.read_upper(&mut antichain);
+            traces.0.distinguish_since(antichain.elements());
         }
     }
 
@@ -69,26 +70,30 @@ impl TraceManager {
     /// accumulations at times in advance of `frontier`.
     pub fn allow_compaction(&mut self, id: GlobalId, frontier: &[Timestamp]) {
         use differential_dataflow::trace::TraceReader;
-        if let Some(val) = self.traces.get_mut(&id) {
-            val.advance_by(frontier);
+        if let Some(traces) = self.traces.get_mut(&id) {
+            traces.0.advance_by(frontier);
+            traces.1.advance_by(frontier);
         }
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get(&self, id: &GlobalId) -> Option<&WithDrop<KeysValsHandle>> {
+    pub fn get(&self, id: &GlobalId) -> Option<&WithDrop<(KeysValsHandle, ErrsHandle)>> {
         self.traces.get(&id)
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut WithDrop<KeysValsHandle>> {
+    pub fn get_mut(
+        &mut self,
+        id: &GlobalId,
+    ) -> Option<&mut WithDrop<(KeysValsHandle, ErrsHandle)>> {
         self.traces.get_mut(&id)
     }
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set(&mut self, id: GlobalId, trace: WithDrop<KeysValsHandle>) {
+    pub fn set(&mut self, id: GlobalId, trace: WithDrop<(KeysValsHandle, ErrsHandle)>) {
         //Currently it is assumed that the first arrangement for a collection is the one
         //keyed by the primary keys
         self.traces.insert(id, trace);

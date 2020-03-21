@@ -9,8 +9,6 @@
 
 //! An interactive dataflow server.
 
-use differential_dataflow::trace::cursor::Cursor;
-use differential_dataflow::trace::TraceReader;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -20,6 +18,10 @@ use std::rc::Rc;
 use std::rc::Weak;
 use std::sync::Mutex;
 
+use differential_dataflow::trace::cursor::Cursor;
+use differential_dataflow::trace::TraceReader;
+use differential_dataflow::Collection;
+use differential_dataflow::operators::arrange::arrangement::Arrange;
 use lazy_static::lazy_static;
 use timely::communication::allocator::generic::GenericBuilder;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
@@ -30,7 +32,6 @@ use timely::dataflow::operators::ActivateCapability;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
-
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::executor::block_on;
 use futures::future::TryFutureExt;
@@ -38,24 +39,24 @@ use futures::sink::{Sink, SinkExt};
 use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use serde::{Deserialize, Serialize};
 
-use super::render;
-use crate::arrangement::{
-    manager::{KeysValsHandle, WithDrop},
-    TraceManager,
-};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     compare_columns, Consistency, DataflowDesc, Diff, ExternalSourceConnector, IndexDesc,
     PeekResponse, RowSetFinishing, Timestamp, Update,
 };
-use expr::{EvalEnv, GlobalId, SourceInstanceId};
+use expr::{EvalEnv, EvalError, GlobalId, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
-
 use crate::source::SourceToken;
+use super::render;
+use crate::arrangement::{
+    manager::{KeysValsHandle, ErrsHandle, WithDrop},
+    TraceManager,
+};
+use crate::operator::CollectionExt;
 
 lazy_static! {
     static ref COMMAND_QUEUE_RAW: IntGaugeVec = register_int_gauge_vec!(
@@ -352,19 +353,21 @@ where
                     move |time, data| m_logger.publish_batch(time, data),
                 );
 
+            let errs = self.inner.dataflow::<Timestamp, _, _>(|scope| Collection::<_, EvalError, isize>::empty(scope).arrange().trace);
+
             // Install traces as maintained indexes
             for (log, (_, trace)) in t_traces {
-                self.traces.set(log.index_id(), WithDrop::from(trace));
+                self.traces.set(log.index_id(), WithDrop::from((trace, errs.clone())));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
             for (log, (_, trace)) in d_traces {
-                self.traces.set(log.index_id(), WithDrop::from(trace));
+                self.traces.set(log.index_id(), WithDrop::from((trace, errs.clone())));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
             for (log, (_, trace)) in m_traces {
-                self.traces.set(log.index_id(), WithDrop::from(trace));
+                self.traces.set(log.index_id(), WithDrop::from((trace, errs.clone())));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
@@ -463,9 +466,9 @@ where
             let mut progress = Vec::new();
             let ids = self.traces.traces.keys().cloned().collect::<Vec<_>>();
             for id in ids {
-                if let Some(trace) = self.traces.get(&id) {
+                if let Some(traces) = self.traces.get(&id) {
                     // Read the upper frontier and compare to what we've reported.
-                    trace.clone().read_upper(&mut upper);
+                    traces.0.clone().read_upper(&mut upper);
                     let lower = self
                         .reported_frontiers
                         .get_mut(&id)
@@ -556,9 +559,11 @@ where
                 eval_env,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace = self.traces.get(&id).unwrap().clone();
-                trace.advance_by(&[timestamp]);
-                trace.distinguish_since(&[]);
+                let mut traces = self.traces.get(&id).unwrap().clone();
+                traces.0.advance_by(&[timestamp]);
+                traces.1.advance_by(&[timestamp]);
+                traces.0.distinguish_since(&[]);
+                traces.1.distinguish_since(&[]);
                 // Prepare a description of the peek work to do.
                 let mut peek = PendingPeek {
                     id,
@@ -566,7 +571,7 @@ where
                     tx,
                     timestamp,
                     finishing,
-                    trace,
+                    traces,
                     project,
                     filter,
                     eval_env,
@@ -759,7 +764,7 @@ struct PendingPeek {
     filter: Vec<expr::ScalarExpr>,
     eval_env: EvalEnv,
     /// The data from which the trace derives.
-    trace: WithDrop<KeysValsHandle>,
+    traces: WithDrop<(KeysValsHandle, ErrsHandle)>,
 }
 
 impl PendingPeek {
@@ -781,7 +786,7 @@ impl PendingPeek {
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
     fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> bool {
-        self.trace.read_upper(upper);
+        self.traces.0.read_upper(upper);
         if !upper.less_equal(&self.timestamp) {
             let response = match self.collect_finished_data() {
                 Ok(rows) => PeekResponse::Rows(rows),
@@ -799,7 +804,7 @@ impl PendingPeek {
 
     /// Collects data for a known-complete peek.
     fn collect_finished_data(&mut self) -> Result<Vec<Row>, String> {
-        let (mut cursor, storage) = self.trace.cursor();
+        let (mut cursor, storage) = self.traces.0.cursor();
         let mut results = Vec::new();
 
         // We can limit the record enumeration if i. there is a limit set,

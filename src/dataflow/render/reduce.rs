@@ -40,111 +40,112 @@ where
         scope: &mut G,
         worker_index: usize,
     ) {
-        if let RelationExpr::Reduce {
-            input,
-            group_key,
-            aggregates,
-        } = relation_expr
-        {
-            // The reduce operator may have multiple aggregation functions, some of
-            // which should only be applied to distinct values for each key. We need
-            // to build a non-trivial dataflow fragment to robustly implement these
-            // aggregations, including:
-            //
-            // 1. Different reductions for each aggregation, to avoid maintaining
-            //    state proportional to the cross-product of values.
-            //
-            // 2. Distinct operators before each reduction which requires distinct
-            //    inputs, to avoid recomputation when the distinct set is stable.
-            //
-            // 3. Hierachical aggregation for operators like min and max that we
-            //    cannot perform in the diff field.
-            //
-            // Our plan is to perform these actions, and the re-integrate the results
-            // in a final reduce whose output arrangement looks just as if we had
-            // applied a single reduction (which should be good for any consumers
-            // of the operator and its arrangement).
+        todo!()
+        //     if let RelationExpr::Reduce {
+        //         input,
+        //         group_key,
+        //         aggregates,
+        //     } = relation_expr
+        //     {
+        //         // The reduce operator may have multiple aggregation functions, some of
+        //         // which should only be applied to distinct values for each key. We need
+        //         // to build a non-trivial dataflow fragment to robustly implement these
+        //         // aggregations, including:
+        //         //
+        //         // 1. Different reductions for each aggregation, to avoid maintaining
+        //         //    state proportional to the cross-product of values.
+        //         //
+        //         // 2. Distinct operators before each reduction which requires distinct
+        //         //    inputs, to avoid recomputation when the distinct set is stable.
+        //         //
+        //         // 3. Hierachical aggregation for operators like min and max that we
+        //         //    cannot perform in the diff field.
+        //         //
+        //         // Our plan is to perform these actions, and the re-integrate the results
+        //         // in a final reduce whose output arrangement looks just as if we had
+        //         // applied a single reduction (which should be good for any consumers
+        //         // of the operator and its arrangement).
 
-            let keys_clone = group_key.clone();
+        //         let keys_clone = group_key.clone();
 
-            self.ensure_rendered(input, env, scope, worker_index);
-            let input = self.collection(input).unwrap();
+        //         self.ensure_rendered(input, env, scope, worker_index);
+        //         let input = self.collection(input).unwrap();
 
-            // Distinct is a special case, as there are no aggregates to aggregate.
-            // In this case, we use a special implementation that does not rely on
-            // collating aggregates.
-            let arrangement = if aggregates.is_empty() {
-                let (ok_collection, err_collection) = input.map_fallible({
-                    let env = env.clone();
-                    let group_key = group_key.clone();
-                    move |row| {
-                        let temp_storage = RowArena::new();
-                        let datums = row.unpack();
-                        let key = Row::try_pack(
-                            group_key
-                                .iter()
-                                .map(|i| i.eval(&datums, &env, &temp_storage)),
-                        )?;
-                        Ok::<_, EvalError>((key, ()))
-                    }
-                });
-                err_collection.inspect(|e| println!("map err: {:?}", e));
-                ok_collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
-                    |key, _input, output| {
-                        output.push((key.clone(), 1));
-                    }
-                })
-            } else if aggregates.len() == 1 {
-                // If we have a single aggregate, we need not stage aggregations separately.
-                build_aggregate_stage(input, group_key, &aggregates[0], env, true)
-            } else {
-                // We'll accumulate partial aggregates here, where each contains updates
-                // of the form `(key, (index, value))`. This is eventually concatenated,
-                // and fed into a final reduce to put the elements in order.
-                let mut partials = Vec::with_capacity(aggregates.len());
-                // Bound the complex dataflow in a region, for better interpretability.
-                scope.region(|region| {
-                    // Create an iterator over collections, where each is the application
-                    // of one aggregation function whose results are annotated with its
-                    // position in the final results. To be followed by a merge reduction.
-                    for (index, aggr) in aggregates.iter().enumerate() {
-                        // Collect the now-aggregated partial result, annotated with its position.
-                        partials.push(
-                            build_aggregate_stage(input.enter(region), group_key, aggr, env, false)
-                                .as_collection(move |key, val| (key.clone(), (index, val.clone())))
-                                .leave(),
-                        );
-                    }
-                });
+        //         // Distinct is a special case, as there are no aggregates to aggregate.
+        //         // In this case, we use a special implementation that does not rely on
+        //         // collating aggregates.
+        //         let arrangement = if aggregates.is_empty() {
+        //             let (ok_collection, err_collection) = input.map_fallible({
+        //                 let env = env.clone();
+        //                 let group_key = group_key.clone();
+        //                 move |row| {
+        //                     let temp_storage = RowArena::new();
+        //                     let datums = row.unpack();
+        //                     let key = Row::try_pack(
+        //                         group_key
+        //                             .iter()
+        //                             .map(|i| i.eval(&datums, &env, &temp_storage)),
+        //                     )?;
+        //                     Ok::<_, EvalError>((key, ()))
+        //                 }
+        //             });
+        //             err_collection.inspect(|e| println!("map err: {:?}", e));
+        //             ok_collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
+        //                 |key, _input, output| {
+        //                     output.push((key.clone(), 1));
+        //                 }
+        //             })
+        //         } else if aggregates.len() == 1 {
+        //             // If we have a single aggregate, we need not stage aggregations separately.
+        //             build_aggregate_stage(input, group_key, &aggregates[0], env, true)
+        //         } else {
+        //             // We'll accumulate partial aggregates here, where each contains updates
+        //             // of the form `(key, (index, value))`. This is eventually concatenated,
+        //             // and fed into a final reduce to put the elements in order.
+        //             let mut partials = Vec::with_capacity(aggregates.len());
+        //             // Bound the complex dataflow in a region, for better interpretability.
+        //             scope.region(|region| {
+        //                 // Create an iterator over collections, where each is the application
+        //                 // of one aggregation function whose results are annotated with its
+        //                 // position in the final results. To be followed by a merge reduction.
+        //                 for (index, aggr) in aggregates.iter().enumerate() {
+        //                     // Collect the now-aggregated partial result, annotated with its position.
+        //                     partials.push(
+        //                         build_aggregate_stage(input.enter(region), group_key, aggr, env, false)
+        //                             .as_collection(move |key, val| (key.clone(), (index, val.clone())))
+        //                             .leave(),
+        //                     );
+        //                 }
+        //             });
 
-                // Our final action is to collect the partial results into one record.
-                //
-                // We concatenate the partial results and lay out the fields as indicated by their
-                // recorded positions. All keys should contribute exactly one value for each of the
-                // aggregates, which we check with assertions; this is true independent of transient
-                // change and inconsistency in the inputs; if this is not the case there is a defect
-                // in differential dataflow.
-                differential_dataflow::collection::concatenate::<_, _, _, _>(scope, partials)
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
-                    let aggregates_len = aggregates.len();
-                    move |key, input, output| {
-                        // The intent, unless things are terribly wrong, is that `input`
-                        // contains, in order, the values to drop into `output`.
-                        assert_eq!(input.len(), aggregates_len);
-                        let mut result = RowPacker::new();
-                        result.extend(key.iter());
-                        for (index, ((pos, val), cnt)) in input.iter().enumerate() {
-                            assert_eq!(*pos, index);
-                            assert_eq!(*cnt, 1);
-                            result.push(val.unpack().pop().unwrap());
-                        }
-                        output.push((result.finish(), 1));
-                    }
-                })
-            };
-            let index = (0..keys_clone.len()).collect::<Vec<_>>();
-            self.set_local_columns(relation_expr, &index[..], arrangement);
-        }
+        //             // Our final action is to collect the partial results into one record.
+        //             //
+        //             // We concatenate the partial results and lay out the fields as indicated by their
+        //             // recorded positions. All keys should contribute exactly one value for each of the
+        //             // aggregates, which we check with assertions; this is true independent of transient
+        //             // change and inconsistency in the inputs; if this is not the case there is a defect
+        //             // in differential dataflow.
+        //             differential_dataflow::collection::concatenate::<_, _, _, _>(scope, partials)
+        //                 .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
+        //                 let aggregates_len = aggregates.len();
+        //                 move |key, input, output| {
+        //                     // The intent, unless things are terribly wrong, is that `input`
+        //                     // contains, in order, the values to drop into `output`.
+        //                     assert_eq!(input.len(), aggregates_len);
+        //                     let mut result = RowPacker::new();
+        //                     result.extend(key.iter());
+        //                     for (index, ((pos, val), cnt)) in input.iter().enumerate() {
+        //                         assert_eq!(*pos, index);
+        //                         assert_eq!(*cnt, 1);
+        //                         result.push(val.unpack().pop().unwrap());
+        //                     }
+        //                     output.push((result.finish(), 1));
+        //                 }
+        //             })
+        //         };
+        //         let index = (0..keys_clone.len()).collect::<Vec<_>>();
+        //         self.set_local_columns(relation_expr, &index[..], arrangement);
+        //     }
     }
 }
 

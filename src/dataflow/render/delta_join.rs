@@ -33,218 +33,219 @@ where
         scope: &mut G,
         worker_index: usize,
         subtract: F,
-    ) -> Collection<G, Row>
+    ) -> (Collection<G, Row>, Collection<G, EvalError>)
     where
         F: Fn(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
-        if let RelationExpr::Join {
-            inputs,
-            variables,
-            demand: _,
-            implementation: expr::JoinImplementation::DeltaQuery(orders),
-        } = relation_expr
-        {
-            // For the moment, assert that each relation participates at most
-            // once in each equivalence class. If not, we should be able to
-            // push a filter upwards, and if we can't do that it means a bit
-            // more filter logic in this operator which doesn't exist yet.
-            assert!(variables.iter().all(|h| {
-                let len = h.len();
-                let mut list = h.iter().map(|(i, _)| i).collect::<Vec<_>>();
-                list.sort();
-                list.dedup();
-                len == list.len()
-            }));
+        todo!()
+        // if let RelationExpr::Join {
+        //     inputs,
+        //     variables,
+        //     demand: _,
+        //     implementation: expr::JoinImplementation::DeltaQuery(orders),
+        // } = relation_expr
+        // {
+        //     // For the moment, assert that each relation participates at most
+        //     // once in each equivalence class. If not, we should be able to
+        //     // push a filter upwards, and if we can't do that it means a bit
+        //     // more filter logic in this operator which doesn't exist yet.
+        //     assert!(variables.iter().all(|h| {
+        //         let len = h.len();
+        //         let mut list = h.iter().map(|(i, _)| i).collect::<Vec<_>>();
+        //         list.sort();
+        //         list.dedup();
+        //         len == list.len()
+        //     }));
 
-            for input in inputs.iter() {
-                self.ensure_rendered(input, env, scope, worker_index);
-            }
+        //     for input in inputs.iter() {
+        //         self.ensure_rendered(input, env, scope, worker_index);
+        //     }
 
-            // We'll need a new scope, to hold `AltNeu` wrappers, and we'll want
-            // to import all traces as alt and neu variants (unless we do a more
-            // careful analysis).
-            let results =
-                scope
-                    .clone()
-                    .scoped::<AltNeu<G::Timestamp>, _, _>("delta query", |inner| {
-                        // Our plan is to iterate through each input relation, and attempt
-                        // to find a plan that maximally uses existing keys (better: uses
-                        // existing arrangements, to which we have access).
-                        let mut delta_queries = Vec::new();
+        //     // We'll need a new scope, to hold `AltNeu` wrappers, and we'll want
+        //     // to import all traces as alt and neu variants (unless we do a more
+        //     // careful analysis).
+        //     let results =
+        //         scope
+        //             .clone()
+        //             .scoped::<AltNeu<G::Timestamp>, _, _>("delta query", |inner| {
+        //                 // Our plan is to iterate through each input relation, and attempt
+        //                 // to find a plan that maximally uses existing keys (better: uses
+        //                 // existing arrangements, to which we have access).
+        //                 let mut delta_queries = Vec::new();
 
-                        // We'll need type information for arities, if nothing else.
-                        let types = inputs.iter().map(|input| input.typ()).collect::<Vec<_>>();
-                        let arities = types
-                            .iter()
-                            .map(|typ| typ.column_types.len())
-                            .collect::<Vec<_>>();
+        //                 // We'll need type information for arities, if nothing else.
+        //                 let types = inputs.iter().map(|input| input.typ()).collect::<Vec<_>>();
+        //                 let arities = types
+        //                     .iter()
+        //                     .map(|typ| typ.column_types.len())
+        //                     .collect::<Vec<_>>();
 
-                        let mut offset = 0;
-                        let mut prior_arities = Vec::new();
-                        for input in 0..inputs.len() {
-                            prior_arities.push(offset);
-                            offset += arities[input];
-                        }
+        //                 let mut offset = 0;
+        //                 let mut prior_arities = Vec::new();
+        //                 for input in 0..inputs.len() {
+        //                     prior_arities.push(offset);
+        //                     offset += arities[input];
+        //                 }
 
-                        for relation in 0..inputs.len() {
-                            // This collection determines changes that result from updates inbound
-                            // from `inputs[relation]` and reflects all strictly prior updates and
-                            // concurrent updates from relations prior to `relation`.
-                            let delta_query = inner.clone().region(|region| {
-                                // Ensure this input is rendered, and extract its update stream.
-                                let mut update_stream = self
-                                    .collection(&inputs[relation])
-                                    .expect("Failed to render update stream")
-                                    .enter(inner)
-                                    .enter(region);
+        //                 for relation in 0..inputs.len() {
+        //                     // This collection determines changes that result from updates inbound
+        //                     // from `inputs[relation]` and reflects all strictly prior updates and
+        //                     // concurrent updates from relations prior to `relation`.
+        //                     let delta_query = inner.clone().region(|region| {
+        //                         // Ensure this input is rendered, and extract its update stream.
+        //                         let mut update_stream = self
+        //                             .collection(&inputs[relation])
+        //                             .expect("Failed to render update stream")
+        //                             .enter(inner)
+        //                             .enter(region);
 
-                                // We track the sources of each column in our update stream.
-                                let mut update_column_sources = (0..arities[relation])
-                                    .map(|c| (relation, c))
-                                    .collect::<Vec<_>>();
+        //                         // We track the sources of each column in our update stream.
+        //                         let mut update_column_sources = (0..arities[relation])
+        //                             .map(|c| (relation, c))
+        //                             .collect::<Vec<_>>();
 
-                                let mut predicates = predicates.to_vec();
-                                update_stream = build_filter(
-                                    update_stream,
-                                    &update_column_sources,
-                                    &mut predicates,
-                                    &prior_arities,
-                                    env,
-                                );
+        //                         let mut predicates = predicates.to_vec();
+        //                         update_stream = build_filter(
+        //                             update_stream,
+        //                             &update_column_sources,
+        //                             &mut predicates,
+        //                             &prior_arities,
+        //                             env,
+        //                         );
 
-                                // We use the order specified by the implementation.
-                                let order = &orders[relation];
+        //                         // We use the order specified by the implementation.
+        //                         let order = &orders[relation];
 
-                                // Repeatedly update `update_stream` to reflect joins with more and more
-                                // other relations, in the specified order.
-                                for (other, next_key) in order.iter() {
-                                    // Keys for the incoming updates are determined by locating
-                                    // the elements of `next_keys` among the existing `columns`.
-                                    let prev_key = next_key
-                                        .iter()
-                                        .map(|k| {
-                                            if let ScalarExpr::Column(c) = k {
-                                                variables
-                                                    .iter()
-                                                    .find(|v| v.contains(&(*other, *c)))
-                                                    .expect("Column in key not bound!")
-                                                    .iter()
-                                                    .flat_map(|rel_col1| {
-                                                        // Find the first (rel,col) pair in `update_column_sources`.
-                                                        // One *should* exist, but it is not the case that all must.us
-                                                        update_column_sources.iter().position(
-                                                            |rel_col2| rel_col1 == rel_col2,
-                                                        )
-                                                    })
-                                                    .next()
-                                                    .expect(
-                                                        "Column in key not bound by prior column",
-                                                    )
-                                            } else {
-                                                panic!(
-                                                    "Non-column keys are not currently supported"
-                                                );
-                                            }
-                                        })
-                                        .collect::<Vec<_>>();
+        //                         // Repeatedly update `update_stream` to reflect joins with more and more
+        //                         // other relations, in the specified order.
+        //                         for (other, next_key) in order.iter() {
+        //                             // Keys for the incoming updates are determined by locating
+        //                             // the elements of `next_keys` among the existing `columns`.
+        //                             let prev_key = next_key
+        //                                 .iter()
+        //                                 .map(|k| {
+        //                                     if let ScalarExpr::Column(c) = k {
+        //                                         variables
+        //                                             .iter()
+        //                                             .find(|v| v.contains(&(*other, *c)))
+        //                                             .expect("Column in key not bound!")
+        //                                             .iter()
+        //                                             .flat_map(|rel_col1| {
+        //                                                 // Find the first (rel,col) pair in `update_column_sources`.
+        //                                                 // One *should* exist, but it is not the case that all must.us
+        //                                                 update_column_sources.iter().position(
+        //                                                     |rel_col2| rel_col1 == rel_col2,
+        //                                                 )
+        //                                             })
+        //                                             .next()
+        //                                             .expect(
+        //                                                 "Column in key not bound by prior column",
+        //                                             )
+        //                                     } else {
+        //                                         panic!(
+        //                                             "Non-column keys are not currently supported"
+        //                                         );
+        //                                     }
+        //                                 })
+        //                                 .collect::<Vec<_>>();
 
-                                    // TODO: Investigate demanded columns as in DifferentialLinear join.
+        //                             // TODO: Investigate demanded columns as in DifferentialLinear join.
 
-                                    // We require different logic based on the flavor of arrangement.
-                                    // We may need to cache each of these if we want to re-use the same wrapped
-                                    // arrangement, rather than re-wrap each time we use a thing.
-                                    let subtract = subtract.clone();
-                                    update_stream = match self
-                                        .arrangement(&inputs[*other], &next_key[..])
-                                        .unwrap_or_else(|| {
-                                            panic!(
-                                                "Arrangement alarmingly absent!: {}, {:?}",
-                                                inputs[*other].pretty(),
-                                                &next_key[..]
-                                            )
-                                        }) {
-                                        ArrangementFlavor::Local(local) => {
-                                            if other > &relation {
-                                                let local = local
-                                                    .enter_at(
-                                                        inner,
-                                                        |_, _, t| AltNeu::alt(t.clone()),
-                                                        move |t| subtract(&t.time),
-                                                    )
-                                                    .enter(region);
-                                                build_lookup(update_stream, local, prev_key)
-                                            } else {
-                                                let local = local
-                                                    .enter_at(
-                                                        inner,
-                                                        |_, _, t| AltNeu::neu(t.clone()),
-                                                        move |t| subtract(&t.time),
-                                                    )
-                                                    .enter(region);
-                                                build_lookup(update_stream, local, prev_key)
-                                            }
-                                        }
-                                        ArrangementFlavor::Trace(_gid, trace) => {
-                                            if other > &relation {
-                                                let trace = trace
-                                                    .enter_at(
-                                                        inner,
-                                                        |_, _, t| AltNeu::alt(t.clone()),
-                                                        move |t| subtract(&t.time),
-                                                    )
-                                                    .enter(region);
-                                                build_lookup(update_stream, trace, prev_key)
-                                            } else {
-                                                let trace = trace
-                                                    .enter_at(
-                                                        inner,
-                                                        |_, _, t| AltNeu::neu(t.clone()),
-                                                        move |t| subtract(&t.time),
-                                                    )
-                                                    .enter(region);
-                                                build_lookup(update_stream, trace, prev_key)
-                                            }
-                                        }
-                                    };
+        //                             // We require different logic based on the flavor of arrangement.
+        //                             // We may need to cache each of these if we want to re-use the same wrapped
+        //                             // arrangement, rather than re-wrap each time we use a thing.
+        //                             let subtract = subtract.clone();
+        //                             update_stream = match self
+        //                                 .arrangement(&inputs[*other], &next_key[..])
+        //                                 .unwrap_or_else(|| {
+        //                                     panic!(
+        //                                         "Arrangement alarmingly absent!: {}, {:?}",
+        //                                         inputs[*other].pretty(),
+        //                                         &next_key[..]
+        //                                     )
+        //                                 }) {
+        //                                 ArrangementFlavor::Local(local) => {
+        //                                     if other > &relation {
+        //                                         let local = local
+        //                                             .enter_at(
+        //                                                 inner,
+        //                                                 |_, _, t| AltNeu::alt(t.clone()),
+        //                                                 move |t| subtract(&t.time),
+        //                                             )
+        //                                             .enter(region);
+        //                                         build_lookup(update_stream, local, prev_key)
+        //                                     } else {
+        //                                         let local = local
+        //                                             .enter_at(
+        //                                                 inner,
+        //                                                 |_, _, t| AltNeu::neu(t.clone()),
+        //                                                 move |t| subtract(&t.time),
+        //                                             )
+        //                                             .enter(region);
+        //                                         build_lookup(update_stream, local, prev_key)
+        //                                     }
+        //                                 }
+        //                                 ArrangementFlavor::Trace(_gid, trace) => {
+        //                                     if other > &relation {
+        //                                         let trace = trace
+        //                                             .enter_at(
+        //                                                 inner,
+        //                                                 |_, _, t| AltNeu::alt(t.clone()),
+        //                                                 move |t| subtract(&t.time),
+        //                                             )
+        //                                             .enter(region);
+        //                                         build_lookup(update_stream, trace, prev_key)
+        //                                     } else {
+        //                                         let trace = trace
+        //                                             .enter_at(
+        //                                                 inner,
+        //                                                 |_, _, t| AltNeu::neu(t.clone()),
+        //                                                 move |t| subtract(&t.time),
+        //                                             )
+        //                                             .enter(region);
+        //                                         build_lookup(update_stream, trace, prev_key)
+        //                                     }
+        //                                 }
+        //                             };
 
-                                    // Update our map of the sources of each column in the update stream.
-                                    update_column_sources
-                                        .extend((0..arities[*other]).map(|c| (*other, c)));
+        //                             // Update our map of the sources of each column in the update stream.
+        //                             update_column_sources
+        //                                 .extend((0..arities[*other]).map(|c| (*other, c)));
 
-                                    update_stream = build_filter(
-                                        update_stream,
-                                        &update_column_sources,
-                                        &mut predicates,
-                                        &prior_arities,
-                                        env,
-                                    );
-                                }
+        //                             update_stream = build_filter(
+        //                                 update_stream,
+        //                                 &update_column_sources,
+        //                                 &mut predicates,
+        //                                 &prior_arities,
+        //                                 env,
+        //                             );
+        //                         }
 
-                                // We must now de-permute the results to return to the common order.
-                                // TODO: Non-demanded columns would need default values here.
-                                update_stream = update_stream.map(move |row| {
-                                    let datums = row.unpack();
-                                    let mut to_sort = update_column_sources
-                                        .iter()
-                                        .zip(datums)
-                                        .collect::<Vec<_>>();
-                                    to_sort.sort();
-                                    Row::pack(to_sort.into_iter().map(|(_, datum)| datum))
-                                });
+        //                         // We must now de-permute the results to return to the common order.
+        //                         // TODO: Non-demanded columns would need default values here.
+        //                         update_stream = update_stream.map(move |row| {
+        //                             let datums = row.unpack();
+        //                             let mut to_sort = update_column_sources
+        //                                 .iter()
+        //                                 .zip(datums)
+        //                                 .collect::<Vec<_>>();
+        //                             to_sort.sort();
+        //                             Row::pack(to_sort.into_iter().map(|(_, datum)| datum))
+        //                         });
 
-                                update_stream.leave()
-                            });
+        //                         update_stream.leave()
+        //                     });
 
-                            delta_queries.push(delta_query);
-                        }
+        //                     delta_queries.push(delta_query);
+        //                 }
 
-                        // Concatenate the results of each delta query as the accumulated results.
-                        differential_dataflow::collection::concatenate(inner, delta_queries).leave()
-                    });
-            results
-        } else {
-            panic!("delta_join invoke on non-delta join");
-        }
+        //                 // Concatenate the results of each delta query as the accumulated results.
+        //                 differential_dataflow::collection::concatenate(inner, delta_queries).leave()
+        //             });
+        //     results
+        // } else {
+        //     panic!("delta_join invoke on non-delta join");
+        // }
     }
 }
 

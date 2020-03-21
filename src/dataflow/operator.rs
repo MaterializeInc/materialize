@@ -13,7 +13,7 @@ use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandle};
+use timely::dataflow::operators::generic::{operator, InputHandle, OperatorInfo, OutputHandle};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
@@ -23,6 +23,8 @@ where
     G: Scope,
     R: Semigroup,
 {
+    fn empty(scope: &G) -> Collection<G, D1, R>;
+
     fn map_fallible<D2, E, L>(&self, logic: L) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
         D2: Data,
@@ -52,6 +54,10 @@ where
     D1: Data,
     R: Semigroup,
 {
+    fn empty(scope: &G) -> Collection<G, D1, R> {
+        operator::empty(scope).as_collection()
+    }
+
     fn map_fallible<D2, E, L>(&self, mut logic: L) -> (Collection<G, D2, R>, Collection<G, E, R>)
     where
         D2: Data,
