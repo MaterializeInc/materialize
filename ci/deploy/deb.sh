@@ -26,7 +26,7 @@ curl -F package=@materialized.deb https://"$FURY_APT_PUSH_SECRET"@push.fury.io/m
 # in ci/test/build.sh
 COMMIT_INDEX=$(git rev-list HEAD | wc -l)
 COMMIT_HASH=$(git rev-parse HEAD)
-upload="https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/publish"
+upload="https://api.bintray.com/content/materialize/apt/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/publish"
 echo "Marking release public in bintray: $upload"
 
 curl -f -X POST -u ci@materialize:"$BINTRAY_API_KEY" "$upload"

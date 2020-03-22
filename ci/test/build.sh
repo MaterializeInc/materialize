@@ -124,9 +124,9 @@ if [[ "$BUILDKITE_BRANCH" = master ]]; then
             \"desc\": \"git master\",
             \"vcs_tag\": \"$COMMIT_HASH\"
         }" -u ci@materialize:"$BINTRAY_API_KEY" \
-        https://api.bintray.com/packages/materialize/materialized/materialized-unstable/versions
+        https://api.bintray.com/packages/materialize/apt/materialized-unstable/versions
     # Step 2 - upload the .deb for the version.
-    curl -f -T target/debian/materialized.deb -u ci@materialize:"$BINTRAY_API_KEY" "https://api.bintray.com/content/materialize/materialized/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/materialized-$COMMIT_HASH.deb;deb_distribution=generic;deb_component=main;deb_architecture=amd64"
+    curl -f -T target/debian/materialized.deb -u ci@materialize:"$BINTRAY_API_KEY" "https://api.bintray.com/content/materialize/apt/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/materialized-$COMMIT_HASH.deb;deb_distribution=generic;deb_component=main;deb_architecture=amd64"
 fi
 
 images=(
