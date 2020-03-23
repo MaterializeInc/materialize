@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="531.125" height="613.5">
+    <g fill="transparent" stroke-width="10">
+        <path d="M24 584V104 24" stroke="#979797"/>
+        <path d="M24 504c0-40 50-40 50-80v-80" stroke="#008fb5"/>
+    </g>
+    <g transform="translate(10 570)">
+        <defs>
+            <clipPath id="b">
+                <use href="#a" xlink:href="#a"/>
+            </clipPath>
+            <circle cx="14" cy="14" r="14" id="a" fill="#979797"/>
+        </defs>
+        <use href="#a" xlink:href="#a" clip-path="url(#b)" stroke-width="0"/>
+    </g>
+    <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(110 584)">
+        A - &lt;&gt;
+    </text>
+    <g transform="translate(10 490)">
+        <defs>
+            <clipPath id="d">
+                <use href="#c" xlink:href="#c"/>
+            </clipPath>
+            <circle cx="14" cy="14" r="14" id="c" fill="#979797"/>
+        </defs>
+        <use href="#c" xlink:href="#c" clip-path="url(#d)" stroke-width="0"/>
+    </g>
+    <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(234.969 504)">
+        B - &lt;&gt;
+    </text>
+    <g data-offset="12">
+        <path d="M110 504l12 15.5h92.969q10 0 10-10v-11q0-10-10-10H122h0z" fill="#979797" stroke="#979797"/>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#fff" style="font:14pt Arial" x="22" transform="translate(110 504)">
+            v0.1.0-rc1
+        </text>
+    </g>
+    <g transform="translate(60 410)">
+        <defs>
+            <clipPath id="f">
+                <use href="#e" xlink:href="#e"/>
+            </clipPath>
+            <circle cx="14" cy="14" r="14" id="e" fill="#008fb5"/>
+        </defs>
+        <use href="#e" xlink:href="#e" clip-path="url(#f)" stroke-width="0"/>
+    </g>
+    <text alignment-baseline="central" dominant-baseline="central" fill="#008fb5" style="font:14pt Arial" transform="translate(110 424)">
+        D&apos; - &lt;&gt;
+    </text>
+    <g transform="translate(60 330)">
+        <defs>
+            <clipPath id="h">
+                <use href="#g" xlink:href="#g"/>
+            </clipPath>
+            <circle cx="14" cy="14" r="14" id="g" fill="#008fb5"/>
+        </defs>
+        <use href="#g" xlink:href="#g" clip-path="url(#h)" stroke-width="0"/>
+    </g>
+    <text alignment-baseline="central" dominant-baseline="central" fill="#008fb5" style="font:14pt Arial" transform="translate(466.734 344)">
+        E&apos; - &lt;&gt;
+    </text>
+    <g transform="translate(110 330)">
+        <rect width="128.922" height="31" rx="10" fill="#fff" stroke="#008fb5"/>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#008fb5" style="font:14pt Arial" x="10" y="15.5">
+            release-0.1.0
+        </text>
+    </g>
+    <g data-offset="12">
+        <path d="M248.922 344l12 15.5h92.969q10 0 10-10v-11q0-10-10-10h-92.97 0z" fill="#008fb5" stroke="#008fb5"/>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#fff" style="font:14pt Arial" x="22" transform="translate(248.922 344)">
+            v0.1.0-rc2
+        </text>
+    </g>
+    <g data-offset="12">
+        <path d="M373.89 344l12 15.5h60.844q10 0 10-10v-11q0-10-10-10h-60.843 0z" fill="#008fb5" stroke="#008fb5"/>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#fff" style="font:14pt Arial" x="22" transform="translate(373.89 344)">
+            v0.1.0
+        </text>
+    </g>
+    <g>
+        <g transform="translate(10 250)">
+            <defs>
+                <clipPath id="j">
+                    <use href="#i" xlink:href="#i"/>
+                </clipPath>
+                <circle cx="14" cy="14" r="14" id="i" fill="#979797"/>
+            </defs>
+            <use href="#i" xlink:href="#i" clip-path="url(#j)" stroke-width="0"/>
+        </g>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(110 264)">
+            C - &lt;&gt;
+        </text>
+    </g>
+    <g>
+        <g transform="translate(10 170)">
+            <defs>
+                <clipPath id="l">
+                    <use href="#k" xlink:href="#k"/>
+                </clipPath>
+                <circle cx="14" cy="14" r="14" id="k" fill="#979797"/>
+            </defs>
+            <use href="#k" xlink:href="#k" clip-path="url(#l)" stroke-width="0"/>
+        </g>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(110 184)">
+            D - &lt;&gt;
+        </text>
+    </g>
+    <g>
+        <g transform="translate(10 90)">
+            <defs>
+                <clipPath id="n">
+                    <use href="#m" xlink:href="#m"/>
+                </clipPath>
+                <circle cx="14" cy="14" r="14" id="m" fill="#979797"/>
+            </defs>
+            <use href="#m" xlink:href="#m" clip-path="url(#n)" stroke-width="0"/>
+        </g>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(110 104)">
+            E - &lt;&gt;
+        </text>
+    </g>
+    <g>
+        <g transform="translate(10 10)">
+            <defs>
+                <clipPath id="p">
+                    <use href="#o" xlink:href="#o"/>
+                </clipPath>
+                <circle cx="14" cy="14" r="14" id="o" fill="#979797"/>
+            </defs>
+            <use href="#o" xlink:href="#o" clip-path="url(#p)" stroke-width="0"/>
+        </g>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(197.297 24)">
+            F - &lt;&gt;
+        </text>
+        <g transform="translate(110 10)">
+            <rect width="77.297" height="31" rx="10" fill="#fff" stroke="#979797"/>
+            <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" x="10" y="15.5">
+                master
+            </text>
+        </g>
+    </g>
+</svg>

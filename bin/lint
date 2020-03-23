@@ -54,29 +54,29 @@ files=$(git diff --ignore-submodules=all --raw "$empty_tree" \
 
 copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
-    -e '\.avro$' \
     -e '(^|/)\.(git|vscode)ignore$' \
-    -e '(^|/)\.git(modules|attributes)$' \
-    -e '(^|/).lfsconfig$' \
+    -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
     -e '(^|/)Cargo\.toml$' \
     -e '^Cargo\.lock$' \
     -e '^deny\.toml$' \
-    -e '^netlify.toml$' \
+    -e '^netlify\.toml$' \
     -e '^rust-toolchain$' \
-    -e '^rustfmt.toml$' \
+    -e '^rustfmt\.toml$' \
     -e '(^|/)requirements.*\.txt$' \
-    -e '\.(md|json|asc|png|jpe?g|svg|eot|ttf|woff2?)$' \
+    -e '\.(md|json|asc|png|jpe?g|svg|avro|pb)$' \
     -e '^www/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^www/static/_redirects$' \
     -e '^misc/docker/ci-builder/ssh_known_hosts$' \
-    -e '\.(protospec|pb)$' \
-    -e '\.in$' \
     -e 'demo/chbench/chbench' \
+    -e 'src/billing-demo/resources/views/.*\.sql\.in' \
     <<< "$files"
 )
 
-newline_files=$(grep -vE '\.(png|jpe?g|eot|ttf|woff2?|protospec|pb|in|svg|avro)$' <<< "$files")
+# Only binary files are permitted to omit a trailing newline. If you're here to
+# exclude a text file that is missing its trailing newline, like an SVG, add
+# a trailing newline to the text file instead.
+newline_files=$(grep -vE '\.(png|jpe?g|pb|avro)$' <<< "$files")
 
 shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.md'))
 
