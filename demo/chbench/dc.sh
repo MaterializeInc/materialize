@@ -326,7 +326,7 @@ dc_check_query() {
 dc_ensure_stays_up() {
     local container=$1
     local seconds="${2-5}"
-    echo -n "ensuring $container is staying up "
+    echo -n "ensuring $container is staying up for $seconds seconds: "
     for i in $(seq 1 "$seconds"); do
         sleep 1
         if [[ -z $(dc_is_running "$container") ]]; then
