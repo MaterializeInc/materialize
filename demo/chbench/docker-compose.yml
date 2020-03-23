@@ -24,7 +24,7 @@ x-port-mappings:
 version: '3.7'
 services:
   materialized:
-    image: materialize/materialized:latest
+    image: ${MZ_IMG:-materialize/materialized:latest}
     ports:
      - *materialized
     init: true
@@ -139,6 +139,8 @@ services:
   inspect:
     image: ubuntu:bionic
     command: "true"
+    volumes:
+      - chbench-gen:/gen
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -210,7 +212,7 @@ services:
       - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
   peeker:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
-    image: materialize/peeker:latest
+    image: ${PEEKER_IMG:-materialize/peeker:latest}
     init: true
     # run peeker using 'dc.sh run peeker' to adjust which queries are peeked,
     # and see /src/peeker/config.toml for a list of queries
