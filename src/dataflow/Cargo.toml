@@ -39,6 +39,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.48"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = { version = "0.2", features = ["blocking", "fs", "rt-threaded"] }
-tokio-util = { version = "0.2", features = ["codec"] }
+tokio-util = { version = "0.3", features = ["codec"] }
 url = { version = "2.1.1", features = ["serde"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
