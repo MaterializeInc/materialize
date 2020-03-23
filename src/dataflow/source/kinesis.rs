@@ -90,44 +90,39 @@ where
                         *shard_iterator = output.next_shard_iterator.clone();
                         output
                     }
-                    Err(rusoto_err) => match rusoto_err {
-                        RusotoError::HttpDispatch(dispatch_err) => {
-                            // todo@jldlaughlin: Parse this to determine fatal/retriable?
-                            error!("{}", dispatch_err);
-                            activator.activate_after(get_reactivation_duration(timer));
-                            return SourceStatus::Alive;
-                        }
-                        RusotoError::Service(service_err) => match service_err {
-                            GetRecordsError::ExpiredIterator(expired_err) => {
-                                // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
-                                error!("{}", expired_err);
-                                return SourceStatus::Done;
-                            }
-                            GetRecordsError::ProvisionedThroughputExceeded(_s) => {
-                                activator.activate_after(get_reactivation_duration(timer));
-                                return SourceStatus::Alive;
-                            }
-                            _ => {
-                                // Fatal service errors:
-                                //  - InvalidArgument
-                                //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
-                                //    KMSOptInRequired, KMSThrottling
-                                //  - ResourceNotFound
-                                error!("{}", service_err);
-                                return SourceStatus::Done;
-                            }
-                        },
-                        _ => {
-                            // Fatal Rusoto errors:
-                            // - Credentials
-                            // - Validation
-                            // - ParseError
-                            // - Unknown (raw HTTP provided)
-                            // - Blocking
-                            error!("{}", rusoto_err);
-                            return SourceStatus::Done;
-                        }
-                    },
+                    Err(RusotoError::HttpDispatch(e)) => {
+                        // todo@jldlaughlin: Parse this to determine fatal/retriable?
+                        error!("{}", e);
+                        activator.activate_after(get_reactivation_duration(timer));
+                        return SourceStatus::Alive;
+                    }
+                    Err(RusotoError::Service(GetRecordsError::ExpiredIterator(e))) => {
+                        // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
+                        error!("{}", e);
+                        return SourceStatus::Done;
+                    }
+                    Err(RusotoError::Service(GetRecordsError::ProvisionedThroughputExceeded(
+                        _,
+                    ))) => {
+                        activator.activate_after(get_reactivation_duration(timer));
+                        return SourceStatus::Alive;
+                    }
+                    Err(e) => {
+                        // Fatal service errors:
+                        //  - InvalidArgument
+                        //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
+                        //    KMSOptInRequired, KMSThrottling
+                        //  - ResourceNotFound
+                        //
+                        // Other fatal Rusoto errors:
+                        // - Credentials
+                        // - Validation
+                        // - ParseError
+                        // - Unknown (raw HTTP provided)
+                        // - Blocking
+                        error!("{}", e);
+                        return SourceStatus::Done;
+                    }
                 };
 
                 for record in get_records_output.records {
