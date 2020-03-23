@@ -93,6 +93,7 @@ main() {
             local glob="${1:?restore requires an argument}" && shift
             dc_prom_restore "$glob"
             ;;
+        ci) ci;;
         *) usage ;;
     esac
 }
@@ -299,11 +300,35 @@ dc_is_running() {
     ( dc_chbench_containers | grep -E "chbench_${1}" ) || true
 }
 
+dc_run_query() {
+    local query=$1
+    # shellcheck disable=SC2059
+    (printf "$query\n" | docker-compose run cli psql -q -h materialized -p 6875 -d materialize) || true
+}
+
+dc_check_query() {
+    local query=$1
+    local timeout=$2
+    for i in $(seq 0 "$timeout"); do
+        local result
+        result=$(dc_run_query "$query")
+        if [[ -z $result ]]; then
+            sleep 1
+        else
+            printf %s "$result"
+            return
+        fi
+    done
+    uw "query failed after $timeout attempts: $query"
+    exit 1
+}
+
+
 dc_ensure_stays_up() {
     local container=$1
     local seconds="${2-5}"
-    echo -n "ensuring $container is staying up "
-    for i in $(seq "$seconds" 1); do
+    echo -n "ensuring $container is staying up for $seconds seconds: "
+    for i in $(seq 1 "$seconds"); do
         sleep 1
         if [[ -z $(dc_is_running "$container") ]]; then
             echo
@@ -370,6 +395,26 @@ drop_kafka_topics() {
     dc_stop materialized peeker
     runv docker exec -it chbench_kafka_1 kafka-topics --delete --bootstrap-server localhost:9092 --topic "mysql.tpcch.*" || true
     dc_up materialized
+}
+
+ci() {
+    bring_up_source_data
+    drop_kafka_topics
+    export MZ_IMG=materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
+    export PEEKER_IMG=materialize/ci-peeker:${BUILDKITE_BUILD_NUMBER}
+    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    dc_run -d chbench run \
+        --dsn=mysql --gen-dir=/var/lib/mysql-files \
+        --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
+        -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
+        --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+    dc_ensure_stays_up chbench 60
+    dc_logs chbench
+    dc_run -d peeker \
+         --queries q01
+    dc_ensure_stays_up peeker
+    dc_status
+    dc_check_query "\\pset format unaligned\nselect count(*) from q01" 20
 }
 
 # Long-running load test

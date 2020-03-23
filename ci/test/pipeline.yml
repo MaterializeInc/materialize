@@ -113,6 +113,15 @@ steps:
           run: billing-demo
     if: $CHANGED_RUST
 
+  - id: chbench-demo
+    label: "chbench sanity check"
+    depends_on: build
+    command: demo/chbench/dc.sh ci
+    timeout_in_minutes: 30
+    plugins:
+      - MaterializeInc/uid#master: ~
+    if: $CHANGED_RUST
+
   - id: catalog-compat
     label: ":book: catalog compatibility check"
     depends_on: build
