@@ -41,7 +41,7 @@ production readiness.
   ```shell
   tag=v<VERSION>-rc<N>
   git tag -a $tag -m $tag
-  git push upstream $tag
+  git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
 
 ### Test the release candidate
@@ -63,18 +63,6 @@ production readiness.
   - [ ] From the VM, ensure all containers are running:
     ```shell script
     docker ps -a
-    ```
-
-    If the prometheus container has failed with this error:
-    ```shell script
-    level=error ts=2020-03-13T18:29:51.472Z caller=query_logger.go:82 component=activeQueryTracker msg="Error opening query log file" file=/prometheus/queries.active err="open /prometheus/queries.active: permission denied"
-    panic: Unable to create mmap-ed active query log
-    ```
-
-    Do the following:
-    ```shell script
-    sudo chmod 777 prometheus/data
-    ./dc.sh up prometheus
     ```
 
   - [ ] Let the test run for 24 hours.
@@ -115,7 +103,7 @@ production readiness.
   ```shell
   tag=v<VERSION>
   git tag -a $tag -m $tag
-  git push upstream $tag
+  git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
 
 - [ ] Create Homebrew bottle and update Homebrew tap.
