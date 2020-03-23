@@ -184,6 +184,7 @@ bring_up_source_data() {
 
 bring_up_introspection() {
     dc_up grafana
+    runv chmod 777 prometheus/data
 }
 
 bring_up_metabase() {

@@ -2,7 +2,12 @@
 
 ## Release candidate
 
-- [ ] Choose the desired commit.
+A release candidate is the Materialize codebase at a given commit, tested for
+production readiness.
+
+### Create the release candidate
+
+- [ ] Choose the desired commit. Most often, this will be the latest commit to master.
 
   ```shell
   git checkout <SHA>
@@ -36,8 +41,10 @@
   ```shell
   tag=v<VERSION>-rc<N>
   git tag -a $tag -m $tag
-  git push origin $tag
+  git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
+
+### Test the release candidate
 
 - [ ] Run the chbench load test on the release candidate tag.
 
@@ -51,6 +58,11 @@
     cd materialize/demo/chbench
     git checkout $tag
     ./dc.sh clean-load-test
+    ```
+
+  - [ ] From the VM, ensure all containers are running:
+    ```shell script
+    docker ps -a
     ```
 
   - [ ] Let the test run for 24 hours.
@@ -68,7 +80,16 @@
 
 - [ ] Run the billing-demo load test on the tag.
 
-  TODO: explain how.
+  - [ ] Spin up the billing-demo with an updated `--message-count` argument.
+
+    ```shell
+    cd src/billing-demo
+    # Manually edit the docker-compose.yml to have `--message-count 100000000`
+    # Follow the rest of the instructions in README.md
+    ```
+
+  - [ ] The billing-demo container should run and finish without error.
+
 
 ## Final release
 
@@ -82,7 +103,7 @@
   ```shell
   tag=v<VERSION>
   git tag -a $tag -m $tag
-  git push origin $tag
+  git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
 
 - [ ] Create Homebrew bottle and update Homebrew tap.
@@ -114,6 +135,6 @@
       to `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on
       master to `v0.1.3-dev`.
 
-[homebrew-guide]: https://github.com/MaterializeInc/homebrew-materialize/tree/master/CONTRIBUTING.md
+[homebrew-guide]: https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md
 [new-github-release]: https://github.com/MaterializeInc/materialize/releases/new
 [v0.1.2]: https://github.com/MaterializeInc/materialize/releases/tag/v0.1.2
