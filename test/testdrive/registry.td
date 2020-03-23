@@ -64,9 +64,6 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=2
-{"before": null, "after": null}
-
 > CREATE MATERIALIZED SOURCE data_v1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -79,9 +76,6 @@ a
 
 $ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=3
 {"before": null, "after": {"a": 2, "b": -1}}
-
-$ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=4
-{"before": null, "after": null}
 
 > CREATE MATERIALIZED SOURCE data_v2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -130,10 +124,6 @@ $ kafka-ingest format=avro topic=missing-data schema=${schema-v1} key-schema=${k
   publish=true timestamp=1
 {"b": 42} {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=missing-data schema=${schema-v1} key-schema=${key-schema-missing}
-  publish=true timestamp=2
-{"b": 42} {"before": null, "after": null}
-
 ! CREATE SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-missing-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -146,10 +136,6 @@ $ kafka-ingest format=avro topic=mismatched-data schema=${schema-v1} key-schema=
   publish=true timestamp=3
 {"a": 1} {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=mismatched-data schema=${schema-v1} key-schema=${key-schema-wrong-type}
-  publish=true timestamp=4
-{"a": 0} {"before": null, "after": null}
-
 ! CREATE SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mismatched-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -159,10 +145,6 @@ key and value column types do not match
 $ kafka-ingest format=avro topic=data schema=${schema-v1} key-schema=${valid-key-schema}
   publish=true timestamp=5
 {"a": 1} {"before": null, "after": {"a": 1}}
-
-$ kafka-ingest format=avro topic=data schema=${schema-v1} key-schema=${valid-key-schema}
-  publish=true timestamp=6
-{"a": 0} {"before": null, "after": null}
 
 > CREATE MATERIALIZED SOURCE data_v3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
