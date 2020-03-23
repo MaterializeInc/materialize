@@ -698,6 +698,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derivative"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b94d2eb97732ec84b4e25eaf37db890e317b80e921f168c82cb5282473f8151"
+dependencies = [
+ "proc-macro2 1.0.7",
+ "quote 1.0.2",
+ "syn 1.0.11",
+]
+
+[[package]]
 name = "difference"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1863,7 +1874,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be601e38e20a6f3d01049d85801cb9b7a34a8da7a0da70df507bbde7735058c8"
 dependencies = [
- "derivative",
+ "derivative 1.0.3",
  "num_enum_derive",
 ]
 
@@ -3458,13 +3469,13 @@ dependencies = [
 
 [[package]]
 name = "tokio-serde"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73c6802964f377789db983c5ea63c52f7fb641e66896833f30b18a04d7479da3"
+checksum = "ebdd897b01021779294eb09bb3b52b6e11b0747f9f7e333a84bef532b656de99"
 dependencies = [
  "bincode",
  "bytes",
- "derivative",
+ "derivative 2.0.2",
  "futures",
  "pin-project",
  "serde",
