@@ -301,14 +301,16 @@ dc_is_running() {
 
 dc_run_query() {
     local query=$1
+    # shellcheck disable=SC2059
     (printf "$query\n" | docker-compose run cli psql -q -h materialized -p 6875 -d materialize) || true
 }
 
 dc_check_query() {
     local query=$1
     local timeout=$2
-    for i in $(seq 0 $timeout); do
-        local result=$(dc_run_query "$query")
+    for i in $(seq 0 "$timeout"); do
+        local result
+        result=$(dc_run_query "$query")
         if [[ -z $result ]]; then
             sleep 1
         else
