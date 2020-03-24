@@ -87,7 +87,7 @@ pub enum SchemaType {
 
 #[derive(Clone, Debug)]
 pub struct CatalogEntry {
-    inner: CatalogItem,
+    item: CatalogItem,
     used_by: Vec<GlobalId>,
     id: GlobalId,
     name: FullName,
@@ -162,7 +162,7 @@ impl CatalogItem {
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
     pub fn desc(&self) -> Result<&RelationDesc, failure::Error> {
-        match &self.inner {
+        match &self.item {
             CatalogItem::Source(src) => Ok(&src.desc),
             CatalogItem::Sink(_) => bail!(
                 "catalog item '{}' is a sink and so cannot be depended upon",
@@ -179,12 +179,12 @@ impl CatalogEntry {
     /// Collects the identifiers of the dataflows that this dataflow depends
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
-        self.inner.uses()
+        self.item.uses()
     }
 
     /// Returns the `CatalogItem` associated with this catalog entry.
     pub fn item(&self) -> &CatalogItem {
-        &self.inner
+        &self.item
     }
 
     /// Returns the global ID of this catalog entry.
@@ -435,7 +435,7 @@ impl Catalog {
     pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
         info!("create {} {} ({})", item.type_string(), name, id);
         let entry = CatalogEntry {
-            inner: item,
+            item,
             name,
             id,
             used_by: Vec::new(),
@@ -694,7 +694,7 @@ impl Catalog {
                     let metadata = self.by_id.remove(&id).unwrap();
                     info!(
                         "drop {} {} ({})",
-                        metadata.inner.type_string(),
+                        metadata.item.type_string(),
                         metadata.name,
                         id
                     );
@@ -710,7 +710,7 @@ impl Catalog {
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
-                    if let CatalogItem::Index(index) = &metadata.inner {
+                    if let CatalogItem::Index(index) = &metadata.item {
                         let indexes = self
                             .indexes
                             .get_mut(&index.on)
