@@ -433,6 +433,7 @@ pub enum AggregateFunc {
     CountAll, // COUNT(*) counts nulls too
     Any,
     All,
+    JsonAgg,
 }
 
 impl AggregateFunc {
@@ -440,7 +441,7 @@ impl AggregateFunc {
         &self,
         datums: I,
         _env: &'a EvalEnv,
-        _temp_storage: &'a RowArena,
+        temp_storage: &'a RowArena,
     ) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
@@ -478,6 +479,12 @@ impl AggregateFunc {
             AggregateFunc::CountAll => count_all(datums),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
+            AggregateFunc::JsonAgg => {
+                let datum = temp_storage.make_datum(|packer| {
+                    packer.push_list(datums.into_iter());
+                });
+                Datum::List(datum.unwrap_list())
+            },
         }
     }
 
@@ -501,6 +508,7 @@ impl AggregateFunc {
             AggregateFunc::CountAll => ScalarType::Int64,
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
+            AggregateFunc::JsonAgg => ScalarType::Jsonb,
             _ => input_type.scalar_type,
         };
         let nullable = match self {
@@ -589,6 +597,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::CountAll => f.write_str("countall"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
+            AggregateFunc::JsonAgg => f.write_str("json_agg"),
         }
     }
 }

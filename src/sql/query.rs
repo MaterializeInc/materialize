@@ -1560,8 +1560,15 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
             // parameter types in this position.
             let expr = plan_expr(ecx, arg, None)?;
             let typ = ecx.column_type(&expr);
-            let func = find_agg_func(&name, typ.scalar_type)?;
-            (expr, func)
+            match find_agg_func(&name, typ.scalar_type)? {
+                AggregateFunc::JsonAgg => {
+                    // We need to transform input into jsonb in order to
+                    // match Postgres' behavior here.
+                    let expr = plan_to_jsonb(ecx, "json_agg", expr)?;
+                    (expr, AggregateFunc::JsonAgg)
+                },
+                func => (expr, func)
+            }
         }
     };
     Ok(AggregateExpr {
@@ -3572,7 +3579,7 @@ fn is_table_func(name: &str) -> bool {
 fn is_aggregate_func(name: &str) -> bool {
     match name {
         // avg is handled by transform::AvgFuncRewriter.
-        "max" | "min" | "sum" | "count" => true,
+        "max" | "min" | "sum" | "count" | "json_agg" => true,
         _ => false,
     }
 }
@@ -3608,6 +3615,7 @@ fn find_agg_func(name: &str, scalar_type: ScalarType) -> Result<AggregateFunc, f
         ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
         ("sum", ScalarType::Unknown) => AggregateFunc::SumNull,
         ("count", _) => AggregateFunc::Count,
+        ("json_agg", _) => AggregateFunc::JsonAgg,
         other => bail!("Unimplemented function/type combo: {:?}", other),
     })
 }
