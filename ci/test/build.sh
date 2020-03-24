@@ -91,6 +91,8 @@ ci_collapsed_heading "Preparing Docker context"
     cp target/debug/examples/pingpong misc/docker/ci-cargo-test/tests/examples
     cp target/release/testdrive misc/docker/ci-cargo-test/tests
     cp misc/shlib/* misc/docker/ci-cargo-test/shlib
+    mkdir misc/docker/ci-http-logs
+    cp demo/http_logs/apps/* misc/docker/ci-http-logs
 
     # Move standalone binaries into the contexts for their respective images.
     mv target/release/materialized misc/docker/ci-materialized
@@ -136,6 +138,7 @@ images=(
     peeker
     billing-demo
     cargo-test
+    http-logs
 )
 
 if [[ "$BUILDKITE_BRANCH" = master || "$BUILDKITE_BRANCH" = v*.* ]]; then
