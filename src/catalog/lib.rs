@@ -87,7 +87,7 @@ pub enum SchemaType {
 
 #[derive(Clone, Debug)]
 pub struct CatalogEntry {
-    pub inner: CatalogItem,
+    inner: CatalogItem,
     used_by: Vec<GlobalId>,
     id: GlobalId,
     name: FullName,

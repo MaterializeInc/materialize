@@ -1318,7 +1318,7 @@ fn handle_explain(
         Explainee::View(name) => {
             let full_name = scx.resolve_name(name.clone())?;
             let entry = scx.catalog.get(&full_name)?;
-            match &entry.inner {
+            match entry.item() {
                 CatalogItem::View(view) => view.unoptimized_expr.clone(),
                 other => bail!(
                     "Expected {} to be a view, not a {}",
