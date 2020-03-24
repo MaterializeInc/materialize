@@ -23,6 +23,8 @@ Detail | Info
 Field | Use
 ------|----
 _date&lowbar;str_ | A string representing a date in `Y-M-D` format.
+_time&lowbar;str_ | _(NOP)_ A string representing a time of day in `H:M:S.NS` format.
+_tz&lowbar;offset_ | _(NOP)_ The timezone's distance, in hours, from UTC.
 
 ## Details
 

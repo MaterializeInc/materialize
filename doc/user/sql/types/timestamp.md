@@ -23,16 +23,12 @@ as an alias for `timestamp with time zone`.
 
 ## Syntax
 
-### TIMESTAMP
-
 {{< diagram "type-timestamp.html" >}}
-
-### TIMESTAMPTZ
-
-{{< diagram "type-timestamptz.html" >}}
 
 Field | Use
 ------|-----
+**WITH TIME ZONE** | Apply the _tz&lowbar;offset_ field. If not specified, don't.
+**TIMESTAMPTZ** | Apply the _tz&lowbar;offset_ field.
 _date&lowbar;str_ | A string representing a date in `Y-M-D` format.
 _time&lowbar;str_ | A string representing a time of day in `H:M:S.NS` format.
 _tz&lowbar;offset_ | The timezone's distance, in hours, from UTC.
