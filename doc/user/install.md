@@ -37,6 +37,7 @@ curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-apple-da
 apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
 # Add and update the repository
 apt-add-repository 'deb http://packages.materialize.io/apt/ /'
+apt update
 # Install materialized
 apt install materialized
 ```
