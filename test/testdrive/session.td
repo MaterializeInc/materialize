@@ -16,6 +16,7 @@ DateStyle           "ISO, MDY"                        "Sets the display format f
 search_path         "mz_catalog, pg_catalog, public"  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
 server_version      9.5.0                             "Shows the server version (PostgreSQL)."
 sql_safe_updates    false                             "Prohibits SQL statements that may be overly destructive (CockroachDB)."
+TimeZone            UTC                               "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 
 > SHOW client_encoding
 UTF8
