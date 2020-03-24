@@ -1,0 +1,125 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+query T multiline
+EXPLAIN DATAFLOW FOR SELECT * FROM (SELECT 1)
+----
+0 =
+| Constant ()
+
+1 =
+| Get %0
+
+2 =
+| Constant ()
+
+3 =
+| Join %1 %2
+| | implementation = Unimplemented
+
+4 =
+| Get %0
+
+5 =
+| Constant ()
+
+6 =
+| Join %4 %5
+| | implementation = Unimplemented
+| Map 1
+| Project (#0)
+| Project (#0)
+
+7 =
+| Get %3
+
+8 =
+| Get %6
+
+9 =
+| Join %7 %8
+| | implementation = Unimplemented
+| Project (#0)
+| Filter true
+
+10 =
+| Get %9
+| Map #0
+| Project (#1)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM (SELECT 1)
+----
+0 =
+| Constant (1)
+
+EOF
+
+statement ok
+CREATE VIEW foo AS SELECT * FROM (SELECT 1)
+
+query T multiline
+EXPLAIN DATAFLOW FOR VIEW foo
+----
+0 =
+| Constant ()
+
+1 =
+| Get %0
+
+2 =
+| Constant ()
+
+3 =
+| Join %1 %2
+| | implementation = Unimplemented
+
+4 =
+| Get %0
+
+5 =
+| Constant ()
+
+6 =
+| Join %4 %5
+| | implementation = Unimplemented
+| Map 1
+| Project (#0)
+| Project (#0)
+
+7 =
+| Get %3
+
+8 =
+| Get %6
+
+9 =
+| Join %7 %8
+| | implementation = Unimplemented
+| Project (#0)
+| Filter true
+
+10 =
+| Get %9
+| Map #0
+| Project (#1)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR VIEW foo
+----
+0 =
+| Constant (1)
+
+EOF
