@@ -1192,6 +1192,14 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
         }
     }
 
+    fn timestamp(&self) -> i64;
+
+    fn timestamp_subsec_micros(&self) -> u32;
+
+    fn extract_epoch(&self) -> f64 {
+        self.timestamp() as f64 + (self.timestamp_subsec_micros() as f64) / 1e6
+    }
+
     fn extract_year(&self) -> f64 {
         f64::from(self.year())
     }
@@ -1373,6 +1381,14 @@ impl TimestampLike for chrono::NaiveDateTime {
         self.date()
     }
 
+    fn timestamp(&self) -> i64 {
+        self.timestamp()
+    }
+
+    fn timestamp_subsec_micros(&self) -> u32 {
+        self.timestamp_subsec_micros()
+    }
+
     fn timezone_offset(&self) -> &'static str {
         "+00"
     }
@@ -1399,6 +1415,14 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
         self.naive_utc().date()
     }
 
+    fn timestamp(&self) -> i64 {
+        self.timestamp()
+    }
+
+    fn timestamp_subsec_micros(&self) -> u32 {
+        self.timestamp_subsec_micros()
+    }
+
     fn timezone_offset(&self) -> &'static str {
         "+00"
     }
@@ -1418,6 +1442,10 @@ impl TimestampLike for chrono::DateTime<chrono::Utc> {
             "utc"
         }
     }
+}
+
+fn extract_interval_epoch<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_interval().as_seconds())
 }
 
 fn extract_interval_year<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1442,6 +1470,13 @@ fn extract_interval_minute<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn extract_interval_second<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval().seconds())
+}
+
+fn extract_timelike_epoch<'a, T>(ts: T) -> Datum<'a>
+where
+    T: TimestampLike,
+{
+    Datum::from(ts.extract_epoch())
 }
 
 fn extract_timelike_year<'a, T>(ts: T) -> Datum<'a>
@@ -2302,12 +2337,14 @@ pub enum UnaryFunc {
     Ascii,
     LengthBytes,
     MatchRegex(Regex),
+    ExtractIntervalEpoch,
     ExtractIntervalYear,
     ExtractIntervalMonth,
     ExtractIntervalDay,
     ExtractIntervalHour,
     ExtractIntervalMinute,
     ExtractIntervalSecond,
+    ExtractTimestampEpoch,
     ExtractTimestampYear,
     ExtractTimestampQuarter,
     ExtractTimestampMonth,
@@ -2319,6 +2356,7 @@ pub enum UnaryFunc {
     ExtractTimestampDayOfYear,
     ExtractTimestampDayOfWeek,
     ExtractTimestampIsoDayOfWeek,
+    ExtractTimestampTzEpoch,
     ExtractTimestampTzYear,
     ExtractTimestampTzQuarter,
     ExtractTimestampTzMonth,
@@ -2437,12 +2475,14 @@ impl UnaryFunc {
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::LengthBytes => Ok(length_bytes(a)),
             UnaryFunc::MatchRegex(regex) => Ok(match_regex(a, &regex)),
+            UnaryFunc::ExtractIntervalEpoch => Ok(extract_interval_epoch(a)),
             UnaryFunc::ExtractIntervalYear => Ok(extract_interval_year(a)),
             UnaryFunc::ExtractIntervalMonth => Ok(extract_interval_month(a)),
             UnaryFunc::ExtractIntervalDay => Ok(extract_interval_day(a)),
             UnaryFunc::ExtractIntervalHour => Ok(extract_interval_hour(a)),
             UnaryFunc::ExtractIntervalMinute => Ok(extract_interval_minute(a)),
             UnaryFunc::ExtractIntervalSecond => Ok(extract_interval_second(a)),
+            UnaryFunc::ExtractTimestampEpoch => Ok(extract_timelike_epoch(a.unwrap_timestamp())),
             UnaryFunc::ExtractTimestampYear => Ok(extract_timelike_year(a.unwrap_timestamp())),
             UnaryFunc::ExtractTimestampQuarter => {
                 Ok(extract_timelike_quarter(a.unwrap_timestamp()))
@@ -2461,6 +2501,9 @@ impl UnaryFunc {
             }
             UnaryFunc::ExtractTimestampIsoDayOfWeek => {
                 Ok(extract_timelike_isodayofweek(a.unwrap_timestamp()))
+            }
+            UnaryFunc::ExtractTimestampTzEpoch => {
+                Ok(extract_timelike_epoch(a.unwrap_timestamptz()))
             }
             UnaryFunc::ExtractTimestampTzYear => Ok(extract_timelike_year(a.unwrap_timestamptz())),
             UnaryFunc::ExtractTimestampTzQuarter => {
@@ -2609,12 +2652,14 @@ impl UnaryFunc {
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
             | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
 
-            ExtractIntervalYear
+            ExtractIntervalEpoch
+            | ExtractIntervalYear
             | ExtractIntervalMonth
             | ExtractIntervalDay
             | ExtractIntervalHour
             | ExtractIntervalMinute
             | ExtractIntervalSecond
+            | ExtractTimestampEpoch
             | ExtractTimestampYear
             | ExtractTimestampQuarter
             | ExtractTimestampMonth
@@ -2626,6 +2671,7 @@ impl UnaryFunc {
             | ExtractTimestampDayOfYear
             | ExtractTimestampDayOfWeek
             | ExtractTimestampIsoDayOfWeek
+            | ExtractTimestampTzEpoch
             | ExtractTimestampTzYear
             | ExtractTimestampTzQuarter
             | ExtractTimestampTzMonth
@@ -2769,12 +2815,14 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::LengthBytes => f.write_str("lengthbytes"),
             UnaryFunc::MatchRegex(regex) => write!(f, "\"{}\" ~", regex.as_str()),
+            UnaryFunc::ExtractIntervalEpoch => f.write_str("ivextractepoch"),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
             UnaryFunc::ExtractIntervalDay => f.write_str("ivextractday"),
             UnaryFunc::ExtractIntervalHour => f.write_str("ivextracthour"),
             UnaryFunc::ExtractIntervalMinute => f.write_str("ivextractminute"),
             UnaryFunc::ExtractIntervalSecond => f.write_str("ivextractsecond"),
+            UnaryFunc::ExtractTimestampEpoch => f.write_str("tsextractepoch"),
             UnaryFunc::ExtractTimestampYear => f.write_str("tsextractyear"),
             UnaryFunc::ExtractTimestampQuarter => f.write_str("tsextractquarter"),
             UnaryFunc::ExtractTimestampMonth => f.write_str("tsextractmonth"),
@@ -2786,6 +2834,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::ExtractTimestampDayOfYear => f.write_str("tsextractdayofyear"),
             UnaryFunc::ExtractTimestampDayOfWeek => f.write_str("tsextractdayofweek"),
             UnaryFunc::ExtractTimestampIsoDayOfWeek => f.write_str("tsextractisodayofweek"),
+            UnaryFunc::ExtractTimestampTzEpoch => f.write_str("tstzextractepoch"),
             UnaryFunc::ExtractTimestampTzYear => f.write_str("tstzextractyear"),
             UnaryFunc::ExtractTimestampTzQuarter => f.write_str("tsextracttzquarter"),
             UnaryFunc::ExtractTimestampTzMonth => f.write_str("tstzextractmonth"),

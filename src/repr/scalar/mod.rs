@@ -844,6 +844,13 @@ impl Interval {
         s + ns
     }
 
+    /// Computes the total number of seconds in the interval.
+    pub fn as_seconds(&self) -> f64 {
+        (self.months as f64) * 60.0 * 60.0 * 24.0 * 30.0
+            + (self.duration.as_secs() as f64)
+            + f64::from(self.duration.subsec_micros()) / 1e6
+    }
+
     /// Truncate the "head" of the interval, removing all time units greater than `f`.
     pub fn truncate_high_fields(&mut self, f: DateTimeField) {
         use std::time::Duration;
