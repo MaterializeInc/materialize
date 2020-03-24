@@ -452,8 +452,19 @@ where
                     worker_id: _,
                     message: WorkerFeedback::CreateSource(source_id, sc, consistency),
                 }) => {
+                    let entry = self.catalog.get_by_id(&source_id.sid).item();
+                    let envelope =
+                    if let CatalogItem::Source(s) = entry {
+                        if let SourceConnector::External{connector:_,encoding:_,envelope,consistency:_} = &s.connector {
+                           envelope
+                        } else {
+                            panic!("Catalog Entry of Type ExternalSourceConnector is expected");
+                        }
+                    } else {
+                        panic!("Catalog Entry of type Source is expected");
+                    };
                     ts_tx
-                        .send(TimestampMessage::Add(source_id, sc, consistency))
+                        .send(TimestampMessage::Add(source_id, sc, consistency, *envelope))
                         .expect("Failed to send CREATE Instance notice to timestamper");
                 }
 

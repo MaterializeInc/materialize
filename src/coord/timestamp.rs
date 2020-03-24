@@ -24,10 +24,7 @@ use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
 
 use catalog::sql::SqlVal;
-use dataflow_types::{
-    Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
-    KinesisSourceConnector,
-};
+use dataflow_types::{Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, Envelope};
 use expr::SourceInstanceId;
 
 use crate::coord;
@@ -41,7 +38,7 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, ExternalSourceConnector, Consistency),
+    Add(SourceInstanceId, ExternalSourceConnector, Consistency, Envelope),
     DropInstance(SourceInstanceId),
     Shutdown,
 }
@@ -64,6 +61,7 @@ enum RtTimestampConnector {
 struct ByoTimestampConsumer {
     connector: ByoTimestampConnector,
     source_name: String,
+    envelope: Envelope,
     last_partition_ts: HashMap<i32, u64>,
     last_ts: u64,
     current_partition_count: i32,
@@ -332,7 +330,7 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.rx.try_recv() {
             match update {
-                TimestampMessage::Add(id, sc, consistency) => {
+                TimestampMessage::Add(id, sc, consistency, envelope) => {
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
                         // Did not know about source, must update
                         match consistency {
@@ -344,7 +342,7 @@ impl Timestamper {
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
                                 info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}", id, consistency_topic);
-                                let consumer = self.create_byo_connector(id, sc, consistency_topic);
+                                let consumer = self.create_byo_connector(id, sc, consistency_topic, envelope);
                                 self.byo_sources.insert(id, consumer);
                             }
                         }
@@ -376,26 +374,29 @@ impl Timestamper {
     /// A new timestamp should be:
     /// 1) strictly greater than the last timestamp
     /// This is necessary to guarantee that this timestamp *could not have been closed yet*
-    fn update_byo_timestamp(&mut self) {
+    ///
+    /// Supports two envelopes: None and Debezium. Currently compatible with Debezium format 1.1
+     fn update_byo_timestamp(&mut self) {
         for (id, byo_consumer) in &mut self.byo_sources {
             // Get the next set of messages from the Consistency topic
             let messages = byo_query_source(byo_consumer, self.max_increment_size);
-            // Notify coordinator of updates
-            for (partition_count, partition, timestamp, offset) in
-                byo_extract_ts_update(byo_consumer, messages)
-            {
-                let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
-                    Some(ts) => *ts,
-                    None => 0,
-                };
-                if timestamp == 0
-                    || timestamp == std::u64::MAX
-                    || timestamp < byo_consumer.last_ts
-                    || timestamp <= last_p_ts
-                    || (partition_count > byo_consumer.current_partition_count
-                        && timestamp == byo_consumer.last_ts)
-                {
-                    error!("The timestamp assignment rules have been violated. The rules are as follows:\n\
+            match byo_consumer.envelope {
+                Envelope::None => {
+                    for (partition_count, partition, timestamp, offset) in
+                        byo_extract_ts_update(byo_consumer, messages)
+                        {
+                            let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
+                                Some(ts) => *ts,
+                                None => 0,
+                            };
+                            if timestamp == 0
+                                || timestamp == std::u64::MAX
+                                || timestamp < byo_consumer.last_ts
+                                || timestamp <= last_p_ts
+                                || (partition_count > byo_consumer.current_partition_count
+                                && timestamp == byo_consumer.last_ts)
+                            {
+                                error!("The timestamp assignment rules have been violated. The rules are as follows:\n\
                      1) A timestamp should be greater than 0\n\
                      2) The timestamp should be strictly smaller than u64::MAX\n\
                      2) If no new partition is added, a new timestamp should be:\n \
@@ -403,42 +404,47 @@ impl Timestamper {
                         - greater or equal to all the timestamps that have been assigned across all partitions\n \
                         If a new partition is added, a new timestamp should be:\n  \
                         - strictly greater than the last timestamp\n");
-                } else {
-                    if byo_consumer.current_partition_count < partition_count {
-                        // A new partition has been added. Partitions always gets added with
-                        // newPartitionId = previousLastPartitionId + 1 and start from 0.
-                        // So this new partition will have ID "partition_count - 1"
-                        // We ensure that the first messages in this partition will always have
-                        // timestamps > the last closed timestamp. We need to explicitly close
-                        // out all prior timestamps. To achieve this, we send an additional
-                        // timestamp message to the coord/worker
-                        self.tx
-                            .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                id: *id,
-                                partition_count,          // The new partition count
-                                pid: partition_count - 1, // the ID of the new partition
-                                timestamp: byo_consumer.last_ts,
-                                offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
-                                           // the empty interval
-                            })
-                            .expect("Failed to send update to coordinator");
-                    }
-                    byo_consumer.current_partition_count = partition_count;
-                    byo_consumer.last_ts = timestamp;
-                    byo_consumer.last_partition_ts.insert(partition, timestamp);
-                    self.tx
-                        .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                            id: *id,
-                            partition_count,
-                            pid: partition,
-                            timestamp,
-                            offset,
-                        })
-                        .expect("Failed to send update to coordinator");
+                            } else {
+                                if byo_consumer.current_partition_count < partition_count {
+                                    // A new partition has been added. Partitions always gets added with
+                                    // newPartitionId = previousLastPartitionId + 1 and start from 0.
+                                    // So this new partition will have ID "partition_count - 1"
+                                    // We ensure that the first messages in this partition will always have
+                                    // timestamps > the last closed timestamp. We need to explicitly close
+                                    // out all prior timestamps. To achieve this, we send an additional
+                                    // timestamp message to the coord/worker
+                                    self.tx
+                                        .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                                            id:*id,
+                                            partition_count,          // The new partition count
+                                            pid: partition_count - 1, // the ID of the new partition
+                                            timestamp: byo_consumer.last_ts,
+                                            offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
+                                            // the empty interval
+                                        })
+                                        .expect("Failed to send update to coordinator");
+                                }
+                                byo_consumer.current_partition_count = partition_count;
+                                byo_consumer.last_ts = timestamp;
+                                byo_consumer.last_partition_ts.insert(partition, timestamp);
+                                self.tx
+                                    .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                                        id:*id,
+                                        partition_count,
+                                        pid: partition,
+                                        timestamp,
+                                        offset,
+                                    })
+                                    .expect("Failed to send update to coordinator");
+                            }
+                        }
+                },
+                Envelope::Debezium =>  {
+                    unimplemented!();
                 }
             }
         }
-    }
+   }
 
     /// Creates a RT connector
     fn create_rt_connector(
@@ -532,6 +538,7 @@ impl Timestamper {
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
         timestamp_topic: String,
+        e: Envelope
     ) -> ByoTimestampConsumer {
         match sc {
             ExternalSourceConnector::Kafka(kc) => ByoTimestampConsumer {
@@ -541,6 +548,7 @@ impl Timestamper {
                     kc,
                     timestamp_topic,
                 )),
+                envelope: e,
                 last_partition_ts: HashMap::new(),
                 last_ts: 0,
                 current_partition_count: 0,
@@ -554,6 +562,7 @@ impl Timestamper {
                         fc,
                         timestamp_topic,
                     )),
+                    envelope: e,
                     last_partition_ts: HashMap::new(),
                     last_ts: 0,
                     current_partition_count: 0,
@@ -568,6 +577,7 @@ impl Timestamper {
                         kinc,
                         timestamp_topic,
                     )),
+                    envelope: e,
                     last_partition_ts: HashMap::new(),
                     last_ts: 0,
                     current_partition_count: 0,
