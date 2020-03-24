@@ -55,7 +55,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
-      - docker-compose#v3.0.3:
+      - docker-compose#v3.3.0:
           config: ci/test/cargo-test.compose.yml
           run: app
     if: $CHANGED_RUST
@@ -83,7 +83,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
-      - docker-compose#v3.0.3:
+      - docker-compose#v3.3.0:
           config: ci/test/testdrive.compose.yml
           run: testdrive
     if: $CHANGED_RUST || $CHANGED_TESTDRIVE
@@ -97,7 +97,7 @@ steps:
       SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
     plugins:
       - MaterializeInc/uid#master: ~
-      - docker-compose#v3.0.3:
+      - docker-compose#v3.3.0:
           config: ci/slt/docker-compose.yml
           run: sqllogictest
     if: $CHANGED_RUST || $CHANGED_SLT
@@ -108,7 +108,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
-      - docker-compose#v3.0.3:
+      - docker-compose#v3.3.0:
           config: ci/test/streaming-demo.compose.yml
           run: billing-demo
     if: $CHANGED_RUST
@@ -128,7 +128,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
-      - docker-compose#v3.0.3:
+      - docker-compose#v3.3.0:
           config: ci/test/catalog-compat.compose.yml
           run: catalog-compat
     if: $CHANGED_RUST
@@ -139,7 +139,7 @@ steps:
     timeout_in_minutes: 10
     plugins:
       - MaterializeInc/uid#master: ~
-      - docker-compose#v3.0.3:
+      - docker-compose#v3.3.0:
           config: ci/test/metabase-demo.compose.yml
           run: healthcheck
     if: $CHANGED_RUST
