@@ -83,6 +83,12 @@ const SQL_SAFE_UPDATES: ServerVar<&bool> = ServerVar {
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
 };
 
+const TIMEZONE: ServerVar<&str> = ServerVar {
+    name: unicase::Ascii::new("TimeZone"),
+    value: "UTC",
+    description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
+};
+
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
     application_name: SessionVar<str>,
@@ -93,6 +99,7 @@ pub struct Session {
     search_path: ServerVar<&'static [&'static str]>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
+    timezone: ServerVar<&'static str>,
     /// The current state of the the session's transaction
     transaction: TransactionStatus,
     /// A map from statement names to SQL queries
@@ -115,6 +122,7 @@ impl fmt::Debug for Session {
             .field("search_path", &self.search_path())
             .field("server_version", &self.server_version())
             .field("sql_safe_updates", &self.sql_safe_updates())
+            .field("timezone", &self.timezone())
             .field("transaction", &self.transaction())
             .field("prepared_statements", &self.prepared_statements.keys())
             .field("portals", &self.portals.keys())
@@ -134,6 +142,7 @@ impl Default for Session {
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
+            timezone: TIMEZONE,
             transaction: TransactionStatus::Idle,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
@@ -154,6 +163,7 @@ impl Session {
             &self.search_path,
             &self.server_version,
             &self.sql_safe_updates,
+            &self.timezone,
         ]
     }
 
@@ -196,6 +206,8 @@ impl Session {
             Ok(&self.server_version)
         } else if name == SQL_SAFE_UPDATES.name {
             Ok(&self.sql_safe_updates)
+        } else if name == TIMEZONE.name {
+            Ok(&self.timezone)
         } else {
             bail!("unknown parameter: {}", name)
         }
@@ -225,6 +237,16 @@ impl Session {
             bail!("parameter {} is read only", SERVER_VERSION.name);
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.set(value)
+        } else if name == TIMEZONE.name {
+            if unicase::Ascii::new(value) != TIMEZONE.value {
+                bail!(
+                    "parameter {} can only be set to {}",
+                    TIMEZONE.name,
+                    TIMEZONE.value
+                );
+            } else {
+                Ok(())
+            }
         } else {
             bail!("unknown parameter: {}", name)
         }
@@ -268,6 +290,11 @@ impl Session {
     /// Returns the value of the `sql_safe_updates` configuration parameter.
     pub fn sql_safe_updates(&self) -> bool {
         *self.sql_safe_updates.value()
+    }
+
+    /// Returns the value of the `timezone` configuration parameter.
+    pub fn timezone(&self) -> &'static str {
+        self.timezone.value
     }
 
     /// Put the session into a transaction
