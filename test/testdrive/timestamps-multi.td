@@ -36,6 +36,9 @@ dummy,1,0,0,0
 
 $ kafka-create-topic topic=data partitions=2
 
+$ kafka-create-topic topic=data2 partitions=2
+
+
 $ kafka-ingest partition=0 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 1}}
 
@@ -44,6 +47,12 @@ $ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE MATERIALIZED SOURCE data_byo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+    WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+> CREATE MATERIALIZED SOURCE data_empty
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
     WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
@@ -58,8 +67,28 @@ $ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE MATERIALIZED VIEW view_rt AS SELECT b, sum(a) FROM data_rt GROUP BY b
 
+> CREATE MATERIALIZED VIEW view_empty AS SELECT b, sum(a) FROM data_empty GROUP BY b
+
 ! SELECT * FROM view_byo;
 At least one input has no complete timestamps yet.
+
+! SELECT * FROM view_empty;
+At least one input has no complete timestamps yet.
+
+$ kafka-ingest format=bytes topic=data-consistency timestamp=1
+testdrive-data2-${testdrive.seed},2,0,1,0
+
+! SELECT * FROM view_empty;
+At least one input has no complete timestamps yet.
+
+$ kafka-ingest format=bytes topic=data-consistency timestamp=1
+testdrive-data2-${testdrive.seed},2,1,1,0
+
+> SELECT * FROM view_empty;
+b sum
+-----
+
+
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
 testdrive-data-${testdrive.seed},2,0,1,1
