@@ -1314,9 +1314,20 @@ fn handle_explain(
     explainee: Explainee,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _desc, _finishing) = match explainee {
-        Explainee::View(name) => panic!("TODO(jamii)"),
-        Explainee::Query(query) => handle_query(scx, *query, params, QueryLifetime::OneShot)?,
+    let relation_expr = match explainee {
+        Explainee::View(name) => {
+            let full_name = scx.resolve_name(name.clone())?;
+            let entry = scx.catalog.get(&full_name)?;
+            match &entry.inner {
+                CatalogItem::View(view) => view.unoptimized_expr.clone(),
+                other => bail!(
+                    "Expected {} to be a view, not a {}",
+                    name,
+                    other.type_string()
+                ),
+            }
+        }
+        Explainee::Query(query) => handle_query(scx, *query, params, QueryLifetime::OneShot)?.0,
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).

@@ -19,7 +19,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use dataflow_types::{SinkConnector, SourceConnector};
-use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
+use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr};
 use repr::RelationDesc;
 
 use crate::error::{Error, ErrorKind};
@@ -87,7 +87,7 @@ pub enum SchemaType {
 
 #[derive(Clone, Debug)]
 pub struct CatalogEntry {
-    inner: CatalogItem,
+    pub inner: CatalogItem,
     used_by: Vec<GlobalId>,
     id: GlobalId,
     name: FullName,
@@ -118,7 +118,8 @@ pub struct Sink {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct View {
     pub create_sql: String,
-    pub expr: OptimizedRelationExpr,
+    pub unoptimized_expr: RelationExpr,
+    pub optimized_expr: OptimizedRelationExpr,
     pub eval_env: EvalEnv,
     pub desc: RelationDesc,
 }
@@ -150,7 +151,7 @@ impl CatalogItem {
             CatalogItem::Sink(sink) => vec![sink.from],
             CatalogItem::View(view) => {
                 let mut out = Vec::new();
-                view.expr.as_ref().global_uses(&mut out);
+                view.optimized_expr.as_ref().global_uses(&mut out);
                 out
             }
             CatalogItem::Index(idx) => vec![idx.on],
