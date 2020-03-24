@@ -212,7 +212,8 @@ where
                                 let eval_env = EvalEnv::default();
                                 let view = catalog::View {
                                     create_sql: view.create_sql,
-                                    expr: optimizer
+                                    unoptimized_expr: view.expr.clone(),
+                                    optimized_expr: optimizer
                                         .optimize(view.expr, catalog.indexes(), &eval_env)
                                         .expect("failed to optimize bootstrap sql"),
                                     eval_env,
@@ -787,9 +788,12 @@ where
                 let eval_env = EvalEnv::default();
                 let view = catalog::View {
                     create_sql: view.create_sql,
-                    expr: self
-                        .optimizer
-                        .optimize(view.expr, self.catalog.indexes(), &eval_env)?,
+                    unoptimized_expr: view.expr.clone(),
+                    optimized_expr: self.optimizer.optimize(
+                        view.expr,
+                        self.catalog.indexes(),
+                        &eval_env,
+                    )?,
                     desc: view.desc,
                     eval_env,
                 };
@@ -949,6 +953,7 @@ where
                 // constant expression that originally contains a global get? Is
                 // there anything not containing a global get that cannot be
                 // optimized to a constant expression?
+                let unoptimized_source = source.clone();
                 let mut source =
                     self.optimizer
                         .optimize(source, self.catalog.indexes(), &eval_env)?;
@@ -1032,7 +1037,8 @@ where
                         dataflow.as_of(Some(vec![timestamp.clone()]));
                         let view = catalog::View {
                             create_sql: "<none>".into(),
-                            expr: source,
+                            unoptimized_expr: unoptimized_source,
+                            optimized_expr: source,
                             desc,
                             eval_env: eval_env.clone(),
                         };
@@ -1338,7 +1344,7 @@ where
         dataflow: &mut DataflowDesc,
     ) {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
-        view.expr.as_ref().visit(&mut |e| {
+        view.optimized_expr.as_ref().visit(&mut |e| {
             if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
@@ -1349,7 +1355,7 @@ where
             }
         });
         // Collect sources, views, and indexes used.
-        view.expr.as_ref().visit(&mut |e| {
+        view.optimized_expr.as_ref().visit(&mut |e| {
             if let RelationExpr::ArrangeBy { input, keys } = e {
                 if let RelationExpr::Get {
                     id: Id::Global(on_id),
@@ -1380,7 +1386,7 @@ where
         });
         dataflow.add_view_to_build(
             *view_id,
-            view.expr.clone(),
+            view.optimized_expr.clone(),
             view.eval_env.clone(),
             view.desc.typ().clone(),
         );
@@ -1771,7 +1777,7 @@ where
     fn insert_view(&mut self, view_id: GlobalId, view: &catalog::View) {
         self.views.remove(&view_id);
         let mut uses = Vec::new();
-        view.expr.as_ref().global_uses(&mut uses);
+        view.optimized_expr.as_ref().global_uses(&mut uses);
         uses.sort();
         uses.dedup();
         self.views.insert(
@@ -1998,7 +2004,7 @@ pub fn auto_generate_view_idx(
 ) -> catalog::Index {
     auto_generate_primary_idx(
         index_name,
-        &view.expr.as_ref().typ().keys,
+        &view.optimized_expr.as_ref().typ().keys,
         view_name,
         view_id,
         &view.desc,
