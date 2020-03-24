@@ -1333,6 +1333,7 @@ fn plan_expr_returning_name<'a>(
                         ExtractField::Hour => UnaryFunc::ExtractIntervalHour,
                         ExtractField::Minute => UnaryFunc::ExtractIntervalMinute,
                         ExtractField::Second => UnaryFunc::ExtractIntervalSecond,
+                        ExtractField::Epoch => UnaryFunc::ExtractIntervalEpoch,
                         ExtractField::DayOfWeek
                         | ExtractField::IsoDayOfWeek
                         | ExtractField::Quarter => {
@@ -1355,6 +1356,7 @@ fn plan_expr_returning_name<'a>(
                         ExtractField::DayOfYear => UnaryFunc::ExtractTimestampDayOfYear,
                         ExtractField::DayOfWeek => UnaryFunc::ExtractTimestampDayOfWeek,
                         ExtractField::IsoDayOfWeek => UnaryFunc::ExtractTimestampIsoDayOfWeek,
+                        ExtractField::Epoch => UnaryFunc::ExtractTimestampEpoch,
                         _ => failure::bail!(
                             "EXTRACT({} ..) for timestamp is not yet implemented",
                             field
@@ -1372,6 +1374,7 @@ fn plan_expr_returning_name<'a>(
                         ExtractField::DayOfYear => UnaryFunc::ExtractTimestampTzDayOfYear,
                         ExtractField::DayOfWeek => UnaryFunc::ExtractTimestampTzDayOfWeek,
                         ExtractField::IsoDayOfWeek => UnaryFunc::ExtractTimestampTzIsoDayOfWeek,
+                        ExtractField::Epoch => UnaryFunc::ExtractTimestampTzEpoch,
                         _ => failure::bail!(
                             "EXTRACT({} ..) for timestamp tz is not yet implemented",
                             field

@@ -171,7 +171,6 @@ SELECT extract(microsecond FROM TIMESTAMP '2010-01-10 12:13:14.123456')
 ----
 123456
 
-skipif postgresql # epoch is not supported
 query I
 SELECT extract(epoch FROM TIMESTAMP '2010-01-10 12:13:14.1')
 ----
@@ -205,3 +204,8 @@ query R
 SELECT extract(millisecond FROM INTERVAL '20.3040' SECOND)
 ----
 20304
+
+query R
+SELECT extract(epoch FROM INTERVAL '10:20.30' MINUTE TO SECOND)
+----
+620.300
