@@ -22,8 +22,11 @@ documentation for the type of data you are trying to load into Materialize:
 
 - [Avro over Kafka](./avro-source)
 - [Protobuf over Kafka](./protobuf-source)
+- [JSON over Kinesis](./kinesis-source)
 - [Local CSV files](./csv-source)
-- [Bytes or unstructured text from local files](./text-source)
+- [Other local files (e.g. text, JSON)](./text-source)
+
+Don't see what you're looking for? [Let us know on GitHub](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md).
 
 ## Related pages
 
