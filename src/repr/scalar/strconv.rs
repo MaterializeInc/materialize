@@ -27,7 +27,7 @@ use std::{f32, f64};
 
 use chrono::offset::TimeZone;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use failure::bail;
+use failure::{bail, format_err};
 
 use ore::fmt::FormatBuffer;
 
@@ -170,9 +170,7 @@ where
 /// <time zone interval> ::=
 ///     <sign> <hours value> <colon> <minutes value>
 /// ```
-fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, &str), failure::Error> {
-    use std::convert::TryInto;
-
+fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), failure::Error> {
     if s.is_empty() {
         bail!("Timestamp string is empty!")
     }
@@ -185,97 +183,23 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, &str), failu
         return Ok((
             NaiveDate::from_ymd(1970, 1, 1),
             NaiveTime::from_hms(0, 0, 0),
-            "",
+            0,
         ));
     }
 
     let (ts_string, tz_string) = crate::datetime::split_timestamp_string(s);
 
-    // Split timestamp into date and time components.
-    let ts_value_split = ts_string.trim().split_whitespace().collect::<Vec<&str>>();
+    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(&ts_string)?;
+    let d: NaiveDate = pdt.compute_date()?;
+    let t: NaiveTime = pdt.compute_time()?;
 
-    if ts_value_split.len() > 2 || ts_value_split.len() == 0 {
-        bail!("unknown format")
-    }
-
-    let date_pdt = ParsedDateTime::build_parsed_datetime_date(ts_value_split[0])?;
-    date_pdt.check_datelike_bounds()?;
-
-    // pdt.hour, pdt.minute, pdt.second are all dropped, which is allowed by
-    // PostgreSQL.
-    let date = match (date_pdt.year, date_pdt.month, date_pdt.day) {
-        (Some(year), Some(month), Some(day)) => {
-            let p_err = {
-                |e: std::num::TryFromIntError, field: &str| {
-                    failure::format_err!("{} in date is invalid: {}", field, e)
-                }
-            };
-            let year = year.unit.try_into().map_err(|e| p_err(e, "Year"))?;
-            let month = month.unit.try_into().map_err(|e| p_err(e, "Month"))?;
-            let day = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
-            NaiveDate::from_ymd(year, month, day)
-        }
-        (_, _, _) => bail!("YEAR, MONTH, DAY are all required"),
-    };
-
-    let time = if ts_value_split.len() == 2 {
-        match parse_time_string(ts_value_split[1]) {
-            Ok(t) => t,
-            Err(e) => bail!("{}", e),
-        }
+    let offset = if tz_string.is_empty() {
+        0
     } else {
-        NaiveTime::from_hms(0, 0, 0)
+        crate::datetime::parse_timezone_offset_second(tz_string)?
     };
 
-    Ok((date, time, tz_string))
-}
-
-/// Use the following grammar to parse `s` into a `NaiveTime`.
-///
-/// ```text
-/// <time value> ::=
-///     <hours value> <colon> <minutes value> <colon> <seconds integer value>
-///     [ <period> [ <seconds fraction> ] ]
-/// ```
-fn parse_time_string(s: &str) -> Result<NaiveTime, failure::Error> {
-    use std::convert::TryInto;
-
-    let pdt = match ParsedDateTime::build_parsed_datetime_time(&s) {
-        Ok(pdt) => pdt,
-        Err(e) => bail!("{}", e),
-    };
-
-    pdt.check_datelike_bounds()?;
-
-    let p_err = {
-        |e: std::num::TryFromIntError, field: &str| -> failure::Error {
-            failure::format_err!("invalid {} : {}", field, e)
-        }
-    };
-
-    let hour = match pdt.hour {
-        Some(hour) => hour.unit.try_into().map_err(|e| p_err(e, "HOUR"))?,
-        None => 0,
-    };
-
-    let minute = match pdt.minute {
-        Some(minute) => minute.unit.try_into().map_err(|e| p_err(e, "MINUTE"))?,
-        None => 0,
-    };
-
-    let (second, nano) = match pdt.second {
-        Some(second) => {
-            let nano: u32 = second
-                .fraction
-                .try_into()
-                .map_err({ |e| p_err(e, "NANOSECOND") })?;
-            let second: u32 = second.unit.try_into().map_err(|e| p_err(e, "MINUTE"))?;
-            (second, nano)
-        }
-        None => (0, 0),
-    };
-
-    Ok(NaiveTime::from_hms_nano(hour, minute, second, nano))
+    Ok((d, t, offset))
 }
 
 /// Parses a [`NaiveDate`] from `s`.
@@ -294,10 +218,16 @@ where
     write!(buf, "{}", d)
 }
 
-/// Parses a `NaiveTime` from `s`.
+/// Parses a `NaiveTime` from `s`, using the following grammar.
+///
+/// ```text
+/// <time value> ::=
+///     <hours value> <colon> <minutes value> <colon> <seconds integer value>
+///     [ <period> [ <seconds fraction> ] ]
+/// ```
 pub fn parse_time(s: &str) -> Result<NaiveTime, failure::Error> {
-    match parse_time_string(s) {
-        Ok(t) => Ok(t),
+    match ParsedDateTime::build_parsed_datetime_time(&s) {
+        Ok(pdt) => pdt.compute_time(),
         Err(e) => bail!("Invalid TIME '{}': {}", s, e),
     }
 }
@@ -328,28 +258,24 @@ where
     format_nanos(buf, ts.timestamp_subsec_nanos());
 }
 
+/// Parses a `DateTime<Utc>` from `s`.
 pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, failure::Error> {
-    let (date, time, tz_string) = match parse_timestamp_string(s) {
+    let (date, time, offset) = match parse_timestamp_string(s) {
         Ok((date, time, tz_string)) => (date, time, tz_string),
         Err(e) => bail!("Invalid TIMESTAMPTZ '{}': {}", s, e),
     };
 
     let ts = date.and_time(time);
 
-    let offset = if tz_string.is_empty() {
-        FixedOffset::east(0)
-    } else {
-        match crate::datetime::parse_timezone_offset_second(tz_string) {
-            Ok(timezone_offset_second) => FixedOffset::east(timezone_offset_second as i32),
-            Err(e) => bail!("Invalid TIMESTAMPTZ '{}': {}", s, e),
-        }
-    };
+    let dt_fixed_offset = FixedOffset::east(offset as i32)
+        .from_local_datetime(&ts)
+        .earliest()
+        .ok_or_else(|| format_err!("Invalid tz conversion"))?;
 
-    let dt_fixed_offset = offset.from_local_datetime(&ts).earliest().unwrap();
-    // .ok_or_else(|| return bail!("Invalid tz conversion"))?;
     Ok(DateTime::<Utc>::from_utc(dt_fixed_offset.naive_utc(), Utc))
 }
 
+/// Writes a [`DateTime<Utc>`] timestamp to `buf`.
 pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>)
 where
     F: FormatBuffer,

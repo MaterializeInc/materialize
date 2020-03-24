@@ -1,2 +1,5 @@
 type_timestamp ::=
-  'TIMESTAMP' "'" date_str time_str? "'"
+  ('TIMESTAMP' 'WITH TIME ZONE'? | 'TIMESTAMPTZ')
+  "'" date_str
+    ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
+  "'"
