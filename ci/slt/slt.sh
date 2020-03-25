@@ -19,7 +19,7 @@ if [[ ! "${BUILDKITE-}" ]]; then
     }
 fi
 
-if [[ "$BUILDKITE" ]]; then
+if [[ "${BUILDKITE-}" ]]; then
     wait-for-it postgres:5432
 fi
 
