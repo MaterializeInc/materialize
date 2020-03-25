@@ -46,6 +46,9 @@ async fn decode_decimal<R: AsyncRead + Unpin>(
         None => decode_len(reader).await?,
     };
     let mut buf = Vec::with_capacity(len);
+    // Safety: the elements will be initialized by the call to `read_exact`
+    // TODO (brennan) - this code already existed before my refactor. See
+    // if we can get rid of the `unsafe`.
     unsafe {
         buf.set_len(len);
     }
@@ -234,9 +237,9 @@ pub fn decode<'a, R: AsyncRead + Unpin + Send>(
                     None => Err(DecodeError::new("Union index out of bounds").into()),
                 }
             }
-            SchemaPiece::ResolveIntLong => zag_i32(reader).await.map(|x| Value::Long(x as i64)),
+            SchemaPiece::ResolveIntLong => zag_i32(reader).await.map(|x| Value::Long(x.into())),
             SchemaPiece::ResolveIntFloat => zag_i32(reader).await.map(|x| Value::Float(x as f32)),
-            SchemaPiece::ResolveIntDouble => zag_i32(reader).await.map(|x| Value::Double(x as f64)),
+            SchemaPiece::ResolveIntDouble => zag_i32(reader).await.map(|x| Value::Double(x.into())),
             SchemaPiece::ResolveLongFloat => zag_i64(reader).await.map(|x| Value::Float(x as f32)),
             SchemaPiece::ResolveLongDouble => {
                 zag_i64(reader).await.map(|x| Value::Double(x as f64))
@@ -313,6 +316,7 @@ pub fn decode<'a, R: AsyncRead + Unpin + Send>(
             } => {
                 let mut items: Vec<Option<(String, Value)>> = vec![None; *n_reader_fields];
                 for default in defaults {
+                    assert!(default.position < items.len(), "Internal error: n_reader_fields should have been big enough to cover all default positions!");
                     if items[default.position].is_some() {
                         return Err(DecodeError::new(format!(
                             "Duplicate record field: {}",
@@ -325,6 +329,7 @@ pub fn decode<'a, R: AsyncRead + Unpin + Send>(
                 for field in fields {
                     match field {
                         ResolvedRecordField::Present(field) => {
+                            assert!(field.position < items.len(), "Internal error: n_reader_fields should have been big enough to cover all field positions!");
                             if items[field.position].is_some() {
                                 return Err(DecodeError::new(format!(
                                     "Duplicate record field: {}",
