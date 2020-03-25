@@ -399,6 +399,16 @@ where
     Datum::True
 }
 
+fn jsonb_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let datum = temp_storage.make_datum(|packer| {
+        packer.push_list(datums.into_iter());
+    });
+    Datum::List(datum.unwrap_list())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AggregateFunc {
     MaxInt32,
@@ -433,15 +443,11 @@ pub enum AggregateFunc {
     CountAll, // COUNT(*) counts nulls too
     Any,
     All,
+    JsonbAgg,
 }
 
 impl AggregateFunc {
-    pub fn eval<'a, I>(
-        &self,
-        datums: I,
-        _env: &'a EvalEnv,
-        _temp_storage: &'a RowArena,
-    ) -> Datum<'a>
+    pub fn eval<'a, I>(&self, datums: I, _env: &'a EvalEnv, temp_storage: &'a RowArena) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
     {
@@ -478,6 +484,7 @@ impl AggregateFunc {
             AggregateFunc::CountAll => count_all(datums),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
+            AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
         }
     }
 
@@ -501,6 +508,7 @@ impl AggregateFunc {
             AggregateFunc::CountAll => ScalarType::Int64,
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
+            AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             _ => input_type.scalar_type,
         };
         let nullable = match self {
@@ -589,6 +597,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::CountAll => f.write_str("countall"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
+            AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
         }
     }
 }
