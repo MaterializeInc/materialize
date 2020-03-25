@@ -11,7 +11,7 @@ version: '3'
 services:
   app:
     image: materialize/ci-cargo-test:${BUILDKITE_BUILD_NUMBER}
-    command: ["wait-for-it", "kafka:9092", "schema-registry:8081", "--", "run-tests"]
+    command: ["wait-for-it", "kafka:9092", "--", "wait-for-it", "schema-registry:8081", "--", "run-tests"]
     volumes:
     - ../../:/workdir
     environment:
