@@ -3074,7 +3074,9 @@ impl VariadicFunc {
                 debug_assert!(
                     input_types
                         .windows(2)
-                        .all(|w| w[0].scalar_type == w[1].scalar_type),
+                        .all(|w| w[0].scalar_type == w[1].scalar_type
+                            || w[0].scalar_type == ScalarType::Unknown
+                            || w[1].scalar_type == ScalarType::Unknown),
                     "coalesce inputs did not have uniform type: {:?}",
                     input_types
                 );

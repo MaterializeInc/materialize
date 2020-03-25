@@ -1095,7 +1095,10 @@ fn plan_using_constraint(
         };
         let l_type = &qcx.relation_type(&left).column_types[l];
         let r_type = &qcx.relation_type(&right).column_types[r];
-        if l_type.scalar_type != r_type.scalar_type {
+        if l_type.scalar_type != r_type.scalar_type
+            && l_type.scalar_type != ScalarType::Unknown
+            && r_type.scalar_type != ScalarType::Unknown
+        {
             bail!(
                 "{:?} and {:?} are not comparable (in NATURAL/USING join on {})",
                 l_type.scalar_type,
