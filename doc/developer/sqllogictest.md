@@ -210,8 +210,7 @@ same file. Most of the time, we use `mode cockroach`. The times when we use
 As you can see [above](#differences-between-modes), generally sqllogictest
 treats newlines as column or row delimiters. We have extended sqllogictest to
 have some primitive support for text output that contains newlines with the
-`multiline` keyword. If you add the `multiline` keyword, the entire expected
-output is treated as one entry with newlines. Here's an example.
+`multiline` keyword. If you add the `multiline` keyword, all text between `----` and `EOF` is treated as one entry with newlines. Here's an example.
 
 ```
 query T multiline
@@ -220,10 +219,8 @@ select 'hello
 ----
 hello
  world
+EOF
 ```
-
-You should be in `mode standard` when using `multiline` because in `mode
-cockroach`, currently all whitespace in the expected result will be ignored.
 
 The sqllogictest binary will panic if you specify any other options together
 with `multiline`.
