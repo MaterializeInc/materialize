@@ -457,6 +457,6 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
         | AggregateFunc::MinTimestamp
         | AggregateFunc::MinTimestampTz
         | AggregateFunc::MinNull => (false, true),
-        AggregateFunc::JsonAgg => (false, false),
+        AggregateFunc::JsonbAgg => (false, false),
     }
 }
