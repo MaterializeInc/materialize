@@ -1016,6 +1016,7 @@ fn plan_join_constraint<'a>(
             (joined, product_scope)
         }
         JoinConstraint::Using(column_names) => plan_using_constraint(
+            qcx,
             &column_names
                 .iter()
                 .map(|ident| normalize::column_name(ident.clone()))
@@ -1040,7 +1041,15 @@ fn plan_join_constraint<'a>(
                     }
                 }
             }
-            plan_using_constraint(&column_names, left, left_scope, right, right_scope, kind)?
+            plan_using_constraint(
+                qcx,
+                &column_names,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                kind,
+            )?
         }
     };
     Ok((expr, scope))
@@ -1049,6 +1058,7 @@ fn plan_join_constraint<'a>(
 // See page 440 of ANSI SQL 2016 spec for details on scoping of using/natural joins
 #[allow(clippy::too_many_arguments)]
 fn plan_using_constraint(
+    qcx: &QueryContext,
     column_names: &[ColumnName],
     left: RelationExpr,
     left_scope: Scope,
@@ -1083,6 +1093,19 @@ fn plan_using_constraint(
                 column_name
             ),
         };
+        let l_type = &qcx.relation_type(&left).column_types[l];
+        let r_type = &qcx.relation_type(&right).column_types[r];
+        if l_type.scalar_type != r_type.scalar_type
+            && l_type.scalar_type != ScalarType::Unknown
+            && r_type.scalar_type != ScalarType::Unknown
+        {
+            bail!(
+                "{:?} and {:?} are not comparable (in NATURAL/USING join on {})",
+                l_type.scalar_type,
+                r_type.scalar_type,
+                column_name
+            );
+        }
         join_exprs.push(ScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1: Box::new(ScalarExpr::Column(ColumnRef {
