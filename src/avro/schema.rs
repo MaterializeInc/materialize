@@ -176,6 +176,8 @@ pub enum SchemaPiece {
     /// A `string` Avro schema.
     /// `String` represents a unicode character sequence.
     String,
+    /// XXX (brennan) - document this
+    Json,
     /// A `array` Avro schema. Avro arrays are required to have the same type for each element.
     /// This variant holds the `Schema` for the array element type.
     Array(Box<SchemaPieceOrNamed>),
@@ -356,6 +358,7 @@ impl<'a> From<&'a SchemaPiece> for SchemaKind {
             SchemaPiece::Fixed { .. } => SchemaKind::Fixed,
             SchemaPiece::ResolveRecord { .. } => SchemaKind::Record,
             SchemaPiece::ResolveEnum { .. } => SchemaKind::Enum,
+            SchemaPiece::Json => SchemaKind::String,
         }
     }
 }
@@ -396,6 +399,7 @@ impl<'a> From<&'a types::Value> for SchemaKind {
             types::Value::Record(_) => SchemaKind::Record,
             types::Value::Enum(_, _) => SchemaKind::Enum,
             types::Value::Fixed(_, _) => SchemaKind::Fixed,
+            types::Value::Json(_) => SchemaKind::String,
         }
     }
 }
@@ -773,6 +777,7 @@ impl SchemaParser {
                 "bytes" => SchemaPieceOrNamed::Piece(Self::parse_bytes(complex)?),
                 "int" => SchemaPieceOrNamed::Piece(Self::parse_int(complex)?),
                 "long" => SchemaPieceOrNamed::Piece(Self::parse_long(complex)?),
+                "string" => SchemaPieceOrNamed::Piece(Self::parse_string(complex)),
                 other => {
                     let name = FullName {
                         name: other.into(),
@@ -1052,6 +1057,18 @@ impl SchemaParser {
         Ok(SchemaPiece::Long)
     }
 
+    fn parse_string(complex: &Map<String, Value>) -> SchemaPiece {
+        const CONNECT_JSON: &str = "io.debezium.data.Json";
+
+        if let Some(serde_json::Value::String(name)) = complex.get("connect.name") {
+            if CONNECT_JSON == name.as_str() {
+                return SchemaPiece::Json;
+            }
+        }
+        debug!("parsing complex type as regular string: {:?}", complex);
+        SchemaPiece::String
+    }
+
     /// Parse a `serde_json::Value` representing a Avro fixed type into a
     /// `Schema`.
     fn parse_fixed(
@@ -1251,6 +1268,7 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
             SchemaPiece::Date => SchemaPiece::Date,
             SchemaPiece::TimestampMilli => SchemaPiece::TimestampMilli,
             SchemaPiece::TimestampMicro => SchemaPiece::TimestampMicro,
+            SchemaPiece::Json => SchemaPiece::Json,
             SchemaPiece::Decimal {
                 scale,
                 precision,
@@ -1582,6 +1600,12 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     }
                     seq.end()
                 }
+                SchemaPiece::Json => {
+                    let mut map = serializer.serialize_map(Some(2))?;
+                    map.serialize_entry("type", "string")?;
+                    map.serialize_entry("connect.name", "io.debezium.data.Json")?;
+                    map.end()
+                }
                 SchemaPiece::Record { .. }
                 | SchemaPiece::Enum { .. }
                 | SchemaPiece::Fixed { .. } => {
@@ -1661,7 +1685,8 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     | SchemaPiece::String
                     | SchemaPiece::Array(_)
                     | SchemaPiece::Map(_)
-                    | SchemaPiece::Union(_) => {
+                    | SchemaPiece::Union(_)
+                    | SchemaPiece::Json => {
                         unreachable!("Unexpected anonymous schema piece in named schema position")
                     }
                     SchemaPiece::ResolveIntLong

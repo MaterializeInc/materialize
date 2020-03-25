@@ -30,6 +30,7 @@ use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
+use repr::jsonb::Jsonb;
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -195,6 +196,7 @@ fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
                 bail!("Unsupported union type: {:?}", schema.inner)
             }
         }
+        SchemaPiece::Json => ScalarType::Jsonb,
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
     })
@@ -272,33 +274,40 @@ fn first_mismatched_schema_types<'a>(
             None
         }
         (SchemaPiece::Fixed { size: ai }, SchemaPiece::Fixed { size: bi }) if ai == bi => None,
+        (SchemaPiece::Json, SchemaPiece::Json) => None,
         _ => Some((a, b)),
     }
 }
 
-pub fn value_to_datum(v: &Value) -> Result<Datum<'_>> {
+fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
     match v {
-        Value::Null => Ok(Datum::Null),
-        Value::Boolean(true) => Ok(Datum::True),
-        Value::Boolean(false) => Ok(Datum::False),
-        Value::Int(i) => Ok(Datum::Int32(*i)),
-        Value::Long(i) => Ok(Datum::Int64(*i)),
-        Value::Float(f) => Ok(Datum::Float32((*f).into())),
-        Value::Double(f) => Ok(Datum::Float64((*f).into())),
-        Value::Date(d) => Ok(Datum::Date(*d)),
-        Value::Timestamp(d) => Ok(Datum::Timestamp(*d)),
-        Value::Decimal(DecimalValue { unscaled, .. }) => Ok(Datum::Decimal(
+        Value::Null => row.push(Datum::Null),
+        Value::Boolean(true) => row.push(Datum::True),
+        Value::Boolean(false) => row.push(Datum::False),
+        Value::Int(i) => row.push(Datum::Int32(i)),
+        Value::Long(i) => row.push(Datum::Int64(i)),
+        Value::Float(f) => row.push(Datum::Float32((f).into())),
+        Value::Double(f) => row.push(Datum::Float64((f).into())),
+        Value::Date(d) => row.push(Datum::Date(d)),
+        Value::Timestamp(d) => row.push(Datum::Timestamp(d)),
+        Value::Decimal(DecimalValue { unscaled, .. }) => row.push(Datum::Decimal(
             Significand::from_twos_complement_be(&unscaled)?,
         )),
-        Value::Bytes(b) => Ok(Datum::Bytes(b)),
-        Value::String(s) => Ok(Datum::String(s)),
-        Value::Union(_, v) => value_to_datum(v),
+        Value::Bytes(b) => row.push(Datum::Bytes(&b)),
+        Value::String(s) => row.push(Datum::String(&s)),
+        Value::Union(_, v) => {
+            row = pack_value(*v, row)?;
+        }
+        Value::Json(j) => {
+            row = Jsonb::new(j)?.pack_into(row);
+        }
         other @ Value::Fixed(..)
         | other @ Value::Enum(..)
         | other @ Value::Array(_)
         | other @ Value::Map(_)
         | other @ Value::Record(_) => bail!("unsupported avro value: {:?}", other),
-    }
+    };
+    Ok(row)
 }
 
 pub fn extract_row<'a, I>(mut v: Value, strip_union: bool, extra: I) -> Result<Option<Row>>
@@ -314,8 +323,8 @@ where
     match v {
         Value::Record(fields) => {
             let mut row = RowPacker::new();
-            for (_, col) in fields.iter() {
-                row.push(value_to_datum(col)?);
+            for (_, col) in fields.into_iter() {
+                row = pack_value(col, row)?;
             }
             for d in extra {
                 row.push(d);
@@ -687,6 +696,10 @@ impl Encoder {
                     }
                     SchemaPiece::Record { fields, .. } => {
                         Self::convert_to_avro_record(record_schema, data, fields)?
+                    }
+                    SchemaPiece::Json => {
+                        let j = Jsonb::from_datum(datum.clone()).into_serde_json();
+                        Value::Json(j)
                     }
                     SchemaPiece::ResolveIntLong
                     | SchemaPiece::ResolveIntFloat

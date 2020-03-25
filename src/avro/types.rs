@@ -96,6 +96,11 @@ pub enum Value {
     ///
     /// See [Record](types.Record) for a more user-friendly support.
     Record(Vec<(String, Value)>),
+    /// A `string` Avro value that has been interpreted as JSON.
+    ///
+    /// This is not part of the Avro spec, but is emitted by Debezium,
+    /// and distinguished by setting the `"connect.name"` property to `"io.debezium.data.Json"`.
+    Json(serde_json::Value),
 }
 
 /// Any structure implementing the [ToAvro](trait.ToAvro.html) trait will be usable
@@ -323,6 +328,7 @@ impl Value {
                         },
                     )
             }
+            (Value::Json(_), SchemaPiece::Json) => true,
             _ => false,
         }
     }

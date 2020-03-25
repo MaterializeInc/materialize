@@ -532,6 +532,60 @@ a b
 1 2
 2 3
 
+# test Json
+
+$ set schema={
+     "fields": [
+      {
+       "name": "before",
+       "type": [
+        {
+         "fields": [
+          {
+           "name": "a",
+           "type": {
+            "connect.name": "io.debezium.data.Json",
+            "type": "string"
+           }
+          }
+         ],
+         "name": "row",
+         "type": "record"
+        },
+        "null"
+       ]
+      },
+      {
+       "name": "after",
+       "type": [
+        "row",
+        "null"
+       ]
+      }
+     ],
+     "name": "envelope",
+     "type": "record"
+    }
+
+$ kafka-create-topic topic=json-data
+
+$kafka-ingest format=avro topic=json-data schema=${schema} timestamp=1
+{"before": null, "after": {"a": "{\"hello\": \"world\"}"}}
+{"before": null, "after": {"a": "[1, 2, 3]"}}
+
+> CREATE SOURCE json_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-json-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM;
+
+> CREATE MATERIALIZED VIEW test10 AS SELECT * FROM json_data;
+
+> SELECT * FROM test10
+a
+---
+"{\"hello\":\"world\"}"
+"[1.0,2.0,3.0]"
+
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 
