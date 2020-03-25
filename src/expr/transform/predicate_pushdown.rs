@@ -142,6 +142,8 @@ impl PredicatePushdown {
                             {
                                 // TODO: We could attempt to localize these here, otherwise they'll be localized
                                 // and pushed down in the next iteration of the fixed point optimization.
+                                // TODO: Retaining *both* predicates is not strictly necessary, as either
+                                // will ensure no matches on `Datum::Null`.
                                 retain.push(
                                     expr1
                                         .clone()

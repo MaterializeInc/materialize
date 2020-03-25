@@ -68,3 +68,35 @@ query ITIT colnames,rowsort
 SELECT * FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 la  lb  ra  rb
+
+# Test that with scalars introduced to join plans we still get the right answers.
+query ITITIT rowsort
+SELECT * FROM l as l1, l as l2, l as l3 WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
+----
+1  l1  2  l2  3  l3
+
+# Test that scalar expressions are introduced to join plans.
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM l as l1, l as l2, l as l3 WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
+----
+0 =
+| Get materialize.public.l (u1)
+| Filter !(isnull((#0 + 1)))
+
+1 =
+| Get materialize.public.l (u1)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+2 =
+| Get materialize.public.l (u1)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+3 =
+| Join %0 %1 %2 (= #2 (#0 + 1)) (= #4 (#0 + #2))
+| | implementation = Differential %0 %1.(#0) %2.(#0)
+| | demand = (#0..#5)
+| Filter !(isnull((#0 + #2)))
+
+EOF
