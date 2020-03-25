@@ -518,7 +518,7 @@ fn downgrade_capability(
         }
     }
     // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-    if changed {
+    if changed && min > 0 {
         cap.downgrade(&(&min + 1));
         *last_closed_ts = min;
     }
