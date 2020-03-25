@@ -60,7 +60,8 @@ pub fn kafka<G>(
     // Send new schema to registry, get back the schema id for the sink.
     // TODO(benesch): don't block the worker thread here.
     let ccsr_client = ccsr::Client::new(connector.schema_registry_url.clone());
-    match ccsr_client.publish_schema(&connector.topic, &schema.to_string()) {
+    let schema_name = format!("{}-value", connector.topic);
+    match ccsr_client.publish_schema(&schema_name, &schema.to_string()) {
         Ok(schema_id) => {
             let mut config = ClientConfig::new();
             config.set("bootstrap.servers", &connector.url.to_string());
