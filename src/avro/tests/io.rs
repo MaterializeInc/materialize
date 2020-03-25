@@ -10,6 +10,7 @@
 //! Port of https://github.com/apache/avro/blob/master/lang/py/test/test_io.py
 use std::io::Cursor;
 
+use avro::schema::resolve_schemas;
 use avro::{
     from_avro_datum, to_avro_datum, types::Value, Schema, SchemaResolutionError, ValidationError,
 };
@@ -29,7 +30,7 @@ lazy_static! {
         (r#"{"type": "enum", "name": "Test", "symbols": ["A", "B"]}"#, Value::Enum(1, "B".to_string())),
         (r#"{"type": "array", "items": "long"}"#, Value::Array(vec![Value::Long(1), Value::Long(3), Value::Long(2)])),
         (r#"{"type": "map", "values": "long"}"#, Value::Map([("a".to_string(), Value::Long(1i64)), ("b".to_string(), Value::Long(3i64)), ("c".to_string(), Value::Long(2i64))].iter().cloned().collect())),
-        (r#"["string", "null", "long"]"#, Value::Union(Box::new(Value::Null))),
+        (r#"["string", "null", "long"]"#, Value::Union(1, Box::new(Value::Null))),
         (r#"{"type": "record", "name": "Test", "fields": [{"name": "f", "type": "long"}]}"#, Value::Record(vec![("f".to_string(), Value::Long(1))]))
     ];
 
@@ -94,7 +95,7 @@ fn test_validate() {
     for (raw_schema, value) in SCHEMAS_TO_VALIDATE.iter() {
         let schema = Schema::parse_str(raw_schema).unwrap();
         assert!(
-            value.validate(&schema),
+            value.validate(schema.top_node()),
             format!("value {:?} does not validate schema: {}", value, raw_schema)
         );
     }
@@ -105,7 +106,7 @@ async fn test_round_trip() {
     for (raw_schema, value) in SCHEMAS_TO_VALIDATE.iter() {
         let schema = Schema::parse_str(raw_schema).unwrap();
         let encoded = to_avro_datum(&schema, value.clone()).unwrap();
-        let decoded = from_avro_datum(&schema, &mut Cursor::new(encoded), None)
+        let decoded = from_avro_datum(&schema, &mut Cursor::new(encoded))
             .await
             .unwrap();
         assert_eq!(value, &decoded);
@@ -115,7 +116,11 @@ async fn test_round_trip() {
 #[test]
 fn test_binary_int_encoding() {
     for (number, hex_encoding) in BINARY_ENCODINGS.iter() {
-        let encoded = to_avro_datum(&Schema::Int, Value::Int(*number as i32)).unwrap();
+        let encoded = to_avro_datum(
+            &Schema::parse_str("\"int\"").unwrap(),
+            Value::Int(*number as i32),
+        )
+        .unwrap();
         assert_eq!(&encoded, hex_encoding);
     }
 }
@@ -123,7 +128,11 @@ fn test_binary_int_encoding() {
 #[test]
 fn test_binary_long_encoding() {
     for (number, hex_encoding) in BINARY_ENCODINGS.iter() {
-        let encoded = to_avro_datum(&Schema::Long, Value::Long(*number as i64)).unwrap();
+        let encoded = to_avro_datum(
+            &Schema::parse_str("\"long\"").unwrap(),
+            Value::Long(*number as i64),
+        )
+        .unwrap();
         assert_eq!(&encoded, hex_encoding);
     }
 }
@@ -145,18 +154,15 @@ async fn test_schema_promotion() {
         for (j, reader_raw_schema) in promotable_schemas.iter().enumerate().skip(i + 1) {
             let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
             let encoded = to_avro_datum(&writer_schema, original_value.clone()).unwrap();
-            let decoded = from_avro_datum(
-                &writer_schema,
-                &mut Cursor::new(encoded),
-                Some(&reader_schema),
-            )
-            .await
-            .unwrap_or_else(|_| {
-                panic!(
-                    "failed to decode {:?} with schema: {:?}",
-                    original_value, reader_raw_schema
-                )
-            });
+            let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
+            let decoded = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded))
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "failed to decode {:?} with schema: {:?}",
+                        original_value, reader_raw_schema
+                    )
+                });
             assert_eq!(decoded, promotable_values[j]);
         }
     }
@@ -172,12 +178,8 @@ async fn test_unknown_symbol() {
             .unwrap();
     let original_value = Value::Enum(0, "FOO".to_string());
     let encoded = to_avro_datum(&writer_schema, original_value).unwrap();
-    let decoded = from_avro_datum(
-        &writer_schema,
-        &mut Cursor::new(encoded),
-        Some(&reader_schema),
-    )
-    .await;
+    let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
+    let decoded = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded)).await;
     assert!(decoded.is_err());
 }
 
@@ -197,13 +199,10 @@ async fn test_default_value() {
         .unwrap();
         let datum_to_read = Value::Record(vec![("H".to_string(), default_datum.clone())]);
         let encoded = to_avro_datum(&LONG_RECORD_SCHEMA, LONG_RECORD_DATUM.clone()).unwrap();
-        let datum_read = from_avro_datum(
-            &LONG_RECORD_SCHEMA,
-            &mut Cursor::new(encoded),
-            Some(&reader_schema),
-        )
-        .await
-        .unwrap();
+        let resolved_schema = resolve_schemas(&LONG_RECORD_SCHEMA, &reader_schema).unwrap();
+        let datum_read = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded))
+            .await
+            .unwrap();
         assert_eq!(
             datum_read, datum_to_read,
             "{} -> {}",
@@ -224,14 +223,8 @@ async fn test_no_default_value() -> Result<(), String> {
         }"#,
     )
     .unwrap();
-    let encoded = to_avro_datum(&LONG_RECORD_SCHEMA, LONG_RECORD_DATUM.clone()).unwrap();
-    let decoded = from_avro_datum(
-        &LONG_RECORD_SCHEMA,
-        &mut Cursor::new(encoded),
-        Some(&reader_schema),
-    )
-    .await;
-    match decoded {
+    let resolved_schema = resolve_schemas(&LONG_RECORD_SCHEMA, &reader_schema);
+    match resolved_schema {
         Ok(_) => Err(String::from("Expected SchemaResolutionError, got Ok")),
         Err(ref e) => match e.downcast_ref::<SchemaResolutionError>() {
             Some(_) => Ok(()),
@@ -260,13 +253,10 @@ async fn test_projection() {
         ("F".to_string(), Value::Int(6)),
     ]);
     let encoded = to_avro_datum(&LONG_RECORD_SCHEMA, LONG_RECORD_DATUM.clone()).unwrap();
-    let datum_read = from_avro_datum(
-        &LONG_RECORD_SCHEMA,
-        &mut Cursor::new(encoded),
-        Some(&reader_schema),
-    )
-    .await
-    .unwrap();
+    let resolved_schema = resolve_schemas(&LONG_RECORD_SCHEMA, &reader_schema).unwrap();
+    let datum_read = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded))
+        .await
+        .unwrap();
     assert_eq!(datum_to_read, datum_read);
 }
 
@@ -290,13 +280,11 @@ async fn test_field_order() {
         ("E".to_string(), Value::Int(5)),
     ]);
     let encoded = to_avro_datum(&LONG_RECORD_SCHEMA, LONG_RECORD_DATUM.clone()).unwrap();
-    let datum_read = from_avro_datum(
-        &LONG_RECORD_SCHEMA,
-        &mut Cursor::new(encoded),
-        Some(&reader_schema),
-    )
-    .await
-    .unwrap();
+    let resolved_schema = resolve_schemas(&LONG_RECORD_SCHEMA, &reader_schema).unwrap();
+    println!("Resolved: {:#?}", resolved_schema);
+    let datum_read = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded))
+        .await
+        .unwrap();
     assert_eq!(datum_to_read, datum_read);
 }
 
@@ -327,4 +315,307 @@ fn test_type_exception() -> Result<(), String> {
             None => Err(format!("Expected ValidationError, got {}", e)),
         },
     }
+}
+
+#[tokio::test]
+async fn test_namespaces() {
+    let schema = r#"
+    {
+        "type": "record",
+        "name": "some_record",
+        "namespace": "io.materialize",
+        "fields": [
+            {
+                "name": "link",
+                "type": [
+                    "null",
+                    "io.materialize.some_record"
+                ]
+            }
+        ]
+    }"#;
+    let schema = Schema::parse_str(schema).unwrap();
+    let datum_to_write = Value::Record(vec![(
+        "link".to_owned(),
+        Value::Union(
+            1,
+            Box::new(Value::Record(vec![(
+                "link".to_owned(),
+                Value::Union(0, Box::new(Value::Null)),
+            )])),
+        ),
+    )]);
+    let encoded = to_avro_datum(&schema, datum_to_write.clone()).unwrap();
+    let datum_read = from_avro_datum(&schema, &mut Cursor::new(encoded))
+        .await
+        .unwrap();
+    assert_eq!(datum_to_write, datum_read);
+}
+
+#[tokio::test]
+async fn test_self_referential_schema() {
+    let schema = r#"
+        {
+            "name": "some_record",
+            "type": "record",
+            "fields": [
+                {
+                    "name": "f1",
+                    "type": {
+                        "type": "array",
+                        "items": {
+                            "name": "some_item",
+                            "type": "record",
+                            "fields": [
+                                {
+                                    "name": "f3",
+                                    "type": "string"
+                                },
+                                {
+                                    "name": "f4",
+                                    "type": "string"
+                                },
+                                {
+                                    "name": "f5",
+                                    "type": [
+                                        "null",
+                                        "double"
+                                    ],
+                                    "default": null
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "f2",
+                    "type": {
+                        "type": "array",
+                        "items": "some_item"
+                    }
+                }
+            ]
+        }
+        "#;
+    let schema = Schema::parse_str(schema).unwrap();
+    let datum_to_write = Value::Record(vec![
+        (
+            "f1".to_owned(),
+            Value::Array(vec![
+                Value::Record(vec![
+                    ("f3".to_owned(), Value::String("s1".to_owned())),
+                    ("f4".to_owned(), Value::String("s2".to_owned())),
+                    (
+                        "f5".to_owned(),
+                        Value::Union(1, Box::new(Value::Double(1.234))),
+                    ),
+                ]),
+                Value::Record(vec![
+                    ("f3".to_owned(), Value::String("s3".to_owned())),
+                    ("f4".to_owned(), Value::String("s4".to_owned())),
+                    (
+                        "f5".to_owned(),
+                        Value::Union(1, Box::new(Value::Double(2.468))),
+                    ),
+                ]),
+            ]),
+        ),
+        (
+            "f2".to_owned(),
+            Value::Array(vec![Value::Record(vec![
+                ("f3".to_owned(), Value::String("s5".to_owned())),
+                ("f4".to_owned(), Value::String("s6".to_owned())),
+                ("f5".to_owned(), Value::Union(0, Box::new(Value::Null))),
+            ])]),
+        ),
+    ]);
+    let encoded = to_avro_datum(&schema, datum_to_write.clone()).unwrap();
+    let datum_read = from_avro_datum(&schema, &mut Cursor::new(encoded))
+        .await
+        .unwrap();
+    assert_eq!(datum_to_write, datum_read);
+}
+
+#[tokio::test]
+async fn test_complex_resolutions() {
+    // Attempt to exercise many of the hard parts of schema resolution:
+    // Reordering fields in "some_record", field "f0" missing from writer, field "f3" missing
+    // from reader, reordering and different set of symbols in enum in "f2",
+    // "union to concrete" resolution in "f4", "concrete to union" in f5, "union to union"
+    // with reordered fields in "f1".
+    let writer_schema = r#"
+        {
+            "name": "some_record",
+            "type": "record",
+            "fields": [
+                {
+                    "name": "f5",
+                    "type": "long"
+                },
+                {
+                    "name": "f4",
+                    "type": [
+                        "double",
+                        {
+                            "name": "variant1",
+                            "type": "fixed",
+                            "size": 1
+                        },
+                        "null",
+                        {
+                            "name": "variant2",
+                            "type": "fixed",
+                            "size": 2
+                        }
+                    ]
+                },
+                {
+                    "name": "f3",
+                    "type": "double"
+                },
+                {
+                    "name": "f2",
+                    "type": {
+                        "type": "enum",
+                        "symbols": ["Clubs", "Diamonds", "Hearts", "Spades", "Jokers"],
+                        "name": "Suit"
+                    }
+                },
+                {
+                    "name": "f1",
+                    "type": [
+                        {
+                            "name": "variant3",
+                            "type": "fixed",
+                            "size": 3
+                        },
+                        "double",
+                        {
+                            "name": "variant4",
+                            "type": "fixed",
+                            "size": 4
+                        }
+                    ]
+                }
+            ]
+        }"#;
+    let datum_to_write = Value::Record(vec![
+        ("f5".to_owned(), Value::Long(1234)),
+        (
+            "f4".to_owned(),
+            Value::Union(1, Box::new(Value::Fixed(1, vec![0]))),
+        ),
+        ("f3".to_owned(), Value::Double(1.234)),
+        ("f2".to_owned(), Value::Enum(1, "Diamonds".to_owned())),
+        (
+            "f1".to_owned(),
+            Value::Union(2, Box::new(Value::Fixed(4, vec![0, 1, 2, 3]))),
+        ),
+    ]);
+    let expected_read = Value::Record(vec![
+        (
+            "f0".to_owned(),
+            Value::Record(vec![
+                ("f0_0".to_owned(), Value::Double(1.234)),
+                (
+                    "f0_1".to_owned(),
+                    Value::Union(0, Box::new(Value::Enum(1, "bar".to_owned()))),
+                ),
+            ]),
+        ),
+        (
+            "f1".to_owned(),
+            Value::Union(0, Box::new(Value::Fixed(4, vec![0, 1, 2, 3]))),
+        ),
+        ("f2".to_owned(), Value::Enum(1, "Diamonds".to_owned())), // TODO - should be the index in the reader
+        ("f4".to_owned(), Value::Fixed(1, vec![0])),
+        (
+            "f5".to_owned(),
+            Value::Union(1, Box::new(Value::Long(1234))),
+        ),
+    ]);
+    let reader_schema = r#"
+        {
+            "name": "some_record",
+            "type": "record",
+            "fields": [
+                {
+                    "name": "f0",
+                    "type": {
+                        "type": "record",
+                        "name": "f0_value",
+                        "fields": [
+                            {
+                                "name": "f0_0",
+                                "type": "double"
+                            },
+                            {
+                                "name": "f0_1",
+                                "type": [
+                                    {
+                                        "type": "enum",
+                                        "symbols": ["foo", "bar", "blah"],
+                                        "name": "some_enum"
+                                    },
+                                    "null"
+                                ]
+                            }
+                        ]
+                    },
+                    "default": {"f0_1": "bar", "f0_0": 1.234}
+                },
+                {
+                    "name": "f1",
+                    "type": [
+                        {
+                            "name": "variant4",
+                            "type": "fixed",
+                            "size": 4
+                        },
+                        {
+                            "name": "variant3",
+                            "type": "fixed",
+                            "size": 3
+                        },
+                        "double"
+                    ]
+                },
+                {
+                    "name": "f2",
+                    "type": {
+                        "type": "enum",
+                        "symbols": ["Hearts", "Spades", "Diamonds", "Clubs"],
+                        "name": "Suit"
+                    }
+                },
+                {
+                    "name": "f4",
+                    "type": {
+                        "name": "variant1",
+                        "type": "fixed",
+                        "size": 1
+                    }
+                },
+                {
+                    "name": "f5",
+                    "type": [
+                        {
+                            "name": "extra_variant",
+                            "type": "fixed",
+                            "size": 10
+                        },
+                        "long"
+                     ]
+                }
+            ]
+        }
+    "#;
+    let writer_schema = Schema::parse_str(writer_schema).unwrap();
+    let reader_schema = Schema::parse_str(reader_schema).unwrap();
+    let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
+    let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();
+    let datum_read = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded))
+        .await
+        .unwrap();
+    assert_eq!(expected_read, datum_read);
 }

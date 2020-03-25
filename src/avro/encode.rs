@@ -10,8 +10,8 @@
 use std::convert::TryInto;
 use std::mem::transmute;
 
-use crate::schema::Schema;
-use crate::types::Value;
+use crate::schema::{Schema, SchemaNode, SchemaPiece};
+use crate::types::{DecimalValue, Value};
 use crate::util::{zig_i32, zig_i64};
 
 /// Encode a `Value` into avro format.
@@ -20,12 +20,20 @@ use crate::util::{zig_i32, zig_i64};
 /// be valid with regards to the schema. Schema are needed only to guide the
 /// encoding for complex type values.
 pub fn encode(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
-    encode_ref(&value, schema, buffer)
+    encode_ref(&value, schema.top_node(), buffer)
 }
 
 fn encode_bytes<B: AsRef<[u8]> + ?Sized>(s: &B, buffer: &mut Vec<u8>) {
     let bytes = s.as_ref();
-    encode(&Value::Long(bytes.len() as i64), &Schema::Long, buffer);
+    encode(
+        &Value::Long(bytes.len() as i64),
+        &Schema {
+            named: vec![],
+            indices: Default::default(),
+            top: SchemaPiece::Long.into(),
+        },
+        buffer,
+    );
     buffer.extend_from_slice(bytes);
 }
 
@@ -42,7 +50,7 @@ fn encode_int(i: i32, buffer: &mut Vec<u8>) {
 /// **NOTE** This will not perform schema validation. The value is assumed to
 /// be valid with regards to the schema. Schema are needed only to guide the
 /// encoding for complex type values.
-pub fn encode_ref(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
+pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
     match value {
         Value::Null => (),
         Value::Boolean(b) => buffer.push(if *b { 1u8 } else { 0u8 }),
@@ -59,10 +67,10 @@ pub fn encode_ref(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
             )
         }
         Value::Timestamp(d) => {
-            let mult = match *schema {
-                Schema::TimestampMilli => 1_000,
-                Schema::TimestampMicro => 1_000_000,
-                ref other => panic!("Invalid schema for timestamp: {:?}", other),
+            let mult = match schema.inner {
+                SchemaPiece::TimestampMilli => 1_000,
+                SchemaPiece::TimestampMicro => 1_000_000,
+                other => panic!("Invalid schema for timestamp: {:?}", other),
             };
             let ts_seconds = d
                 .timestamp()
@@ -81,22 +89,16 @@ pub fn encode_ref(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
             encode_long(ts, buffer)
         }
         Value::Double(x) => buffer.extend_from_slice(&unsafe { transmute::<f64, [u8; 8]>(*x) }),
-        Value::Decimal { unscaled, .. } => match *schema {
-            Schema::Decimal {
-                fixed_size: Some(_),
-                ..
-            } => buffer.extend(unscaled),
-            Schema::Decimal {
-                fixed_size: None, ..
-            } => encode_bytes(unscaled, buffer),
-            _ => (),
+        Value::Decimal(DecimalValue { unscaled, .. }) => match schema.name {
+            None => encode_bytes(unscaled, buffer),
+            Some(_) => buffer.extend(unscaled),
         },
         Value::Bytes(bytes) => encode_bytes(bytes, buffer),
-        Value::String(s) => match *schema {
-            Schema::String => {
+        Value::String(s) => match schema.inner {
+            SchemaPiece::String => {
                 encode_bytes(s, buffer);
             }
-            Schema::Enum { ref symbols, .. } => {
+            SchemaPiece::Enum { symbols, .. } => {
                 if let Some(index) = symbols.iter().position(|item| item == s) {
                     encode_int(index as i32, buffer);
                 }
@@ -105,48 +107,44 @@ pub fn encode_ref(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
         },
         Value::Fixed(_, bytes) => buffer.extend(bytes),
         Value::Enum(i, _) => encode_int(*i, buffer),
-        Value::Union(item) => {
-            if let Schema::Union(ref inner) = *schema {
-                // Find the schema that is matched here. Due to validation, this should always
-                // return a value.
-                let (idx, inner_schema) = inner
-                    .find_schema(item)
-                    .expect("Invalid Union validation occurred");
-                encode_long(idx as i64, buffer);
-                encode_ref(&*item, inner_schema, buffer);
+        Value::Union(idx, item) => {
+            if let SchemaPiece::Union(inner) = schema.inner {
+                let inner = &inner.variants()[*idx];
+                encode_long(*idx as i64, buffer);
+                encode_ref(&*item, schema.step(inner), buffer);
             }
         }
         Value::Array(items) => {
-            if let Schema::Array(ref inner) = *schema {
+            if let SchemaPiece::Array(inner) = schema.inner {
                 if !items.is_empty() {
                     encode_long(items.len() as i64, buffer);
                     for item in items.iter() {
-                        encode_ref(item, inner, buffer);
+                        encode_ref(item, schema.step(&**inner), buffer);
                     }
                 }
                 buffer.push(0u8);
             }
         }
         Value::Map(items) => {
-            if let Schema::Map(ref inner) = *schema {
+            if let SchemaPiece::Map(inner) = schema.inner {
                 if !items.is_empty() {
                     encode_long(items.len() as i64, buffer);
                     for (key, value) in items {
                         encode_bytes(key, buffer);
-                        encode_ref(value, inner, buffer);
+                        encode_ref(value, schema.step(&**inner), buffer);
                     }
                 }
                 buffer.push(0u8);
             }
         }
         Value::Record(fields) => {
-            if let Schema::Record {
-                fields: ref schema_fields,
+            if let SchemaPiece::Record {
+                fields: inner_fields,
                 ..
-            } = *schema
+            } = schema.inner
             {
                 for (i, &(_, ref value)) in fields.iter().enumerate() {
-                    encode_ref(value, &schema_fields[i].schema, buffer);
+                    encode_ref(value, schema.step(&inner_fields[i].schema), buffer);
                 }
             }
         }
@@ -170,7 +168,7 @@ mod tests {
         let empty: Vec<Value> = Vec::new();
         encode(
             &Value::Array(empty),
-            &Schema::Array(Box::new(Schema::Int)),
+            &Schema::parse_str(r#"{"type": "array", "items": "int"}"#).unwrap(),
             &mut buf,
         );
         assert_eq!(vec![0u8], buf);
@@ -182,7 +180,7 @@ mod tests {
         let empty: HashMap<String, Value> = HashMap::new();
         encode(
             &Value::Map(empty),
-            &Schema::Map(Box::new(Schema::Int)),
+            &Schema::parse_str(r#"{"type": "map", "values": "int"}"#).unwrap(),
             &mut buf,
         );
         assert_eq!(vec![0u8], buf);

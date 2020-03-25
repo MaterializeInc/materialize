@@ -215,10 +215,8 @@ impl Action for IngestAction {
                     };
                     let val = crate::format::avro::json_to_avro(
                         &val_row.map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
-                        &value_schema,
-                    )?
-                    .resolve(&value_schema)
-                    .map_err(|e| format!("resolving avro schema: {}", e))?;
+                        value_schema.top_node(),
+                    )?;
                     // The first byte is a magic byte (0) that indicates the Confluent
                     // serialization format version, and the next four bytes are a
                     // 32-bit schema ID.
@@ -236,7 +234,7 @@ impl Action for IngestAction {
                             &key_row
                                 .unwrap()
                                 .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
-                            &key_schema,
+                            key_schema.top_node(),
                         )?;
                         key_buf.write_u8(0).unwrap();
                         key_buf.write_i32::<NetworkEndian>(*key_schema_id).unwrap();

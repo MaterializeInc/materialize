@@ -13,10 +13,10 @@ use std::hash::BuildHasher;
 use std::u8;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use failure::{Error, Fail};
+use failure::Fail;
 use serde_json::Value as JsonValue;
 
-use crate::schema::{RecordField, Schema, SchemaKind, UnionSchema};
+use crate::schema::{SchemaNode, SchemaPiece};
 
 /// Describes errors happened while performing schema resolution on Avro data.
 #[derive(Fail, Debug)]
@@ -30,6 +30,14 @@ impl SchemaResolutionError {
     {
         SchemaResolutionError(msg.into())
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecimalValue {
+    /// An unscaled two's-complement integer value in big-endian byte order.
+    pub unscaled: Vec<u8>,
+    pub precision: usize,
+    pub scale: usize,
 }
 
 /// Represents any valid Avro value
@@ -60,12 +68,7 @@ pub enum Value {
     ///
     /// The value of the decimal can be computed as follows:
     /// <em>unscaled</em> × 10<sup>-<em>scale</em></sup>.
-    Decimal {
-        /// An unscaled two's-complement integer value in big-endian byte order.
-        unscaled: Vec<u8>,
-        precision: usize,
-        scale: usize,
-    },
+    Decimal(DecimalValue),
     /// A `bytes` Avro value.
     Bytes(Vec<u8>),
     /// A `string` Avro value.
@@ -81,14 +84,14 @@ pub enum Value {
     /// reading values.
     Enum(i32, String),
     /// An `union` Avro value.
-    Union(Box<Value>),
+    Union(usize, Box<Value>),
     /// An `array` Avro value.
     Array(Vec<Value>),
     /// A `map` Avro value.
     Map(HashMap<String, Value>),
     /// A `record` Avro value.
     ///
-    /// A Record is represented by a vector of (`<record name>`, `value`).
+    /// A Record is represented by a vector of (`<field name>`, `value`).
     /// This allows schema-less encoding.
     ///
     /// See [Record](types.Record) for a more user-friendly support.
@@ -140,19 +143,6 @@ impl<'a> ToAvro for &'a str {
 impl<'a> ToAvro for &'a [u8] {
     fn avro(self) -> Value {
         Value::Bytes(self.to_owned())
-    }
-}
-
-impl<T> ToAvro for Option<T>
-where
-    T: ToAvro,
-{
-    fn avro(self) -> Value {
-        let v = match self {
-            Some(v) => T::avro(v),
-            None => Value::Null,
-        };
-        Value::Union(Box::new(v))
     }
 }
 
@@ -212,11 +202,11 @@ impl<'a> Record<'a> {
     /// Create a `Record` given a `Schema`.
     ///
     /// If the `Schema` is not a `Schema::Record` variant, `None` will be returned.
-    pub fn new(schema: &Schema) -> Option<Record> {
-        match *schema {
-            Schema::Record {
-                fields: ref schema_fields,
-                lookup: ref schema_lookup,
+    pub fn new(schema: SchemaNode<'a>) -> Option<Record<'a>> {
+        let ret = match schema.inner {
+            SchemaPiece::Record {
+                fields: schema_fields,
+                lookup: schema_lookup,
                 ..
             } => {
                 let mut fields = Vec::with_capacity(schema_fields.len());
@@ -230,7 +220,8 @@ impl<'a> Record<'a> {
                 })
             }
             _ => None,
-        }
+        };
+        ret
     }
 
     /// Put a compatible value (implementing the `ToAvro` trait) in the
@@ -281,622 +272,221 @@ impl Value {
     ///
     /// See the [Avro specification](https://avro.apache.org/docs/current/spec.html)
     /// for the full set of rules of schema validation.
-    pub fn validate(&self, schema: &Schema) -> bool {
-        match (self, schema) {
-            (&Value::Null, &Schema::Null) => true,
-            (&Value::Boolean(_), &Schema::Boolean) => true,
-            (&Value::Int(_), &Schema::Int) => true,
-            (&Value::Long(_), &Schema::Long) => true,
-            (&Value::Float(_), &Schema::Float) => true,
-            (&Value::Double(_), &Schema::Double) => true,
-            (&Value::Date(_), &Schema::Date) => true,
-            (&Value::Timestamp(_), &Schema::TimestampMicro) => true,
-            (&Value::Timestamp(_), &Schema::TimestampMilli) => true,
+    pub fn validate(&self, schema: SchemaNode) -> bool {
+        match (self, schema.inner) {
+            (&Value::Null, SchemaPiece::Null) => true,
+            (&Value::Boolean(_), SchemaPiece::Boolean) => true,
+            (&Value::Int(_), SchemaPiece::Int) => true,
+            (&Value::Long(_), SchemaPiece::Long) => true,
+            (&Value::Float(_), SchemaPiece::Float) => true,
+            (&Value::Double(_), SchemaPiece::Double) => true,
+            (&Value::Date(_), SchemaPiece::Date) => true,
+            (&Value::Timestamp(_), SchemaPiece::TimestampMicro) => true,
+            (&Value::Timestamp(_), SchemaPiece::TimestampMilli) => true,
             (
-                &Value::Decimal {
+                &Value::Decimal(DecimalValue {
                     precision: vp,
                     scale: vs,
                     ..
-                },
-                &Schema::Decimal {
+                }),
+                SchemaPiece::Decimal {
                     precision: sp,
                     scale: ss,
-                    ..
+                    fixed_size: _,
                 },
-            ) => vp == sp && vs == ss,
-            (&Value::Bytes(_), &Schema::Bytes) => true,
-            (&Value::String(_), &Schema::String) => true,
-            (&Value::Fixed(n, _), &Schema::Fixed { size, .. }) => n == size,
-            (&Value::String(ref s), &Schema::Enum { ref symbols, .. }) => symbols.contains(s),
-            (&Value::Enum(i, ref s), &Schema::Enum { ref symbols, .. }) => symbols
+            ) => vp == *sp && vs == *ss,
+            (&Value::Bytes(_), SchemaPiece::Bytes) => true,
+            (&Value::String(_), SchemaPiece::String) => true,
+            (&Value::Fixed(n, _), SchemaPiece::Fixed { size }) => n == *size,
+            (&Value::String(ref s), SchemaPiece::Enum { symbols, .. }) => symbols.contains(s),
+            (&Value::Enum(i, ref s), SchemaPiece::Enum { symbols, .. }) => symbols
                 .get(i as usize)
-                .map(|ref symbol| symbol == &s)
+                .map(|symbol| symbol == s)
                 .unwrap_or(false),
-            // (&Value::Union(None), &Schema::Union(_)) => true,
-            (&Value::Union(ref value), &Schema::Union(ref inner)) => {
-                inner.find_schema(value).is_some()
+            (&Value::Union(idx, ref value), SchemaPiece::Union(inner)) => {
+                inner.variants().len() > idx && value.validate(schema.step(&inner.variants()[idx]))
             }
-            (&Value::Array(ref items), &Schema::Array(ref inner)) => {
-                items.iter().all(|item| item.validate(inner))
+            (&Value::Array(ref items), SchemaPiece::Array(inner)) => {
+                let node = schema.step(&**inner);
+                items.iter().all(|item| item.validate(node))
             }
-            (&Value::Map(ref items), &Schema::Map(ref inner)) => {
-                items.iter().all(|(_, value)| value.validate(inner))
+            (&Value::Map(ref items), SchemaPiece::Map(inner)) => {
+                let node = schema.step(&**inner);
+                items.iter().all(|(_, value)| value.validate(node))
             }
-            (&Value::Record(ref record_fields), &Schema::Record { ref fields, .. }) => {
+            (&Value::Record(ref record_fields), SchemaPiece::Record { fields, .. }) => {
                 fields.len() == record_fields.len()
                     && fields.iter().zip(record_fields.iter()).all(
                         |(field, &(ref name, ref value))| {
-                            field.name == *name && value.validate(&field.schema)
+                            let node = schema.step(&field.schema);
+                            field.name == *name && value.validate(node)
                         },
                     )
             }
             _ => false,
         }
     }
-
-    /// Attempt to perform schema resolution on the value, with the given
-    /// [Schema](../schema/enum.Schema.html).
-    ///
-    /// See [Schema Resolution](https://avro.apache.org/docs/current/spec.html#Schema+Resolution)
-    /// in the Avro specification for the full set of rules of schema
-    /// resolution.
-    pub fn resolve(mut self, schema: &Schema) -> Result<Self, Error> {
-        // Check if this schema is a union, and if the reader schema is not.
-        if SchemaKind::from(&self) == SchemaKind::Union
-            && SchemaKind::from(schema) != SchemaKind::Union
-        {
-            // Pull out the Union, and attempt to resolve against it.
-            let v = match self {
-                Value::Union(b) => *b,
-                _ => unreachable!(),
-            };
-            self = v;
-        }
-        match *schema {
-            Schema::Null => self.resolve_null(),
-            Schema::Boolean => self.resolve_boolean(),
-            Schema::Int => self.resolve_int(),
-            Schema::Long => self.resolve_long(),
-            Schema::Float => self.resolve_float(),
-            Schema::Double => self.resolve_double(),
-            Schema::Date | Schema::TimestampMilli | Schema::TimestampMicro => {
-                // Datelike things only have a single representation
-                self.resolve_datelike()
-            }
-            Schema::Decimal {
-                precision, scale, ..
-            } => self.resolve_decimal(precision, scale),
-            Schema::Bytes => self.resolve_bytes(),
-            Schema::String => self.resolve_string(),
-            Schema::Fixed { size, .. } => self.resolve_fixed(size),
-            Schema::Union(ref inner) => self.resolve_union(inner),
-            Schema::Enum { ref symbols, .. } => self.resolve_enum(symbols),
-            Schema::Array(ref inner) => self.resolve_array(inner),
-            Schema::Map(ref inner) => self.resolve_map(inner),
-            Schema::Record { ref fields, .. } => self.resolve_record(fields),
-        }
-    }
-
-    fn resolve_null(self) -> Result<Self, Error> {
-        match self {
-            Value::Null => Ok(Value::Null),
-            other => {
-                Err(SchemaResolutionError::new(format!("Null expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_boolean(self) -> Result<Self, Error> {
-        match self {
-            Value::Boolean(b) => Ok(Value::Boolean(b)),
-            other => {
-                Err(SchemaResolutionError::new(format!("Boolean expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_int(self) -> Result<Self, Error> {
-        match self {
-            Value::Int(n) => Ok(Value::Int(n)),
-            Value::Long(n) => Ok(Value::Int(n as i32)),
-            other => {
-                Err(SchemaResolutionError::new(format!("Int expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_long(self) -> Result<Self, Error> {
-        match self {
-            Value::Int(n) => Ok(Value::Long(i64::from(n))),
-            Value::Long(n) => Ok(Value::Long(n)),
-            other => {
-                Err(SchemaResolutionError::new(format!("Long expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_float(self) -> Result<Self, Error> {
-        match self {
-            Value::Int(n) => Ok(Value::Float(n as f32)),
-            Value::Long(n) => Ok(Value::Float(n as f32)),
-            Value::Float(x) => Ok(Value::Float(x)),
-            Value::Double(x) => Ok(Value::Float(x as f32)),
-            other => {
-                Err(SchemaResolutionError::new(format!("Float expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_double(self) -> Result<Self, Error> {
-        match self {
-            Value::Int(n) => Ok(Value::Double(f64::from(n))),
-            Value::Long(n) => Ok(Value::Double(n as f64)),
-            Value::Float(x) => Ok(Value::Double(f64::from(x))),
-            Value::Double(x) => Ok(Value::Double(x)),
-            other => {
-                Err(SchemaResolutionError::new(format!("Double expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_datelike(self) -> Result<Self, Error> {
-        match self {
-            Value::Date(_) => Ok(self),
-            Value::Timestamp(_) => Ok(self),
-            other => Err(
-                SchemaResolutionError::new(format!("Datelike expected, got {:?}", other)).into(),
-            ),
-        }
-    }
-
-    fn resolve_decimal(self, p1: usize, s1: usize) -> Result<Self, Error> {
-        match self {
-            Value::Decimal {
-                precision: p2,
-                scale: s2,
-                ..
-            } if p1 == p2 && s1 == s2 => Ok(self),
-            other => Err(SchemaResolutionError::new(format!(
-                "Decimal({}, {}) expected, got {:?}",
-                p1, s1, other
-            ))
-            .into()),
-        }
-    }
-
-    fn resolve_bytes(self) -> Result<Self, Error> {
-        match self {
-            Value::Bytes(bytes) => Ok(Value::Bytes(bytes)),
-            Value::String(s) => Ok(Value::Bytes(s.into_bytes())),
-            Value::Array(items) => Ok(Value::Bytes(
-                items
-                    .into_iter()
-                    .map(Value::try_u8)
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            other => {
-                Err(SchemaResolutionError::new(format!("Bytes expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_string(self) -> Result<Self, Error> {
-        match self {
-            Value::String(s) => Ok(Value::String(s)),
-            Value::Bytes(bytes) => Ok(Value::String(String::from_utf8(bytes)?)),
-            other => {
-                Err(SchemaResolutionError::new(format!("String expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_fixed(self, size: usize) -> Result<Self, Error> {
-        match self {
-            Value::Fixed(n, bytes) => {
-                if n == size {
-                    Ok(Value::Fixed(n, bytes))
-                } else {
-                    Err(SchemaResolutionError::new(format!(
-                        "Fixed size mismatch, {} expected, got {}",
-                        size, n
-                    ))
-                    .into())
-                }
-            }
-            other => {
-                Err(SchemaResolutionError::new(format!("String expected, got {:?}", other)).into())
-            }
-        }
-    }
-
-    fn resolve_enum(self, symbols: &[String]) -> Result<Self, Error> {
-        let validate_symbol = |symbol: String, symbols: &[String]| {
-            if let Some(index) = symbols.iter().position(|ref item| item == &&symbol) {
-                Ok(Value::Enum(index as i32, symbol))
-            } else {
-                Err(SchemaResolutionError::new(format!(
-                    "Enum default {} is not among allowed symbols {:?}",
-                    symbol, symbols,
-                ))
-                .into())
-            }
-        };
-
-        match self {
-            Value::Enum(i, s) => {
-                if i >= 0 && i < symbols.len() as i32 {
-                    validate_symbol(s, symbols)
-                } else {
-                    Err(SchemaResolutionError::new(format!(
-                        "Enum value {} is out of bound {}",
-                        i,
-                        symbols.len() as i32
-                    ))
-                    .into())
-                }
-            }
-            Value::String(s) => validate_symbol(s, symbols),
-            other => Err(SchemaResolutionError::new(format!(
-                "Enum({:?}) expected, got {:?}",
-                symbols, other
-            ))
-            .into()),
-        }
-    }
-
-    fn resolve_union(self, schema: &UnionSchema) -> Result<Self, Error> {
-        let v = match self {
-            // Both are unions case.
-            Value::Union(v) => *v,
-            // Reader is a union, but writer is not.
-            v => v,
-        };
-        // Find the first match in the reader schema.
-        let (_, inner) = schema
-            .find_schema(&v)
-            .ok_or_else(|| SchemaResolutionError::new("Could not find matching type in union"))?;
-        Ok(Value::Union(Box::new(v.resolve(inner)?)))
-    }
-
-    fn resolve_array(self, schema: &Schema) -> Result<Self, Error> {
-        match self {
-            Value::Array(items) => Ok(Value::Array(
-                items
-                    .into_iter()
-                    .map(|item| item.resolve(schema))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            other => Err(SchemaResolutionError::new(format!(
-                "Array({:?}) expected, got {:?}",
-                schema, other
-            ))
-            .into()),
-        }
-    }
-
-    fn resolve_map(self, schema: &Schema) -> Result<Self, Error> {
-        match self {
-            Value::Map(items) => Ok(Value::Map(
-                items
-                    .into_iter()
-                    .map(|(key, value)| value.resolve(schema).map(|value| (key, value)))
-                    .collect::<Result<HashMap<_, _>, _>>()?,
-            )),
-            other => Err(SchemaResolutionError::new(format!(
-                "Map({:?}) expected, got {:?}",
-                schema, other
-            ))
-            .into()),
-        }
-    }
-
-    fn resolve_record(self, fields: &[RecordField]) -> Result<Self, Error> {
-        let mut items = match self {
-            Value::Map(items) => Ok(items),
-            Value::Record(fields) => Ok(fields.into_iter().collect::<HashMap<_, _>>()),
-            other => Err(Error::from(SchemaResolutionError::new(format!(
-                "Record({:?}) expected, got {:?}",
-                fields, other
-            )))),
-        }?;
-
-        let new_fields = fields
-            .iter()
-            .map(|field| {
-                let value = match items.remove(&field.name) {
-                    Some(value) => value,
-                    None => match field.default {
-                        Some(ref value) => match field.schema {
-                            Schema::Enum { ref symbols, .. } => {
-                                value.clone().avro().resolve_enum(symbols)?
-                            }
-                            _ => value.clone().avro(),
-                        },
-                        _ => {
-                            return Err(SchemaResolutionError::new(format!(
-                                "missing field {} in record",
-                                field.name
-                            ))
-                            .into());
-                        }
-                    },
-                };
-                value
-                    .resolve(&field.schema)
-                    .map(|value| (field.name.clone(), value))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Value::Record(new_fields))
-    }
-
-    fn try_u8(self) -> Result<u8, Error> {
-        let int = self.resolve(&Schema::Int)?;
-        if let Value::Int(n) = int {
-            if n >= 0 && n <= i32::from(u8::MAX) {
-                return Ok(n as u8);
-            }
-        }
-
-        Err(SchemaResolutionError::new(format!("Unable to convert to u8, got {:?}", int)).into())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{Name, RecordField, RecordFieldOrder, UnionSchema};
+    use crate::Schema;
 
     #[test]
     fn validate() {
         let value_schema_valid = vec![
-            (Value::Int(42), Schema::Int, true),
-            (Value::Int(42), Schema::Boolean, false),
+            (Value::Int(42), "\"int\"", true),
+            (Value::Int(42), "\"boolean\"", false),
             (
-                Value::Union(Box::new(Value::Null)),
-                Schema::Union(UnionSchema::new(vec![Schema::Null, Schema::Int]).unwrap()),
+                Value::Union(0, Box::new(Value::Null)),
+                r#"["null", "int"]"#,
                 true,
             ),
             (
-                Value::Union(Box::new(Value::Int(42))),
-                Schema::Union(UnionSchema::new(vec![Schema::Null, Schema::Int]).unwrap()),
+                Value::Union(1, Box::new(Value::Int(42))),
+                r#"["null", "int"]"#,
                 true,
             ),
             (
-                Value::Union(Box::new(Value::Null)),
-                Schema::Union(UnionSchema::new(vec![Schema::Double, Schema::Int]).unwrap()),
+                Value::Union(0, Box::new(Value::Null)),
+                r#"["double", "int"]"#,
                 false,
             ),
             (
-                Value::Union(Box::new(Value::Int(42))),
-                Schema::Union(
-                    UnionSchema::new(vec![
-                        Schema::Null,
-                        Schema::Double,
-                        Schema::String,
-                        Schema::Int,
-                    ])
-                    .unwrap(),
-                ),
+                Value::Union(3, Box::new(Value::Int(42))),
+                r#"["null", "double", "string", "int"]"#,
                 true,
             ),
             (
                 Value::Array(vec![Value::Long(42i64)]),
-                Schema::Array(Box::new(Schema::Long)),
+                r#"{"type": "array", "items": "long"}"#,
                 true,
             ),
             (
                 Value::Array(vec![Value::Boolean(true)]),
-                Schema::Array(Box::new(Schema::Long)),
+                r#"{"type": "array", "items": "long"}"#,
                 false,
             ),
-            (Value::Record(vec![]), Schema::Null, false),
+            (Value::Record(vec![]), "\"null\"", false),
         ];
 
         for (value, schema, valid) in value_schema_valid.into_iter() {
-            assert_eq!(valid, value.validate(&schema));
+            let schema = Schema::parse_str(schema).unwrap();
+            assert_eq!(valid, value.validate(schema.top_node()));
         }
     }
 
     #[test]
     fn validate_fixed() {
-        let schema = Schema::Fixed {
-            size: 4,
-            name: Name::new("some_fixed"),
-        };
+        let schema =
+            Schema::parse_str(r#"{"type": "fixed", "size": 4, "name": "some_fixed"}"#).unwrap();
 
-        assert!(Value::Fixed(4, vec![0, 0, 0, 0]).validate(&schema));
-        assert!(!Value::Fixed(5, vec![0, 0, 0, 0, 0]).validate(&schema));
+        assert!(Value::Fixed(4, vec![0, 0, 0, 0]).validate(schema.top_node()));
+        assert!(!Value::Fixed(5, vec![0, 0, 0, 0, 0]).validate(schema.top_node()));
     }
 
     #[test]
     fn validate_enum() {
-        let schema = Schema::Enum {
-            name: Name::new("some_enum"),
-            doc: None,
-            symbols: vec![
-                "spades".to_string(),
-                "hearts".to_string(),
-                "diamonds".to_string(),
-                "clubs".to_string(),
-            ],
-        };
+        let schema = Schema::parse_str(r#"{"type": "enum", "name": "some_enum", "symbols": ["spades", "hearts", "diamonds", "clubs"]}"#).unwrap();
 
-        assert!(Value::Enum(0, "spades".to_string()).validate(&schema));
-        assert!(Value::String("spades".to_string()).validate(&schema));
+        assert!(Value::Enum(0, "spades".to_string()).validate(schema.top_node()));
+        assert!(Value::String("spades".to_string()).validate(schema.top_node()));
 
-        assert!(!Value::Enum(1, "spades".to_string()).validate(&schema));
-        assert!(!Value::String("lorem".to_string()).validate(&schema));
+        assert!(!Value::Enum(1, "spades".to_string()).validate(schema.top_node()));
+        assert!(!Value::String("lorem".to_string()).validate(schema.top_node()));
 
-        let other_schema = Schema::Enum {
-            name: Name::new("some_other_enum"),
-            doc: None,
-            symbols: vec![
-                "hearts".to_string(),
-                "diamonds".to_string(),
-                "clubs".to_string(),
-                "spades".to_string(),
-            ],
-        };
+        let other_schema = Schema::parse_str(r#"{"type": "enum", "name": "some_other_enum", "symbols": ["hearts", "diamonds", "clubs", "spades"]}"#).unwrap();
 
-        assert!(!Value::Enum(0, "spades".to_string()).validate(&other_schema));
+        assert!(!Value::Enum(0, "spades".to_string()).validate(other_schema.top_node()));
     }
 
     #[test]
     fn validate_record() {
-        // {
-        //    "type": "record",
-        //    "fields": [
-        //      {"type": "long", "name": "a"},
-        //      {"type": "string", "name": "b"}
-        //    ]
-        // }
-        let schema = Schema::Record {
-            name: Name::new("some_record"),
-            doc: None,
-            fields: vec![
-                RecordField {
-                    name: "a".to_string(),
-                    doc: None,
-                    default: None,
-                    schema: Schema::Long,
-                    order: RecordFieldOrder::Ascending,
-                    position: 0,
-                },
-                RecordField {
-                    name: "b".to_string(),
-                    doc: None,
-                    default: None,
-                    schema: Schema::String,
-                    order: RecordFieldOrder::Ascending,
-                    position: 1,
-                },
-            ],
-            lookup: HashMap::new(),
-        };
+        let schema = Schema::parse_str(
+            r#"{
+           "type": "record",
+           "fields": [
+             {"type": "long", "name": "a"},
+             {"type": "string", "name": "b"}
+           ],
+           "name": "some_record"
+        }"#,
+        )
+        .unwrap();
 
         assert!(Value::Record(vec![
             ("a".to_string(), Value::Long(42i64)),
             ("b".to_string(), Value::String("foo".to_string())),
         ])
-        .validate(&schema));
+        .validate(schema.top_node()));
 
         assert!(!Value::Record(vec![
             ("b".to_string(), Value::String("foo".to_string())),
             ("a".to_string(), Value::Long(42i64)),
         ])
-        .validate(&schema));
+        .validate(schema.top_node()));
 
         assert!(!Value::Record(vec![
             ("a".to_string(), Value::Boolean(false)),
             ("b".to_string(), Value::String("foo".to_string())),
         ])
-        .validate(&schema));
+        .validate(schema.top_node()));
 
         assert!(!Value::Record(vec![
             ("a".to_string(), Value::Long(42i64)),
             ("c".to_string(), Value::String("foo".to_string())),
         ])
-        .validate(&schema));
+        .validate(schema.top_node()));
 
         assert!(!Value::Record(vec![
             ("a".to_string(), Value::Long(42i64)),
             ("b".to_string(), Value::String("foo".to_string())),
             ("c".to_string(), Value::Null),
         ])
-        .validate(&schema));
+        .validate(schema.top_node()));
     }
 
     #[test]
     fn validate_decimal() {
-        assert!(Value::Decimal {
+        assert!(Value::Decimal(DecimalValue {
             unscaled: vec![7],
             precision: 12,
             scale: 5
-        }
-        .validate(&Schema::Decimal {
-            precision: 12,
-            scale: 5,
-            fixed_size: None,
-        }));
+        })
+        .validate(
+            Schema::parse_str(
+                r#"
+            {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 12,
+                "scale": 5
+            }
+        "#
+            )
+            .unwrap()
+            .top_node()
+        ));
 
-        assert!(!Value::Decimal {
+        assert!(!Value::Decimal(DecimalValue {
             unscaled: vec![7],
             precision: 13,
             scale: 5
-        }
-        .validate(&Schema::Decimal {
-            precision: 12,
-            scale: 5,
-            fixed_size: None,
-        }));
-    }
-
-    #[test]
-    fn resolve_bytes_ok() {
-        let value = Value::Array(vec![Value::Int(0), Value::Int(42)]);
-        assert_eq!(
-            value.resolve(&Schema::Bytes).unwrap(),
-            Value::Bytes(vec![0u8, 42u8])
-        );
-    }
-
-    #[test]
-    fn resolve_bytes_failure() {
-        let value = Value::Array(vec![Value::Int(2000), Value::Int(-42)]);
-        assert!(value.resolve(&Schema::Bytes).is_err());
-    }
-
-    #[test]
-    fn resolve_union_ok() {
-        let value = Value::Long(0);
-        let reader_schema = Schema::parse_str(r#"["string", "long"]"#).unwrap();
-        assert_eq!(
-            value.resolve(&reader_schema).unwrap(),
-            Value::Union(Box::new(Value::Long(0))),
-        )
-    }
-
-    #[test]
-    fn resolve_union_err() {
-        let value = Value::Double(0.0);
-        let reader_schema = Schema::parse_str(r#"["string", "long"]"#).unwrap();
-        assert!(value.resolve(&reader_schema).is_err());
-    }
-
-    #[test]
-    fn resolve_decimal_ok() {
-        let value = Value::Decimal {
-            unscaled: vec![42],
-            precision: 12,
-            scale: 5,
-        };
-        assert_eq!(
-            value
-                .clone()
-                .resolve(&Schema::Decimal {
-                    precision: 12,
-                    scale: 5,
-                    fixed_size: None
-                })
-                .unwrap(),
-            value,
-        );
-    }
-
-    #[test]
-    fn resolve_decimal_err() {
-        let value = Value::Decimal {
-            unscaled: vec![42],
-            precision: 12,
-            scale: 5,
-        };
-        assert!(value
-            .resolve(&Schema::Decimal {
-                precision: 12,
-                scale: 6,
-                fixed_size: None
-            })
-            .is_err());
+        })
+        .validate(
+            Schema::parse_str(
+                r#"
+            {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 12,
+                "scale": 5
+            }
+        "#
+            )
+            .unwrap()
+            .top_node()
+        ));
     }
 }

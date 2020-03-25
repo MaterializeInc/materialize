@@ -58,7 +58,7 @@ impl Action for VerifyAction {
                 crate::format::avro::json_to_avro(
                     &serde_json::from_str(expected)
                         .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
-                    &schema,
+                    schema.top_node(),
                 )
                 .unwrap(),
             );
@@ -94,7 +94,7 @@ impl Action for VerifyAction {
                                 ));
                             }
                             actual_messages.push(
-                                block_on(avro::from_avro_datum(&schema, &mut bytes, None))
+                                block_on(avro::from_avro_datum(&schema, &mut bytes))
                                     .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?,
                             );
                         }
