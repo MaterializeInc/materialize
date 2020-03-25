@@ -224,6 +224,7 @@ define_keywords!(
     GROUPS,
     HAVING,
     HEADER,
+    HEADERS,
     HOLD,
     HOUR,
     HOURS,

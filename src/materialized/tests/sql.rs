@@ -159,6 +159,17 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<(String, String, String, i64)>>())
     };
 
+    let fetch_cols = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
+        // TODO(benesch): use a blocking SELECT when that exists.
+        thread::sleep(Duration::from_secs(1));
+        let rows = client.query(&*format!("SELECT * FROM {} LIMIT 1", source), &[])?;
+        Ok(rows[0]
+            .columns()
+            .iter()
+            .map(|col| col.name().to_string())
+            .collect::<Vec<String>>())
+    };
+
     let fetch_avro_rows = |client: &mut postgres::Client, source| -> Result<_, Box<dyn Error>> {
         // TODO(brennan): use a blocking SELECT when that exists.
         thread::sleep(Duration::from_secs(1));
@@ -201,18 +212,22 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     let mut dynamic_file = File::create(&dynamic_path)?;
     let mut avro_writer = avro::Writer::new(&avro_schema, File::create(&avro_path)?);
 
+    // CSV files
     fs::write(
         &static_path,
-        "Rochester,NY,14618
+        "city,state,zip
+Rochester,NY,14618
 New York,NY,10004
 \"bad,place\"\"\",CA,92679
 ",
     )?;
 
-    let line1 = ("Rochester".into(), "NY".into(), "14618".into(), 1);
-    let line2 = ("New York".into(), "NY".into(), "10004".into(), 2);
-    let line3 = ("bad,place\"".into(), "CA".into(), "92679".into(), 3);
+    let line1 = ("city".into(), "state".into(), "zip".into(), 1);
+    let line2 = ("Rochester".into(), "NY".into(), "14618".into(), 2);
+    let line3 = ("New York".into(), "NY".into(), "10004".into(), 3);
+    let line4 = ("bad,place\"".into(), "CA".into(), "92679".into(), 4);
 
+    // Static CSV without headers
     client.batch_execute(&*format!(
         "CREATE SOURCE static_csv_source FROM FILE '{}' FORMAT CSV WITH 3 COLUMNS",
         static_path.display(),
@@ -222,9 +237,68 @@ New York,NY,10004
 
     assert_eq!(
         fetch_rows(&mut client, "static_csv")?,
-        &[line1.clone(), line2.clone(), line3.clone()],
+        &[line1.clone(), line2.clone(), line3.clone(), line4.clone()],
     );
 
+    assert_eq!(
+        fetch_cols(&mut client, "static_csv")?,
+        &[
+            "column1".to_string(),
+            "column2".to_string(),
+            "column3".to_string(),
+            "mz_line_no".to_string()
+        ],
+    );
+
+    // Static CSV with automatic headers
+    client.batch_execute(&*format!(
+        "CREATE SOURCE static_csv_header_source FROM FILE '{}' FORMAT CSV WITH HEADER",
+        static_path.display(),
+    ))?;
+    client.batch_execute(
+        "CREATE MATERIALIZED VIEW static_csv_header AS SELECT * FROM static_csv_header_source",
+    )?;
+
+    assert_eq!(
+        fetch_rows(&mut client, "static_csv_header")?,
+        &[line2.clone(), line3.clone(), line4.clone()],
+    );
+
+    assert_eq!(
+        fetch_cols(&mut client, "static_csv_header")?,
+        &[
+            "city".to_string(),
+            "state".to_string(),
+            "zip".to_string(),
+            "mz_line_no".to_string()
+        ],
+    );
+
+    // Static CSV with automatic headers overwritten
+    client.batch_execute(&*format!(
+        "CREATE SOURCE static_csv_header_man_source FROM FILE '{}' WITH (col_names='city_man,state_man,zip_man') FORMAT CSV WITH HEADER;",
+        static_path.display(),
+    ))?;
+    client.batch_execute(
+        "CREATE MATERIALIZED VIEW static_csv_header_man AS SELECT * FROM static_csv_header_man_source",
+    )?;
+
+    assert_eq!(
+        fetch_rows(&mut client, "static_csv_header_man")?,
+        &[line2.clone(), line3.clone(), line4.clone()],
+    );
+
+    assert_eq!(
+        fetch_cols(&mut client, "static_csv_header_man")?,
+        &[
+            "city_man".to_string(),
+            "state_man".to_string(),
+            "zip_man".to_string(),
+            "mz_line_no".to_string()
+        ],
+    );
+
+    // Dynamic CSV without headers
     append(&mut dynamic_file, b"")?;
 
     client.batch_execute(&*format!(
@@ -235,19 +309,23 @@ New York,NY,10004
         "CREATE MATERIALIZED VIEW dynamic_csv AS SELECT * FROM dynamic_csv_source",
     )?;
 
+    append(&mut dynamic_file, b"city,state,zip\n")?;
     append(&mut dynamic_file, b"Rochester,NY,14618\n")?;
-    assert_eq!(fetch_rows(&mut client, "dynamic_csv")?, &[line1.clone()]);
-
-    append(&mut dynamic_file, b"New York,NY,10004\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
         &[line1.clone(), line2.clone()]
     );
 
+    append(&mut dynamic_file, b"New York,NY,10004\n")?;
+    assert_eq!(
+        fetch_rows(&mut client, "dynamic_csv")?,
+        &[line1.clone(), line2.clone(), line3.clone()]
+    );
+
     append(&mut dynamic_file, b"\"bad,place\"\"\",CA,92679\n")?;
     assert_eq!(
         fetch_rows(&mut client, "dynamic_csv")?,
-        &[line1, line2, line3]
+        &[line1, line2, line3, line4]
     );
 
     fn get_record(i: i32) -> Value {
@@ -303,13 +381,13 @@ New York,NY,10004
     assert!(tail_reader
         .next()
         .unwrap()?
-        .starts_with(&b"City 1\tST\t00001\t4\tDiff: 1 at "[..]));
+        .starts_with(&b"City 1\tST\t00001\t5\tDiff: 1 at "[..]));
 
     append(&mut dynamic_file, b"City 2,ST,00002\n")?;
     assert!(tail_reader
         .next()
         .unwrap()?
-        .starts_with(&b"City 2\tST\t00002\t5\tDiff: 1 at "[..]));
+        .starts_with(&b"City 2\tST\t00002\t6\tDiff: 1 at "[..]));
 
     // The tail won't end until a cancellation request is sent.
     cancel_token.cancel_query(postgres::NoTls)?;

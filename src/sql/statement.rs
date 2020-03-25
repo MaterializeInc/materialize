@@ -39,6 +39,8 @@ use crate::query::QueryLifetime;
 use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, View};
 use regex::Regex;
 
+use tokio::io::AsyncBufReadExt;
+
 pub fn describe_statement(
     catalog: &Catalog,
     session: &dyn PlanSession,
@@ -896,6 +898,32 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                     *schema = sql_parser::ast::Schema::Inline(buf);
                 }
             }
+            Some(Format::Csv { header_row, .. }) => {
+                if *header_row {
+                    match connector {
+                        Connector::File { path } => {
+                            if !with_options_map.contains_key("col_names") {
+                                let path = path.clone();
+                                let f = tokio::fs::File::open(path).await?;
+                                let f = tokio::io::BufReader::new(f);
+                                let csv_header = f.lines().next_line().await?;
+                                match csv_header {
+                                    Some(csv_header) => {
+                                        with_options.push(sql_parser::ast::SqlOption {
+                                            name: sql_parser::ast::Ident::new("col_names"),
+                                            value: sql_parser::ast::Value::SingleQuotedString(
+                                                csv_header,
+                                            ),
+                                        });
+                                    }
+                                    None => bail!("CSV file expected header line, but is empty"),
+                                }
+                            }
+                        }
+                        _ => bail!("CSV format only works with file connectors"),
+                    }
+                }
+            }
             _ => (),
         }
     }
@@ -918,7 +946,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
             };
 
-            let get_encoding = || {
+            let get_encoding = |mut with_options: std::collections::HashMap<String, Value>| {
                 let format = format
                     .as_ref()
                     .ok_or_else(|| format_err!("Source format must be specified"))?;
@@ -983,13 +1011,51 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         let regex = Regex::new(regex)?;
                         DataEncoding::Regex { regex }
                     }
-                    Format::Csv { n_cols, delimiter } => DataEncoding::Csv(CsvEncoding {
-                        n_cols: *n_cols,
-                        delimiter: match *delimiter as u32 {
-                            0..=127 => *delimiter as u8,
-                            _ => bail!("CSV delimiter must be an ASCII character"),
-                        },
-                    }),
+                    Format::Csv {
+                        header_row,
+                        n_cols,
+                        delimiter,
+                    } => {
+                        let (col_names, n_cols) = match with_options.remove("col_names") {
+                            Some(Value::SingleQuotedString(s)) => {
+                                let col_names: Vec<String> =
+                                    s.split(*delimiter as char).map(|v| v.to_string()).collect();
+                                let n_cols_derived = col_names.len();
+                                // If user specified number of columns, ensure it matches the
+                                // number of names provided.
+                                if let Some(n_cols) = n_cols {
+                                    if *n_cols != n_cols_derived {
+                                        bail!(
+                                            "Provided names for {} columns, but specified {} columns \
+                                             when creating source",
+                                            n_cols_derived,
+                                            n_cols
+                                        )
+                                    }
+                                };
+                                (Some(col_names), n_cols_derived)
+                            }
+                            _ => {
+                                match n_cols {
+                                    Some(n_cols) => (None, *n_cols),
+                                    None => bail!(
+                                        "Cannot determine number of columns in CSV source; specify using \
+                                        CREATE SOURCE...FORMAT CSV WITH X COLUMNS"
+                                    )
+                                }
+                            },
+                        };
+
+                        DataEncoding::Csv(CsvEncoding {
+                            header_row: *header_row,
+                            col_names,
+                            n_cols,
+                            delimiter: match *delimiter as u32 {
+                                0..=127 => *delimiter as u8,
+                                _ => bail!("CSV delimiter must be an ASCII character"),
+                            },
+                        })
+                    }
                     Format::Json => bail!("JSON sources are not supported yet."),
                     Format::Text => DataEncoding::Text,
                 })
@@ -1016,7 +1082,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         topic: topic.clone(),
                         ssl_certificate_file,
                     });
-                    let encoding = get_encoding()?;
+                    let encoding = get_encoding(with_options)?;
                     (connector, encoding)
                 }
                 Connector::Kinesis { arn, .. } => {
@@ -1059,7 +1125,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         access_key,
                         secret_access_key,
                     });
-                    let encoding = get_encoding()?;
+                    let encoding = get_encoding(with_options)?;
                     (connector, encoding)
                 }
                 Connector::File { path, .. } => {
@@ -1072,7 +1138,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         path: path.clone().into(),
                         tail,
                     });
-                    let encoding = get_encoding()?;
+                    let encoding = get_encoding(with_options)?;
                     (connector, encoding)
                 }
                 Connector::AvroOcf { path, .. } => {

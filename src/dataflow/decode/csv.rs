@@ -21,6 +21,7 @@ use repr::{Datum, Row};
 
 pub fn csv<G>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,
+    header_row: bool,
     n_cols: usize,
     delimiter: u8,
 ) -> Stream<G, (Row, Timestamp, Diff)>
@@ -60,6 +61,9 @@ where
                             csv_reader.reset();
                             if let Some(line_no) = line_no {
                                 csv_reader.set_line(*line_no as u64);
+                                if header_row && *line_no == 1 {
+                                    continue;
+                                }
                             }
 
                             let mut input = line.as_slice();

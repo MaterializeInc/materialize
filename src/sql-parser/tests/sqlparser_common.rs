@@ -3058,6 +3058,46 @@ fn parse_create_source_regex() {
 fn parse_create_source_csv() {
     let sql = "CREATE SOURCE foo \
                FROM FILE 'bar' WITH (tail = false) \
+               FORMAT CSV WITH HEADER";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            connector,
+            with_options,
+            format,
+            envelope,
+            if_not_exists,
+            materialized,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
+            assert_eq!(
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(false)
+                }],
+                with_options
+            );
+            assert_eq!(
+                Format::Csv {
+                    header_row: true,
+                    n_cols: None,
+                    delimiter: ','
+                },
+                format.unwrap()
+            );
+            assert_eq!(Envelope::None, envelope);
+            assert!(!if_not_exists);
+            assert!(!materialized);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_csv_wo_header() {
+    let sql = "CREATE SOURCE foo \
+               FROM FILE 'bar' WITH (tail = false) \
                FORMAT CSV WITH 3 COLUMNS";
     match verified_stmt(sql) {
         Statement::CreateSource {
@@ -3080,7 +3120,48 @@ fn parse_create_source_csv() {
             );
             assert_eq!(
                 Format::Csv {
-                    n_cols: 3,
+                    header_row: false,
+                    n_cols: Some(3),
+                    delimiter: ','
+                },
+                format.unwrap()
+            );
+            assert_eq!(Envelope::None, envelope);
+            assert!(!if_not_exists);
+            assert!(!materialized);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_csv_man_header() {
+    let sql = "CREATE SOURCE foo \
+               FROM FILE 'bar' WITH (col_names = 'one,two') \
+               FORMAT CSV WITH HEADER";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            connector,
+            with_options,
+            format,
+            envelope,
+            if_not_exists,
+            materialized,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
+            assert_eq!(
+                vec![SqlOption {
+                    name: "col_names".into(),
+                    value: Value::SingleQuotedString("one,two".to_string())
+                }],
+                with_options
+            );
+            assert_eq!(
+                Format::Csv {
+                    header_row: true,
+                    n_cols: None,
                     delimiter: ','
                 },
                 format.unwrap()
@@ -3119,7 +3200,8 @@ fn parse_create_source_csv_custom_delim() {
             );
             assert_eq!(
                 Format::Csv {
-                    n_cols: 3,
+                    header_row: false,
+                    n_cols: Some(3),
                     delimiter: '|'
                 },
                 format.unwrap()
