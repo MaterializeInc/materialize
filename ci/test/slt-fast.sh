@@ -154,7 +154,7 @@ tests=(
     # test/sqllogictest/cockroach/zero.slt
 )
 
-if [[ "$BUILDKITE" ]]; then
+if [[ "${BUILDKITE-}" ]]; then
     wait-for-it postgres:5432
 fi
 sqllogictest -v "${tests[@]}"

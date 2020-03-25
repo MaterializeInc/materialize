@@ -3071,19 +3071,23 @@ impl VariadicFunc {
         use VariadicFunc::*;
         match self {
             Coalesce => {
+                let known_types = input_types
+                    .iter()
+                    .filter(|t| t.scalar_type != ScalarType::Unknown)
+                    .collect::<Vec<_>>();
+
                 debug_assert!(
-                    input_types
+                    known_types
                         .windows(2)
-                        .all(|w| w[0].scalar_type == w[1].scalar_type
-                            || w[0].scalar_type == ScalarType::Unknown
-                            || w[1].scalar_type == ScalarType::Unknown),
+                        .all(|w| w[0].scalar_type == w[1].scalar_type),
                     "coalesce inputs did not have uniform type: {:?}",
                     input_types
                 );
-                if input_types.is_empty() {
+
+                if known_types.is_empty() {
                     ColumnType::new(ScalarType::Unknown)
                 } else {
-                    input_types.into_first().nullable(true)
+                    known_types.into_first().clone().nullable(true)
                 }
             }
             Concat => ColumnType::new(ScalarType::String).nullable(true),
