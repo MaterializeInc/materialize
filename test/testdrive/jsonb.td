@@ -61,3 +61,5 @@ jsonb_agg function only takes one argument
 # todo@jldlaughlin: Fix test when #2414 is implemented
 ! SELECT jsonb_agg((1, 2))
 Parse error:
+
+> DROP SOURCE data
