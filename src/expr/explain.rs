@@ -165,9 +165,14 @@ impl RelationExpr {
                     .unwrap();
                 }
                 Get { id, .. } => match id {
-                    Id::Local(local_id) => {
-                        write!(pretty, "Get %{}", local_id_chain[local_id]).unwrap()
-                    }
+                    Id::Local(local_id) => write!(
+                        pretty,
+                        "Get %{}",
+                        local_id_chain
+                            .get(local_id)
+                            .map_or_else(|| "?".to_owned(), |i| i.to_string())
+                    )
+                    .unwrap(),
                     Id::Global(_) => write!(
                         pretty,
                         "Get {} ({})",
