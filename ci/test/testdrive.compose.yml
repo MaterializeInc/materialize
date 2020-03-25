@@ -12,8 +12,10 @@ services:
   testdrive:
     image: materialize/ci-testdrive:${BUILDKITE_BUILD_NUMBER}
     command: >-
-      bash -c "wait-for-it schema-registry:8081 materialized:6875 --
-      testdrive
+      bash -c "wait-for-it kafka:9092
+      && wait-for-it schema-registry:8081
+      && wait-for-it materialized:6875
+      && testdrive
       --kafka-addr=kafka:9092
       --schema-registry-url=http://schema-registry:8081
       --materialized-url=postgres://ignored@materialized:6875

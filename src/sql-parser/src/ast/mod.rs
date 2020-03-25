@@ -896,8 +896,14 @@ pub enum Statement {
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
     Explain {
         stage: Stage,
-        query: Box<Query>,
+        explainee: Explainee,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Explainee {
+    View(ObjectName),
+    Query(Box<Query>),
 }
 
 impl fmt::Display for Statement {
@@ -1247,7 +1253,18 @@ impl fmt::Display for Statement {
                 write!(f, "ROLLBACK{}", if *chain { " AND CHAIN" } else { "" },)
             }
             Statement::Tail { name } => write!(f, "TAIL {}", name),
-            Statement::Explain { stage, query } => write!(f, "EXPLAIN {} FOR {}", stage, query),
+            Statement::Explain { stage, explainee } => {
+                write!(f, "EXPLAIN {} FOR {}", stage, explainee)
+            }
+        }
+    }
+}
+
+impl fmt::Display for Explainee {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Explainee::View(name) => write!(f, "VIEW {}", name),
+            Explainee::Query(query) => write!(f, "{}", query),
         }
     }
 }

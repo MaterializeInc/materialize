@@ -1,2 +1,2 @@
 type_date ::=
-  'DATE' "'" date_str "'"
+  'DATE' "'" date_str ('T'? time_str)? ( ('+' | '-' ) tz_offset )? "'"

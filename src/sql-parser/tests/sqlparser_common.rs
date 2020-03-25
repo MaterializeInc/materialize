@@ -3988,7 +3988,7 @@ fn parse_explain() {
         ast,
         Statement::Explain {
             stage: Stage::Dataflow,
-            query: Box::new(verified_query("SELECT 665")),
+            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
         }
     );
 
@@ -3997,7 +3997,19 @@ fn parse_explain() {
         ast,
         Statement::Explain {
             stage: Stage::Plan,
-            query: Box::new(verified_query("SELECT 665")),
+            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+        }
+    );
+
+    let ast = verified_stmt("EXPLAIN PLAN FOR VIEW FOO");
+    assert_eq!(
+        ast,
+        Statement::Explain {
+            stage: Stage::Plan,
+            explainee: Explainee::View(ObjectName(vec![Ident {
+                value: "FOO".to_owned(),
+                quote_style: None
+            }])),
         }
     );
 }
@@ -4384,8 +4396,20 @@ fn parse_set() {
         }
     );
 
+    let stmt = one_statement_parses_to("SET TIME ZONE utc", "SET timezone = utc");
+    assert_eq!(
+        stmt,
+        Statement::SetVariable {
+            local: false,
+            variable: "timezone".into(),
+            value: SetVariableValue::Ident("utc".into()),
+        }
+    );
+
     one_statement_parses_to("SET a TO b", "SET a = b");
     one_statement_parses_to("SET SESSION a = b", "SET a = b");
+    one_statement_parses_to("SET tiMe ZoNE 7", "SET timezone = 7");
+    one_statement_parses_to("SET LOCAL tiMe ZoNE 7", "SET LOCAL timezone = 7");
 
     assert_eq!(
         parse_sql_statements("SET").unwrap_err().to_string(),

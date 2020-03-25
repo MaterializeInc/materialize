@@ -382,10 +382,10 @@ SELECT INTERVAL '1-2' HOUR;
 ----
 1 year 2 months
 
-statement error Invalid INTERVAL '1-2 hour': Hour must be preceeded by a number, e.g. '1Hour'
+statement error Invalid INTERVAL '1-2 hour': Invalid syntax: HOUR must be preceeded by a number, e.g. '1HOUR'
 SELECT INTERVAL '1-2 hour';
 
-statement error
+statement error Invalid INTERVAL '1-2hour': Invalid syntax at offset 3: provided TimeUnit\(Hour\) but expected None
 SELECT INTERVAL '1-2hour';
 
 # Use larger numbers.

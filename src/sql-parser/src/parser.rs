@@ -2190,8 +2190,15 @@ impl Parser {
 
     pub fn parse_set(&mut self) -> Result<Statement, ParserError> {
         let modifier = self.parse_one_of_keywords(&["SESSION", "LOCAL"]);
-        let variable = self.parse_identifier()?;
-        if self.consume_token(&Token::Eq) || self.parse_keyword("TO") {
+        let mut variable = self.parse_identifier()?;
+        let mut normal = self.consume_token(&Token::Eq) || self.parse_keyword("TO");
+        if !normal && variable.value.to_uppercase() == "TIME" {
+            self.expect_keyword("ZONE")?;
+            variable.value = "timezone".into();
+            variable.quote_style = None;
+            normal = true;
+        }
+        if normal {
             let token = self.peek_token();
             let value = match (self.parse_value(), token) {
                 (Ok(value), _) => SetVariableValue::Literal(value),
@@ -2203,7 +2210,7 @@ impl Parser {
                 variable,
                 value,
             })
-        } else if variable.value == "TRANSACTION" && modifier.is_none() {
+        } else if variable.value.to_uppercase() == "TRANSACTION" && modifier.is_none() {
             Ok(Statement::SetTransaction {
                 modes: self.parse_transaction_modes()?,
             })
@@ -2762,10 +2769,13 @@ impl Parser {
         };
         self.expect_keyword("FOR")?;
 
-        Ok(Statement::Explain {
-            stage,
-            query: Box::new(self.parse_query()?),
-        })
+        let explainee = if self.parse_keyword("VIEW") {
+            Explainee::View(self.parse_object_name()?)
+        } else {
+            Explainee::Query(Box::new(self.parse_query()?))
+        };
+
+        Ok(Statement::Explain { stage, explainee })
     }
 }
 

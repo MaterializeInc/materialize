@@ -30,11 +30,17 @@ curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-apple-da
 
 ## Linux installation
 
-### apt
+### apt (Ubuntu, Debian, or variants)
+
+Run the following commands as root.
 
 ```shell
-echo "deb [trusted=yes] https://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/materialize.list
+# Add the signing key for the Materialize apt repository
+apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
+# Add and update the repository
+sh -c 'echo "deb http://packages.materialize.io/apt/ /" > /etc/apt/sources.list.d/materialize.list'
 apt update
+# Install materialized
 apt install materialized
 ```
 
