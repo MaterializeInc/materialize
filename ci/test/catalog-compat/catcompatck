@@ -43,11 +43,11 @@ expect_sql() {
 launch_materialized() {
     "materialized-$1" "$@" &
     materialized_pid=$?
-    wait-for-it -q localhost:6875
+    wait-for-it --timeout=30 -q localhost:6875
     run_sql "SELECT 1" > /dev/null
 }
 
-wait-for-it kafka:9092
+wait-for-it --timeout=30 kafka:9092
 
 say "launching materialized-golden"
 launch_materialized golden
