@@ -23,8 +23,7 @@ $ set aggs-schema={
             "name": "row",
             "type": "record",
             "fields": [
-              {"name": "num", "type": "int"},
-              {"name": "name", "type": "string"}
+              {"name": "num", "type": "int"}
             ]
           },
           "null"
@@ -37,9 +36,9 @@ $ set aggs-schema={
 $ kafka-create-topic topic=aggs
 
 $ kafka-ingest format=avro topic=aggs schema=${aggs-schema} timestamp=1
-{"before": null, "after": {"num": 1, "name": "one"}}
-{"before": null, "after": {"num": 2, "name": "two"}}
-{"before": null, "after": {"num": 3, "name": "three"}}
+{"before": null, "after": {"num": 1}}
+{"before": null, "after": {"num": 2}}
+{"before": null, "after": {"num": 3}}
 
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-aggs-${testdrive.seed}'
@@ -47,11 +46,11 @@ $ kafka-ingest format=avro topic=aggs schema=${aggs-schema} timestamp=1
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM data
-num           name
+num
 ----
-1             "one"
-2             "two"
-3             "three"
+1
+2
+3
 
 > SELECT jsonb_agg(data.num) from data;
 [2.0,3.0,1.0]
