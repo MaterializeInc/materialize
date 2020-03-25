@@ -94,8 +94,11 @@ impl RedundantJoin {
             }
 
             // Update constraints to reference `prior`. Shift subsequent references.
-            while let Some(index) = to_remove.pop() {
-                inputs.remove(index);
+            if !to_remove.is_empty() {
+                // remove in reverse order.
+                while let Some(index) = to_remove.pop() {
+                    inputs.remove(index);
+                }
                 for equivalence in equivalences.iter_mut() {
                     for expr in equivalence.iter_mut() {
                         expr.permute(&projection[..]);
@@ -106,6 +109,7 @@ impl RedundantJoin {
                 equivalences.retain(|v| v.len() > 1);
                 *demand = None;
             }
+
             // Implement a projection if the projection removed any columns.
             let orig_arity = input_arities.iter().sum::<usize>();
             if projection.len() != orig_arity || projection.iter().enumerate().any(|(i, p)| i != *p)
