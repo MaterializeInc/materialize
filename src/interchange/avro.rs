@@ -416,7 +416,7 @@ pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     fast_row_schema: Option<Schema>,
-    is_debezium: bool,
+    envelope: EnvelopeType,
 }
 
 impl fmt::Debug for Decoder {
@@ -446,7 +446,7 @@ impl Decoder {
     pub fn new(
         reader_schema: &str,
         schema_registry_url: Option<url::Url>,
-        is_debezium: bool,
+        envelope: EnvelopeType,
     ) -> Decoder {
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
@@ -476,7 +476,7 @@ impl Decoder {
             reader_schema,
             writer_schemas,
             fast_row_schema,
-            is_debezium,
+            envelope,
         }
     }
 
@@ -515,31 +515,34 @@ impl Decoder {
             None => (&self.reader_schema, None),
         };
 
-        let result = if self.is_debezium {
-            if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
-                // The record is laid out such that we can extract the `before` and
-                // `after` fields without decoding the entire record.
-                let before = extract_row(
-                    block_on(avro::from_avro_datum(&schema, &mut bytes))?,
-                    true,
-                    iter::once(Datum::Int64(-1)),
-                )?;
-                let after = extract_row(
-                    block_on(avro::from_avro_datum(&schema, &mut bytes))?,
-                    true,
-                    iter::once(Datum::Int64(1)),
-                )?;
-                DiffPair { before, after }
-            } else {
-                let val = block_on(avro::from_avro_datum(resolved_schema, &mut bytes))?;
-                extract_debezium_slow(val)?
+        let result = match self.envelope {
+            EnvelopeType::Debezium => {
+                if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
+                    // The record is laid out such that we can extract the `before` and
+                    // `after` fields without decoding the entire record.
+                    let before = extract_row(
+                        block_on(avro::from_avro_datum(&schema, &mut bytes))?,
+                        true,
+                        iter::once(Datum::Int64(-1)),
+                    )?;
+                    let after = extract_row(
+                        block_on(avro::from_avro_datum(&schema, &mut bytes))?,
+                        true,
+                        iter::once(Datum::Int64(1)),
+                    )?;
+                    DiffPair { before, after }
+                } else {
+                    let val = block_on(avro::from_avro_datum(resolved_schema, &mut bytes))?;
+                    extract_debezium_slow(val)?
+                }
             }
-        } else {
-            let val = block_on(avro::from_avro_datum(resolved_schema, &mut bytes))?;
-            let row = extract_row(val, false, iter::empty())?;
-            DiffPair {
-                before: None,
-                after: row,
+            EnvelopeType::Upsert | EnvelopeType::None => {
+                let val = block_on(avro::from_avro_datum(resolved_schema, &mut bytes))?;
+                let row = extract_row(val, self.envelope == EnvelopeType::Upsert, iter::empty())?;
+                DiffPair {
+                    before: None,
+                    after: row,
+                }
             }
         };
         Ok(result)

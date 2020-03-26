@@ -1201,7 +1201,6 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     (connector, encoding)
                 }
             };
-
             // TODO (materialize#2537): cleanup format validation
             // Avro format validation is different for the Debezium envelope
             // vs the Upsert envelope.

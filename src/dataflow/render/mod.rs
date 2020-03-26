@@ -20,14 +20,14 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
 use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
 use futures::stream::StreamExt;
-use repr::{Datum, RelationType, Row, RowArena};
+use repr::{Datum, RelationType, Row, RowArena, RowPacker};
 use tokio_util::codec::{FramedRead, LinesCodec};
 
 use self::context::{ArrangementFlavor, Context};
@@ -36,7 +36,7 @@ use super::source;
 use super::source::FileReadStyle;
 use super::source::SourceToken;
 use crate::arrangement::manager::{TraceManager, WithDrop};
-use crate::decode::{decode, decode_avro_values};
+use crate::decode::{decode, decode_avro_values, decode_kafka, decode_kafka_upsert};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
@@ -89,6 +89,27 @@ pub(crate) fn build_local_input<A: Allocate>(
             };
         });
     });
+}
+
+fn stream_as_collection<G>(
+    stream: Stream<G, (Row, Timestamp, Diff)>,
+    envelope: Envelope,
+) -> Collection<G, Row, Diff>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    match envelope {
+        Envelope::None => stream.as_collection(),
+        Envelope::Debezium => {
+            // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+            stream.as_collection().explode(|row| {
+                let mut datums = row.unpack();
+                let diff = datums.pop().unwrap().unwrap_int64() as isize;
+                Some((Row::pack(datums.into_iter()), diff))
+            })
+        }
+        Envelope::Upsert(_) => unreachable!(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -146,8 +167,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         vid: first_export_id,
                     };
 
-                    let (stream, capability) =
-                        if let ExternalSourceConnector::AvroOcf(c) = connector {
+                    let (collection, capability) = match connector {
+                        ExternalSourceConnector::AvroOcf(c) => {
                             // Distribute read responsibility among workers.
                             use differential_dataflow::hashable::Hashable;
                             let hash = src_id.hashed() as usize;
@@ -186,26 +207,54 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 read_style,
                                 ctor,
                             );
-                            (decode_avro_values(&source, &envelope), capability)
-                        } else {
-                            let (source, capability) = match connector {
-                                ExternalSourceConnector::Kafka(c) => {
-                                    // Distribute read responsibility among workers.
-                                    use differential_dataflow::hashable::Hashable;
-                                    let hash = src_id.hashed() as usize;
-                                    let read_from_kafka = hash % worker_peers == worker_index;
-                                    source::kafka(
-                                        region,
-                                        format!("kafka-{}-{}", first_export_id, source_number),
-                                        c,
-                                        uid,
-                                        advance_timestamp,
-                                        timestamp_histories.clone(),
-                                        timestamp_channel.clone(),
-                                        consistency,
-                                        read_from_kafka,
-                                    )
+                            (
+                                stream_as_collection(
+                                    decode_avro_values(&source, &envelope),
+                                    envelope,
+                                ),
+                                capability,
+                            )
+                        }
+                        ExternalSourceConnector::Kafka(c) => {
+                            // Distribute read responsibility among workers.
+                            use differential_dataflow::hashable::Hashable;
+                            let hash = src_id.hashed() as usize;
+                            let read_from_kafka = hash % worker_peers == worker_index;
+                            let (source, capability) = source::kafka(
+                                region,
+                                format!("kafka-{}-{}", first_export_id, source_number),
+                                c,
+                                uid,
+                                advance_timestamp,
+                                timestamp_histories.clone(),
+                                timestamp_channel.clone(),
+                                consistency,
+                                read_from_kafka,
+                            );
+                            let collection = match envelope {
+                                Envelope::Upsert(key_encoding) => {
+                                    decode_kafka_upsert(&source, encoding, key_encoding)
+                                        .as_collection()
+                                        .flat_map(move |(key, value)| {
+                                            if let Some(value) = value {
+                                                let mut result = RowPacker::new();
+                                                result.extend_by_row(&key);
+                                                result.extend_by_row(&value);
+                                                vec![result.finish()]
+                                            } else {
+                                                Vec::new()
+                                            }
+                                        })
                                 }
+                                _ => stream_as_collection(
+                                    decode_kafka(&source, encoding, &envelope),
+                                    envelope,
+                                ),
+                            };
+                            (collection, capability)
+                        }
+                        _ => {
+                            let (source, capability) = match connector {
                                 ExternalSourceConnector::Kinesis(c) => {
                                     // Distribute read responsibility among workers.
                                     use differential_dataflow::hashable::Hashable;
@@ -254,26 +303,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         ctor,
                                     )
                                 }
-                                ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                                ExternalSourceConnector::AvroOcf(_)
+                                | ExternalSourceConnector::Kafka(_) => unreachable!(),
                             };
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream = decode(&source, encoding, &dataflow.debug_name, &envelope);
+                            let collection = stream_as_collection(
+                                decode(&source, encoding, &dataflow.debug_name, &envelope),
+                                envelope,
+                            );
 
-                            (stream, capability)
-                        };
-
-                    let collection = match envelope {
-                        Envelope::None => stream.as_collection(),
-                        Envelope::Debezium => {
-                            // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
-                            stream.as_collection().explode(|row| {
-                                let mut datums = row.unpack();
-                                let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                                Some((Row::pack(datums.into_iter()), diff))
-                            })
+                            (collection, capability)
                         }
-                        Envelope::Upsert(_) => unreachable!("Upsert is not supported yet"),
                     };
 
                     // Introduce the stream by name, as an unarranged collection.
