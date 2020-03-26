@@ -14,9 +14,12 @@ services:
     entrypoint: /bin/bash
     volumes:
       - db-data:/share/billing-demo/data
-    command: -c "wait-for-it --timeout=30 materialized:6875 -- wait-for-it --timeout=30 kafka:9092 --
+    command: -c "wait-for-it --timeout=30 materialized:6875 --
+      wait-for-it --timeout=30 kafka:9092 --
+      wait-for-it --timeout=30 schema-registry:8081 --
       billing-demo --message-count 1000 --materialized-host materialized
-      --kafka-host kafka --csv-file-name /share/billing-demo/data/prices.csv"
+      --kafka-host kafka --schema-registry-url http://schema-registry:8081
+      --csv-file-name /share/billing-demo/data/prices.csv"
     environment:
     - RUST_LOG=billing-demo=debug,info
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
@@ -35,6 +38,12 @@ services:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_ADVERTISED_HOST_NAME=kafka
     depends_on: [zookeeper]
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.2.1
+    environment:
+    - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
+    - SCHEMA_REGISTRY_HOST_NAME=localhost
+    depends_on: [kafka, zookeeper]
 
 volumes:
   db-data:
