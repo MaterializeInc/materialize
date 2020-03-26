@@ -52,7 +52,10 @@ pub fn kafka<G>(
     timestamp_tx: TimestampChanges,
     consistency: Consistency,
     read_kafka: bool,
-) -> (Stream<G, (Vec<u8>, Option<i64>)>, Option<SourceToken>)
+) -> (
+    Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+    Option<SourceToken>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -186,6 +189,7 @@ where
                         let payload = message.payload();
                         let partition = message.partition();
                         let offset = message.offset() + 1;
+                        let key = message.key().map(|k| k.to_vec()).unwrap_or_default();
 
                         if !partitions.contains(&partition) {
                             // We have received a message for a partition for which we do not yet
@@ -246,7 +250,9 @@ where
                                 if let Some(payload) = payload {
                                     let out = payload.to_vec();
                                     bytes_read += out.len() as i64;
-                                    output.session(&cap).give((out, Some(message.offset())));
+                                    output
+                                        .session(&cap)
+                                        .give(((key, out), Some(message.offset())));
                                 }
 
                                 downgrade_capability(
@@ -299,6 +305,7 @@ where
                     while let Some(result) = consumer.poll(Duration::from_millis(0)) {
                         match result {
                             Ok(message) => {
+                                let key = message.key().map(|k| k.to_vec()).unwrap_or_default();
                                 let payload = match message.payload() {
                                     Some(p) => p,
                                     // Null payloads are expected from Debezium.
@@ -331,7 +338,9 @@ where
 
                                 let out = payload.to_vec();
                                 bytes_read += out.len() as i64;
-                                output.session(&cap).give((out, Some(message.offset())));
+                                output
+                                    .session(&cap)
+                                    .give(((key, out), Some(message.offset())));
                             }
                             Err(err) => error!("kafka error: {}: {}", name, err),
                         }

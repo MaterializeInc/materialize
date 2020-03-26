@@ -349,6 +349,18 @@ impl DataEncoding {
         );
         Ok(full_desc)
     }
+
+    pub fn op_name(&self) -> &str {
+        match self {
+            DataEncoding::Bytes => "Bytes",
+            DataEncoding::AvroOcf { .. } => "AvroOcf",
+            DataEncoding::Avro(_) => "Avro",
+            DataEncoding::Protobuf(_) => "Protobuf",
+            DataEncoding::Regex { .. } => "Regex",
+            DataEncoding::Csv(_) => "Csv",
+            DataEncoding::Text => "Text",
+        }
+    }
 }
 
 /// Encoding in Avro format.
