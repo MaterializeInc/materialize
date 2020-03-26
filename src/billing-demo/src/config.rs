@@ -56,7 +56,7 @@ pub struct Args {
 
     #[structopt(long)]
     pub csv_file_name: String,
-    
+
     /// The schema-registry URL
     #[structopt(long, default_value = "http://localhost:8081")]
     pub schema_registry_url: String,

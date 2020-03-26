@@ -155,7 +155,14 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             exec_query!(client, "drop_index_billing_records");
         }
 
-        client.create_sink(&config.kafka_url, config::KAFKA_SINK_TOPIC_NAME, config::KAFKA_SINK_NAME, &config.schema_registry_url).await?;
+        client
+            .create_sink(
+                &config.kafka_url,
+                config::KAFKA_SINK_TOPIC_NAME,
+                config::KAFKA_SINK_NAME,
+                &config.schema_registry_url,
+            )
+            .await?;
     } else {
         log::info!(
             "source '{}' already exists, not recreating",
