@@ -103,6 +103,9 @@ pub struct Config {
     /// Whether to collect metrics. If enabled, metrics can be collected by
     /// e.g. Prometheus via the `/metrics` HTTP endpoint.
     pub gather_metrics: bool,
+    /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
+    /// where <addr_port> is the address of this process's entry in `addresses`.
+    pub listen_addr: Option<SocketAddr>,
 }
 
 impl Config {
@@ -177,13 +180,15 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     let executor = runtime.handle().clone();
 
     // Initialize network listener.
-    let listen_addr = SocketAddr::new(
-        match config.addresses[config.process].ip() {
-            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-        },
-        config.addresses[config.process].port(),
-    );
+    let listen_addr = config.listen_addr.unwrap_or_else(|| {
+        SocketAddr::new(
+            match config.addresses[config.process].ip() {
+                IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            },
+            config.addresses[config.process].port(),
+        )
+    });
     let mut listener = runtime.block_on(TcpListener::bind(&listen_addr))?;
     let local_addr = listener.local_addr()?;
     config.addresses[config.process].set_port(local_addr.port());

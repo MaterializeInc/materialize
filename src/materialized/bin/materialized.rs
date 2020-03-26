@@ -112,6 +112,12 @@ fn run() -> Result<(), failure::Error> {
         "where materialized will write logs (default <data directory>/materialized.log)",
         "PATH",
     );
+    opts.optopt(
+        "",
+        "listen-addr",
+        "the address and port on which materialized will listen for connections",
+        "ADDR:PORT",
+    );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "do not gather prometheus metrics");
     if cfg!(debug_assertions) {
@@ -158,6 +164,7 @@ fn run() -> Result<(), failure::Error> {
     let processes = popts.opt_get_default("processes", 1)?;
     let address_file = popts.opt_str("address-file");
     let gather_metrics = !popts.opt_present("no-prometheus");
+    let listen_addr = popts.opt_get("listen-addr")?;
 
     if cfg!(debug_assertions) && !popts.opt_present("dev") && !ore::env::is_var_truthy("MZ_DEV") {
         bail!(
@@ -235,6 +242,7 @@ fn run() -> Result<(), failure::Error> {
         data_directory: Some(data_directory),
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,
+        listen_addr,
     })?;
 
     // Block forever.
