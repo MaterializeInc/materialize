@@ -18,7 +18,7 @@ cd "$(dirname "$0")/../.."
 if [[ "$BRANCH" = master ]]; then
     spec=HEAD^
 else
-    git fetch https://"$DEPLOY_KEY"@github.com/MaterializeInc/materialize.git master
+    git fetch https://github.com/MaterializeInc/materialize.git master
     spec=FETCH_HEAD...
 fi
 
