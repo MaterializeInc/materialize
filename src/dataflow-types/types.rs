@@ -251,14 +251,37 @@ pub enum DataEncoding {
 }
 
 impl DataEncoding {
-    pub fn desc(&self, envelope: Envelope) -> Result<RelationDesc, failure::Error> {
+    pub fn desc(&self, envelope: &Envelope) -> Result<RelationDesc, failure::Error> {
+        let mut full_desc = if let Envelope::Upsert(key_encoding) = envelope {
+            let key_desc = key_encoding.desc(&Envelope::None)?;
+            //rename key columns to "key" something if the encoding is not Avro
+            let key_desc = match key_encoding {
+                DataEncoding::Avro(_) => key_desc,
+                _ => RelationDesc::new(
+                    key_desc.typ().clone(),
+                    key_desc
+                        .iter_names()
+                        .enumerate()
+                        .map(|(i, _)| Some(format!("key{}", i))),
+                ),
+            };
+            let keys = key_desc
+                .iter_names()
+                .enumerate()
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            key_desc.add_keys(keys)
+        } else {
+            RelationDesc::empty()
+        };
+
         let desc = match self {
             DataEncoding::Bytes => RelationDesc::from_cols(vec![(
                 ColumnType::new(ScalarType::Bytes),
                 Some("data".to_owned()),
             )]),
             DataEncoding::AvroOcf { reader_schema } => {
-                avro::validate_value_schema(&*reader_schema, envelope == Envelope::Debezium)
+                avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
                     .with_context(|e| format!("validating avro ocf reader schema: {}", e))?
             }
             DataEncoding::Avro(AvroEncoding {
@@ -267,7 +290,7 @@ impl DataEncoding {
                 ..
             }) => {
                 let mut desc =
-                    avro::validate_value_schema(value_schema, envelope == Envelope::Debezium)
+                    avro::validate_value_schema(value_schema, envelope.get_avro_envelope_type())
                         .with_context(|e| format!("validating avro value schema: {}", e))?;
                 if let Some(key_schema) = key_schema {
                     let keys = avro::validate_key_schema(key_schema, &desc)
@@ -320,7 +343,11 @@ impl DataEncoding {
                 Some("text".to_owned()),
             )]),
         };
-        Ok(desc)
+        full_desc.add_cols(
+            desc.iter()
+                .map(|(name, typ)| (name.to_owned(), typ.to_owned())),
+        );
+        Ok(full_desc)
     }
 }
 
@@ -370,10 +397,21 @@ pub struct SinkDesc {
     pub connector: SinkConnector,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Envelope {
     None,
     Debezium,
+    Upsert(DataEncoding),
+}
+
+impl Envelope {
+    pub fn get_avro_envelope_type(&self) -> avro::EnvelopeType {
+        match self {
+            Envelope::None => avro::EnvelopeType::None,
+            Envelope::Debezium => avro::EnvelopeType::Debezium,
+            Envelope::Upsert(_) => avro::EnvelopeType::Upsert,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -396,16 +434,16 @@ pub enum ExternalSourceConnector {
 }
 
 impl ExternalSourceConnector {
-    pub fn metadata_columns(&self) -> Vec<(ColumnType, Option<String>)> {
+    pub fn metadata_columns(&self) -> Vec<(Option<String>, ColumnType)> {
         match self {
-            Self::Kafka(_) => vec![(ColumnType::new(ScalarType::Int64), Some("mz_offset".into()))],
+            Self::Kafka(_) => vec![(Some("mz_offset".into()), ColumnType::new(ScalarType::Int64))],
             Self::File(_) => vec![(
-                ColumnType::new(ScalarType::Int64),
                 Some("mz_line_no".into()),
+                ColumnType::new(ScalarType::Int64),
             )],
             Self::Kinesis(_) => vec![],
             Self::AvroOcf(_) => {
-                vec![(ColumnType::new(ScalarType::Int64), Some("mz_obj_no".into()))]
+                vec![(Some("mz_obj_no".into()), ColumnType::new(ScalarType::Int64))]
             }
         }
     }

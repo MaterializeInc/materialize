@@ -861,12 +861,83 @@ fn handle_create_view(
     })
 }
 
+async fn purify_format(
+    format: &mut Option<Format>,
+    connector: &mut Connector,
+    col_names: &mut Vec<Ident>,
+) -> Result<(), failure::Error> {
+    match format {
+        Some(Format::Avro(schema)) => match schema {
+            AvroSchema::CsrUrl { url, seed } => {
+                let topic = if let Connector::Kafka { topic, .. } = connector {
+                    topic
+                } else {
+                    bail!("Confluent Schema Registry is only supported with Kafka sources")
+                };
+                if seed.is_none() {
+                    let url = url.parse()?;
+                    let Schema {
+                        key_schema,
+                        value_schema,
+                        ..
+                    } = get_remote_avro_schema(url, topic.clone()).await?;
+                    *seed = Some(CsrSeed {
+                        key_schema,
+                        value_schema,
+                    });
+                }
+            }
+            AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
+                let value_schema = tokio::fs::read_to_string(path).await?;
+                *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
+            }
+            _ => {}
+        },
+        Some(Format::Protobuf { schema, .. }) => {
+            if let sql_parser::ast::Schema::File(path) = schema {
+                let descriptors = tokio::fs::read(path).await?;
+                let mut buf = String::new();
+                strconv::format_bytes(&mut buf, &descriptors);
+                *schema = sql_parser::ast::Schema::Inline(buf);
+            }
+        }
+        Some(Format::Csv {
+            header_row,
+            delimiter,
+            ..
+        }) => {
+            if *header_row && col_names.is_empty() {
+                match connector {
+                    Connector::File { path } => {
+                        let path = path.clone();
+                        let f = tokio::fs::File::open(path).await?;
+                        let f = tokio::io::BufReader::new(f);
+                        let csv_header = f.lines().next_line().await?;
+                        match csv_header {
+                            Some(csv_header) => {
+                                csv_header
+                                    .split(*delimiter as char)
+                                    .for_each(|v| col_names.push(Ident::from(v)));
+                            }
+                            None => bail!("CSV file expected header line, but is empty"),
+                        }
+                    }
+                    _ => bail!("CSV format with headers only works with file connectors"),
+                }
+            }
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
 pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Error> {
     if let Statement::CreateSource {
         col_names,
         connector,
         format,
         with_options,
+        envelope,
         ..
     } = &mut stmt
     {
@@ -891,67 +962,9 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
             _ => (),
         }
 
-        match format {
-            Some(Format::Avro(schema)) => match schema {
-                AvroSchema::CsrUrl { url, seed } => {
-                    let topic = if let Connector::Kafka { topic, .. } = connector {
-                        topic
-                    } else {
-                        bail!("Confluent Schema Registry is only supported with Kafka sources")
-                    };
-                    if seed.is_none() {
-                        let url = url.parse()?;
-                        let Schema {
-                            key_schema,
-                            value_schema,
-                            ..
-                        } = get_remote_avro_schema(url, topic.clone()).await?;
-                        *seed = Some(CsrSeed {
-                            key_schema,
-                            value_schema,
-                        });
-                    }
-                }
-                AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
-                    let value_schema = tokio::fs::read_to_string(path).await?;
-                    *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
-                }
-                _ => {}
-            },
-            Some(Format::Protobuf { schema, .. }) => {
-                if let sql_parser::ast::Schema::File(path) = schema {
-                    let descriptors = tokio::fs::read(path).await?;
-                    let mut buf = String::new();
-                    strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = sql_parser::ast::Schema::Inline(buf);
-                }
-            }
-            Some(Format::Csv {
-                header_row,
-                delimiter,
-                ..
-            }) => {
-                if *header_row && col_names.is_empty() {
-                    match connector {
-                        Connector::File { path } => {
-                            let path = path.clone();
-                            let f = tokio::fs::File::open(path).await?;
-                            let f = tokio::io::BufReader::new(f);
-                            let csv_header = f.lines().next_line().await?;
-                            match csv_header {
-                                Some(csv_header) => {
-                                    csv_header
-                                        .split(*delimiter as char)
-                                        .for_each(|v| col_names.push(Ident::from(v)));
-                                }
-                                None => bail!("CSV file expected header line, but is empty"),
-                            }
-                        }
-                        _ => bail!("CSV format with headers only works with file connectors"),
-                    }
-                }
-            }
-            _ => (),
+        purify_format(format, connector, col_names).await?;
+        if let sql_parser::ast::Envelope::Upsert(format) = envelope {
+            purify_format(format, connector, col_names).await?;
         }
     }
     Ok(stmt)
@@ -969,12 +982,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             if_not_exists,
             materialized,
         } => {
-            let envelope = match envelope {
-                sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
-                sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
-            };
-
-            let get_encoding = || {
+            let get_encoding = |format: &Option<Format>| {
                 let format = format
                     .as_ref()
                     .ok_or_else(|| format_err!("Source format must be specified"))?;
@@ -1070,7 +1078,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut with_options = normalize::with_options(with_options);
 
             let mut consistency = Consistency::RealTime;
-            let (external_connector, encoding) = match connector {
+            let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
                     let ssl_certificate_file = match with_options.remove("ssl_certificate_file") {
                         None => None,
@@ -1088,7 +1096,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         topic: topic.clone(),
                         ssl_certificate_file,
                     });
-                    let encoding = get_encoding()?;
+                    let encoding = get_encoding(format)?;
                     (connector, encoding)
                 }
                 Connector::Kinesis { arn, .. } => {
@@ -1147,7 +1155,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         access_key,
                         secret_access_key,
                     });
-                    let encoding = get_encoding()?;
+                    let encoding = get_encoding(format)?;
                     (connector, encoding)
                 }
                 Connector::File { path, .. } => {
@@ -1160,7 +1168,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         path: path.clone().into(),
                         tail,
                     });
-                    let encoding = get_encoding()?;
+                    let encoding = get_encoding(format)?;
                     (connector, encoding)
                 }
                 Connector::AvroOcf { path, .. } => {
@@ -1188,7 +1196,60 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 }
             };
 
-            let mut desc = encoding.desc(envelope)?;
+            // TODO (materialize#2537): cleanup format validation
+            // Avro format validation is different for the Debezium envelope
+            // vs the Upsert envelope.
+            //
+            // For the Debezium envelope, the key schema is not meant to be
+            // used to decode records; it is meant to be a subset of the
+            // value schema so we can identify what the primary key is.
+            //
+            // When using the Upsert envelope, we delete the key schema
+            // from the value encoding because the key schema is not
+            // necessarily a subset of the value schema. Also, we shift
+            // the key schema, if it exists, over to the value schema position
+            // in the Upsert envelope's key_format so it can be validated like
+            // a schema used to decode records.
+            let envelope = match &envelope {
+                sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
+                sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
+                sql_parser::ast::Envelope::Upsert(key_format) => match connector {
+                    Connector::Kafka { .. } => {
+                        let mut key_encoding = if key_format.is_some() {
+                            get_encoding(key_format)?
+                        } else {
+                            encoding.clone()
+                        };
+                        if let DataEncoding::Avro(AvroEncoding {
+                            key_schema,
+                            value_schema,
+                            ..
+                        }) = &mut key_encoding
+                        {
+                            if key_schema.is_some() {
+                                *value_schema = key_schema.take().unwrap();
+                            }
+                        }
+                        dataflow_types::Envelope::Upsert(key_encoding)
+                    }
+                    _ => bail!("Upsert envelope for non-Kafka sources not supported yet"),
+                },
+            };
+
+            if let dataflow_types::Envelope::Upsert(_) = envelope {
+                // delete the key schema because 1) the format in the upsert is already
+                // taking care of that 2) to prevent schema validation from looking for the
+                // key columns in the value record
+                if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &mut encoding {
+                    *key_schema = None;
+                }
+                // TODO: remove the bail once PR #2943 is in
+                // the bail is meant to prevent someone from accidentally trying
+                // the upsert envelope and then causing a panic.
+                bail!("Upsert envelope is not supported yet");
+            }
+
+            let mut desc = encoding.desc(&envelope)?;
 
             let typ = desc.typ();
             if !col_names.is_empty() {

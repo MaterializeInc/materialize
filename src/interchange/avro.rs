@@ -61,46 +61,82 @@ pub fn validate_key_schema(key_schema: &str, value_desc: &RelationDesc) -> Resul
     }
     Ok(indices)
 }
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum EnvelopeType {
+    None,
+    Debezium,
+    Upsert,
+}
 
 /// Converts an Apache Avro schema into a [`repr::RelationDesc`].
-pub fn validate_value_schema(schema: &str, is_debezium: bool) -> Result<RelationDesc> {
+pub fn validate_value_schema(schema: &str, envelope: EnvelopeType) -> Result<RelationDesc> {
     let schema = parse_schema(schema)?;
     let node = schema.top_node();
 
-    let row_schema = if is_debezium {
-        // The top-level record needs to be a diff "envelope" that contains
-        // `before` and `after` fields, where the `before` and `after` fields
-        // have the same schema.
-        let row_schema = match node.inner {
-            SchemaPiece::Record { fields, .. } => {
-                let before = fields.iter().find(|f| f.name == "before");
-                let after = fields.iter().find(|f| f.name == "after");
-                match (before, after) {
-                    (Some(before), Some(after)) => {
-                        let left = node.step(&before.schema);
-                        let right = node.step(&after.schema);
-                        if let Some((left, right)) = first_mismatched_schema_types(left, right) {
-                            bail!(
-                            "source schema has mismatched 'before' and 'after' schemas: before={:?} after={:?}",
-                            left.inner,
-                            right.inner
-                        )
+    let row_schema = match envelope {
+        EnvelopeType::Debezium => {
+            // The top-level record needs to be a diff "envelope" that contains
+            // `before` and `after` fields, where the `before` and `after` fields
+            // have the same schema.
+            let row_schema = match node.inner {
+                SchemaPiece::Record { fields, .. } => {
+                    let before = fields.iter().find(|f| f.name == "before");
+                    let after = fields.iter().find(|f| f.name == "after");
+                    match (before, after) {
+                        (Some(before), Some(after)) => {
+                            let left = node.step(&before.schema);
+                            let right = node.step(&after.schema);
+                            if let Some((left, right)) = first_mismatched_schema_types(left, right)
+                            {
+                                bail!(
+                                "source schema has mismatched 'before' and 'after' schemas: before={:?} after={:?}",
+                                left.inner,
+                                right.inner
+                            )
+                            }
+                            &before.schema
                         }
-                        &before.schema
+                        (None, _) => bail!("source schema is missing 'before' field"),
+                        (_, None) => bail!("source schema is missing 'after' field"),
                     }
-                    (None, _) => bail!("source schema is missing 'before' field"),
-                    (_, None) => bail!("source schema is missing 'after' field"),
                 }
+                _ => bail!("source schema does not match required envelope format"),
+            };
+            // The "row" schema used by the `before` and `after` fields needs to be
+            // a nullable record type.
+            match row_schema.get_piece_and_name(&schema).0 {
+                SchemaPiece::Union(us) => {
+                    if us.variants().len() != 2 {
+                        bail!("source schema 'before'/'after' fields are not of expected type");
+                    }
+                    let has_null = us.variants().iter().any(|s| is_null(s));
+                    let record =
+                        us.variants()
+                            .iter()
+                            .find(|s| match s.get_piece_and_name(&schema).0 {
+                                SchemaPiece::Record { .. } => true,
+                                _ => false,
+                            });
+                    if !has_null {
+                        bail!("source schema has non-nullable 'before'/'after' fields");
+                    }
+                    match record {
+                        Some(record) => record,
+                        None => {
+                            bail!("source schema 'before/'after' fields are not of expected type")
+                        }
+                    }
+                }
+                _ => bail!("source schema has non-nullable 'before'/'after' fields"),
             }
-            _ => bail!("source schema does not match required envelope format"),
-        };
-
-        // The "row" schema used by the `before` and `after` fields needs to be
-        // a nullable record type.
-        match row_schema.get_piece_and_name(&schema).0 {
+        }
+        EnvelopeType::Upsert => match node.inner {
             SchemaPiece::Union(us) => {
-                if us.variants().len() != 2 {
-                    bail!("source schema 'before'/'after' fields are not of expected type");
+                if us.variants().len() > 2 {
+                    bail!(
+                        "upsert schema can only be record or union[null, record], got: {:?}",
+                        schema.top
+                    );
                 }
                 let has_null = us.variants().iter().any(|s| is_null(s));
                 let record = us
@@ -111,17 +147,26 @@ pub fn validate_value_schema(schema: &str, is_debezium: bool) -> Result<Relation
                         _ => false,
                     });
                 if !has_null {
-                    bail!("source schema has non-nullable 'before'/'after' fields");
+                    bail!(
+                        "upsert schema can only be record or union[null, record], got: {:?}",
+                        schema.top
+                    );
                 }
                 match record {
                     Some(record) => record,
-                    None => bail!("source schema 'before/'after' fields are not of expected type"),
+                    None => bail!(
+                        "upsert schema can only be record or union[null, record], got: {:?}",
+                        schema.top
+                    ),
                 }
             }
-            _ => bail!("source schema has non-nullable 'before'/'after' fields"),
-        }
-    } else {
-        &schema.top
+            SchemaPiece::Record { .. } => &schema.top,
+            _ => bail!(
+                "upsert schema can only be record or union[null, record], got: {:?}",
+                schema.top
+            ),
+        },
+        EnvelopeType::None => &schema.top,
     };
 
     // The diff envelope is sane. Convert the actual record schema for the row.
@@ -790,7 +835,7 @@ mod tests {
             // avoids embedding JSON strings inside of JSON, which is hard on
             // the eyes.
             let schema = serde_json::to_string(&tc.input)?;
-            let output = super::validate_value_schema(&schema, true)?;
+            let output = super::validate_value_schema(&schema, EnvelopeType::Debezium)?;
             assert_eq!(output, tc.expected, "failed test case name: {}", tc.name)
         }
 

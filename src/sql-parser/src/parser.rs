@@ -1257,8 +1257,19 @@ impl Parser {
             Envelope::None
         } else if self.parse_keyword("DEBEZIUM") {
             Envelope::Debezium
+        } else if self.parse_keyword("UPSERT") {
+            let format = if self.parse_keyword("FORMAT") {
+                Some(self.parse_format()?)
+            } else {
+                None
+            };
+            Envelope::Upsert(format)
         } else {
-            return self.expected(self.peek_range(), "NONE or DEBEZIUM", self.peek_token());
+            return self.expected(
+                self.peek_range(),
+                "NONE, DEBEZIUM, or UPSERT",
+                self.peek_token(),
+            );
         };
         Ok(envelope)
     }

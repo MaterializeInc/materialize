@@ -3411,6 +3411,50 @@ fn parse_create_source_default_envelope() {
 }
 
 #[test]
+fn parse_create_source_upsert_envelope() {
+    let sql = "CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' \
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' \
+    ENVELOPE UPSERT";
+    match verified_stmt(sql) {
+        Statement::CreateSource { envelope, .. } => {
+            assert_eq!(Envelope::Upsert(None), envelope);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_upsert_envelope_format_avro() {
+    let sql = "CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' \
+    FORMAT AVRO USING SCHEMA 'string' \
+    ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'";
+    match verified_stmt(sql) {
+        Statement::CreateSource { envelope, .. } => {
+            assert_eq!(
+                Envelope::Upsert(Some(Format::Avro(AvroSchema::Schema(Schema::Inline(
+                    "long".into()
+                ))))),
+                envelope
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_upsert_envelope_format_text() {
+    let sql = "CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' \
+    FORMAT AVRO USING SCHEMA FILE 'path' \
+    ENVELOPE UPSERT FORMAT TEXT";
+    match verified_stmt(sql) {
+        Statement::CreateSource { envelope, .. } => {
+            assert_eq!(Envelope::Upsert(Some(Format::Text)), envelope);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn parse_create_source_if_not_exists() {
     let sql = "CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES";
     match verified_stmt(sql) {

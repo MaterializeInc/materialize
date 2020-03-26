@@ -386,8 +386,10 @@ macro_rules! make_visitor {
 
             fn visit_source_envelope(
                 &mut self,
-                _envelope: &'ast $($mut)* Envelope,
-            ) { }
+                envelope: &'ast $($mut)* Envelope,
+            ) {
+                visit_source_envelope(self, envelope)
+            }
 
             fn visit_avro_schema(
                 &mut self,
@@ -1387,6 +1389,16 @@ macro_rules! make_visitor {
                     visitor.visit_schema(schema);
                 },
                 Regex(regex) => visitor.visit_literal_string(regex),
+            }
+        }
+
+        fn visit_source_envelope<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            envelope: &'ast $($mut)* Envelope,
+        ) {
+            use Envelope::*;
+            if let Upsert(Some(format)) = envelope {
+                visitor.visit_format(format);
             }
         }
 
