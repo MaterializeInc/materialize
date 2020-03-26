@@ -16,6 +16,8 @@ use structopt::StructOpt;
 
 pub static KAFKA_SOURCE_NAME: &str = "billing_source";
 pub static CSV_SOURCE_NAME: &str = "price_source";
+pub static KAFKA_SINK_NAME: &str = "billing_sink";
+pub static KAFKA_SINK_TOPIC_NAME: &str = "billing_monthly_statements";
 
 fn parse_utc_datetime_from_str(s: &str) -> ParseResult<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from_utc(
@@ -54,6 +56,10 @@ pub struct Args {
 
     #[structopt(long)]
     pub csv_file_name: String,
+    
+    /// The schema-registry URL
+    #[structopt(long, default_value = "http://localhost:8081")]
+    pub schema_registry_url: String,
 
     /// Whether or not to delete the sources and views before starting
     #[structopt(long)]
@@ -91,6 +97,7 @@ impl Args {
             host: self.materialized_host.clone(),
             port: self.materialized_port,
             kafka_url: self.kafka_url(),
+            schema_registry_url: self.schema_registry_url.clone(),
             kafka_topic: self.kafka_topic.clone(),
             csv_file_name: self.csv_file_name.clone(),
             preserve_source: self.preserve_source,
@@ -120,6 +127,7 @@ pub struct MzConfig {
     pub host: String,
     pub port: u16,
     pub kafka_url: String,
+    pub schema_registry_url: String,
     pub kafka_topic: String,
     pub csv_file_name: String,
     pub preserve_source: bool,
