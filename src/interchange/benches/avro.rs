@@ -12,7 +12,7 @@ use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::{Duration, NaiveDate};
 use criterion::{black_box, Criterion, Throughput};
 
-use interchange::avro::{parse_schema, Decoder};
+use interchange::avro::{parse_schema, Decoder, EnvelopeType};
 use std::ops::Add;
 
 pub fn bench_avro(c: &mut Criterion) {
@@ -293,7 +293,7 @@ pub fn bench_avro(c: &mut Criterion) {
     buf.extend(avro::to_avro_datum(&schema, record).unwrap());
     let len = buf.len() as u64;
 
-    let mut decoder = Decoder::new(schema_str, None, true);
+    let mut decoder = Decoder::new(schema_str, None, EnvelopeType::Debezium);
 
     let mut bg = c.benchmark_group("avro");
     bg.throughput(Throughput::Bytes(len));

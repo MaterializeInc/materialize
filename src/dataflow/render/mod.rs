@@ -20,13 +20,13 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
 use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
-use repr::{Datum, RelationType, Row, RowArena};
+use repr::{Datum, RelationType, Row, RowArena, RowPacker};
 
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
@@ -34,7 +34,7 @@ use super::source;
 use super::source::FileReadStyle;
 use super::source::SourceToken;
 use crate::arrangement::manager::{TraceManager, WithDrop};
-use crate::decode::{decode, decode_avro_values};
+use crate::decode::{decode, decode_avro_values, decode_kafka, decode_kafka_upsert};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
@@ -88,6 +88,27 @@ pub(crate) fn build_local_input<A: Allocate>(
             };
         });
     });
+}
+
+fn stream_as_collection<G>(
+    stream: Stream<G, (Row, Timestamp, Diff)>,
+    envelope: Envelope,
+) -> Collection<G, Row, Diff>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    match envelope {
+        Envelope::None => stream.as_collection(),
+        Envelope::Debezium => {
+            // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+            stream.as_collection().explode(|row| {
+                let mut datums = row.unpack();
+                let diff = datums.pop().unwrap().unwrap_int64() as isize;
+                Some((Row::pack(datums.into_iter()), diff))
+            })
+        }
+        Envelope::Upsert(_) => unreachable!(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -261,7 +282,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 Some((Row::pack(datums.into_iter()), diff))
                             })
                         }
-                        Envelope::Upsert(_) => unreachable!("Upsert is not supported yet"),
                     };
 
                     // Introduce the stream by name, as an unarranged collection.
