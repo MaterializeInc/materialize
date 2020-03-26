@@ -20,7 +20,7 @@ if [[ ! "${BUILDKITE-}" ]]; then
 fi
 
 if [[ "${BUILDKITE-}" ]]; then
-    wait-for-it postgres:5432
+    wait-for-it --timeout=30 postgres:5432
 fi
 
 export RUST_BACKTRACE=full
