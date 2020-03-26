@@ -1,0 +1,9 @@
+CREATE MATERIALIZED VIEW billing_monthly_statement_export AS
+SELECT
+billing_monthly_statement.month::string,
+billing_monthly_statement.client_id,
+billing_monthly_statement.execution_time_ms,
+billing_monthly_statement.cpu_num,
+billing_monthly_statement.memory_gb,
+billing_monthly_statement.monthly_bill
+FROM billing_monthly_statement;
