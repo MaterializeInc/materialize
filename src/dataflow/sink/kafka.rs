@@ -6,8 +6,12 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+use futures::executor::block_on;
+use std::time::Duration;
 
 use log::error;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
 use rdkafka::producer::FutureRecord;
@@ -18,35 +22,10 @@ use timely::dataflow::{Scope, Stream};
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
 use interchange::avro::Encoder;
+use ore::collections::CollectionExt;
 use repr::{RelationDesc, Row};
 
 // TODO@jldlaughlin: What guarantess does this sink support? #1728
-
-// TODO@jldlaughlin: Progress tracking for kafka sinks #1442
-//
-// Right now, every time Materialize crashes and recovers these sinks
-// will resend each record to Kafka. This is not entirely horrible, but also
-// obviously not ideal! But until we have a more concrete idea of what
-// people will require from Kafka sinks, we're punting on implementing this.
-//
-// For posterity, here are some of the options we discussed to
-// implement this:
-//      - Use differential's Consolidate operator on the batches we are
-//        iterating through. Track our progress in sending batches to Kafka
-//        using the "watermarks" from the consolidated batch (inclusive on the
-//        lower bound, exclusive on the upper bound). Store these timestamps
-//        persistently (in mzdata/catalog) in order to either:
-//            - Resend everything including and after the last successfully sent batch.
-//              This assumes the Kafka topic we are sending to handles duplicates.
-//            - First, send a negative diff of each record in the last successful
-//              batch. Then, resend everything after.
-//
-//     - Append something like a "Materialize start up timestamp" to the
-//       end of the Kafka topic name. This accepts resending all of the data,
-//       but will not duplicate data in a single topic.
-//            - NB: This, like other decisions we've made, assumes that
-//              the user has configured their Kafka instance to automatically
-//              create new topics.
 pub fn kafka<G>(
     stream: &Stream<G, (Row, Timestamp, Diff)>,
     id: GlobalId,
@@ -65,6 +44,35 @@ pub fn kafka<G>(
         Ok(schema_id) => {
             let mut config = ClientConfig::new();
             config.set("bootstrap.servers", &connector.url.to_string());
+            let admin: AdminClient<DefaultClientContext> =
+                config.create().expect("creating admin kafka client failed");
+
+            let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
+            let new_topic = NewTopic::new(&connector.topic, 1, TopicReplication::Fixed(1));
+            let res = block_on(admin.create_topics(&[new_topic], &admin_opts));
+            let res = match res {
+                Err(err) => panic!(
+                    "error creating new topic {} for sink: {}",
+                    connector.topic,
+                    err.to_string()
+                ),
+                Ok(res) => res,
+            };
+            if res.len() != 1 {
+                panic!(
+                "error creating topic {} for sink: kafka topic creation returned {} results, but exactly one result was expected",
+                connector.topic,
+                res.len()
+            );
+            }
+            match res.into_element() {
+                Ok(_) => (),
+                Err((_, err)) => panic!(
+                    "error creating topic {} for sink: {}",
+                    connector.topic,
+                    err.to_string()
+                ),
+            };
             let producer: FutureProducer = config.create().unwrap();
 
             stream.sink(Pipeline, &format!("kafka-{}", id), move |input| {
