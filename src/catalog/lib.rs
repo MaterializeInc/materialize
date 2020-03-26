@@ -11,12 +11,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::SystemTime;
 
-use chrono::Utc;
 use failure::bail;
 use lazy_static::lazy_static;
 use log::{info, trace};
-use rand::random;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -60,9 +59,8 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     storage: Arc<Mutex<sql::Connection>>,
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
-    // Used to uniquely identify any sink topics created during this catalog's
-    // lifetime
-    sink_topic_suffix: String,
+    creation_time: SystemTime,
+    nonce: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,7 +224,8 @@ impl Catalog {
             ambient_schemas: BTreeMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             serialize_item: S::serialize,
-            sink_topic_suffix: format!("{}-{}", Utc::now().timestamp(), random::<u64>()),
+            creation_time: SystemTime::now(),
+            nonce: rand::random(),
         };
 
         let databases = catalog.storage().load_databases()?;
@@ -748,8 +747,12 @@ impl Catalog {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
 
-    pub fn get_sink_topic_suffix(&self) -> &str {
-        &self.sink_topic_suffix
+    pub fn creation_time(&self) -> SystemTime {
+        self.creation_time
+    }
+
+    pub fn nonce(&self) -> u64 {
+        self.nonce
     }
 }
 
