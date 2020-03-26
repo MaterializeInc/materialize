@@ -7,10 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# IMPORTANT: compacted kafka logs are produced using the same syntax as
-# kafka-avro-console-producer.
+# TODO: after taking up the arrange_from_upsert operator, the results of selecting
+# from the streams should change.
 
-$ set keyschema={"type": "string"}
+$ set keyschema={
+    "type": "record",
+    "name": "Key",
+    "fields": [
+        {"name": "key", "type": "string"}
+    ]
+  }
 
 $ set schema=[
     "null",
@@ -24,9 +30,34 @@ $ set schema=[
     }
   ]
 
-$ kafka-create-topic topic=test1
+$ kafka-create-topic topic=avroavro
 
-$ kafka-ingest format=avro topic=test1 key-schema=${keyschema} schema=${schema} publish=true timestamp=1
+$ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true timestamp=1
+{"key": "bird1"} {"f1":"goose", "f2": 1}
+{"key": "birdmore"} {"f1":"geese", "f2": 2}
+{"key": "mammal1"} {"f1": "moose", "f2": 1}
+{"key": "bird1"} null
+{"key": "birdmore"} {"f1":"geese", "f2": 56}
+{"key": "mammalmore"} {"f1": "moose", "f2": 42}
+{"key": "mammal1"} null
+
+#> CREATE MATERIALIZED SOURCE avroavro
+#  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
+#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#  ENVELOPE UPSERT
+
+#> SELECT * from avroavro
+#key           f1       f2
+#-------------------------
+#bird1         goose    1
+#birdmore      geese    2
+#mammal1       moose    1
+#birdmore      geese    56
+#mammalmore    moose    42
+
+$ kafka-create-topic topic=textavro
+
+$ kafka-ingest format=avro topic=textavro key-format=bytes schema=${schema} publish=true timestamp=1
 "bird1" {"f1":"goose", "f2": 1}
 "birdmore" {"f1":"geese", "f2": 2}
 "mammal1" {"f1": "moose", "f2": 1}
@@ -35,5 +66,16 @@ $ kafka-ingest format=avro topic=test1 key-schema=${keyschema} schema=${schema} 
 "mammalmore" {"f1": "moose", "f2": 42}
 "mammal1" null
 
-# TODO: create source in this format. then query to make sure upsert works
-# TODO: test key1: null for deletion. test deletion in the middle of a row
+#> CREATE MATERIALIZED SOURCE textavro
+#  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
+#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#  ENVELOPE UPSERT FORMAT TEXT
+
+#> select * from textavro
+#key           f1       f2
+#-------------------------
+#bird1         goose    1
+#birdmore      geese    2
+#mammal1       moose    1
+#birdmore      geese    56
+#mammalmore    moose    42
