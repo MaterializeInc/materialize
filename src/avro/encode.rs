@@ -148,6 +148,9 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
                 }
             }
         }
+        Value::Json(j) => {
+            encode_bytes(&j.to_string(), buffer);
+        }
     }
 }
 

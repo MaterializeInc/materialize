@@ -88,6 +88,10 @@ pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, S
                 scale: *scale,
             }))
         }
+        (JsonValue::String(s), SchemaPiece::Json) => {
+            let j = serde_json::from_str(s).map_err(|e| e.to_string())?;
+            Ok(AvroValue::Json(j))
+        }
         (JsonValue::Object(items), SchemaPiece::Record { fields, .. }) => Ok(AvroValue::Record(
             items
                 .iter()

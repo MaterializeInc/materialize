@@ -74,6 +74,17 @@ async fn decode_double<R: AsyncRead + Unpin>(reader: &mut R) -> Result<f64, Erro
     Ok(unsafe { transmute::<[u8; 8], f64>(buf) })
 }
 
+async fn decode_string<R: AsyncRead + Unpin>(reader: &mut R) -> Result<String, Error> {
+    let len = decode_len(reader).await?;
+    let mut buf = Vec::with_capacity(len);
+    unsafe {
+        buf.set_len(len);
+    }
+    reader.read_exact(&mut buf).await?;
+
+    String::from_utf8(buf).map_err(|_| DecodeError::new("not a valid utf-8 string").into())
+}
+
 /// Decode a `Value` from avro format given its `Schema`.
 pub fn decode<'a, R: AsyncRead + Unpin + Send>(
     schema: SchemaNode<'a>,
@@ -167,17 +178,12 @@ pub fn decode<'a, R: AsyncRead + Unpin + Send>(
                 reader.read_exact(&mut buf).await?;
                 Ok(Value::Bytes(buf))
             }
-            SchemaPiece::String => {
-                let len = decode_len(reader).await?;
-                let mut buf = Vec::with_capacity(len);
-                unsafe {
-                    buf.set_len(len);
-                }
-                reader.read_exact(&mut buf).await?;
-
-                String::from_utf8(buf)
-                    .map(Value::String)
-                    .map_err(|_| DecodeError::new("not a valid utf-8 string").into())
+            SchemaPiece::String => decode_string(reader).await
+                .map(Value::String),
+            SchemaPiece::Json => {
+                let s = decode_string(reader).await?;
+                let j = serde_json::from_str(s.as_str())?;
+                Ok(Value::Json(j))
             }
             SchemaPiece::Array(inner) => {
                 let mut items = Vec::new();

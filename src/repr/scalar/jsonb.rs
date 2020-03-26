@@ -84,6 +84,10 @@ impl Jsonb {
         &self.inner
     }
 
+    pub fn into_serde_json(self) -> serde_json::Value {
+        self.inner
+    }
+
     pub fn pack_into(self, packer: RowPacker) -> RowPacker {
         fn pack(val: serde_json::Value, mut packer: RowPacker) -> RowPacker {
             use serde_json::Value;
