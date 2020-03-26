@@ -16,7 +16,7 @@ use sql::Session;
 
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
-    let catalog = Catalog::open::<BincodeSerializer, _>(None, true, |_| ())?;
+    let catalog = Catalog::open::<BincodeSerializer, _>(None, |_| ())?;
     let session = Session::default();
     let test_cases = vec![
         (

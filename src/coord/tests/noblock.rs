@@ -37,7 +37,6 @@ fn no_block() {
         executor: &executor,
         timestamp: None,
         logical_compaction_window: None,
-        disable_sink_suffix: true,
     })
     .unwrap();
 
