@@ -85,7 +85,6 @@ where
     pub executor: &'a tokio::runtime::Handle,
     pub timestamp: Option<TimestampConfig>,
     pub logical_compaction_window: Option<Duration>,
-    pub disable_sink_suffix: bool,
 }
 
 /// Glues the external world to the Timely workers.
@@ -145,121 +144,117 @@ where
 
             let catalog_path = catalog_path.as_deref();
             let catalog = if let Some(logging_config) = config.logging {
-                Catalog::open::<SqlSerializer, _>(
-                    catalog_path,
-                    config.disable_sink_suffix,
-                    |catalog| {
-                        for log_src in logging_config.active_logs() {
-                            let view_name = FullName {
+                Catalog::open::<SqlSerializer, _>(catalog_path, |catalog| {
+                    for log_src in logging_config.active_logs() {
+                        let view_name = FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: "mz_catalog".into(),
+                            item: log_src.name().into(),
+                        };
+                        let index_name = format!("{}_primary_idx", log_src.name());
+                        catalog.insert_item(
+                            log_src.id(),
+                            FullName {
                                 database: DatabaseSpecifier::Ambient,
                                 schema: "mz_catalog".into(),
                                 item: log_src.name().into(),
-                            };
-                            let index_name = format!("{}_primary_idx", log_src.name());
-                            catalog.insert_item(
-                                log_src.id(),
-                                FullName {
-                                    database: DatabaseSpecifier::Ambient,
-                                    schema: "mz_catalog".into(),
-                                    item: log_src.name().into(),
-                                },
-                                CatalogItem::Source(catalog::Source {
-                                    create_sql: "TODO".to_string(),
-                                    connector: dataflow_types::SourceConnector::Local,
-                                    desc: log_src.schema(),
-                                }),
-                            );
-                            catalog.insert_item(
-                                log_src.index_id(),
-                                FullName {
-                                    database: DatabaseSpecifier::Ambient,
-                                    schema: "mz_catalog".into(),
-                                    item: index_name.clone(),
-                                },
-                                CatalogItem::Index(catalog::Index {
-                                    on: log_src.id(),
-                                    keys: log_src
-                                        .index_by()
-                                        .into_iter()
-                                        .map(ScalarExpr::Column)
-                                        .collect(),
-                                    create_sql: index_sql(
-                                        index_name,
-                                        view_name,
-                                        &log_src.schema(),
-                                        &log_src.index_by(),
-                                    ),
-                                    eval_env: EvalEnv::default(),
-                                }),
-                            );
-                        }
+                            },
+                            CatalogItem::Source(catalog::Source {
+                                create_sql: "TODO".to_string(),
+                                connector: dataflow_types::SourceConnector::Local,
+                                desc: log_src.schema(),
+                            }),
+                        );
+                        catalog.insert_item(
+                            log_src.index_id(),
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "mz_catalog".into(),
+                                item: index_name.clone(),
+                            },
+                            CatalogItem::Index(catalog::Index {
+                                on: log_src.id(),
+                                keys: log_src
+                                    .index_by()
+                                    .into_iter()
+                                    .map(ScalarExpr::Column)
+                                    .collect(),
+                                create_sql: index_sql(
+                                    index_name,
+                                    view_name,
+                                    &log_src.schema(),
+                                    &log_src.index_by(),
+                                ),
+                                eval_env: EvalEnv::default(),
+                            }),
+                        );
+                    }
 
-                        for log_view in logging_config.active_views() {
-                            let params = Params {
-                                datums: Row::pack(&[]),
-                                types: vec![],
-                            };
-                            let stmt = sql::parse(log_view.sql.to_owned())
-                                .expect("failed to parse bootstrap sql")
-                                .into_element();
-                            match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
-                                Ok(Plan::CreateView {
-                                    name: _,
-                                    view,
-                                    replace,
-                                    materialize,
-                                    if_not_exists,
-                                }) => {
-                                    assert!(replace.is_none());
-                                    assert!(!if_not_exists);
-                                    assert!(materialize);
-                                    let eval_env = EvalEnv::default();
-                                    let view = catalog::View {
-                                        create_sql: view.create_sql,
-                                        unoptimized_expr: view.expr.clone(),
-                                        optimized_expr: optimizer
-                                            .optimize(view.expr, catalog.indexes(), &eval_env)
-                                            .expect("failed to optimize bootstrap sql"),
-                                        eval_env,
-                                        desc: view.desc,
-                                    };
-                                    let view_name = FullName {
+                    for log_view in logging_config.active_views() {
+                        let params = Params {
+                            datums: Row::pack(&[]),
+                            types: vec![],
+                        };
+                        let stmt = sql::parse(log_view.sql.to_owned())
+                            .expect("failed to parse bootstrap sql")
+                            .into_element();
+                        match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
+                            Ok(Plan::CreateView {
+                                name: _,
+                                view,
+                                replace,
+                                materialize,
+                                if_not_exists,
+                            }) => {
+                                assert!(replace.is_none());
+                                assert!(!if_not_exists);
+                                assert!(materialize);
+                                let eval_env = EvalEnv::default();
+                                let view = catalog::View {
+                                    create_sql: view.create_sql,
+                                    unoptimized_expr: view.expr.clone(),
+                                    optimized_expr: optimizer
+                                        .optimize(view.expr, catalog.indexes(), &eval_env)
+                                        .expect("failed to optimize bootstrap sql"),
+                                    eval_env,
+                                    desc: view.desc,
+                                };
+                                let view_name = FullName {
+                                    database: DatabaseSpecifier::Ambient,
+                                    schema: "mz_catalog".into(),
+                                    item: log_view.name.into(),
+                                };
+                                let index_name = format!("{}_primary_idx", log_view.name);
+                                let index = auto_generate_view_idx(
+                                    index_name.clone(),
+                                    view_name.clone(),
+                                    &view,
+                                    log_view.id,
+                                );
+                                catalog.insert_item(
+                                    log_view.id,
+                                    view_name,
+                                    CatalogItem::View(view),
+                                );
+                                catalog.insert_item(
+                                    log_view.index_id,
+                                    FullName {
                                         database: DatabaseSpecifier::Ambient,
                                         schema: "mz_catalog".into(),
-                                        item: log_view.name.into(),
-                                    };
-                                    let index_name = format!("{}_primary_idx", log_view.name);
-                                    let index = auto_generate_view_idx(
-                                        index_name.clone(),
-                                        view_name.clone(),
-                                        &view,
-                                        log_view.id,
-                                    );
-                                    catalog.insert_item(
-                                        log_view.id,
-                                        view_name,
-                                        CatalogItem::View(view),
-                                    );
-                                    catalog.insert_item(
-                                        log_view.index_id,
-                                        FullName {
-                                            database: DatabaseSpecifier::Ambient,
-                                            schema: "mz_catalog".into(),
-                                            item: index_name,
-                                        },
-                                        CatalogItem::Index(index),
-                                    );
-                                }
-                                err => panic!(
+                                        item: index_name,
+                                    },
+                                    CatalogItem::Index(index),
+                                );
+                            }
+                            err => panic!(
                                 "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
                                 log_view.sql, err
                             ),
-                            }
                         }
-                    },
-                )?
+                    }
+                })?
             } else {
-                Catalog::open::<SqlSerializer, _>(catalog_path, config.disable_sink_suffix, |_| ())?
+                Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
             };
             let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
                 let millis = d.as_millis();
@@ -2084,7 +2079,6 @@ pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
         executor: runtime.handle(),
         timestamp: None,
         logical_compaction_window: None,
-        disable_sink_suffix: true,
     })?;
     Ok(coord.catalog.dump())
 }

@@ -106,9 +106,6 @@ pub struct Config {
     /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
     /// where <addr_port> is the address of this process's entry in `addresses`.
     pub listen_addr: Option<SocketAddr>,
-    /// Whether we disable sink topic name suffixing or not. If this is true,
-    /// Kafka topics created for sinks will have identical names across restarts
-    pub disable_sink_suffix: bool,
 }
 
 impl Config {
@@ -281,7 +278,6 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             },
             logical_compaction_window: config.logical_compaction_window,
             executor: &executor,
-            disable_sink_suffix: config.disable_sink_suffix,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
     } else {

@@ -120,11 +120,6 @@ fn run() -> Result<(), failure::Error> {
     );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "do not gather prometheus metrics");
-    opts.optflag(
-        "",
-        "disable-sink-suffix",
-        "(internal use only) do not add suffix to sink storange name",
-    );
     if cfg!(debug_assertions) {
         opts.optflag("", "dev", "allow running this dev (unoptimized) build");
     }
@@ -170,7 +165,6 @@ fn run() -> Result<(), failure::Error> {
     let address_file = popts.opt_str("address-file");
     let gather_metrics = !popts.opt_present("no-prometheus");
     let listen_addr = popts.opt_get("listen-addr")?;
-    let disable_sink_suffix = popts.opt_present("disable-sink-suffix");
 
     if cfg!(debug_assertions) && !popts.opt_present("dev") && !ore::env::is_var_truthy("MZ_DEV") {
         bail!(
@@ -249,7 +243,6 @@ fn run() -> Result<(), failure::Error> {
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,
         listen_addr,
-        disable_sink_suffix,
     })?;
 
     // Block forever.
