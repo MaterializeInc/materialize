@@ -304,6 +304,7 @@ version = "0.1.0"
 dependencies = [
  "backtrace",
  "bincode",
+ "chrono",
  "dataflow-types",
  "expr",
  "failure",
@@ -311,6 +312,7 @@ dependencies = [
  "lazy_static",
  "log",
  "ore",
+ "rand",
  "regex",
  "repr",
  "rusqlite",

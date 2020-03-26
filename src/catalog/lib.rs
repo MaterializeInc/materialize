@@ -12,9 +12,11 @@ use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use chrono::Utc;
 use failure::bail;
 use lazy_static::lazy_static;
 use log::{info, trace};
+use rand::random;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +60,9 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     storage: Arc<Mutex<sql::Connection>>,
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
+    // Used to uniquely identify any sink topics created during this catalog's
+    // lifetime
+    sink_topic_suffix: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -221,6 +226,7 @@ impl Catalog {
             ambient_schemas: BTreeMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             serialize_item: S::serialize,
+            sink_topic_suffix: format!("{}-{}", Utc::now().timestamp(), random::<u64>()),
         };
 
         let databases = catalog.storage().load_databases()?;
@@ -740,6 +746,10 @@ impl Catalog {
 
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
+    }
+
+    pub fn get_sink_topic_suffix(&self) -> &str {
+        &self.sink_topic_suffix
     }
 }
 

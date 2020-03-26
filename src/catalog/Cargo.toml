@@ -11,6 +11,7 @@ path = "lib.rs"
 [dependencies]
 backtrace = "0.3.43"
 bincode = { version = "1.2", optional = true }
+chrono = "0.4.11"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 failure = "0.1.6"
@@ -18,6 +19,7 @@ lazy_static = "1.4.0"
 log = "0.4.8"
 itertools = "0.8.2"
 ore = { path = "../ore" }
+rand = "0.7.3"
 regex = "1"
 repr = { path = "../repr" }
 rusqlite = { version = "0.20", features = ["bundled"] }
