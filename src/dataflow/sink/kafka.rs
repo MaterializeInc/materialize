@@ -59,21 +59,28 @@ pub fn kafka<G>(
                 connector.topic,
                 res.len()
             );
+                        return;
                     }
                     match res.into_element() {
                         Ok(_) => (),
-                        Err((_, err)) => error!(
-                            "error creating topic {} for sink: {}",
-                            connector.topic,
-                            err.to_string()
-                        ),
+                        Err((_, err)) => {
+                            error!(
+                                "error creating topic {} for sink: {}",
+                                connector.topic,
+                                err.to_string()
+                            );
+                            return;
+                        }
                     };
                 }
-                Err(err) => error!(
-                    "error creating new topic {} for sink: {}",
-                    connector.topic,
-                    err.to_string()
-                ),
+                Err(err) => {
+                    error!(
+                        "error creating new topic {} for sink: {}",
+                        connector.topic,
+                        err.to_string()
+                    );
+                    return;
+                }
             }
             let producer: FutureProducer = config.create().unwrap();
 
