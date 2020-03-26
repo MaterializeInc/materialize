@@ -60,9 +60,9 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     storage: Arc<Mutex<sql::Connection>>,
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
-    // Used to uniquely identify any sink topics created during this catalog's
+    // Used to uniquely identify any sink storage created during this catalog's
     // lifetime
-    sink_topic_suffix: String,
+    sink_suffix: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,12 +212,22 @@ impl Catalog {
     /// Opens or creates a `Catalog` that stores data at `path`. The
     /// `initialize` callback will be invoked after database and schemas are
     /// loaded but before any persisted user items are loaded.
-    pub fn open<S, F>(path: Option<&Path>, f: F) -> Result<Catalog, Error>
+    pub fn open<S, F>(
+        path: Option<&Path>,
+        disable_sink_suffix: bool,
+        f: F,
+    ) -> Result<Catalog, Error>
     where
         S: CatalogItemSerializer,
         F: FnOnce(&mut Self),
     {
         let storage = sql::Connection::open(path)?;
+
+        let sink_suffix = if disable_sink_suffix == true {
+            None
+        } else {
+            Some(format!("{}-{}", Utc::now().timestamp(), random::<u64>()))
+        };
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
@@ -226,7 +236,7 @@ impl Catalog {
             ambient_schemas: BTreeMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             serialize_item: S::serialize,
-            sink_topic_suffix: format!("{}-{}", Utc::now().timestamp(), random::<u64>()),
+            sink_suffix,
         };
 
         let databases = catalog.storage().load_databases()?;
@@ -303,7 +313,7 @@ impl Catalog {
     /// TODO(benesch): remove.
     #[cfg(feature = "bincode")]
     pub fn dummy() -> Catalog {
-        Catalog::open::<BincodeSerializer, _>(None, |_| ()).unwrap()
+        Catalog::open::<BincodeSerializer, _>(None, false, |_| ()).unwrap()
     }
 
     fn storage(&self) -> MutexGuard<sql::Connection> {
@@ -748,8 +758,8 @@ impl Catalog {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
 
-    pub fn get_sink_topic_suffix(&self) -> &str {
-        &self.sink_topic_suffix
+    pub fn get_sink_suffix(&self) -> &Option<String> {
+        &self.sink_suffix
     }
 }
 

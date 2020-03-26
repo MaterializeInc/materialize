@@ -31,7 +31,7 @@ services:
     depends_on: [kafka, zookeeper, schema-registry, materialized]
   materialized:
     image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
-    command: --logging-granularity=10ms --data-directory=/share/mzdata
+    command: --logging-granularity=10ms --data-directory=/share/mzdata --disable-sink-suffix
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp

@@ -669,7 +669,12 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     // Validate that we can actually encode this stream as Avro.
     let relation_desc = catalog_entry.desc()?.clone();
     let _ = interchange::avro::encode_schema(&relation_desc)?;
-    let topic_name = format!("{}-{}", topic, scx.catalog.get_sink_topic_suffix());
+
+    let sink_suffix = scx.catalog.get_sink_suffix();
+    let topic_name = match sink_suffix {
+        Some(suffix) => format!("{}-{}", topic, suffix),
+        None => topic,
+    };
 
     let sink = Sink {
         create_sql,
