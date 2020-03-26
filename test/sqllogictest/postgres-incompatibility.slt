@@ -62,3 +62,15 @@ SELECT 17 / - COALESCE ( - + 60, - + AVG ( DISTINCT 54 ) * COUNT ( * ), + 0 ) * 
 ----
 -1278.000000000000
 0
+
+# these return null in postgres
+# https://github.com/MaterializeInc/materialize/issues/2418
+
+query error division by zero
+SELECT ALL 56 * 97 - SUM ( - 51 ) + NULLIF ( + - 36, + + CAST ( NULL AS INTEGER ) ) * + - 91 / - 0 * - 45 * - 10 * - CAST ( NULL AS INTEGER ) * - - 85
+
+query error division by zero
+SELECT ALL + CASE - 59 WHEN + 55 * - 56 + - - 95 THEN - 78 + 98 * CASE - COUNT ( * ) WHEN NULLIF ( - AVG ( DISTINCT - + NULLIF ( + - ( 11 ), 89 / ( 0 ) ) ), - COUNT ( * ) ) + 62 THEN 37 + + COUNT ( DISTINCT + 77 ) / 61 ELSE + 26 / 10 - + 14 * - 10 END / 79 END * 60 col2
+
+query error division by zero
+SELECT ALL CASE - 6 WHEN + 70 + ( 81 ) THEN NULL WHEN COALESCE ( - 22, - + COALESCE ( - 64, + 65 / 49 + - + 62, - - NULLIF ( + 57, COUNT ( ALL - CASE 58 WHEN + 17 - 80 THEN 72 * - 40 + 54 * + 58 WHEN - CAST ( NULL AS INTEGER ) THEN NULL WHEN - 59 + 45 / + COALESCE ( 54 / 88, CAST ( NULL AS INTEGER ) * - 22 + - 58 * + 98 ) THEN - 18 / 20 ELSE NULL END ) * 3 ) ) * - MAX ( DISTINCT + 46 * - 27 ), AVG ( ALL 22 ) ) THEN NULL WHEN 23 THEN 42 - + MAX ( 52 ) END
