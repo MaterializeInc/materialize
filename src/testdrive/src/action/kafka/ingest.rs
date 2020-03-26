@@ -51,7 +51,7 @@ enum Encoder {
 }
 
 impl Encoder {
-    fn decode_into_buf(&self, row: &str, buf: &mut Vec<u8>) -> Result<(), String> {
+    fn encode_to_bytes(&self, row: &str, buf: &mut Vec<u8>) -> Result<(), String> {
         match self {
             Encoder::Avro { schema, schema_id } => {
                 let val = crate::format::avro::json_to_avro(
@@ -238,9 +238,9 @@ impl Action for IngestAction {
                 (None, row.clone())
             };
 
-            value_encoder.decode_into_buf(&val_row, &mut val_buf)?;
+            value_encoder.encode_to_bytes(&val_row, &mut val_buf)?;
             if let Some(key_encoder) = &key_encoder {
-                key_encoder.decode_into_buf(&key_row.unwrap(), &mut key_buf)?;
+                key_encoder.encode_to_bytes(&key_row.unwrap(), &mut key_buf)?;
             }
 
             let mut record: FutureRecord<_, _> = FutureRecord::to(&topic_name)
