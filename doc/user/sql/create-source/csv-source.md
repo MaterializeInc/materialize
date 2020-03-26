@@ -11,7 +11,8 @@ aliases:
 `CREATE SOURCE` connects Materialize to some data source, and lets you interact
 with its data as if it were in a SQL table.
 
-This document details how to connect Materialize to locally available CSV file. For other options, view [`CREATE  SOURCE`](../).
+This document details how to connect Materialize to locally available CSV file.
+For other options, view [`CREATE  SOURCE`](../).
 
 ## Conceptual framework
 
@@ -28,7 +29,8 @@ Field | Use
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
 **FILE** _path_ | The absolute path to the file you want to use as the source.
 **WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
-**CSV WITH** _n_ **COLUMNS** | Format the source's data as a CSV with _n_ columns. Any data without _n_ columns is not propagated to the source.
+**HEADER** | Treat the first line of the CSV file as a header. See [CSV format details](#csv-format-details).
+_n_ **COLUMNS** | Format the source's data as a CSV with _n_ columns. See [CSV format details](#csv-format-details).
 **DELIMITED BY** _char_ | Delimit the CSV by _char_. ASCII comma by default (`','`). This must be an ASCII character; other Unicode code points are not supported.
 
 #### `WITH` options
@@ -38,9 +40,9 @@ The following options are valid within the `WITH` clause.
 Field | Value | Description
 ------|-------|------------
 `tail` | `bool` | Continually check the file for new content; as new content arrives, process it using other `WITH` options.
+`col_names` | `text` | Name the source's columns using `text`, which should delimit each column name by the same _char_ as the file (i.e. the same _char_ as **DELIMITED BY** _char_). For an example, see [Creating a source from a dynamic CSV](#creating-a-source-from-a-dynamic-csv).
 
 ## Details
-
 
 This document assumes you're using a locally available file to load CSV data into Materialize.
 
@@ -50,17 +52,22 @@ This document assumes you're using a locally available file to load CSV data int
     ```sql
     CREATE SOURCE server_source FROM FILE '/Users/sean/server.log'...
     ```
-- All data in file sources are treated as [`text`](../../types/text).
+- All data in file sources are treated as [`text`](../../types/text), but can be converted to other types using [views](../../create-materialized-view).
 
 ### CSV format details
 
-CSV-formatted sources read lines from a CSV file.
+Materialize uses the format method you specify to determine the number of
+columns to create in the source, as well as the columns' names.
 
-- Every line of the CSV is treated as a row, i.e. there is no concept of
-  headers.
-- Columns in the source are named `column1`, `column2`, etc.
-- Any row with a number of columns other than the specified amount (**CSV WITH**
-  _n_ **COLUMNS**) gets ignored, though Materialize will log an error.
+Method | Outcome
+-------|--------
+**HEADER** | Materialize reads the first line of the file to determine:<br/><br/>&bull; The number of columns in the file<br/><br/>&bull; The name of each column<br/><br/>The first line of the file is not ingested as data.
+_n_ **COLUMNS** | &bull; Materialize treats the file as if it has _n_ columns.<br/><br/>&bull; Columns are named `column1`, `column2`...`columnN`.
+
+- You can override these naming conventions using the [`col_names`
+  option](#with-options).
+- All rows without the number of columns determined by the format are dropped,
+  and Materialize logs an error.
 
 ### Envelope details
 
@@ -72,20 +79,34 @@ CSV data can currently only be handled as append-only by Materialize.
 
 ## Example
 
-### Creating a source from a dynamic CSV
+### Creating a source from a static CSV
 
 ```sql
-CREATE SOURCE test
+CREATE SOURCE static_w_header
 FROM FILE '[path to .csv]'
-WITH (tail = true)
-FORMAT CSV WITH 5 COLUMNS;
+FORMAT CSV WITH HEADER;
 ```
 
 This creates a source that...
 
 - Is append-only.
-- Has 5 columns (`column1`...`column5`). Materialize will ignore all data
-  received without 5 columns.
+- Has as many columns as the first row, and uses that row to name the columns.
+- Materialize reads once during source creation.
+
+### Creating a source from a dynamic CSV
+
+```sql
+CREATE SOURCE dynamic_wo_header
+FROM FILE '[path to .csv]'
+WITH (tail = true, col_names='col_foo,col_bar,col_baz')
+FORMAT CSV WITH 3 COLUMNS;
+```
+
+This creates a source that...
+
+- Is append-only.
+- Has 3 columns (`col_foo`, `col_bar`, `col_baz`). Materialize will not ingest
+  any row without 3 columns.
 - Materialize dynamically checks for new entries.
 
 ## Related pages
