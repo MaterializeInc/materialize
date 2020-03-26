@@ -176,7 +176,7 @@ pub enum SchemaPiece {
     /// A `string` Avro schema.
     /// `String` represents a unicode character sequence.
     String,
-    /// XXX (brennan) - document this
+    /// A `string` Avro schema that is tagged as representing JSON data
     Json,
     /// A `array` Avro schema. Avro arrays are required to have the same type for each element.
     /// This variant holds the `Schema` for the array element type.
