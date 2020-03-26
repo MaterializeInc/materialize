@@ -81,6 +81,27 @@ impl MzClient {
         Ok(())
     }
 
+    pub async fn create_sink(
+        &self,
+        kafka_url: &impl std::fmt::Display,
+        sink_topic_name: &str,
+        sink_name: &str,
+        schema_registry_url: &str,
+    ) -> Result<()> {
+        let query = format!(
+            "CREATE SINK {sink} FROM billing_monthly_statement_export INTO KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
+             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
+             sink = sink_name,
+             kafka_url = kafka_url,
+             topic = sink_topic_name,
+             schema_registry = schema_registry_url
+         );
+
+        log::debug!("creating sink=> {}", query);
+        self.0.execute(&*query, &[]).await?;
+        Ok(())
+    }
+
     pub async fn create_csv_source(
         &self,
         file_name: &str,

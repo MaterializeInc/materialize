@@ -311,6 +311,7 @@ dependencies = [
  "lazy_static",
  "log",
  "ore",
+ "rand",
  "regex",
  "repr",
  "rusqlite",

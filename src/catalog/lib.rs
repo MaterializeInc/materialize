@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::SystemTime;
 
 use failure::bail;
 use lazy_static::lazy_static;
@@ -58,6 +59,8 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     storage: Arc<Mutex<sql::Connection>>,
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
+    creation_time: SystemTime,
+    nonce: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -221,6 +224,8 @@ impl Catalog {
             ambient_schemas: BTreeMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             serialize_item: S::serialize,
+            creation_time: SystemTime::now(),
+            nonce: rand::random(),
         };
 
         let databases = catalog.storage().load_databases()?;
@@ -740,6 +745,14 @@ impl Catalog {
 
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
+    }
+
+    pub fn creation_time(&self) -> SystemTime {
+        self.creation_time
+    }
+
+    pub fn nonce(&self) -> u64 {
+        self.nonce
     }
 }
 

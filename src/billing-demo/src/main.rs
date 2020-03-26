@@ -149,10 +149,20 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
         exec_query!(client, "billing_agg_by_day");
         exec_query!(client, "billing_agg_by_month");
         exec_query!(client, "billing_monthly_statement");
+        exec_query!(client, "billing_monthly_statement_export");
         if config.low_memory {
             exec_query!(client, "drop_index_billing_raw_data");
             exec_query!(client, "drop_index_billing_records");
         }
+
+        client
+            .create_sink(
+                &config.kafka_url,
+                config::KAFKA_SINK_TOPIC_NAME,
+                config::KAFKA_SINK_NAME,
+                &config.schema_registry_url,
+            )
+            .await?;
     } else {
         log::info!(
             "source '{}' already exists, not recreating",
