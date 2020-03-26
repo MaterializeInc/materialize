@@ -105,7 +105,7 @@ pub struct Config {
     pub gather_metrics: bool,
     /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
     /// where <addr_port> is the address of this process's entry in `addresses`.
-    pub bind_to: Option<SocketAddr>,
+    pub listen_addr: Option<SocketAddr>,
 }
 
 impl Config {
@@ -180,7 +180,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     let executor = runtime.handle().clone();
 
     // Initialize network listener.
-    let listen_addr = config.bind_to.unwrap_or_else(|| {
+    let listen_addr = config.listen_addr.unwrap_or_else(|| {
         SocketAddr::new(
             match config.addresses[config.process].ip() {
                 IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
