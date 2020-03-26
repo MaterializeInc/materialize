@@ -52,6 +52,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         symbiosis_url: None,
         gather_metrics: false,
         listen_addr: None,
+        disable_sink_suffix: true,
     })?);
     let client = server.connect()?;
     Ok((server, client))

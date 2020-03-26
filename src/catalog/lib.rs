@@ -223,7 +223,7 @@ impl Catalog {
     {
         let storage = sql::Connection::open(path)?;
 
-        let sink_suffix = if disable_sink_suffix == true {
+        let sink_suffix = if disable_sink_suffix {
             None
         } else {
             Some(format!("{}-{}", Utc::now().timestamp(), random::<u64>()))
