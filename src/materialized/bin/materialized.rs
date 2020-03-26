@@ -33,6 +33,7 @@ use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
 use log::trace;
 use once_cell::sync::OnceCell;
+use std::str::FromStr;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 static LOG_FILE: OnceCell<File> = OnceCell::new();
@@ -112,6 +113,12 @@ fn run() -> Result<(), failure::Error> {
         "where materialized will write logs (default <data directory>/materialized.log)",
         "PATH",
     );
+    opts.optopt(
+        "",
+        "bind-to",
+        "the address and port on which materialized will listen for connections",
+        "ADDR:PORT",
+    );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "do not gather prometheus metrics");
     if cfg!(debug_assertions) {
@@ -158,6 +165,10 @@ fn run() -> Result<(), failure::Error> {
     let processes = popts.opt_get_default("processes", 1)?;
     let address_file = popts.opt_str("address-file");
     let gather_metrics = !popts.opt_present("no-prometheus");
+    let bind_to = popts
+        .opt_str("bind-to")
+        .map(|s| SocketAddr::from_str(&s))
+        .transpose()?;
 
     if cfg!(debug_assertions) && !popts.opt_present("dev") && !ore::env::is_var_truthy("MZ_DEV") {
         bail!(
@@ -235,6 +246,7 @@ fn run() -> Result<(), failure::Error> {
         data_directory: Some(data_directory),
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,
+        bind_to,
     })?;
 
     // Block forever.
