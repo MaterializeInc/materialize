@@ -6,9 +6,10 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-use futures::executor::block_on;
+
 use std::time::Duration;
 
+use futures::executor::block_on;
 use log::error;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
@@ -50,29 +51,30 @@ pub fn kafka<G>(
             let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
             let new_topic = NewTopic::new(&connector.topic, 1, TopicReplication::Fixed(1));
             let res = block_on(admin.create_topics(&[new_topic], &admin_opts));
-            let res = match res {
-                Err(err) => panic!(
-                    "error creating new topic {} for sink: {}",
-                    connector.topic,
-                    err.to_string()
-                ),
-                Ok(res) => res,
-            };
-            if res.len() != 1 {
-                panic!(
+            match res {
+                Ok(res) => {
+                    if res.len() != 1 {
+                        error!(
                 "error creating topic {} for sink: kafka topic creation returned {} results, but exactly one result was expected",
                 connector.topic,
                 res.len()
             );
-            }
-            match res.into_element() {
-                Ok(_) => (),
-                Err((_, err)) => panic!(
-                    "error creating topic {} for sink: {}",
+                    }
+                    match res.into_element() {
+                        Ok(_) => (),
+                        Err((_, err)) => error!(
+                            "error creating topic {} for sink: {}",
+                            connector.topic,
+                            err.to_string()
+                        ),
+                    };
+                }
+                Err(err) => error!(
+                    "error creating new topic {} for sink: {}",
                     connector.topic,
                     err.to_string()
                 ),
-            };
+            }
             let producer: FutureProducer = config.create().unwrap();
 
             stream.sink(Pipeline, &format!("kafka-{}", id), move |input| {
