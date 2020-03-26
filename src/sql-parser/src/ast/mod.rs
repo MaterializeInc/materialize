@@ -573,7 +573,8 @@ pub enum Format {
     },
     Regex(String),
     Csv {
-        n_cols: usize,
+        header_row: bool,
+        n_cols: Option<usize>,
         delimiter: char,
     },
     Json,
@@ -620,10 +621,18 @@ impl fmt::Display for Format {
                 schema
             ),
             Self::Regex(regex) => write!(f, "REGEX '{}'", value::escape_single_quote_string(regex)),
-            Self::Csv { n_cols, delimiter } => write!(
-                f,
-                "CSV WITH {} COLUMNS{}",
+            Self::Csv {
+                header_row,
                 n_cols,
+                delimiter,
+            } => write!(
+                f,
+                "CSV WITH {}{}",
+                if *header_row {
+                    "HEADER".to_owned()
+                } else {
+                    format!("{} COLUMNS", n_cols.unwrap())
+                },
                 if *delimiter == ',' {
                     "".to_owned()
                 } else {

@@ -126,7 +126,9 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     match (encoding, envelope) {
-        (DataEncoding::Csv(enc), Envelope::None) => csv(stream, enc.n_cols, enc.delimiter),
+        (DataEncoding::Csv(enc), Envelope::None) => {
+            csv(stream, enc.header_row, enc.n_cols, enc.delimiter)
+        }
         (DataEncoding::Avro(enc), envelope) => avro(
             stream,
             &enc.value_schema,

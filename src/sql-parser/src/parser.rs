@@ -1156,8 +1156,14 @@ impl Parser {
             Format::Regex(regex)
         } else if self.parse_keyword("CSV") {
             self.expect_keyword("WITH")?;
-            let n_cols = self.parse_literal_uint()? as usize;
-            self.expect_keyword("COLUMNS")?;
+            let (header_row, n_cols) =
+                if self.parse_keyword("HEADER") || self.parse_keyword("HEADERS") {
+                    (true, None)
+                } else {
+                    let n_cols = self.parse_literal_uint()? as usize;
+                    self.expect_keyword("COLUMNS")?;
+                    (false, Some(n_cols))
+                };
             let delimiter = if self.parse_keywords(vec!["DELIMITED", "BY"]) {
                 let s = self.parse_literal_string()?;
                 match s.len() {
@@ -1169,7 +1175,11 @@ impl Parser {
             } else {
                 ','
             };
-            Format::Csv { n_cols, delimiter }
+            Format::Csv {
+                header_row,
+                n_cols,
+                delimiter,
+            }
         } else if self.parse_keyword("JSON") {
             Format::Json
         } else if self.parse_keyword("TEXT") {
