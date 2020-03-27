@@ -18,6 +18,7 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use std::env;
+use std::env::VarError;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
@@ -76,12 +77,7 @@ fn run() -> Result<(), failure::Error> {
         "historical detail maintained for arrangements (default 60s)",
         "DURATION/\"off\"",
     );
-    opts.optopt(
-        "w",
-        "threads",
-        "number of per-process worker threads (default 1)",
-        "N",
-    );
+    opts.optopt("w", "threads", "number of per-process worker threads", "N");
     opts.optopt(
         "p",
         "process",
@@ -151,7 +147,25 @@ fn run() -> Result<(), failure::Error> {
 
     let log_file = popts.opt_str("log-file");
     let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
-    let threads = popts.opt_get_default("threads", 1)?;
+
+    let threads = match popts.opt_get::<usize>("threads")? {
+        Some(val) => val,
+        None => match env::var("MZ_THREADS") {
+            Ok(val) => val.parse()?,
+            Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_THREADS"),
+            Err(VarError::NotPresent) => 0,
+        },
+    };
+    if threads == 0 {
+        bail!(
+            "'--threads' must be specified and greater than 0\n\
+             hint: As a starting point, set the number of threads to half of the number of\n\
+             cores on your system. Then, further adjust based on your performance needs.\n\
+             hint: You may also set the environment variable MZ_THREADS to the desired number\n\
+             of threads."
+        );
+    }
+
     let process = popts.opt_get_default("process", 0)?;
     let processes = popts.opt_get_default("processes", 1)?;
     let address_file = popts.opt_str("address-file");
