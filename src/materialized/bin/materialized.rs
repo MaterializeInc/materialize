@@ -18,6 +18,7 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use std::env;
+use std::env::VarError;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
@@ -149,9 +150,10 @@ fn run() -> Result<(), failure::Error> {
 
     let threads = match popts.opt_get::<usize>("threads")? {
         Some(val) => val,
-        None => match env::var_os("MZ_THREADS") {
-            Some(val) => val.into_string().unwrap().parse()?,
-            None => 0,
+        None => match env::var("MZ_THREADS") {
+            Ok(val) => val.parse()?,
+            Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_THREADS"),
+            Err(VarError::NotPresent) => 0,
         },
     };
     if threads == 0 {
