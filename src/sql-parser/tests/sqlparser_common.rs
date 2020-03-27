@@ -800,6 +800,24 @@ fn parse_in_subquery() {
         },
         select.selection.unwrap()
     );
+
+    let sql = "SELECT * FROM t WHERE x IN (VALUES (1))";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        Expr::InSubquery {
+            expr: Box::new(Expr::Identifier(Ident::new("x"))),
+            subquery: Box::new(Query {
+                ctes: vec![],
+                body: SetExpr::Values(Values(vec![vec![Expr::Value(Value::Number("1".into()))]])),
+                order_by: vec![],
+                limit: None,
+                offset: None,
+                fetch: None,
+            }),
+            negated: false,
+        },
+        select.selection.unwrap()
+    );
 }
 
 #[test]

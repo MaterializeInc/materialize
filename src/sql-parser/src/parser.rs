@@ -754,7 +754,10 @@ impl Parser {
     /// Parses the parens following the `[ NOT ] IN` operator
     pub fn parse_in(&mut self, expr: Expr, negated: bool) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let in_op = if self.parse_keyword("SELECT") || self.parse_keyword("WITH") {
+        let in_op = if self
+            .parse_one_of_keywords(&["SELECT", "VALUES", "WITH"])
+            .is_some()
+        {
             self.prev_token();
             Expr::InSubquery {
                 expr: Box::new(expr),
