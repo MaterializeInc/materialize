@@ -930,7 +930,7 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                                 }
                             }
                         }
-                        _ => bail!("CSV format only works with file connectors"),
+                        _ => bail!("CSV format with headers only works with file connectors"),
                     }
                 }
             }
