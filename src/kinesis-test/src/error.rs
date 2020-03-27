@@ -19,9 +19,8 @@ pub enum Error {
     #[error("Unexpected error running postgres command")]
     PgError(#[from] tokio_postgres::Error),
 
-//    #[error("Interacting with Rusoto element: {0}")]
-//    RusotoError(#[from] rusoto_core::RusotoError),
-
+    //    #[error("Interacting with Rusoto element: {0}")]
+    //    RusotoError(#[from] rusoto_core::RusotoError),
     #[error("Sending kafka message")]
     FuturesCancelled(#[from] futures_channel::oneshot::Canceled),
 

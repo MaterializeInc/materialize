@@ -21,10 +21,6 @@ pub struct Args {
     #[structopt(long, default_value = "foo")]
     pub kinesis_source_name: String,
 
-    /// The kinesis port
-    #[structopt(long, default_value = "5468")]
-    pub kinesis_port: u16,
-
     #[structopt(long, default_value = "kinesis-test")]
     pub kinesis_stream_name: String,
 
@@ -47,7 +43,6 @@ pub struct Args {
 impl Args {
     pub(crate) fn kinesis_config(&self) -> KinesisConfig {
         KinesisConfig {
-            port: self.kinesis_port,
             stream_name: self.kinesis_stream_name.clone(),
             region: self.kinesis_region.clone(),
             access_key: self.kinesis_access_key.clone(),
@@ -56,27 +51,18 @@ impl Args {
         }
     }
 
-    pub(crate) fn mz_config(&self) -> MzConfig {
-        MzConfig {
-            host: self.materialized_host.clone(),
-            port: self.materialized_port,
-            kinesis_source_name: self.kinesis_source_name.clone(),
-            seed: self.seed,
-        }
-    }
-
-    pub(crate) fn kinesis(&self) -> String {
-        if let Some(seed) = self.seed {
-            format!("{}-{}", self.kinesis_stream_name, seed)
-        } else {
-            String::from("")
-        }
-    }
+    //    pub(crate) fn mz_config(&self) -> MzConfig {
+    //        MzConfig {
+    //            host: self.materialized_host.clone(),
+    //            port: self.materialized_port,
+    //            kinesis_source_name: self.kinesis_source_name.clone(),
+    //            seed: self.seed,
+    //        }
+    //    }
 }
 
 #[derive(Debug)]
 pub struct KinesisConfig {
-    pub port: u16,
     pub stream_name: String,
     pub region: String,
     pub access_key: String,
@@ -84,10 +70,10 @@ pub struct KinesisConfig {
     pub seed: Option<u64>,
 }
 
-#[derive(Debug)]
-pub struct MzConfig {
-    pub host: String,
-    pub port: u16,
-    pub kinesis_source_name: String,
-    pub seed: Option<u64>,
-}
+//#[derive(Debug)]
+//pub struct MzConfig {
+//    pub host: String,
+//    pub port: u16,
+//    pub kinesis_source_name: String,
+//    pub seed: Option<u64>,
+//}
