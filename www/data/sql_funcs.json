@@ -166,6 +166,10 @@
                 "description": "`s` must return exactly one column; `true` if applying [bool_op](#boolean) to `expression` and every value of `s` evaluates to `true`"
             },
             {
+                "signature": "expression bool_op ANY(s: Query) -> bool",
+                "description": "`s` must return exactly one column; `true` if applying [bool_op](#boolean) to `expression` and any value of `s` evaluates to `true`"
+            },
+            {
                 "signature": "EXISTS(s: Query) -> bool",
                 "description": "`true` if `s` returns at least one row"
             },
