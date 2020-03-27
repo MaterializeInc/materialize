@@ -35,82 +35,73 @@ impl Join {
 
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
-            inputs, variables, ..
+            inputs,
+            equivalences,
+            demand,
+            implementation,
         } = relation
         {
             let mut new_inputs = Vec::new();
-            let mut new_variables = Vec::new();
-            let mut new_relation = Vec::new();
+            let mut new_equivalences = Vec::new();
+            let mut new_columns = 0;
 
+            // We scan through each input, digesting any joins that we find and updating their equivalence classes.
+            // We retain any existing equivalence classes, as they are already with respect to the cross product.
             for input in inputs.drain(..) {
-                let mut columns = Vec::new();
                 if let RelationExpr::Join {
                     mut inputs,
-                    mut variables,
+                    mut equivalences,
                     ..
                 } = input
                 {
                     // Update and push all of the variables.
-                    for mut variable in variables.drain(..) {
-                        for (rel, _col) in variable.iter_mut() {
-                            *rel += new_inputs.len();
+                    for mut equivalence in equivalences.drain(..) {
+                        for expr in equivalence.iter_mut() {
+                            expr.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(c) = e {
+                                    *c += new_columns;
+                                }
+                            });
                         }
-                        new_variables.push(variable);
+                        new_equivalences.push(equivalence);
                     }
                     // Add all of the inputs.
                     for input in inputs.drain(..) {
-                        let new_inputs_len = new_inputs.len();
-                        let arity = input.arity();
-                        columns.extend((0..arity).map(|c| (new_inputs_len, c)));
+                        new_columns += input.arity();
                         new_inputs.push(input);
                     }
                 } else {
                     // Retain the input.
-                    let new_inputs_len = new_inputs.len();
-                    let arity = input.arity();
-                    columns.extend((0..arity).map(|c| (new_inputs_len, c)));
+                    new_columns += input.arity();
                     new_inputs.push(input);
                 }
-                new_relation.push(columns);
             }
 
-            for mut variable in variables.drain(..) {
-                for (rel, col) in variable.iter_mut() {
-                    let (rel2, col2) = new_relation[*rel][*col];
-                    *rel = rel2;
-                    *col = col2;
-                }
-                new_variables.push(variable);
-            }
+            new_equivalences.extend(equivalences.drain(..));
 
             *inputs = new_inputs;
-            *variables = new_variables;
+            *equivalences = new_equivalences;
+            *demand = None;
+            *implementation = crate::JoinImplementation::Unimplemented;
 
-            // Join variables may not be an equivalance class. Better ensure!
-            for index in 1..variables.len() {
+            // Join variables may not be an equivalence class. Better ensure!
+            for index in 1..equivalences.len() {
                 for inner in 0..index {
-                    if variables[index]
+                    if equivalences[index]
                         .iter()
-                        .any(|pair| variables[inner].contains(pair))
+                        .any(|pair| equivalences[inner].contains(pair))
                     {
-                        let to_extend = std::mem::replace(&mut variables[index], Vec::new());
-                        variables[inner].extend(to_extend);
+                        let to_extend = std::mem::replace(&mut equivalences[index], Vec::new());
+                        equivalences[inner].extend(to_extend);
                     }
                 }
             }
-            variables.retain(|v| !v.is_empty());
+            equivalences.retain(|v| !v.is_empty());
 
             // put join constraints in a canonical format.
-            for variable in variables.iter_mut() {
-                variable.sort();
-                variable.dedup();
-            }
-            //disable variable sort if any indexes are being used
-            if !inputs.iter().any(|input| match input {
-                RelationExpr::ArrangeBy { .. } => true,
-                _ => false,
-            }) {
-                variables.sort();
+            for equivalence in equivalences.iter_mut() {
+                equivalence.sort();
+                equivalence.dedup();
             }
         }
     }

@@ -146,7 +146,7 @@ impl ProjectionLifting {
             }
             RelationExpr::Join {
                 inputs,
-                variables,
+                equivalences,
                 demand,
                 implementation,
             } => {
@@ -154,28 +154,15 @@ impl ProjectionLifting {
                     self.action(input, gets);
                 }
 
+                // Track the location of the projected columns in the un-projected join.
                 let mut projection = Vec::new();
                 let mut temp_arity = 0;
 
-                for (index, join_input) in inputs.iter_mut().enumerate() {
+                for join_input in inputs.iter_mut() {
                     if let RelationExpr::Project { input, outputs } = join_input {
-                        for variable in variables.iter_mut() {
-                            for (rel, col) in variable.iter_mut() {
-                                if *rel == index {
-                                    *col = outputs[*col];
-                                }
-                            }
-                        }
                         for output in outputs.iter() {
                             projection.push(temp_arity + *output);
                         }
-
-                        if let Some(demand) = demand {
-                            for col in demand[index].iter_mut() {
-                                *col = outputs[*col];
-                            }
-                        }
-
                         temp_arity += input.arity();
                         *join_input = input.take_dangerous();
                     } else {
@@ -185,9 +172,21 @@ impl ProjectionLifting {
                     }
                 }
 
-                *implementation = crate::relation::JoinImplementation::Unimplemented;
-
                 if projection.len() != temp_arity || (0..temp_arity).any(|i| projection[i] != i) {
+                    // Update equivalences, demand, and implementation.
+                    for equivalence in equivalences.iter_mut() {
+                        for expr in equivalence {
+                            expr.permute(&projection[..]);
+                        }
+                    }
+                    if let Some(demand) = demand {
+                        for column in demand.iter_mut() {
+                            *column = projection[*column];
+                        }
+                    }
+
+                    *implementation = crate::relation::JoinImplementation::Unimplemented;
+
                     *relation = relation.take_dangerous().project(projection);
                 }
             }

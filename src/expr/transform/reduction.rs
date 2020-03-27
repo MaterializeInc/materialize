@@ -250,7 +250,9 @@ impl FoldConstants {
                 }
             }
             RelationExpr::Join {
-                inputs, variables, ..
+                inputs,
+                equivalences,
+                ..
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
                     relation.take_safely();
@@ -281,34 +283,19 @@ impl FoldConstants {
                         }
                     }
 
-                    let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                    let input_arities = input_types
-                        .iter()
-                        .map(|i| i.column_types.len())
-                        .collect::<Vec<_>>();
-
-                    let mut offset = 0;
-                    let mut prior_arities = Vec::new();
-                    for input in 0..inputs.len() {
-                        prior_arities.push(offset);
-                        offset += input_arities[input];
-                    }
-
-                    let input_relation = input_arities
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                        .collect::<Vec<_>>();
-
                     // Now throw away anything that doesn't satisfy the requisite constraints.
                     old_rows.retain(|(row, _count)| {
                         let datums = row.unpack();
-                        variables.iter().filter(|v| !v.is_empty()).all(|variable| {
-                            let (rel, col) = variable[0];
-                            let datum = datums[prior_arities[input_relation[rel]] + col];
-                            variable[1..].iter().all(|(rel, col)| {
-                                datum == datums[prior_arities[input_relation[*rel]] + col]
-                            })
+                        let temp_storage = RowArena::new();
+                        equivalences.iter().all(|equivalence| {
+                            let mut values = equivalence
+                                .iter()
+                                .map(|e| e.eval(&datums, env, &temp_storage));
+                            if let Some(value) = values.next() {
+                                values.all(|v| v == value)
+                            } else {
+                                true
+                            }
                         })
                     });
 

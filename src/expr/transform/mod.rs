@@ -37,7 +37,7 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
-pub mod simplify;
+// pub mod simplify;
 pub mod split_predicates;
 pub mod topk_elision;
 pub mod update_let;
@@ -170,7 +170,7 @@ impl Default for Optimizer {
                 transforms: vec![
                     Box::new(crate::transform::nonnullable::NonNullable),
                     Box::new(crate::transform::reduction::FoldConstants),
-                    Box::new(crate::transform::simplify::SimplifyFilterPredicates),
+                    // Box::new(crate::transform::simplify::SimplifyFilterPredicates),
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::transform::fusion::join::Join),
                     Box::new(crate::transform::fusion::filter::Filter),

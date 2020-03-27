@@ -201,13 +201,25 @@ mod delta_queries {
 
         if let RelationExpr::Join {
             inputs,
-            variables,
+            equivalences,
             demand,
             implementation,
         } = &mut new_join
         {
+            let input_relation = arities
+                .iter()
+                .enumerate()
+                .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+                .collect::<Vec<_>>();
+
             // Determine a viable order for each relation, or return `None` if none found.
-            let orders = super::optimize_orders(variables, available, unique_keys);
+            let orders = super::optimize_orders(
+                equivalences,
+                available,
+                unique_keys,
+                &input_relation[..],
+                prior_arities,
+            );
             if !orders.iter().all(|o| o.iter().all(|(c, _, _)| c.arranged)) {
                 return None;
             }
@@ -237,21 +249,10 @@ mod delta_queries {
                 // We must add the support of expression in `lifted` to the `demand`
                 // member to ensure they are correctly populated.
                 if let Some(demand) = demand {
-                    let mut rel_col = Vec::new();
-                    for (input, arity) in arities.iter().enumerate() {
-                        for _ in 0..*arity {
-                            rel_col.push(input);
-                        }
-                    }
                     for expr in lifted.iter() {
-                        for column in expr.support() {
-                            let rel = rel_col[column];
-                            demand[rel].push(column - prior_arities[rel]);
-                        }
-                    }
-                    for list in demand.iter_mut() {
-                        list.sort();
-                        list.dedup();
+                        demand.extend(expr.support());
+                        demand.sort();
+                        demand.dedup();
                     }
                 }
             }
@@ -286,22 +287,34 @@ mod differential {
 
         if let RelationExpr::Join {
             inputs,
-            variables,
+            equivalences,
             demand,
             implementation,
         } = &mut new_join
         {
-            for variable in variables.iter_mut() {
-                variable.sort();
+            for equivalence in equivalences.iter_mut() {
+                equivalence.sort();
             }
-            variables.sort();
+            equivalences.sort();
+
+            let input_relation = arities
+                .iter()
+                .enumerate()
+                .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+                .collect::<Vec<_>>();
 
             // We prefer a starting point based on the characteristics of the other input arrangements.
             // We could change this preference at any point, but the list of orders should still inform.
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
             // should remain stable even when promoted to the first position.
-            let orders = super::optimize_orders(variables, available, unique_keys);
+            let orders = super::optimize_orders(
+                equivalences,
+                available,
+                unique_keys,
+                &input_relation[..],
+                prior_arities,
+            );
             let max_min_characteristics = orders
                 .iter()
                 .flat_map(|order| order.iter().map(|(c, _, _)| c.clone()).min())
@@ -329,21 +342,10 @@ mod differential {
                 // We must add the support of expression in `lifted` to the `demand`
                 // member to ensure they are correctly populated.
                 if let Some(demand) = demand {
-                    let mut rel_col = Vec::new();
-                    for (input, arity) in arities.iter().enumerate() {
-                        for _ in 0..*arity {
-                            rel_col.push(input);
-                        }
-                    }
                     for expr in lifted.iter() {
-                        for column in expr.support() {
-                            let rel = rel_col[column];
-                            demand[rel].push(column - prior_arities[rel]);
-                        }
-                    }
-                    for list in demand.iter_mut() {
-                        list.sort();
-                        list.dedup();
+                        demand.extend(expr.support());
+                        demand.sort();
+                        demand.dedup();
                     }
                 }
             }
@@ -417,11 +419,19 @@ fn implement_arrangements<'a>(
 }
 
 fn optimize_orders(
-    variables: &[Vec<(usize, usize)>],
+    equivalences: &[Vec<ScalarExpr>],
     available: &[Vec<Vec<ScalarExpr>>],
     unique_keys: &[Vec<Vec<usize>>],
+    input_relation: &[usize],
+    prior_arities: &[usize],
 ) -> Vec<Vec<(Characteristics, Vec<ScalarExpr>, usize)>> {
-    let mut orderer = Orderer::new(variables, available, unique_keys);
+    let mut orderer = Orderer::new(
+        equivalences,
+        available,
+        unique_keys,
+        input_relation,
+        prior_arities,
+    );
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
         .collect::<Vec<_>>()
@@ -459,32 +469,38 @@ impl Characteristics {
 
 struct Orderer<'a> {
     inputs: usize,
-    variables: &'a [Vec<(usize, usize)>],
+    equivalences: &'a [Vec<ScalarExpr>],
     arrangements: &'a [Vec<Vec<ScalarExpr>>],
     unique_keys: &'a [Vec<Vec<usize>>],
-    reverse_variables: Vec<Vec<usize>>,
+    input_relation: &'a [usize],
+    prior_arities: &'a [usize],
+    reverse_equivalences: Vec<Vec<(usize, usize)>>,
     unique_arrangement: Vec<Vec<bool>>,
 
     order: Vec<(Characteristics, Vec<ScalarExpr>, usize)>,
     placed: Vec<bool>,
     bound: Vec<Vec<usize>>,
-    variables_active: Vec<bool>,
+    equivalences_active: Vec<bool>,
     arrangement_active: Vec<Vec<usize>>,
     priority_queue: std::collections::BinaryHeap<(Characteristics, Vec<ScalarExpr>, usize)>,
 }
 
 impl<'a> Orderer<'a> {
     fn new(
-        variables: &'a [Vec<(usize, usize)>],
+        equivalences: &'a [Vec<ScalarExpr>],
         arrangements: &'a [Vec<Vec<ScalarExpr>>],
         unique_keys: &'a [Vec<Vec<usize>>],
+        input_relation: &'a [usize],
+        prior_arities: &'a [usize],
     ) -> Self {
         let inputs = arrangements.len();
-        // A map from inputs to the variables in which they are contained.
-        let mut reverse_variables = vec![Vec::new(); inputs];
-        for (index, variable) in variables.iter().enumerate() {
-            for (rel, _col) in variable.iter() {
-                reverse_variables[*rel].push(index);
+        // A map from inputs to the equivalence classes in which they are referenced.
+        let mut reverse_equivalences = vec![Vec::new(); inputs];
+        for (index, equivalence) in equivalences.iter().enumerate() {
+            for (index2, expr) in equivalence.iter().enumerate() {
+                for column in expr.support() {
+                    reverse_equivalences[input_relation[column]].push((index, index2));
+                }
             }
         }
         // Per-arrangement information about uniqueness of the arrangement key.
@@ -502,20 +518,22 @@ impl<'a> Orderer<'a> {
         let order = Vec::with_capacity(inputs);
         let placed = vec![false; inputs];
         let bound = vec![Vec::new(); inputs];
-        let variables_active = vec![false; variables.len()];
+        let equivalences_active = vec![false; equivalences.len()];
         let arrangement_active = vec![Vec::new(); inputs];
         let priority_queue = std::collections::BinaryHeap::new();
         Self {
             inputs,
-            variables,
+            equivalences,
             arrangements,
             unique_keys,
-            reverse_variables,
+            input_relation,
+            prior_arities,
+            reverse_equivalences,
             unique_arrangement,
             order,
             placed,
             bound,
-            variables_active,
+            equivalences_active,
             arrangement_active,
             priority_queue,
         }
@@ -532,8 +550,8 @@ impl<'a> Orderer<'a> {
             self.bound[input].clear();
             self.arrangement_active[input].clear();
         }
-        for index in 0..self.variables.len() {
-            self.variables_active[index] = false;
+        for index in 0..self.equivalences.len() {
+            self.equivalences_active[index] = false;
         }
 
         // Introduce cross joins as a possibility.
@@ -582,44 +600,57 @@ impl<'a> Orderer<'a> {
     /// keys are available to consider (both arranged, and unarranged).
     fn order_input(&mut self, input: usize) {
         self.placed[input] = true;
-        for variable in self.reverse_variables[input].iter() {
-            if !self.variables_active[*variable] {
-                self.variables_active[*variable] = true;
-                for (rel, col) in self.variables[*variable].iter() {
-                    // Update bound columns.
-                    self.bound[*rel].push(*col);
-                    self.bound[*rel].sort();
-                    // Reconsider all available arrangements.
-                    for (pos, keys) in self.arrangements[*rel].iter().enumerate() {
-                        if !self.arrangement_active[*rel].contains(&pos) {
-                            // Determine if the arrangement is viable, which happens when the
-                            // support of its keys are all bound.
-                            if keys
-                                .iter()
-                                .all(|k| k.support().iter().all(|c| self.bound[*rel].contains(c)))
-                            {
-                                self.arrangement_active[*rel].push(pos);
-                                // TODO: This could be pre-computed, as it is independent of the order.
-                                let is_unique = self.unique_arrangement[*rel][pos];
-                                self.priority_queue.push((
-                                    Characteristics::new(is_unique, keys.len(), true, *rel),
-                                    keys.clone(),
-                                    *rel,
-                                ));
+        for (equivalence, expr_index) in self.reverse_equivalences[input].iter() {
+            if !self.equivalences_active[*equivalence] {
+                // Placing `input` *may* activate the equivalence. Each of its columns
+                // come in to scope, which may result in an expression in `equivalence`
+                // becoming fully defined (when its support is contained in placed inputs)
+                let fully_supported = self.equivalences[*equivalence][*expr_index]
+                    .support()
+                    .iter()
+                    .all(|c| self.placed[self.input_relation[*c]]);
+                if fully_supported {
+                    self.equivalences_active[*equivalence] = true;
+                    for expr in self.equivalences[*equivalence].iter() {
+                        if let ScalarExpr::Column(c) = expr {
+                            let rel = self.input_relation[*c];
+                            let col = *c - self.prior_arities[rel];
+
+                            // Update bound columns.
+                            self.bound[rel].push(col);
+                            self.bound[rel].sort();
+                            // Reconsider all available arrangements.
+                            for (pos, keys) in self.arrangements[rel].iter().enumerate() {
+                                if !self.arrangement_active[rel].contains(&pos) {
+                                    // Determine if the arrangement is viable, which happens when the
+                                    // support of its keys are all bound.
+                                    if keys.iter().all(|k| {
+                                        k.support().iter().all(|c| self.bound[rel].contains(c))
+                                    }) {
+                                        self.arrangement_active[rel].push(pos);
+                                        // TODO: This could be pre-computed, as it is independent of the order.
+                                        let is_unique = self.unique_arrangement[rel][pos];
+                                        self.priority_queue.push((
+                                            Characteristics::new(is_unique, keys.len(), true, rel),
+                                            keys.clone(),
+                                            rel,
+                                        ));
+                                    }
+                                }
                             }
+                            let is_unique = self.unique_keys[rel]
+                                .iter()
+                                .any(|cols| cols.iter().all(|c| self.bound[rel].contains(c)));
+                            self.priority_queue.push((
+                                Characteristics::new(is_unique, self.bound[rel].len(), false, rel),
+                                self.bound[rel]
+                                    .iter()
+                                    .map(|c| ScalarExpr::Column(*c))
+                                    .collect::<Vec<_>>(),
+                                rel,
+                            ));
                         }
                     }
-                    let is_unique = self.unique_keys[*rel]
-                        .iter()
-                        .any(|cols| cols.iter().all(|c| self.bound[*rel].contains(c)));
-                    self.priority_queue.push((
-                        Characteristics::new(is_unique, self.bound[*rel].len(), false, *rel),
-                        self.bound[*rel]
-                            .iter()
-                            .map(|c| ScalarExpr::Column(*c))
-                            .collect::<Vec<_>>(),
-                        *rel,
-                    ));
                 }
             }
         }

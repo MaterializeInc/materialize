@@ -68,3 +68,126 @@ query ITIT colnames,rowsort
 SELECT * FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 la  lb  ra  rb
+
+# Test that projections work through join plans with scalars.
+query ITT rowsort
+SELECT l1.la, l2.lb, l3.lb
+FROM l as l1, l as l2, l as l3
+WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
+----
+1  l2  l3
+
+# Test that join plans with scalars work in subqueries
+query IT rowsort
+SELECT l1.la, l1.lb
+FROM l as l1
+WHERE l1.la IN (
+    SELECT l2.la + 1
+    FROM l AS l2
+    WHERE l2.la IN (
+        SELECT l3.la + 1
+        FROM l as l3
+    )
+)
+----
+3  l3
+
+# Test that scalar expressions are introduced to join plans.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT l1.la, l2.lb, l3.lb
+FROM l as l1, l as l2, l as l3
+WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
+----
+0 =
+| Get materialize.public.l (u1)
+| Filter !(isnull((#0 + 1)))
+
+1 =
+| Get materialize.public.l (u1)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+2 =
+| Get materialize.public.l (u1)
+| Filter !(isnull(#0))
+| ArrangeBy (#0)
+
+3 =
+| Join %0 %1 %2 (= #2 (#0 + 1)) (= #4 (#0 + #2))
+| | implementation = Differential %0 %1.(#0) %2.(#0)
+| | demand = (#0, #2, #3, #5)
+| Filter !(isnull((#0 + #2)))
+| Project (#0, #3, #5)
+
+EOF
+
+# Confirm that a +1 can exist in a subquery based join.
+# Note that the other +1 is found instead in a filter,
+# because subquery planning re-uses the relation it wraps.
+# It is perfectly acceptable for this plan to change, esp
+# if it improves (i.e. the cross join is removed).
+query T multiline
+EXPLAIN PLAN FOR
+SELECT l1.la, l1.lb
+FROM l as l1
+WHERE l1.la IN (
+    SELECT l2.la + 1
+    FROM l AS l2
+    WHERE l2.la IN (
+        SELECT l3.la + 1
+        FROM l as l3
+    )
+)
+----
+0 =
+| Get materialize.public.l (u1)
+| Distinct group=(#0)
+| ArrangeBy ()
+
+1 =
+| Get materialize.public.l (u1)
+
+2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0, #1)
+
+3 =
+| Get materialize.public.l (u1)
+
+4 =
+| Get %2
+| Filter (#0 = (#1 + 1))
+
+5 =
+| Get %2
+| Filter !(isnull(#1))
+| Distinct group=(#1)
+| ArrangeBy (#0)
+
+6 =
+| Get materialize.public.l (u1)
+| Filter !(isnull((#0 + 1)))
+
+7 =
+| Join %5 %6 (= #0 (#1 + 1))
+| | implementation = Differential %6 %5.(#0)
+| | demand = (#0)
+| Reduce group=(#0) any(true)
+| ArrangeBy (#0)
+
+8 =
+| Join %4 %7 (= #1 #3)
+| | implementation = Differential %4 %7.(#0)
+| | demand = (#0)
+| Reduce group=(#0) any(true)
+| ArrangeBy (#0)
+
+9 =
+| Join %3 %8 (= #0 #2)
+| | implementation = Differential %3 %8.(#0)
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF

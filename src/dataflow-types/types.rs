@@ -60,7 +60,7 @@ impl PeekResponse {
         match self {
             PeekResponse::Rows(rows) => rows,
             PeekResponse::Error(_) | PeekResponse::Canceled => {
-                panic!("PeekResponse::unwrap_rows called on an invalid response")
+                panic!("PeekResponse::unwrap_rows called on {:?}", self)
             }
         }
     }

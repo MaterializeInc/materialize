@@ -133,26 +133,37 @@ impl ColumnKnowledge {
                 input_knowledge
             }
             RelationExpr::Join {
-                inputs, variables, ..
+                inputs,
+                equivalences,
+                ..
             } => {
-                let mut knowledges = inputs
-                    .iter_mut()
-                    .map(|i| ColumnKnowledge::harvest(i, env, knowledge))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut knowledges = Vec::new();
+                for input in inputs.iter_mut() {
+                    for knowledge in ColumnKnowledge::harvest(input, env, knowledge)? {
+                        knowledges.push(knowledge);
+                    }
+                }
 
-                for variable in variables.iter() {
-                    if !variable.is_empty() {
-                        let mut know = knowledges[variable[0].0][variable[0].1].clone();
-                        for (rel, col) in variable {
-                            know.absorb(&knowledges[*rel][*col]);
+                for equivalence in equivalences.iter_mut() {
+                    let mut knowledge = DatumKnowledge {
+                        value: None,
+                        nullable: true,
+                    };
+
+                    // We can produce composite knowledge for everything in the equivalence class.
+                    for expr in equivalence.iter_mut() {
+                        if let ScalarExpr::Column(c) = expr {
+                            knowledge.absorb(&knowledges[*c]);
                         }
-                        for (rel, col) in variable {
-                            knowledges[*rel][*col] = know.clone();
+                    }
+                    for expr in equivalence.iter_mut() {
+                        if let ScalarExpr::Column(c) = expr {
+                            knowledges[*c] = knowledge.clone();
                         }
                     }
                 }
 
-                knowledges.into_iter().flat_map(|k| k).collect()
+                knowledges
             }
             RelationExpr::Reduce {
                 input,

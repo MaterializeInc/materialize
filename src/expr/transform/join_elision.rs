@@ -39,7 +39,9 @@ impl JoinElision {
 
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
-            inputs, variables, ..
+            inputs,
+            equivalences,
+            ..
         } = relation
         {
             // We re-accumulate `inputs` into `new_inputs` in order to perform
@@ -66,13 +68,6 @@ impl JoinElision {
                 .map(|(_, expression)| expression)
                 .collect::<Vec<_>>();
 
-            for group in variables.iter_mut() {
-                for (index, _) in group {
-                    // Subtract the number of prior vacuous join inputs.
-                    *index -= (0..*index).filter(|i| is_vacuous[*i]).count()
-                }
-            }
-
             // If `new_inputs` is empty or a singleton (without constraints) we can remove the join.
             *inputs = new_inputs;
 
@@ -85,7 +80,7 @@ impl JoinElision {
                     // if there are constraints, they probably should have
                     // been pushed down by predicate pushdown, but .. let's
                     // not re-write that code here.
-                    if variables.is_empty() {
+                    if equivalences.is_empty() {
                         *relation = inputs.pop().unwrap();
                     }
                 }

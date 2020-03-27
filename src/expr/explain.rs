@@ -204,7 +204,7 @@ impl RelationExpr {
                 }
                 Join {
                     inputs,
-                    variables,
+                    equivalences,
                     demand,
                     implementation,
                 } => {
@@ -221,21 +221,12 @@ impl RelationExpr {
                         ),
                         Separated(
                             " ",
-                            variables
+                            equivalences
                                 .iter()
-                                .map(|variable| Bracketed(
+                                .map(|equivalence| Bracketed(
                                     "(= ",
                                     ")",
-                                    Separated(
-                                        " ",
-                                        variable
-                                            .iter()
-                                            .map(|(input_pos, column)| format!(
-                                                "%{}.#{}",
-                                                input_chains[*input_pos], column
-                                            ))
-                                            .collect()
-                                    )
+                                    Separated(" ", equivalence.clone())
                                 ))
                                 .collect()
                         )
@@ -246,13 +237,8 @@ impl RelationExpr {
                         implementation.fmt_with(&input_chains)
                     ));
                     if let Some(demand) = demand {
-                        for (input_chain, input_demand) in demand.iter().enumerate() {
-                            annotations.push(format!(
-                                "demand for %{} = {}",
-                                expr_chain(&inputs[input_chain]),
-                                Bracketed("(", ")", Indices(input_demand)),
-                            ));
-                        }
+                        annotations
+                            .push(format!("demand = {}", Bracketed("(", ")", Indices(demand))));
                     }
                 }
                 Reduce {

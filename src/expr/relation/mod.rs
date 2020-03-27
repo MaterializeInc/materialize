@@ -96,17 +96,22 @@ pub enum RelationExpr {
     Join {
         /// A sequence of input relations.
         inputs: Vec<RelationExpr>,
-        /// A sequence of equivalence classes of `(input_index, column_index)`.
+        /// A sequence of equivalence classes of expressions on the cross product of inputs.
         ///
-        /// Each element of the sequence is a set of pairs, where the values described by each pair must
-        /// be equal to all other values in the same set.
-        variables: Vec<Vec<(usize, usize)>>,
-        /// This optional field is a hint for which columns from each input are
+        /// Each equivalence class is a list of scalar expressions, where for each class the
+        /// intended interpretation is that all evaluated expressions should be equal.
+        ///
+        /// Each scalar expression is to be evaluated over the cross-product of all records
+        /// from all inputs. In many cases this may just be column selection from specific
+        /// inputs, but more general cases exist (e.g. complex functions of multiple columns
+        /// from multiple inputs, or just constant literals).
+        equivalences: Vec<Vec<ScalarExpr>>,
+        /// This optional field is a hint for which columns are
         /// actually used by operators that use this collection. Although the
         /// join does not have permission to change the schema, it can introduce
         /// dummy values at the end of its computation, avoiding the maintenance of values
         /// not present in this list (when it is non-None).
-        demand: Option<Vec<Vec<usize>>>,
+        demand: Option<Vec<usize>>,
         /// Join implementation information.
         implementation: JoinImplementation,
     },
@@ -273,7 +278,9 @@ impl RelationExpr {
             }
             RelationExpr::Filter { input, .. } => input.typ(),
             RelationExpr::Join {
-                inputs, variables, ..
+                inputs,
+                equivalences,
+                ..
             } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
@@ -285,6 +292,24 @@ impl RelationExpr {
                     .collect::<Vec<_>>();
                 let mut typ = RelationType::new(column_types);
 
+                let input_arities = input_types
+                    .iter()
+                    .map(|i| i.column_types.len())
+                    .collect::<Vec<_>>();
+
+                let mut offset = 0;
+                let mut prior_arities = Vec::new();
+                for input in 0..inputs.len() {
+                    prior_arities.push(offset);
+                    offset += input_arities[input];
+                }
+
+                let input_relation = input_arities
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+                    .collect::<Vec<_>>();
+
                 // A relation's uniqueness constraint holds if there is a
                 // sequence of the other relations such that each one has
                 // a uniqueness constraint whose columns are used in join
@@ -294,19 +319,23 @@ impl RelationExpr {
                 // first relation, and attempt to use the presented order.
                 let remains_unique = (1..inputs.len()).all(|index| {
                     let mut prior_bound = Vec::new();
-                    for variable in variables {
-                        if variable.iter().any(|(r, _c)| *r < index) {
-                            for (r, c) in variable {
-                                if r == &index {
+                    for equivalence in equivalences {
+                        if equivalence.iter().any(|expr| {
+                            expr.support()
+                                .into_iter()
+                                .all(|i| input_relation[i] < index)
+                        }) {
+                            for expr in equivalence {
+                                if let ScalarExpr::Column(c) = expr {
                                     prior_bound.push(c);
                                 }
                             }
                         }
                     }
-                    input_types[index]
-                        .keys
-                        .iter()
-                        .any(|ks| ks.iter().all(|k| prior_bound.contains(&k)))
+                    input_types[index].keys.iter().any(|ks| {
+                        ks.iter()
+                            .all(|k| prior_bound.contains(&&(prior_arities[index] + k)))
+                    })
                 });
                 if remains_unique && !inputs.is_empty() {
                     for keys in input_types[0].keys.iter() {
@@ -509,9 +538,32 @@ impl RelationExpr {
     /// let result = joined.project(vec![0, 1, 3]);
     /// ```
     pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
+        let arities = inputs.iter().map(|input| input.arity()).collect::<Vec<_>>();
+
+        let mut offset = 0;
+        let mut prior_arities = Vec::new();
+        for input in 0..inputs.len() {
+            prior_arities.push(offset);
+            offset += arities[input];
+        }
+
+        let equivalences = variables
+            .into_iter()
+            .map(|vs| {
+                vs.into_iter()
+                    .map(|(r, c)| ScalarExpr::Column(prior_arities[r] + c))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        Self::join_scalars(inputs, equivalences)
+    }
+
+    /// Constructs a join operator from inputs and required-equal scalar expressions.
+    pub fn join_scalars(inputs: Vec<RelationExpr>, equivalences: Vec<Vec<ScalarExpr>>) -> Self {
         RelationExpr::Join {
             inputs,
-            variables,
+            equivalences,
             demand: None,
             implementation: JoinImplementation::Unimplemented,
         }
