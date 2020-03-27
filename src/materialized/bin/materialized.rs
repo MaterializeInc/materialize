@@ -166,11 +166,23 @@ fn run() -> Result<(), failure::Error> {
     let gather_metrics = !popts.opt_present("no-prometheus");
     let listen_addr = popts.opt_get("listen-addr")?;
 
-    if cfg!(debug_assertions) && !popts.opt_present("dev") && !ore::env::is_var_truthy("MZ_DEV") {
+    let debug_opt_in =
+        cfg!(debug_assertions) && (popts.opt_present("dev") || ore::env::is_var_truthy("MZ_DEV"));
+
+    if cfg!(debug_assertions) && !debug_opt_in {
         bail!(
             "refusing to run dev (unoptimized) binary without explicit opt-in\n\
              hint: Pass the '--dev' option or set the MZ_DEV environment variable to opt in.\n\
              hint: Or perhaps you meant to use a release binary?"
+        );
+    }
+
+    if !popts.opt_present("threads") && !debug_opt_in {
+        bail!(
+            "missing required number of worker threads '--threads'\n\
+             hint: As a starting point, set the number of threads to half of the number of\n\
+             cores on your system. Then, further adjust based on your performance needs.\n\
+             hint: Debug builds default to one worker thread."
         );
     }
 
