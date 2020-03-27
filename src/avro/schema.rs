@@ -507,11 +507,7 @@ impl Name {
     /// More information about fullnames can be found in the
     /// [Avro specification](https://avro.apache.org/docs/current/spec.html#names)
     pub fn fullname(&self, default_namespace: &str) -> FullName {
-        FullName::from_parts(
-            &self.name,
-            self.namespace.as_deref(),
-            default_namespace,
-        )
+        FullName::from_parts(&self.name, self.namespace.as_deref(), default_namespace)
     }
 }
 

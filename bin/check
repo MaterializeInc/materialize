@@ -169,6 +169,14 @@ disabled_lints=(
     # `..`, while sometimes convenient, can cause match sites that need to be
     # updated for the new field to be overlooked.
     clippy::unneeded_field_pattern
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#mutable_key_type
+    #
+    # clippy::mutable_key_type disallows using internally mutable types as keys in `HashMap`,
+    # because their order could change. This is a good lint in principle, but its current
+    # implementation is too strict -- it disallows anything containing an `Arc` or `Rc`,
+    # for example.
+    clippy::mutable_key_type
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word

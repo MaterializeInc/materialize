@@ -260,14 +260,14 @@ fn first_mismatched_schema_types<'a>(
             .iter()
             .zip(bi.variants())
             .flat_map(|(ai, bi)| first_mismatched_schema_types(a.step(ai), b.step(bi)))
-            .nth(0),
+            .next(),
         (SchemaPiece::Record { fields: ai, .. }, SchemaPiece::Record { fields: bi, .. }) => ai
             .iter()
             .zip(bi.iter())
             .flat_map(|(ai, bi)| {
                 first_mismatched_schema_types(a.step(&ai.schema), b.step(&bi.schema))
             })
-            .nth(0),
+            .next(),
         (SchemaPiece::Enum { symbols: ai, .. }, SchemaPiece::Enum { symbols: bi, .. })
             if ai == bi =>
         {
