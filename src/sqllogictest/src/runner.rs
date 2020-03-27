@@ -714,7 +714,7 @@ impl State {
                 .unbounded_send(coord::Command::Parse {
                     name: statement_name.clone(),
                     sql: sql.into(),
-                    session: mem::replace(&mut self.session, Session::default()),
+                    session: mem::take(&mut self.session),
                     tx,
                 })
                 .expect("futures channel should not fail");
@@ -739,7 +739,7 @@ impl State {
             self.cmd_tx
                 .unbounded_send(coord::Command::Execute {
                     portal_name,
-                    session: mem::replace(&mut self.session, Session::default()),
+                    session: mem::take(&mut self.session),
                     conn_id: self.conn_id,
                     tx,
                 })

@@ -1227,7 +1227,7 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
     fn extract_second(&self) -> f64 {
         let s = f64::from(self.second());
         let ns = f64::from(self.nanosecond()) / 1e9;
-        (s + ns)
+        s + ns
     }
 
     /// Extract the iso week of the year

@@ -137,21 +137,13 @@ fn run() -> Result<(), failure::Error> {
         return Ok(());
     }
 
-    let logging_granularity = match popts
-        .opt_str("logging-granularity")
-        .as_ref()
-        .map(|x| x.as_str())
-    {
+    let logging_granularity = match popts.opt_str("logging-granularity").as_deref() {
         None => Some(std::time::Duration::new(1, 0)),
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
 
-    let timestamp_frequency = match popts
-        .opt_str("timestamp-frequency")
-        .as_ref()
-        .map(|x| x.as_str())
-    {
+    let timestamp_frequency = match popts.opt_str("timestamp-frequency").as_deref() {
         None => Some(parse_duration::parse("10ms")?),
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
@@ -174,11 +166,7 @@ fn run() -> Result<(), failure::Error> {
         );
     }
 
-    let logical_compaction_window = match popts
-        .opt_str("logical-compaction-window")
-        .as_ref()
-        .map(|x| x.as_str())
-    {
+    let logical_compaction_window = match popts.opt_str("logical-compaction-window").as_deref() {
         None => Some(parse_duration::parse("60s")?),
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
