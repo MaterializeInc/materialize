@@ -197,8 +197,23 @@ fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
             }
         }
         SchemaPiece::Json => ScalarType::Jsonb,
+        SchemaPiece::Array(_) => ScalarType::Jsonb,
 
-        _ => bail!("Unsupported type in schema: {:?}", schema.inner),
+        piece @ SchemaPiece::Map(_)
+        | piece @ SchemaPiece::ResolveIntLong
+        | piece @ SchemaPiece::ResolveIntFloat
+        | piece @ SchemaPiece::ResolveIntDouble
+        | piece @ SchemaPiece::ResolveLongFloat
+        | piece @ SchemaPiece::ResolveLongDouble
+        | piece @ SchemaPiece::ResolveFloatDouble
+        | piece @ SchemaPiece::ResolveConcreteUnion { .. }
+        | piece @ SchemaPiece::ResolveUnionUnion { .. }
+        | piece @ SchemaPiece::ResolveUnionConcrete { .. }
+        | piece @ SchemaPiece::Record { .. }
+        | piece @ SchemaPiece::ResolveRecord { .. }
+        | piece @ SchemaPiece::ResolveEnum { .. } => {
+            bail!("Unsupported type in schema: {:?}", piece)
+        }
     })
 }
 
@@ -279,6 +294,47 @@ fn first_mismatched_schema_types<'a>(
     }
 }
 
+fn pack_json_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
+    match v {
+        Value::Null => row.push(Datum::JsonNull),
+        Value::Boolean(true) => row.push(Datum::True),
+        Value::Boolean(false) => row.push(Datum::False),
+        Value::Int(i) => row.push(Datum::Float64((i as f64).into())),
+        Value::Long(l) => row.push(Datum::Float64((l as f64).into())),
+        Value::Float(f) => row.push(Datum::Float64((f as f64).into())),
+        Value::Double(d) => row.push(Datum::Float64(d.into())),
+        Value::String(s) | Value::Enum(_, s) => row.push(Datum::String(&s)),
+        Value::Array(vs) => {
+            row = row.try_push_list_with(move |mut row| {
+                for v in vs {
+                    row = pack_json_value(v, row)?;
+                }
+                Ok(row)
+            })?;
+        }
+        Value::Record(fields) => {
+            row = row.try_push_dict_with(move |mut row| {
+                for (k, v) in fields {
+                    row.push(Datum::String(&k));
+                    row = pack_json_value(v, row)?;
+                }
+                Ok(row)
+            })?;
+        }
+        Value::Json(j) => {
+            row = Jsonb::new(j)?.pack_into(row);
+        }
+        val @ Value::Fixed(_, _)
+        | val @ Value::Union(_, _)
+        | val @ Value::Map(_)
+        | val @ Value::Date(_)
+        | val @ Value::Timestamp(_)
+        | val @ Value::Decimal(_)
+        | val @ Value::Bytes(_) => bail!("Value not supported in JSON: {:?}", val),
+    }
+    Ok(row)
+}
+
 fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
     match v {
         Value::Null => row.push(Datum::Null),
@@ -298,14 +354,12 @@ fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
         Value::Union(_, v) => {
             row = pack_value(*v, row)?;
         }
-        Value::Json(j) => {
-            row = Jsonb::new(j)?.pack_into(row);
+        Value::Array(_) | Value::Record(_) | Value::Json(_) => {
+            row = pack_json_value(v, row)?;
         }
-        other @ Value::Fixed(..)
-        | other @ Value::Enum(..)
-        | other @ Value::Array(_)
-        | other @ Value::Map(_)
-        | other @ Value::Record(_) => bail!("unsupported avro value: {:?}", other),
+        other @ Value::Fixed(..) | other @ Value::Enum(..) | other @ Value::Map(_) => {
+            bail!("unsupported avro value: {:?}", other)
+        }
     };
     Ok(row)
 }

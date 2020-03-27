@@ -63,3 +63,62 @@ jsonb_agg function only takes one argument
 Parse error:
 
 > DROP SOURCE data
+
+# Test Avro arrays are interpretable as Json
+
+$ set nested-avro-schema={
+      "type": "record",
+      "name": "envelope",
+      "fields": [
+        {
+          "name": "before",
+          "type": [
+            {
+              "name": "row",
+              "type": "record",
+              "fields": [
+                {
+                  "name": "a", "type": {
+                    "type": "array",
+                    "items": {
+                      "type": "record",
+                      "name": "inner",
+                      "fields": [
+                        {
+                          "name": "f1",
+                          "type": "long"
+                        },
+                        {
+                          "name": "f2",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "null"
+          ]
+        },
+        { "name": "after", "type": ["row", "null"] }
+      ]
+    }
+
+$ kafka-create-topic topic=nested_avro
+
+$ kafka-ingest format=avro topic=nested_avro schema=${nested-avro-schema} timestamp=1
+{"before": null, "after": {"a": [{"f1": 123, "f2": "hello"}, {"f1": 456, "f2": "world"}]}}
+
+> CREATE MATERIALIZED SOURCE data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nested_avro-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${nested-avro-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM data
+a
+---
+"[{\"f1\":123.0,\"f2\":\"hello\"},{\"f1\":456.0,\"f2\":\"world\"}]"
+
+
+> DROP SOURCE data
