@@ -65,20 +65,6 @@
         ]
     },
     {
-        "type": "Column",
-        "description": "Column functions take column name arguments.",
-        "functions": [
-            {
-                "signature": "lhs bool_op ALL(c: C) -> bool",
-                "description": "`true` if applying [bool_op](#boolean) to `lhs` and every value of `C` evaluates to `true`"
-            },
-            {
-                "signature": "lhs bool_op ANY(c: C) -> bool",
-                "description": "`true` if applying [bool_op](#boolean) to `lhs` and any value of `C` evaluates to `true`"
-            }
-        ]
-    },
-    {
         "type": "Numbers",
         "description": "Number functions take number-like arguments, e.g. [`int`](../types/int), [`float`](../types/float), [`numeric`](../types/numeric).",
         "functions": [
@@ -142,6 +128,62 @@
             {
                 "signature": "regexp_extract(regex: str, haystack: str) -> Col<string>",
                 "description": "Values of the capture groups of `regex` as matched in `haystack`"
+            }
+        ]
+    },
+    {
+        "type": "Scalar",
+        "description": "Scalar functions take a list of scalar expressions",
+        "functions": [
+            {
+                "signature": "expression bool_op ALL(s: Scalars) -> bool",
+                "description": "`true` if applying [bool_op](#boolean) to `expression` and every value of `s` evaluates to `true`"
+            },
+            {
+                "signature": "expression bool_op ANY(s: Scalars) -> bool",
+                "description": "`true` if applying [bool_op](#boolean) to `expression` and any value of `s` evaluates to `true`"
+            },
+            {
+                "signature": "expression IN(s: Scalars) -> bool",
+                "description": "`true` for each value in `expression` if it matches at least one element of `s`"
+            },
+            {
+                "signature": "expression NOT IN(s: Scalars) -> bool",
+                "description": "`true` for each value in `expression` if it does not match any elements of `s`"
+            },
+            {
+                "signature": "expression bool_op SOME(s: Scalars) -> bool",
+                "description": "`true` if applying [bool_op](#boolean) to `expression` and any value of `s` evaluates to `true`"
+            }
+        ]
+    },
+    {
+        "type": "Subquery",
+        "description": "Subquery functions take a query, e.g. [`SELECT`](/docs/sql/select)",
+        "functions": [
+            {
+                "signature": "expression bool_op ALL(s: Query) -> bool",
+                "description": "`s` must return exactly one column; `true` if applying [bool_op](#boolean) to `expression` and every value of `s` evaluates to `true`"
+            },
+            {
+                "signature": "EXISTS(s: Query) -> bool",
+                "description": "`true` if `s` returns at least one row"
+            },
+            {
+                "signature": "expression IN(s: Query) -> bool",
+                "description": "`s` must return exactly one column; `true` for each value in `expression` if it matches at least one element of `s`"
+            },
+            {
+                "signature": "NOT EXISTS(s: Query) -> bool",
+                "description": "`true` if `s` returns zero rows"
+            },
+            {
+                "signature": "expression NOT IN(s: Query) -> bool",
+                "description": "`s` must return exactly one column; `true` for each value in `expression` if it does not match any elements of `s`"
+            },
+            {
+                "signature": "expression bool_op SOME(s: Query) -> bool",
+                "description": "`s` must return exactly one column; `true` if applying [bool_op](#boolean) to `expression` and any value of `s` evaluates to `true`"
             }
         ]
     },
