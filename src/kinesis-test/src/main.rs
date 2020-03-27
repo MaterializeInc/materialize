@@ -7,12 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Test Kinesis
-//!
-//! Questions to answer:
-//!     - What is tokio?
-//!     - How do runtimes work?
-//!
+/// ! todo: Add something real here
 
 use std::error::Error as _;
 use std::thread;
