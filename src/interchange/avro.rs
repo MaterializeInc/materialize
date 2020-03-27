@@ -20,6 +20,7 @@ use avro::types::{DecimalValue, Value};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use failure::{bail, format_err};
 use futures::executor::block_on;
+use log::error;
 use serde_json::json;
 
 use sha2::Sha256;
@@ -584,7 +585,7 @@ impl Encoder {
 
     /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
     /// See function implementation for Confluent-specific details.
-    pub fn encode(&self, schema_id: i32, row: &Row, diff: Option<isize>) -> Vec<u8> {
+    pub fn encode(&self, schema_id: i32, row: &Row, diff: isize) -> Vec<u8> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a
         // 32-bit schema ID.
@@ -597,7 +598,7 @@ impl Encoder {
         buf
     }
 
-    fn row_to_avro(&self, row: &Row, diff: Option<isize>) -> Result<Vec<u8>> {
+    fn row_to_avro(&self, row: &Row, diff: isize) -> Result<Vec<u8>> {
         let node = self.writer_schema.top_node();
         match node.inner {
             SchemaPiece::Record { fields, .. } => match fields.as_slice() {
@@ -612,25 +613,18 @@ impl Encoder {
                         .0;
                     let avro_val = Self::data_to_avro(node.step(&before.schema), &row.unpack())?;
                     // Add wrapper Record with before and after RecordFields
-                    let wrapped_avro_val = if let Some(diff) = diff {
-                        if diff >= 0 {
-                            Value::Record(vec![
-                                (
-                                    "before".into(),
-                                    Value::Union(null_idx, Box::from(Value::Null)),
-                                ),
-                                ("after".into(), avro_val),
-                            ])
-                        } else {
-                            Value::Record(vec![
-                                ("before".into(), avro_val),
-                                (
-                                    "after".into(),
-                                    Value::Union(null_idx, Box::from(Value::Null)),
-                                ),
-                            ])
-                        }
+                    let wrapped_avro_val = if diff == -1 {
+                        Value::Record(vec![
+                            ("before".into(), avro_val),
+                            (
+                                "after".into(),
+                                Value::Union(null_idx, Box::from(Value::Null)),
+                            ),
+                        ])
                     } else {
+                        if diff != 1 {
+                            error!("Received an invalid diff {} when encoding a avro record. Defaulting to encode as insert", diff);
+                        }
                         Value::Record(vec![
                             (
                                 "before".into(),

@@ -88,7 +88,7 @@ pub fn kafka<G>(
                 let encoder = Encoder::new(&schema.to_string());
                 input.for_each(|_, rows| {
                     for (row, _time, diff) in rows.iter() {
-                        let buf = encoder.encode(schema_id, row, Some(*diff));
+                        let buf = encoder.encode(schema_id, row, *diff);
                         let record: FutureRecord<&Vec<u8>, _> =
                             FutureRecord::to(&connector.topic).payload(&buf);
                         producer.send(record, 1000 /* block_ms */);
