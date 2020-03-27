@@ -29,6 +29,6 @@ data           mz_offset
 "\\xc2\\xa91"  0
 "\\xc2\\xa92"  1
 
-> select convert_from(data, 'utf8') FROM data;
+> select convert_from(data, 'utf8') FROM data
 ©1
 ©2
