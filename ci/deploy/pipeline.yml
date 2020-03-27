@@ -36,6 +36,6 @@ steps:
   - command: ci/deploy/macos.sh
     agents:
       queue: mac
-    timeout_in_minutes: 15
+    timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/macos
