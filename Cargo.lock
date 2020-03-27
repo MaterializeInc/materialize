@@ -1440,6 +1440,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kinesis-test"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "futures",
+ "futures-channel",
+ "log",
+ "rand",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kinesis",
+ "structopt",
+ "thiserror",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
