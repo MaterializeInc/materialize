@@ -147,3 +147,45 @@ unknown schema 'noexist'
 unknown schema 'noexist'
 ! CREATE VIEW noexist.ignored.ignored AS SELECT 1
 unknown database 'noexist'
+
+# Check default sources and views in mz_catalog.
+
+> SHOW SOURCES FROM mz_catalog
+mz_arrangement_sharing
+mz_arrangement_sizes
+mz_catalog_names
+mz_dataflow_channels
+mz_dataflow_operator_addresses
+mz_dataflow_operators
+mz_materialization_dependencies
+mz_materialization_frontiers
+mz_materializations
+mz_peek_active
+mz_peek_durations
+mz_scheduling_elapsed
+mz_scheduling_histogram
+mz_scheduling_parks
+mz_view_foreign_keys
+mz_view_keys
+
+> SHOW VIEWS FROM mz_catalog
+mz_addresses_with_unit_length
+mz_dataflow_names
+mz_dataflow_operator_dataflows
+mz_perf_arrangement_records
+mz_perf_dependency_frontiers
+mz_perf_peek_durations_aggregates
+mz_perf_peek_durations_bucket
+mz_perf_peek_durations_core
+mz_records_per_dataflow
+mz_records_per_dataflow_global
+mz_records_per_dataflow_operator
+
+> SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
+mz_peek_active
+mz_peek_durations
+
+> SHOW VIEWS FROM mz_catalog LIKE '%peek%';
+mz_perf_peek_durations_aggregates
+mz_perf_peek_durations_bucket
+mz_perf_peek_durations_core
