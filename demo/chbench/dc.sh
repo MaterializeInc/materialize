@@ -184,8 +184,9 @@ bring_up_source_data() {
 }
 
 bring_up_introspection() {
+    mkdir -p prometheus/data
+    chmod 777 prometheus/data
     dc_up grafana
-    runv chmod 777 prometheus/data
 }
 
 bring_up_metabase() {
@@ -373,7 +374,7 @@ restart() {
 # Forcibly remove Docker state. Use when there are inexplicable Docker issues.
 dc_nuke() {
     shut_down
-    rm -rf prometheus/data
+    rm -rf prometheus/data/*
     runv docker system prune -af
     runv docker volume prune -f
 }
