@@ -509,7 +509,7 @@ impl Name {
     pub fn fullname(&self, default_namespace: &str) -> FullName {
         FullName::from_parts(
             &self.name,
-            self.namespace.as_ref().map(String::as_str),
+            self.namespace.as_deref(),
             default_namespace,
         )
     }
