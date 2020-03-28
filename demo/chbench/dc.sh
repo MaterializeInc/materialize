@@ -28,28 +28,38 @@ BACKUP_DIRS=(
     prometheus/data
 )
 
+# docker-compose env vars
+export MZ_IMG=materialize/materialized:latest
+export MZ_THREADS=1
+export PEEKER_IMG=materialize/peeker:latest
+
+# cli options
+HELP=n
+PEEKER_COMMAND=(--queries loadtest)
+
 main() {
     if [[ $# -lt 1 ]]; then
         usage
     fi
+    local -a cmd=()
     local arg=$1 && shift
     case "$arg" in
         up)
             if [[ $# -eq 0 ]]; then
-                bring_up
+                cmd=(bring_up)
             elif [[ $1 = :demo: ]]; then
                 # currently just the same as the default
-                bring_up
+                cmd=(bring_up)
             elif [[ $1 = :init: ]]; then
-                initialize_warehouse
+                cmd=(initialize_warehouse)
             elif [[ $1 = :minimal-connected: || $1 = :mc: ]]; then
-                bring_up_source_data
+                cmd=(bring_up_source_data)
             else
-                dc_up "$@"
+                cmd=(dc_up "$@")
             fi ;;
         stop|down)
             if [[ $# -eq 0 ]]; then
-                shut_down
+                cmd=(shut_down)
             else
                 dc_stop "$@"
             fi ;;
@@ -59,21 +69,21 @@ main() {
             if [[ $# -eq 0 ]]; then
               usage
             fi
-            dc_logs "$@" ;;
-        nuke) dc_nuke ;;
-        clean-load-test) clean_load_test;;
+            dc_logs "$@";;
+        nuke) dc_nuke;;
+        clean-load-test) clean_load_test "$@";;
         load-test) load_test "$@";;
         demo-load) demo_load;;
         run)
             if [[ $# -eq 0 ]]; then
                 usage
             fi
-            dc_run "$@" ;;
+            dc_run "$@";;
         restart)
             if [[ $# -ne 1 ]]; then
                 usage
             fi
-            restart "$@" ;;
+            restart "$@";;
         web)
             local page="${1:-_}" && shift
             case "$page" in
@@ -94,36 +104,108 @@ main() {
             dc_prom_restore "$glob"
             ;;
         ci) ci;;
-        *) usage ;;
+        *)
+            local unrec
+            parse_opts unrec "$arg"
+            if [[ "${#unrec[@]}" -gt 0 ]]; then
+                echo "ERROR: Unrecognized argument: '${unrec[*]}'"
+                usage short
+            fi
+            if [[ $HELP == y ]]; then
+                usage
+            fi
+            ;;
     esac
+    if [[ "${#cmd[@]}" -gt 0 ]]; then
+        "${cmd[@]}"
+    fi
+}
+
+parse_opts() {
+    local err_unreq=n
+    local first="${1}" && shift
+    if [[ "$first" == ERROR ]]; then
+        err_unreq=y
+    else
+        local -n __unrec="$first"
+        __unrec=()
+    fi
+    local opt
+    while [[ "$#" -gt 0 ]]; do
+        opt="$1" && shift
+        case "$opt" in
+            -h|--help)
+                HELP=y
+                ;;
+            # selecting which version to run
+            --tag)
+                local tag="${1:?--tag requires an argument}" && shift
+                MZ_IMG=materialize/materialized:"${tag}"
+                PEEKER_IMG=materialize/peeker:"${tag}"
+                ;;
+            --commit)
+                local sha="${1:?--commit requires an argument}" && shift
+                MZ_IMG=materialize/materialized:unstable-"${sha}"
+                PEEKER_IMG=materialize/peeker:unstable-"${sha}"
+                ;;
+            --mz-docker-tag)
+                local tag="${1:?--mz-docker-tag requires an argument}" && shift
+                MZ_IMG=materialize/materialized:"${tag}"
+                ;;
+            --peeker-docker-tag)
+                local tag="${1:?--peeker-docker-tag requires an argument}" && shift
+                PEEKER_IMG=materialize/peeker:"${tag}"
+                ;;
+            --peeker-opts)
+                local peeker_opts="${1:?--peeker opts requires one argument}" && shift
+                # We explicitly want to preserve shell quoting and I guess maybe globbing
+                # shellcheck disable=SC2206
+                PEEKER_COMMAND=($peeker_opts)
+                ;;
+            --mz-threads)
+                MZ_THREADS="${1:?--mz-threads needs a number}" && shift
+                ;;
+            *)
+                if [[ $err_unreq == y ]]; then
+                    die "Unrecognized option: '$opt'"
+                else
+                    __unrec+=("$opt")
+                fi
+                ;;
+        esac
+    done
 }
 
 # Print out to use this program and then exit
+# shellcheck disable=SC2006
 usage() {
     # legacy backtics are fine for this use IMO
-    # shellcheck disable=SC2006
-    die "usage: $0 `us COMMAND`
+    echo "usage: $0 `us COMMAND`"
 
+    if [[ "${1:-}" == short ]]; then
+        exit 1
+    fi
+    die "
 Possible COMMANDs:
 
  Cluster commands:
+    `us up \[SERVICE..\] \[ROPTS\]` With args: Start the list of services
+                      With no args: Start the cluster, bringing up introspection and
+                      metabase but no load generators.
+                      See below load tests for `us ROPTS`.
+                      `uw WARNING:` you must perform the 'up :init:' step exactly once
+                        Special SERVICEs:
+                          `uo :init:` -- one-time setup that must be run before
+                          performing anything else or after running 'nuke'
+                          `uo :demo:` -- Set things up for a demo
+                          `uo :minimal-connected:`/`uo :mc:` -- bring up just mysql and
+                          kafka containers with no grafana.
 
-    `us up \[SERVICE..\]`           With args: Start the list of services
-                             With no args: Start the cluster, bringing up introspection and
-                             metabase but no load generators.
-                             `uw WARNING:` you must perform the 'up :init:' step exactly once
-                               Special args:
-                                 `uo :init:` -- one-time setup that must be run before
-                                 performing anything else or after running 'nuke'
-                                 `uo :demo:` -- Set things up for a demo
-                                 `uo :minimal-connected:`/`uo :mc:` -- bring up just mysql and
-                                 kafka containers with no grafana.
-    `us down \[SERVICE..\]`         With args: Stop the list of services, without removing them
+    `us down \[SERVICE..\]`  With args: Stop the list of services, without removing them
                              With no args: Stop the cluster, removing containers, volumes, etc
-    `us status`              Show cluster status
+    `us status`            Show cluster status
 
  Individual service commands:
-
     `us run SERVICE \[ARGS..\]`          Equivalent of 'docker-compose run ..ARGS' -- leaves the terminal
                                     connected and running
     `us restart \(SERVICE\|all\)`         Restart either SERVICE or all services. This preserves data in
@@ -132,11 +214,19 @@ Possible COMMANDs:
                                     number of log messages, enter the number after the SERVICE.
 
  Load test commands:
-    `us clean-load-test`      Nuke and then run a long-running load test.
-                              One-stop shop, nothing else needs to be run.
-    `us load-test \[--up\]`     Run a long-running load test, modify this file to change parameters
-                              With --up: also run `uo :init:` and start all dependencies
-    `us demo-load`            Generate a lot of changes to be used in the demo
+    `us clean-load-test \[ROPTS\]`   Nuke and then run a long-running load test.
+                                One-stop shop, nothing else needs to be run.
+    `us load-test \[--up\] \[ROPTS\]`  Run a long-running load test, modify this file to change parameters
+                                With --up: also run `uo :init:` and start all dependencies
+    `us demo-load \[ROPTS\]`         Generate a lot of changes to be used in the demo
+
+ ROPTS (Run Options):
+     `uo --commit C`               Set both mz & peeker to 'unstable-C'
+     `uo --tag T`                  Set both mz & peeker to 'T'
+     `uo --mz-docker-tag T`        Set the tag for materialize/materialized:T
+     `uo --mz-threads N`           Set mz -w/--threads to N
+     `uo --peeker-docker-tag T`    Set the tag for materialize/peeker:T
+     `uo --peeker-opts`            Set the peeker options, single string. Default: '-q loadtest'
 
  Helpers:
     `us web \(grafana\|metabase\|kafka\)`    Open service page in a web browser
@@ -144,7 +234,6 @@ Possible COMMANDs:
     `us restore PATHGLOB`                    Unpack tarbal that matches PATHGLOB into prometheus dir
 
  Danger Zone:
-
     `us nuke`                     Destroy *all data* in Docker: volumes, local images, etc"
 }
 
@@ -184,8 +273,9 @@ bring_up_source_data() {
 }
 
 bring_up_introspection() {
+    mkdir -p prometheus/data
+    chmod 777 prometheus/data
     dc_up grafana
-    runv chmod 777 prometheus/data
 }
 
 bring_up_metabase() {
@@ -207,7 +297,9 @@ initialize_warehouse() {
 
 # Start a single service and all its dependencies
 dc_up() {
-    runv docker-compose up -d --build "$@"
+    local -a services=()
+    parse_opts services "$@"
+    runv docker-compose up -d --build "${services[@]}"
 }
 
 # Stop the named docker-compose service
@@ -373,12 +465,13 @@ restart() {
 # Forcibly remove Docker state. Use when there are inexplicable Docker issues.
 dc_nuke() {
     shut_down
-    rm -rf prometheus/data
+    rm -rf prometheus/data/*
     runv docker system prune -af
     runv docker volume prune -f
 }
 
 clean_load_test() {
+    parse_opts ERROR "$@"
     echo "$(uw WARNING:) nuking everything docker"
     for i in {5..1}; do
         echo -n "$i "
@@ -420,10 +513,12 @@ ci() {
 # Long-running load test
 load_test() {
     if [[ "${1:-}" = --up ]]; then
+        shift
         initialize_warehouse
         bring_up_source_data
         bring_up_introspection
     fi
+    parse_opts ERROR "$@"
     drop_kafka_topics
     dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
     dc_run -d chbench run \
@@ -434,7 +529,7 @@ load_test() {
     dc_ensure_stays_up chbench 20
     dc_logs chbench
     dc_run -d peeker \
-         --queries loadtest
+         "${PEEKER_COMMAND[@]}"
     dc_ensure_stays_up peeker
     dc_status
 }
