@@ -22,26 +22,26 @@ use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
-use interchange::avro::Encoder;
+use interchange::avro::{DiffPair, Encoder};
 use ore::collections::CollectionExt;
 use repr::{RelationDesc, Row};
 
-// TODO@jldlaughlin: What guarantess does this sink support? #1728
+// TODO@jldlaughlin: What guarantees does this sink support? #1728
 pub fn kafka<G>(
     stream: &Stream<G, (Row, Timestamp, Diff)>,
     id: GlobalId,
     connector: KafkaSinkConnector,
-    relation_desc: RelationDesc,
+    desc: RelationDesc,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let schema = interchange::avro::encode_schema(&relation_desc).expect("");
-
+    let encoder = Encoder::new(desc);
     // Send new schema to registry, get back the schema id for the sink.
     // TODO(benesch): don't block the worker thread here.
     let ccsr_client = ccsr::Client::new(connector.schema_registry_url.clone());
     let schema_name = format!("{}-value", connector.topic);
-    match ccsr_client.publish_schema(&schema_name, &schema.to_string()) {
+    let schema = encoder.writer_schema().canonical_form();
+    match ccsr_client.publish_schema(&schema_name, &schema) {
         Ok(schema_id) => {
             let mut config = ClientConfig::new();
             config.set("bootstrap.servers", &connector.url.to_string());
@@ -85,13 +85,26 @@ pub fn kafka<G>(
             let producer: FutureProducer = config.create().unwrap();
 
             stream.sink(Pipeline, &format!("kafka-{}", id), move |input| {
-                let encoder = Encoder::new(&schema.to_string());
                 input.for_each(|_, rows| {
                     for (row, _time, diff) in rows.iter() {
-                        let buf = encoder.encode(schema_id, row, *diff);
-                        let record: FutureRecord<&Vec<u8>, _> =
-                            FutureRecord::to(&connector.topic).payload(&buf);
-                        producer.send(record, 1000 /* block_ms */);
+                        let diff_pair = if *diff < 0 {
+                            DiffPair {
+                                before: Some(row),
+                                after: None,
+                            }
+                        } else {
+                            DiffPair {
+                                before: None,
+                                after: Some(row),
+                            }
+                        };
+                        let buf = encoder.encode(schema_id, diff_pair);
+                        for _ in 0..diff.abs() {
+                            producer.send(
+                                FutureRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf),
+                                1000, /* block_ms */
+                            );
+                        }
                     }
                 })
             })

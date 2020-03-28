@@ -12,26 +12,26 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 
-use avro::schema::{
-    resolve_schemas, RecordField, Schema, SchemaFingerprint, SchemaNode, SchemaNodeOrNamed,
-    SchemaPiece, SchemaPieceOrNamed, UnionSchema,
-};
-use avro::types::{DecimalValue, Value};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
-use failure::{bail, format_err};
+use chrono::Timelike;
+use failure::bail;
 use futures::executor::block_on;
-use log::error;
+use itertools::Itertools;
 use serde_json::json;
-
 use sha2::Sha256;
 use url::Url;
 
+use avro::schema::{
+    resolve_schemas, Schema, SchemaFingerprint, SchemaNode, SchemaNodeOrNamed, SchemaPiece,
+    SchemaPieceOrNamed,
+};
+use avro::types::{DecimalValue, Value};
 use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
+use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
-use repr::jsonb::Jsonb;
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -340,7 +340,7 @@ where
 /// Extract a debezium-format Avro object by parsing it fully,
 /// i.e., when the record isn't laid out such that we can extract the `before` and
 /// `after` fields without decoding the entire record.
-pub fn extract_debezium_slow(v: Value) -> Result<DiffPair> {
+pub fn extract_debezium_slow(v: Value) -> Result<DiffPair<Row>> {
     let mut before = None;
     let mut after = None;
     match v {
@@ -361,9 +361,9 @@ pub fn extract_debezium_slow(v: Value) -> Result<DiffPair> {
 }
 
 #[derive(Debug)]
-pub struct DiffPair {
-    pub before: Option<Row>,
-    pub after: Option<Row>,
+pub struct DiffPair<T> {
+    pub before: Option<T>,
+    pub after: Option<T>,
 }
 
 /// Manages decoding of Avro-encoded bytes.
@@ -436,7 +436,7 @@ impl Decoder {
     }
 
     /// Decodes Avro-encoded `bytes` into a `DiffPair`.
-    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair> {
+    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair<Row>> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a big
         // endian 32-bit schema ID.
@@ -501,71 +501,90 @@ impl Decoder {
     }
 }
 
-pub fn encode_schema(desc: &RelationDesc) -> Result<serde_json::Value> {
+/// Builds an Avro schema that corresponds to `desc`.
+///
+/// Requires that all column names in `desc` are present. The returned schema
+/// has some special properties to ease encoding:
+///
+///   * Union schemas are only used to represent nullability. The first
+///     variant is always the null variant, and the second and last variant
+///     is the non-null variant.
+fn build_schema(desc: &RelationDesc) -> Schema {
     let mut fields = Vec::new();
     for (name, typ) in desc.iter() {
-        let field_name = match name {
-            Some(name) => name.as_str(),
-            None => bail!("All Kafka sink columns must have a name."),
-        };
-
-        // todo@jldlaughlin: Support all ScalarTypes #1517
-        let field_type = match typ.scalar_type {
-            ScalarType::Unknown => "null",
-            ScalarType::Bool => "boolean",
-            ScalarType::Int32 => "int",
-            ScalarType::Int64 => "long",
-            ScalarType::Float32 => "float",
-            ScalarType::Float64 => "double",
-            ScalarType::Decimal(_, _) => "decimal",
-            ScalarType::Date => "date",
-            //            ScalarType::Timestamp => ,
-            //            ScalarType::TimestampTz => ,
-            ScalarType::Interval => "duration",
-            ScalarType::Bytes => "bytes",
-            ScalarType::String => "string",
-            //            ScalarType::Jsonb => ,
-            _ => bail!(
-                "Do not support schemas with field type: {:#?}",
-                typ.scalar_type
-            ),
-        };
-        let field_types = match typ.nullable {
-            true => json!({
-                "name": field_name,
-                "type": ["null", field_type],
+        let mut field_type = match typ.scalar_type {
+            ScalarType::Unknown => json!("null"),
+            ScalarType::Bool => json!("boolean"),
+            ScalarType::Int32 => json!("int"),
+            ScalarType::Int64 => json!("long"),
+            ScalarType::Float32 => json!("float"),
+            ScalarType::Float64 => json!("double"),
+            ScalarType::Decimal(p, s) => json!({
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": p,
+                "scale": s,
             }),
-            false => json!({
-                "name": field_name,
-                "type": field_type, // Want a string, not a list!
+            ScalarType::Date => json!({
+                "type": "string",
+                "logicalType": "date",
+            }),
+            ScalarType::Time => json!({
+                "type": "long",
+                "logicalType": "time-micros",
+            }),
+            ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+                "type": "string",
+                "connect.name": "io.debezium.time.MicroTimestamp",
+                "logicalType": "timestamp-micros"
+            }),
+            ScalarType::Interval => json!({
+                "type": "fixed",
+                "size": 12,
+                "logicalType": "duration"
+            }),
+            ScalarType::Bytes => json!("bytes"),
+            ScalarType::String => json!("string"),
+            ScalarType::Jsonb => json!({
+                "type": "string",
+                "connect.name": "io.debezium.data.Json",
             }),
         };
-        fields.push(field_types);
+        if typ.nullable && typ.scalar_type != ScalarType::Unknown {
+            field_type = json!(["null", field_type]);
+        }
+        fields.push(json!({
+            "name": name.expect("function preconditions require name to be present"),
+            "type": field_type,
+        }));
     }
-
-    // Add before and after wrapper.
-    Ok(json!({
+    let schema = json!({
         "type": "record",
         "name": "envelope",
-        "fields":
-            [
-                {"name": "before",
-                 "type": [
+        "fields": [
+            {
+                "name": "before",
+                "type": [
+                    "null",
                     {
                         "name": "row",
                         "type": "record",
                         "fields": fields,
-                    },
-                        "null"
-                  ]},
-                {"name": "after",
-                 "type": [ "row",  "null" ]}
-            ]
-    }))
+                    }
+                ]
+            },
+            {
+                "name": "after",
+                "type": ["null", "row"]
+            }
+        ]
+    });
+    Schema::parse(&schema).expect("valid schema constructed")
 }
 
 /// Manages encoding of Avro-encoded bytes.
 pub struct Encoder {
+    desc: RelationDesc,
     writer_schema: Schema,
 }
 
@@ -578,213 +597,120 @@ impl fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    pub fn new(raw_schema: &str) -> Self {
-        let writer_schema = parse_schema(raw_schema).unwrap();
-        Encoder { writer_schema }
+    pub fn new(mut desc: RelationDesc) -> Self {
+        // Invent names for columns that don't have a name.
+        let missing_names: Vec<_> = desc
+            .iter_names()
+            .enumerate()
+            .filter_map(|(i, name)| match name {
+                Some(_) => None,
+                None => Some(i),
+            })
+            .collect();
+        for i in missing_names {
+            desc.set_name(i, Some(format!("column{}", i).into()));
+        }
+
+        let writer_schema = build_schema(&desc);
+        Encoder {
+            desc,
+            writer_schema,
+        }
+    }
+
+    pub fn writer_schema(&self) -> &Schema {
+        &self.writer_schema
     }
 
     /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
     /// See function implementation for Confluent-specific details.
-    pub fn encode(&self, schema_id: i32, row: &Row, diff: isize) -> Vec<u8> {
+    pub fn encode(&self, schema_id: i32, diff_pair: DiffPair<&Row>) -> Vec<u8> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a
         // 32-bit schema ID.
         //
         // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
         let mut buf = Vec::new();
-        buf.write_u8(0).unwrap();
-        buf.write_i32::<NetworkEndian>(schema_id).unwrap();
-        buf.extend(self.row_to_avro(row, diff).unwrap());
+        buf.write_u8(0).expect("writing to vec cannot fail");
+        buf.write_i32::<NetworkEndian>(schema_id)
+            .expect("writing to vec cannot fail");
+        buf.extend(self.diff_pair_to_avro(diff_pair));
         buf
     }
 
-    fn row_to_avro(&self, row: &Row, diff: isize) -> Result<Vec<u8>> {
-        let node = self.writer_schema.top_node();
-        match node.inner {
-            SchemaPiece::Record { fields, .. } => match fields.as_slice() {
-                [before, _after] => {
-                    let before_union = match &before.schema {
-                        SchemaPieceOrNamed::Piece(SchemaPiece::Union(us)) => us,
-                        _ => bail!("Expected \"before\" to be nullable"),
-                    };
-                    let null_idx = before_union
-                        .resolve_piece(&SchemaPiece::Null)
-                        .ok_or_else(|| format_err!("Expected \"before\" to be nullable"))?
-                        .0;
-                    let avro_val = Self::data_to_avro(node.step(&before.schema), &row.unpack())?;
-                    // Add wrapper Record with before and after RecordFields
-                    let wrapped_avro_val = if diff == -1 {
-                        Value::Record(vec![
-                            ("before".into(), avro_val),
-                            (
-                                "after".into(),
-                                Value::Union(null_idx, Box::from(Value::Null)),
-                            ),
-                        ])
-                    } else {
-                        if diff != 1 {
-                            error!("Received an invalid diff {} when encoding a avro record. Defaulting to encode as insert", diff);
-                        }
-                        Value::Record(vec![
-                            (
-                                "before".into(),
-                                Value::Union(null_idx, Box::from(Value::Null)),
-                            ),
-                            ("after".into(), avro_val),
-                        ])
-                    };
-
-                    avro::to_avro_datum(&self.writer_schema, wrapped_avro_val)
-                }
-                _ => bail!("Expected schema to contain before and after fields."),
-            },
-            _ => bail!("Expected schema to be wrapped in a Schema::Record"),
-        }
+    fn diff_pair_to_avro(&self, diff_pair: DiffPair<&Row>) -> Vec<u8> {
+        let before = match diff_pair.before {
+            None => Value::Union(0, Box::new(Value::Null)),
+            Some(row) => {
+                let row = self.row_to_avro(row.unpack());
+                Value::Union(1, Box::new(row))
+            }
+        };
+        let after = match diff_pair.before {
+            None => Value::Union(0, Box::new(Value::Null)),
+            Some(row) => {
+                let row = self.row_to_avro(row.unpack());
+                Value::Union(1, Box::new(row))
+            }
+        };
+        let val = Value::Record(vec![("before".into(), before), ("after".into(), after)]);
+        avro::to_avro_datum(&self.writer_schema, val).expect("schema constructed to match val")
     }
 
-    fn data_to_avro(record_schema: SchemaNode, data: &[Datum]) -> Result<Value> {
-        Ok(match data {
-            [] => bail!("Expected to convert Datum to type {:#?}, but no Datum found."),
-            [datum] => {
-                match record_schema.inner {
-                    SchemaPiece::Null => match datum {
-                        Datum::Null => Value::Null,
-                        _ => bail!(
-                            "Schema expected Datum to be Null, Datum was non-Null type: {:#?}.",
-                            datum
-                        ),
-                    },
-                    SchemaPiece::Boolean => Value::Boolean(datum.unwrap_bool()),
-                    SchemaPiece::Int => Value::Int(datum.unwrap_int32()),
-                    SchemaPiece::Long => Value::Long(datum.unwrap_int64()),
-                    SchemaPiece::Float => Value::Float(datum.unwrap_float32()),
-                    SchemaPiece::Double => Value::Double(datum.unwrap_float64()),
-                    SchemaPiece::Date => Value::Date(datum.unwrap_date()),
-                    SchemaPiece::TimestampMilli => Value::Timestamp(datum.unwrap_timestamp()),
-                    SchemaPiece::TimestampMicro => Value::Timestamp(datum.unwrap_timestamp()),
-                    SchemaPiece::Decimal {
-                        precision, scale, ..
-                    } => Value::Decimal(DecimalValue {
+    fn row_to_avro(&self, row: Vec<Datum>) -> Value {
+        let fields = self
+            .desc
+            .iter()
+            .zip_eq(row)
+            .map(|((name, typ), datum)| {
+                let name = name.expect("name known to exist").as_str().to_owned();
+                if typ.nullable && typ.scalar_type != ScalarType::Unknown && datum.is_null() {
+                    return (name, Value::Union(0, Box::new(Value::Null)));
+                }
+                let mut val = match typ.scalar_type {
+                    ScalarType::Unknown => Value::Null,
+                    ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
+                    ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
+                    ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
+                    ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
+                    ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
+                    ScalarType::Decimal(p, s) => Value::Decimal(DecimalValue {
                         unscaled: datum.unwrap_decimal().as_i128().to_be_bytes().to_vec(),
-                        precision: precision.clone(),
-                        scale: scale.clone(),
+                        precision: p.into(),
+                        scale: s.into(),
                     }),
-                    SchemaPiece::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                    SchemaPiece::String => Value::String(String::from(datum.unwrap_str())),
-                    SchemaPiece::Array(array) => {
-                        let mut value_array = Vec::new();
-                        for d in datum.unwrap_list().iter() {
-                            value_array.push(
-                                Self::data_to_avro(record_schema.step(&*array), &[d]).unwrap(),
-                            )
-                        }
-                        Value::Array(value_array)
+                    ScalarType::Date => Value::Date(datum.unwrap_date()),
+                    ScalarType::Time => Value::Long({
+                        let time = datum.unwrap_time();
+                        (time.num_seconds_from_midnight() * 1_000_000) as i64
+                            + (time.nanosecond() as i64) / 1_000
+                    }),
+                    ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp()),
+                    ScalarType::TimestampTz => {
+                        Value::Timestamp(datum.unwrap_timestamptz().naive_utc())
                     }
-                    SchemaPiece::Map(map) => {
-                        let mut value_map = HashMap::new();
-                        for (key, datum) in datum.unwrap_dict().iter() {
-                            value_map.insert(
-                                String::from(key),
-                                Self::data_to_avro(record_schema.step(&*map), &[datum]).unwrap(),
-                            );
-                        }
-                        Value::Map(value_map)
+                    ScalarType::Interval => Value::Fixed(12, {
+                        let iv = datum.unwrap_interval();
+                        let mut buf = Vec::with_capacity(12);
+                        buf.extend(&(iv.months as i32).to_le_bytes());
+                        buf.extend(&0i32.to_le_bytes());
+                        buf.extend(&(iv.duration.as_millis() as i32).to_le_bytes());
+                        debug_assert_eq!(buf.len(), 12);
+                        buf
+                    }),
+                    ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
+                    ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
+                    ScalarType::Jsonb => {
+                        Value::Json(Jsonb::from_datum(datum.clone()).into_serde_json())
                     }
-                    SchemaPiece::Enum { symbols, .. } => {
-                        let symbol = datum.unwrap_str();
-                        let position = symbols.iter().position(|s| s == symbol);
-                        match position {
-                            Some(p) => Value::Enum(p as i32, String::from(symbol)),
-                            None => bail!(
-                                "Datum has value {:#?}, not found in Enum symbols: {:#?}",
-                                symbol,
-                                symbols
-                            ),
-                        }
-                    }
-                    SchemaPiece::Fixed { size } => {
-                        Value::Fixed(*size, Vec::from(datum.unwrap_bytes()))
-                    }
-                    // Schema::Union and Schema::Record can serialize >= 1 Datums
-                    SchemaPiece::Union(union) => {
-                        Self::convert_to_avro_union(record_schema, data, union)?
-                    }
-                    SchemaPiece::Record { fields, .. } => {
-                        Self::convert_to_avro_record(record_schema, data, fields)?
-                    }
-                    SchemaPiece::Json => {
-                        let j = Jsonb::from_datum(datum.clone()).into_serde_json();
-                        Value::Json(j)
-                    }
-                    SchemaPiece::ResolveIntLong
-                    | SchemaPiece::ResolveIntFloat
-                    | SchemaPiece::ResolveIntDouble
-                    | SchemaPiece::ResolveLongFloat
-                    | SchemaPiece::ResolveLongDouble
-                    | SchemaPiece::ResolveFloatDouble
-                    | SchemaPiece::ResolveConcreteUnion { .. }
-                    | SchemaPiece::ResolveUnionUnion { .. }
-                    | SchemaPiece::ResolveUnionConcrete { .. }
-                    | SchemaPiece::ResolveRecord { .. }
-                    | SchemaPiece::ResolveEnum { .. } => {
-                        bail!("Can't use resolved schema in encoder")
-                    }
+                };
+                if typ.nullable && typ.scalar_type != ScalarType::Unknown {
+                    val = Value::Union(1, Box::new(val));
                 }
-            }
-            _ => match record_schema.inner {
-                // Schema::Union and Schema::Record can serialize >= 1 Datums
-                SchemaPiece::Union(union) => {
-                    Self::convert_to_avro_union(record_schema, data, union)?
-                }
-                SchemaPiece::Record { fields, .. } => {
-                    Self::convert_to_avro_record(record_schema, data, fields)?
-                }
-                _ => bail!(
-                    "Expected to convert Datum to type {:#?}, but more than one Datum found.",
-                    record_schema.inner
-                ),
-            },
-        })
-    }
-
-    fn convert_to_avro_record(
-        schema: SchemaNode,
-        data: &[Datum],
-        fields: &[RecordField],
-    ) -> Result<Value> {
-        let mut vals = Vec::new();
-        for (rf, datum) in fields.iter().zip(data) {
-            match rf {
-                avro::schema::RecordField {
-                    name,
-                    schema: inner,
-                    ..
-                } => {
-                    vals.push((
-                        String::from(name),
-                        Self::data_to_avro(schema.step(inner), &[*datum])?,
-                    ));
-                }
-            }
-        }
-        Ok(Value::Record(vals))
-    }
-
-    fn convert_to_avro_union(
-        schema: SchemaNode,
-        data: &[Datum],
-        union: &UnionSchema,
-    ) -> Result<Value> {
-        let mut value = None;
-        for (i, s) in union.variants().iter().enumerate() {
-            if let Ok(v) = Self::data_to_avro(schema.step(s), data) {
-                value = Some(Value::Union(i, Box::new(v)))
-            }
-        }
-        match value {
-            Some(v) => Ok(v),
-            None => bail!("Unable to parse Datum into any Avro schema options."),
-        }
+                (name, val)
+            })
+            .collect();
+        Value::Record(fields)
     }
 }
 
@@ -828,16 +754,17 @@ impl SchemaCache {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use failure::ResultExt;
     use ordered_float::OrderedFloat;
     use serde::Deserialize;
     use std::fs::File;
 
-    use avro::schema::Schema;
     use avro::types::{DecimalValue, Value};
     use repr::decimal::Significand;
     use repr::{Datum, RelationDesc};
+
+    use super::*;
 
     #[derive(Deserialize)]
     struct TestCase {
@@ -848,7 +775,7 @@ mod tests {
 
     #[test]
     #[ignore] // TODO(benesch): update tests for diff envelope.
-    fn test_schema_parsing() -> Result<(), failure::Error> {
+    fn test_schema_parsing() -> Result<()> {
         let file = File::open("interchange/testdata/avro-schema.json")
             .context("opening test data file")?;
         let test_cases: Vec<TestCase> =
@@ -873,13 +800,7 @@ mod tests {
     /// Complete list of primitive types in test, also found in this
     /// documentation:
     /// https://avro.apache.org/docs/current/spec.html#schemas
-    fn test_row_to_avro_primitive_types() -> Result<(), failure::Error> {
-        //        // The Encoder's schema is not used in data_to_avro(), use simple mock instead.
-        //        let dummy_relation_desc = RelationDesc::empty();
-        //        let schema = super::encode_schema(&dummy_relation_desc)?;
-        //
-        //        let encoder = super::Encoder::new(&schema.to_string());
-
+    fn test_diff_pair_to_avro_primitive_types() -> Result<()> {
         // Data to be used later in assertions.
         let date = NaiveDate::from_ymd(2020, 1, 8);
         let date_time = NaiveDateTime::new(date, NaiveTime::from_hms(1, 1, 1));
@@ -888,39 +809,35 @@ mod tests {
 
         // Simple transformations from primitive Avro Schema types
         // to Avro Values.
-        let valid_pairings = [
-            ("\"null\"", Datum::Null, Value::Null),
-            ("\"boolean\"", Datum::True, Value::Boolean(true)),
-            ("\"boolean\"", Datum::False, Value::Boolean(false)),
-            ("\"int\"", Datum::Int32(1), Value::Int(1)),
-            ("\"long\"", Datum::Int64(1), Value::Long(1)),
+        let valid_pairings = vec![
+            (ScalarType::Unknown, Datum::Null, Value::Null),
+            (ScalarType::Bool, Datum::True, Value::Boolean(true)),
+            (ScalarType::Bool, Datum::False, Value::Boolean(false)),
+            (ScalarType::Int32, Datum::Int32(1), Value::Int(1)),
+            (ScalarType::Int64, Datum::Int64(1), Value::Long(1)),
             (
-                "\"float\"",
+                ScalarType::Float32,
                 Datum::Float32(OrderedFloat::from(1f32)),
                 Value::Float(1f32),
             ),
             (
-                "\"double\"",
+                ScalarType::Float64,
                 Datum::Float64(OrderedFloat::from(1f64)),
                 Value::Double(1f64),
             ),
+            (ScalarType::Date, Datum::Date(date), Value::Date(date)),
             (
-                r#"{"type": "int", "logicalType": "date"}"#,
-                Datum::Date(date),
-                Value::Date(date),
-            ),
-            (
-                r#"{"type": "long", "logicalType": "timestamp-millis"}"#,
+                ScalarType::Timestamp,
                 Datum::Timestamp(date_time),
                 Value::Timestamp(date_time),
             ),
             (
-                r#"{"type": "long", "logicalType": "timestamp-micros"}"#,
-                Datum::Timestamp(date_time),
+                ScalarType::TimestampTz,
+                Datum::TimestampTz(DateTime::from_utc(date_time, Utc)),
                 Value::Timestamp(date_time),
             ),
             (
-                r#"{"type": "bytes", "logicalType": "decimal", "precision": 1, "scale": 1}"#,
+                ScalarType::Decimal(1, 1),
                 Datum::Decimal(Significand::new(1i128)),
                 Value::Decimal(DecimalValue {
                     unscaled: bytes.clone(),
@@ -929,20 +846,26 @@ mod tests {
                 }),
             ),
             (
-                "\"bytes\"",
+                ScalarType::Bytes,
                 Datum::Bytes(&bytes),
                 Value::Bytes(bytes.clone()),
             ),
             (
-                "\"string\"",
+                ScalarType::String,
                 Datum::String(&string),
                 Value::String(string.clone()),
             ),
         ];
-        for (s, d, expected) in valid_pairings.iter() {
-            let avro_value =
-                super::Encoder::data_to_avro(Schema::parse_str(*s).unwrap().top_node(), &[*d])?;
-            assert_eq!(*expected, avro_value);
+        for (typ, datum, expected) in valid_pairings {
+            let desc = RelationDesc::new(
+                RelationType::new(vec![ColumnType::new(typ)]),
+                vec!["column1".into()],
+            );
+            let avro_value = Encoder::new(desc).row_to_avro(vec![datum]);
+            assert_eq!(
+                Value::Record(vec![("column1".into(), expected)]),
+                avro_value
+            );
         }
 
         Ok(())

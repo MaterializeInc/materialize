@@ -669,9 +669,6 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     let from = scx.resolve_name(from)?;
     let catalog_entry = scx.catalog.get(&from)?;
 
-    // Validate that we can actually encode this stream as Avro.
-    let relation_desc = catalog_entry.desc()?.clone();
-    let _ = interchange::avro::encode_schema(&relation_desc)?;
     let topic_name = format!(
         "{}-{}-{}",
         topic,
