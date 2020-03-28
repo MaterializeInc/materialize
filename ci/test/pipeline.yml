@@ -13,7 +13,7 @@ steps:
   - id: build
     label: ":docker: build"
     command: ci/test/build.sh
-    if: $CHANGED_RUST || $CHANGED_SLT || $CHANGED_TESTDRIVE
+    if: $CHANGED_RUST || $CHANGED_CHBENCH || $CHANGED_SLT || $CHANGED_TESTDRIVE
     timeout_in_minutes: 30
     agents:
       queue: builder
@@ -120,7 +120,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
-    if: $CHANGED_RUST
+    if: $CHANGED_RUST || $CHANGED_CHBENCH
 
   - id: catalog-compat
     label: ":book: catalog compatibility check"

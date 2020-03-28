@@ -39,7 +39,8 @@ CHANGED_DOC_USER=$(changes_matching "doc/user/*")
 CHANGED_RUST=$(changes_matching "src/*" Cargo.lock)
 CHANGED_SLT=$(changes_matching "test/*.slt" "test/**/*.slt")
 CHANGED_TESTDRIVE=$(changes_matching "test/*.td" "test/**/*.td")
-export CHANGED_DOC_USER CHANGED_RUST CHANGED_SLT CHANGED_TESTDRIVE
+CHANGED_CHBENCH=$(changes_matching "demo/chbench/*")
+export CHANGED_DOC_USER CHANGED_RUST CHANGED_SLT CHANGED_TESTDRIVE CHANGED_CHBENCH
 
 GIT_PAGER="" run git diff --stat origin/master...
 env | grep CHANGED

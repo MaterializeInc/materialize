@@ -37,6 +37,9 @@ export PEEKER_IMG=materialize/peeker:latest
 HELP=n
 PEEKER_COMMAND=(--queries loadtest)
 
+# Used for passing options back and forth
+declare -a OPTIONS=()
+
 main() {
     if [[ $# -lt 1 ]]; then
         usage
@@ -105,10 +108,10 @@ main() {
             ;;
         ci) ci;;
         *)
-            local unrec
-            parse_opts unrec "$arg"
-            if [[ "${#unrec[@]}" -gt 0 ]]; then
-                echo "ERROR: Unrecognized argument: '${unrec[*]}'"
+            OPTIONS=()
+            parse_opts "$arg"
+            if [[ "${#OPTIONS[@]}" -gt 0 ]]; then
+                echo "ERROR: Unrecognized argument: '${OPTIONS[*]}'"
                 usage short
             fi
             if [[ $HELP == y ]]; then
@@ -123,12 +126,12 @@ main() {
 
 parse_opts() {
     local err_unreq=n
-    local first="${1}" && shift
+    local first="${1}"
     if [[ "$first" == ERROR ]]; then
         err_unreq=y
+        shift
     else
-        local -n __unrec="$first"
-        __unrec=()
+        OPTIONS=()
     fi
     local opt
     while [[ "$#" -gt 0 ]]; do
@@ -169,7 +172,7 @@ parse_opts() {
                 if [[ $err_unreq == y ]]; then
                     die "Unrecognized option: '$opt'"
                 else
-                    __unrec+=("$opt")
+                    OPTIONS+=("$opt")
                 fi
                 ;;
         esac
@@ -297,9 +300,8 @@ initialize_warehouse() {
 
 # Start a single service and all its dependencies
 dc_up() {
-    local -a services=()
-    parse_opts services "$@"
-    runv docker-compose up -d --build "${services[@]}"
+    parse_opts "$@"
+    runv docker-compose up -d --build "${OPTIONS[@]}"
 }
 
 # Stop the named docker-compose service
