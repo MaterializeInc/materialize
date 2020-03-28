@@ -130,7 +130,7 @@ impl FoldConstants {
             }
             RelationExpr::Threshold { input } => {
                 if let RelationExpr::Constant { rows, .. } = &mut **input {
-                    rows.retain(|(_, diff| *diff > 0);
+                    rows.retain(|(_, diff)| *diff > 0);
                     *relation = input.take_dangerous();
                 }
             }
