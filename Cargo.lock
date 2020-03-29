@@ -1360,6 +1360,7 @@ dependencies = [
  "criterion",
  "failure",
  "futures",
+ "itertools",
  "log",
  "num-traits",
  "ordered-float",
