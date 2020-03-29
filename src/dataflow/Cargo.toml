@@ -21,7 +21,7 @@ expr = { path = "../expr" }
 failure = "0.1"
 futures = "0.3"
 interchange = { path = "../interchange" }
-itertools = "0.8"
+itertools = "0.9"
 lazy_static = "1.4"
 log = "0.4"
 notify = "4.0"
