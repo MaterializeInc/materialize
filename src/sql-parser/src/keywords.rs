@@ -453,6 +453,7 @@ define_keywords!(
     TRIM_ARRAY,
     TRUE,
     TRUNCATE,
+    TYPED,
     UESCAPE,
     UNBOUNDED,
     UNCOMMITTED,

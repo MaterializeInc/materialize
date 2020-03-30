@@ -123,3 +123,87 @@ EXPLAIN PLAN FOR VIEW foo
 | Constant (1)
 
 EOF
+
+query T multiline
+EXPLAIN TYPED DATAFLOW FOR VIEW foo
+----
+0 =
+| Constant ()
+| | types = ()
+| | keys = ()
+
+1 =
+| Get %0
+| | types = ()
+| | keys = ()
+
+2 =
+| Constant ()
+| | types = ()
+| | keys = ()
+
+3 =
+| Join %1 %2
+| | implementation = Unimplemented
+| | types = ()
+| | keys = ()
+
+4 =
+| Get %0
+| | types = ()
+| | keys = ()
+
+5 =
+| Constant ()
+| | types = ()
+| | keys = ()
+
+6 =
+| Join %4 %5
+| | implementation = Unimplemented
+| | types = ()
+| | keys = ()
+| Map 1
+| | types = (i32)
+| | keys = ()
+| Project (#0)
+| | types = (i32)
+| | keys = ()
+| Project (#0)
+| | types = (i32)
+| | keys = ()
+
+7 =
+| Get %3
+| | types = ()
+| | keys = ()
+
+8 =
+| Get %6
+| | types = (i32)
+| | keys = ()
+
+9 =
+| Join %7 %8
+| | implementation = Unimplemented
+| | types = (i32)
+| | keys = ()
+| Project (#0)
+| | types = (i32)
+| | keys = ()
+| Filter true
+| | types = (i32)
+| | keys = ()
+
+10 =
+| Get %9
+| | types = (i32)
+| | keys = ()
+| Map #0
+| | types = (i32, i32)
+| | keys = ()
+| Project (#1)
+| | types = (i32)
+| | keys = ()
+
+EOF

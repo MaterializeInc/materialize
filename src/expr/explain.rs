@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use super::{
+    AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
+    ScalarExpr,
+};
 /// This is the implementation for the EXPLAIN command.
 ///
 /// Conventions:
@@ -18,10 +22,7 @@
 /// * Collections of columns are written as ranges where possible eg "#2..#5"
 ///
 /// It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
-use super::{
-    AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
-    ScalarExpr,
-};
+use repr::RelationType;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -322,6 +323,21 @@ impl RelationExpr {
         }
 
         Explanation { nodes }
+    }
+}
+
+impl<'a> Explanation<'a> {
+    pub fn explain_types(&mut self) {
+        for node in &mut self.nodes {
+            // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
+            let RelationType { column_types, keys } = node.expr.typ();
+            node.annotations
+                .push(format!("types = ({})", Separated(", ", column_types)));
+            node.annotations.push(format!(
+                "keys = ({})",
+                Separated(", ", keys.iter().map(|key| Indices(key)).collect())
+            ));
+        }
     }
 }
 
