@@ -7,9 +7,13 @@ skip = [
     # Awaiting https://github.com/bheisler/criterion.rs/pull/398.
     { name = "itertools", version = "0.8.0" },
 
-    # Waiting on https://github.com/RustCrypto/utils/pull/39 and releases for
-    # https://github.com/RustCrypto/traits.
-    { name = "generic-array", version = "0.12.0" },
+    # Awaiting:
+    #   - reqwest 0.13.5 (https://github.com/seanmonstar/reqwest/releases)
+    #   - redox-users (https://gitlab.redox-os.org/redox-os/users/-/merge_requests/34)
+    { name = "base64", version = "0.11.0" },
+
+    # Awaiting h2 0.2.4 (https://github.com/hyperium/h2/releases).
+    { name = "tokio-util", version = "0.2" },
 
     # Waiting on mio 0.7: https://github.com/tokio-rs/tokio/issues/1190.
     { name = "miow", version = "0.2.1" },

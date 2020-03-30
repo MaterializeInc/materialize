@@ -122,8 +122,7 @@ impl Default for Codec {
     }
 }
 
-impl Encoder for Codec {
-    type Item = BackendMessage;
+impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
