@@ -27,6 +27,7 @@ pub mod normalize;
 
 mod explain;
 mod expr;
+mod kafka_util;
 mod query;
 mod scope;
 mod session;
