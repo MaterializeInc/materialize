@@ -28,15 +28,29 @@ use ore::collections::CollectionExt;
 use repr::{RelationDesc, Row};
 
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
-pub fn kafka<G>(
+pub fn kafka<G, H>(
+    scope: &H,
     stream: &Stream<G, (Row, Timestamp, Diff)>,
     id: GlobalId,
     connector: KafkaSinkConnector,
     desc: RelationDesc,
-    write_to_kafka: bool,
 ) where
     G: Scope<Timestamp = Timestamp>,
+    H: Scope<Timestamp = Timestamp>,
 {
+    // NB: This code relies on timely dataflow details about how Exchange channels
+    // route data to workers
+    // We want exactly one worker to create the new sink topic and send all the
+    // data to that topic. Therefore, our logic for selecting a new worker ( to
+    // create the sink topic) must match Timely's logic for routing data via
+    // Exchange channels. For the forseeable future, Timely routes data over
+    // them by taking the generated u64 key % number_of_workers, so passing
+    // the sink hash works
+    let index = scope.index();
+    let peers = scope.peers();
+    let sink_hash = id.hashed() as usize;
+    let write_to_kafka = sink_hash % peers == index;
+
     let encoder = Encoder::new(desc);
     // Send new schema to registry, get back the schema id for the sink.
     // TODO(benesch): don't block the worker thread here.
@@ -86,10 +100,9 @@ pub fn kafka<G>(
                 }
             }
             let producer: FutureProducer = config.create().unwrap();
-            let hash = id.hashed();
 
             stream.sink(
-                Exchange::new(move |_| hash),
+                Exchange::new(move |_| sink_hash as u64),
                 &format!("kafka-{}", id),
                 move |input| {
                     input.for_each(|_, rows| {

@@ -411,11 +411,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
             }
 
             for (sink_id, sink) in dataflow.sink_exports.clone() {
-                // Distribute write responsibility among workers.
-                use differential_dataflow::hashable::Hashable;
-                let hash = sink_id.hashed() as usize;
-                let should_write = hash % worker_peers == worker_index;
-
                 // put together tokens that belong to the export
                 let mut needed_source_tokens = Vec::new();
                 let mut needed_index_tokens = Vec::new();
@@ -436,7 +431,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                 match sink.connector {
                     SinkConnector::Kafka(c) => {
-                        sink::kafka(&collection.inner, sink_id, c, sink.from.1, should_write)
+                        sink::kafka(scope, &collection.inner, sink_id, c, sink.from.1)
                     }
                     SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
                 }
