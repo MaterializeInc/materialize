@@ -2781,19 +2781,19 @@ impl Parser {
 
         // SQL | (RAW | DECORRELATED | OPTIMIZED)? PLAN
         let stage = if self.parse_keyword("SQL") {
-            Stage::Sql
+            ExplainStage::Sql
         } else if self.parse_keyword("RAW") {
             self.expect_keyword("PLAN")?;
-            Stage::RawPlan
+            ExplainStage::RawPlan
         } else if self.parse_keyword("DECORRELATED") {
             self.expect_keyword("PLAN")?;
-            Stage::DecorrelatedPlan
+            ExplainStage::DecorrelatedPlan
         } else if self.parse_keyword("OPTIMIZED") {
             self.expect_keyword("PLAN")?;
-            Stage::OptimizedPlan { default: false }
+            ExplainStage::OptimizedPlan { default: false }
         } else if self.parse_keyword("PLAN") {
             // default stage
-            Stage::OptimizedPlan { default: true }
+            ExplainStage::OptimizedPlan { default: true }
         } else {
             self.expected(self.peek_range(), "SQL or PLAN", self.peek_token())?
         };

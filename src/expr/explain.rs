@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/// This is the implementation for the EXPLAIN command.
+/// This is the implementation for the EXPLAIN PLAN command.
 ///
 /// Conventions:
 /// * RelationExprs are printed in post-order, left to right

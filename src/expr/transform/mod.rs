@@ -265,6 +265,10 @@ impl OptimizedRelationExpr {
     pub fn declare_optimized(expr: RelationExpr) -> OptimizedRelationExpr {
         OptimizedRelationExpr(expr)
     }
+
+    pub fn unwrap(self) -> RelationExpr {
+        self.0
+    }
 }
 
 impl AsRef<RelationExpr> for OptimizedRelationExpr {

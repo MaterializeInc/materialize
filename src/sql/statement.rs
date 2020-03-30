@@ -32,8 +32,9 @@ use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, CsrSeed, ExplainOptions, Explainee, Format, Ident, IfExistsBehavior,
-    ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
+    AvroSchema, Connector, CsrSeed, ExplainOptions, ExplainStage, Explainee, Format, Ident,
+    IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
+    Statement, Value,
 };
 
 use crate::query::QueryLifetime;
@@ -65,8 +66,10 @@ pub fn describe_statement(
         Statement::Explain { stage, .. } => (
             Some(RelationDesc::empty().add_column(
                 match stage {
-                    Stage::Dataflow => "Dataflow",
-                    Stage::Plan => "Plan",
+                    ExplainStage::Sql => "Sql",
+                    ExplainStage::RawPlan => "Raw Plan",
+                    ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+                    ExplainStage::OptimizedPlan{..} => "Optimized Plan",
                 },
                 ScalarType::String,
             )),
@@ -1387,38 +1390,44 @@ fn handle_select(
 
 fn handle_explain(
     scx: &StatementContext,
-    stage: Stage,
+    stage: ExplainStage,
     explainee: Explainee,
-    explain_options: ExplainOptions,
+    options: ExplainOptions,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let relation_expr = match explainee {
+    match explainee {
         Explainee::View(name) => {
             let full_name = scx.resolve_name(name.clone())?;
             let entry = scx.catalog.get(&full_name)?;
-            match entry.item() {
-                CatalogItem::View(view) => view.unoptimized_expr.clone(),
+            let view = match entry.item() {
+                CatalogItem::View(view) => view,
                 other => bail!(
                     "Expected {} to be a view, not a {}",
                     name,
                     other.type_string()
                 ),
-            }
+            };
+            Ok(Plan::ExplainPlan {
+                sql: view.create_sql.clone(),
+                decorrelated_plan: view.unoptimized_expr.clone(),
+                optimized_plan: Some(view.optimized_expr.as_ref().clone()),
+                stage,
+                options,
+            })
         }
-        Explainee::Query(query) => handle_query(scx, *query, params, QueryLifetime::OneShot)?.0,
-    };
-    // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
-    // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    if stage == Stage::Dataflow {
-        let mut explanation = relation_expr.explain(scx.catalog);
-        if explain_options.typed {
-            explanation.explain_types();
+        Explainee::Query(query) => {
+            let sql = query.to_string();
+            // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
+            // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
+            let expr = handle_query(scx, *query, params, QueryLifetime::OneShot)?.0;
+            Ok(Plan::ExplainPlan {
+                sql,
+                decorrelated_plan: expr,
+                optimized_plan: None,
+                stage,
+                options,
+            })
         }
-        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            &*explanation.to_string(),
-        )])]))
-    } else {
-        Ok(Plan::ExplainPlan(relation_expr, explain_options))
     }
 }
 

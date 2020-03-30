@@ -476,7 +476,7 @@ impl fmt::Display for WindowFrameBound {
 
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Stage {
+pub enum ExplainStage {
     /// The original sql string
     Sql,
     /// The sql::RelationExpr after parsing
@@ -490,14 +490,14 @@ pub enum Stage {
     },
 }
 
-impl fmt::Display for Stage {
+impl fmt::Display for ExplainStage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Stage::Sql => f.write_str("SQL"),
-            Stage::RawPlan => f.write_str("RAW PLAN"),
-            Stage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
-            Stage::OptimizedPlan { default: false } => f.write_str("OPTIMIZED PLAN"),
-            Stage::OptimizedPlan { default: true } => f.write_str("PLAN"),
+            ExplainStage::Sql => f.write_str("SQL"),
+            ExplainStage::RawPlan => f.write_str("RAW PLAN"),
+            ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
+            ExplainStage::OptimizedPlan { default: false } => f.write_str("OPTIMIZED PLAN"),
+            ExplainStage::OptimizedPlan { default: true } => f.write_str("PLAN"),
         }
     }
 }
@@ -913,7 +913,7 @@ pub enum Statement {
     },
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
     Explain {
-        stage: Stage,
+        stage: ExplainStage,
         explainee: Explainee,
         options: ExplainOptions,
     },

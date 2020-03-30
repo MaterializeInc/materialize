@@ -46,6 +46,7 @@ use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
 use sql::{Params, PreparedStatement};
+use sql_parser::ast::ExplainStage;
 
 use crate::persistence::SqlSerializer;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -1133,19 +1134,46 @@ where
 
             Plan::SendRows(rows) => Ok(send_immediate_rows(rows)),
 
-            Plan::ExplainPlan(relation_expr, explain_options) => {
-                let eval_env = EvalEnv {
-                    wall_time: Some(chrono::Utc::now()),
-                    logical_time: Some(0),
+            Plan::ExplainPlan {
+                sql,
+                decorrelated_plan,
+                optimized_plan,
+                stage,
+                options,
+            } => {
+                let explanation_string = match stage {
+                    ExplainStage::Sql => sql,
+                    ExplainStage::RawPlan => panic!("TODO(jamii)"),
+                    ExplainStage::DecorrelatedPlan | ExplainStage::OptimizedPlan { .. } => {
+                        let expr = match stage {
+                            ExplainStage::DecorrelatedPlan => decorrelated_plan,
+                            ExplainStage::OptimizedPlan { .. } => match optimized_plan {
+                                Some(optimized_plan) => optimized_plan,
+                                None => {
+                                    // if the planner doesn't have a cached optimized plan we'll have to make our own
+                                    let eval_env = EvalEnv {
+                                        wall_time: Some(chrono::Utc::now()),
+                                        logical_time: Some(0),
+                                    };
+                                    self.optimizer
+                                        .optimize(
+                                            decorrelated_plan,
+                                            self.catalog.indexes(),
+                                            &eval_env,
+                                        )?
+                                        .unwrap()
+                                }
+                            },
+                            _ => unreachable!(),
+                        };
+                        let mut explanation = expr.explain(&self.catalog);
+                        if options.typed {
+                            explanation.explain_types();
+                        }
+                        explanation.to_string()
+                    }
                 };
-                let relation_expr =
-                    self.optimizer
-                        .optimize(relation_expr, self.catalog.indexes(), &eval_env)?;
-                let mut explanation = relation_expr.as_ref().explain(&self.catalog);
-                if explain_options.typed {
-                    explanation.explain_types();
-                }
-                let rows = vec![Row::pack(&[Datum::from(&*explanation.to_string())])];
+                let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
                 Ok(send_immediate_rows(rows))
             }
 
