@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use differential_dataflow::hashable::Hashable;
 use futures::executor::block_on;
 use log::error;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
@@ -16,7 +17,7 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
 use rdkafka::producer::FutureRecord;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 
@@ -32,6 +33,7 @@ pub fn kafka<G>(
     id: GlobalId,
     connector: KafkaSinkConnector,
     desc: RelationDesc,
+    write_to_kafka: bool,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -45,69 +47,78 @@ pub fn kafka<G>(
         Ok(schema_id) => {
             let mut config = ClientConfig::new();
             config.set("bootstrap.servers", &connector.url.to_string());
-            let admin: AdminClient<DefaultClientContext> =
-                config.create().expect("creating admin kafka client failed");
 
-            let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
-            let new_topic = NewTopic::new(&connector.topic, 1, TopicReplication::Fixed(1));
-            let res = block_on(admin.create_topics(&[new_topic], &admin_opts));
-            match res {
-                Ok(res) => {
-                    if res.len() != 1 {
-                        error!(
+            if write_to_kafka {
+                let admin: AdminClient<DefaultClientContext> =
+                    config.create().expect("creating admin kafka client failed");
+
+                let admin_opts =
+                    AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
+                let new_topic = NewTopic::new(&connector.topic, 1, TopicReplication::Fixed(1));
+                let res = block_on(admin.create_topics(&[new_topic], &admin_opts));
+                match res {
+                    Ok(res) => {
+                        if res.len() != 1 {
+                            error!(
                 "error creating topic {} for sink: kafka topic creation returned {} results, but exactly one result was expected",
                 connector.topic,
                 res.len()
             );
-                        return;
-                    }
-                    match res.into_element() {
-                        Ok(_) => (),
-                        Err((_, err)) => {
-                            error!(
-                                "error creating topic {} for sink: {}",
-                                connector.topic,
-                                err.to_string()
-                            );
                             return;
                         }
-                    };
-                }
-                Err(err) => {
-                    error!(
-                        "error creating new topic {} for sink: {}",
-                        connector.topic,
-                        err.to_string()
-                    );
-                    return;
+                        match res.into_element() {
+                            Ok(_) => (),
+                            Err((_, err)) => {
+                                error!(
+                                    "error creating topic {} for sink: {}",
+                                    connector.topic,
+                                    err.to_string()
+                                );
+                                return;
+                            }
+                        };
+                    }
+                    Err(err) => {
+                        error!(
+                            "error creating new topic {} for sink: {}",
+                            connector.topic,
+                            err.to_string()
+                        );
+                        return;
+                    }
                 }
             }
             let producer: FutureProducer = config.create().unwrap();
+            let hash = id.hashed();
 
-            stream.sink(Pipeline, &format!("kafka-{}", id), move |input| {
-                input.for_each(|_, rows| {
-                    for (row, _time, diff) in rows.iter() {
-                        let diff_pair = if *diff < 0 {
-                            DiffPair {
-                                before: Some(row),
-                                after: None,
+            stream.sink(
+                Exchange::new(move |_| hash),
+                &format!("kafka-{}", id),
+                move |input| {
+                    input.for_each(|_, rows| {
+                        for (row, _time, diff) in rows.iter() {
+                            let diff_pair = if *diff < 0 {
+                                DiffPair {
+                                    before: Some(row),
+                                    after: None,
+                                }
+                            } else {
+                                DiffPair {
+                                    before: None,
+                                    after: Some(row),
+                                }
+                            };
+                            let buf = encoder.encode(schema_id, diff_pair);
+                            for _ in 0..diff.abs() {
+                                producer.send(
+                                    FutureRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf),
+                                    1000, /* block_ms */
+                                );
                             }
-                        } else {
-                            DiffPair {
-                                before: None,
-                                after: Some(row),
-                            }
-                        };
-                        let buf = encoder.encode(schema_id, diff_pair);
-                        for _ in 0..diff.abs() {
-                            producer.send(
-                                FutureRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf),
-                                1000, /* block_ms */
-                            );
                         }
-                    }
-                })
-            })
+                    })
+                },
+            )
         }
         Err(e) => error!("unable to publish schema to registry in kafka sink: {}", e),
     }
