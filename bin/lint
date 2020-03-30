@@ -70,6 +70,7 @@ copyright_files=$(grep -vE \
     -e '^misc/docker/ci-builder/ssh_known_hosts$' \
     -e 'demo/chbench/chbench' \
     -e 'src/billing-demo/resources/views/.*\.sql\.in' \
+    -e 'gen/.*\.rs' \
     <<< "$files"
 )
 
