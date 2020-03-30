@@ -61,6 +61,7 @@ pub struct Catalog {
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
     creation_time: SystemTime,
     nonce: u64,
+    sink_count: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,6 +227,7 @@ impl Catalog {
             serialize_item: S::serialize,
             creation_time: SystemTime::now(),
             nonce: rand::random(),
+            sink_count: 0,
         };
 
         let databases = catalog.storage().load_databases()?;
@@ -454,6 +456,11 @@ impl Catalog {
                 ),
             }
         }
+
+        if let CatalogItem::Sink(_) = entry.item() {
+            self.increment_sink_count();
+        }
+
         if let CatalogItem::Index(index) = entry.item() {
             self.indexes
                 .entry(index.on)
@@ -753,6 +760,14 @@ impl Catalog {
 
     pub fn nonce(&self) -> u64 {
         self.nonce
+    }
+
+    pub fn sink_count(&self) -> u64 {
+        self.sink_count
+    }
+
+    fn increment_sink_count(&mut self) {
+        self.sink_count += 1
     }
 }
 
