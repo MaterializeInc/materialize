@@ -25,8 +25,9 @@ use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding, Envelope,
-    ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
-    KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
+    ExternalSourceConnector, FileSourceConnector, KafkaAuth, KafkaSinkConnectorBuilder,
+    KafkaSourceConnector, KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder,
+    SourceConnector,
 };
 use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::Encoder;
@@ -1082,9 +1083,34 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 Connector::Kafka { broker, topic, .. } => {
                     let ssl_certificate_file = match with_options.remove("ssl_certificate_file") {
                         None => None,
-                        Some(Value::SingleQuotedString(p)) => Some(p.into()),
+                        Some(Value::SingleQuotedString(p)) => Some(p),
                         Some(_) => bail!("ssl_certificate_file must be a string"),
                     };
+
+                    let security_protocol = match with_options.remove("security_protocol") {
+                        None => None,
+                        Some(Value::SingleQuotedString(p)) => Some(p),
+                        Some(_) => bail!("ssl_certificate_file must be a string"),
+                    };
+
+                    let auth = match security_protocol.as_deref() {
+                        Some("ssl") => {
+                            match ssl_certificate_file {
+                                None => bail!("Must specify ssl_certificate_file option if security_protocol='ssl'"),
+                                Some(p) => Some(KafkaAuth::SSL(p.into()))
+                            }
+                        }
+                        Some("sasl_plaintext") => {
+                            Some(KafkaAuth::sasl_palintext_kerberos_settings(&mut with_options)?)
+                        }
+                        _ => {
+                            match ssl_certificate_file {
+                                None => None,
+                                Some(p) => Some(KafkaAuth::SSL(p.into()))
+                            }
+                        },
+                    };
+
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
                         Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
@@ -1094,7 +1120,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,
                         topic: topic.clone(),
-                        ssl_certificate_file,
+                        auth,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)

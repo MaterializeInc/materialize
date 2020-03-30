@@ -56,11 +56,7 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let KafkaSourceConnector {
-        url,
-        topic,
-        ssl_certificate_file,
-    } = connector.clone();
+    let KafkaSourceConnector { url, topic, auth } = connector.clone();
 
     let ts = if read_kafka {
         let prev = timestamp_histories
@@ -91,15 +87,8 @@ where
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &url.to_string());
 
-        if let Some(path) = ssl_certificate_file {
-            // See https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka
-            // for more details on this librdkafka option
-            config.set("security.protocol", "ssl");
-            config.set(
-                "ssl.ca.location",
-                path.to_str()
-                    .expect("Converting ssl certificate file path failed"),
-            );
+        if let Some(auth) = auth {
+            auth.configure_client(&mut config);
         }
 
         let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if read_kafka {

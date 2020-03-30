@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use failure::ResultExt;
+use failure::{bail, ResultExt};
 use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -24,8 +24,11 @@ use url::Url;
 use expr::{EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
 use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
+use rdkafka::consumer::BaseConsumer;
+use rdkafka::ClientConfig;
 use regex::Regex;
 use repr::{ColumnType, RelationDesc, RelationType, Row, ScalarType};
+use sql_parser::ast::Value;
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -459,7 +462,119 @@ pub enum Consistency {
 pub struct KafkaSourceConnector {
     pub url: Url,
     pub topic: String,
-    pub ssl_certificate_file: Option<PathBuf>,
+    pub auth: Option<KafkaAuth>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaAuth {
+    /// Authenticate the Kafka broker using the CA file at `path`.
+    SSL(PathBuf),
+    /// Connect to the Kafka broker with sasl_plaintext, configuring the client with the
+    /// embedded key-value pairs.
+    SASLPlaintext(Vec<(String, String)>),
+}
+
+impl KafkaAuth {
+    /// Return a list of key-value pairs to authenaticate `rdkafka` to connect
+    /// to a Kerberized Kafka cluster.
+    ///
+    /// # Arguments
+    ///
+    /// - `with_options` should be the `with_options` field of
+    ///   `sql_parser::ast::Statement::CreateSource`, where the user has passed
+    ///   in their options to connect to the Kerberized Kafka cluster.
+    ///
+    /// # Errors
+    ///
+    /// - If the `rdkafka` does not have sufficient information to create a
+    ///   Kafka consumer. This case covers when the user doesn't have a local
+    ///   keytab cache configured and doesn't provide sufficient detail to
+    ///   `rdkafka` to establish a connection.
+    ///
+    pub fn sasl_palintext_kerberos_settings(
+        with_options: &mut std::collections::HashMap<String, Value>,
+    ) -> Result<Self, failure::Error> {
+        // Represents valid with_option keys to connect to Kerberized Kafka
+        // cluster through SASL based on
+        // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md.
+        // Currently all of these keys can be converted to their respective
+        // client config settings by replacing underscores with dots.
+        let allowed_configs = vec![
+            "sasl_kerberos_keytab",
+            "sasl_kerberos_kinit_cmd",
+            "sasl_kerberos_min_time_before_relogin",
+            "sasl_kerberos_principal",
+            "sasl_kerberos_service_name",
+            "sasl_mechanisms",
+        ];
+
+        let mut client_config: Vec<(String, String)> = vec![];
+        for config in allowed_configs {
+            match with_options.remove(&config.to_string()) {
+                Some(Value::SingleQuotedString(v)) => {
+                    client_config.push((config.replace("_", "."), v));
+                }
+                Some(_) => bail!("{} must be a string", config),
+                None => {}
+            };
+        }
+
+        // Perform a dry run to see if we have the necessary credentials to
+        // connect. Concretely, this is checking to see if the local keytab
+        // cache is present, and if not, notifying the user which additional
+        // paramters need to be set.
+        let mut config = ClientConfig::new();
+        config.set("security.protocol", "sasl_plaintext");
+        for s in client_config.clone() {
+            config.set(s.0.as_str(), s.1.as_str());
+        }
+
+        if let Err(e) = config.create::<BaseConsumer>() {
+            match e {
+                rdkafka::error::KafkaError::ClientCreation(s) => {
+                    println!("{}", s);
+                    // Catch the one error we know about.
+                    if s == "Invalid sasl.kerberos.kinit.cmd value: Property \
+                    not available: \"sasl.kerberos.keytab\""
+                    {
+                        bail!(
+                            "Invalid SASL Auth: Can't seem to find local keytab \
+                            cache. You must provide explicit sasl_kerberos_keytab \
+                            or sasl_kerberos_kinit_cmd option."
+                        )
+                    } else {
+                        // Pass existing error back up.
+                        bail!(rdkafka::error::KafkaError::ClientCreation(s))
+                    }
+                }
+                _ => bail!(e),
+            }
+        }
+
+        Ok(KafkaAuth::SASLPlaintext(client_config))
+    }
+    /// Add the appropriate settings to the `rdkafka` client's config based on
+    /// the authentication method detailed when creating the Kafka source.
+    pub fn configure_client(&self, config: &mut ClientConfig) {
+        match self {
+            KafkaAuth::SSL(path) => {
+                // See https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka
+                // for more details on this librdkafka option
+                config.set("security.protocol", "ssl");
+                config.set(
+                    "ssl.ca.location",
+                    path.to_str()
+                        .expect("Converting ssl certificate file path failed"),
+                );
+            }
+            KafkaAuth::SASLPlaintext(settings) => {
+                config.set("security.protocol", "sasl_plaintext");
+                for s in settings {
+                    config.set(s.0.as_str(), s.1.as_str());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

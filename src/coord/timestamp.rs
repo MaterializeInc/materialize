@@ -483,14 +483,8 @@ impl Timestamper {
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &kc.url.to_string());
-
-        if let Some(path) = kc.ssl_certificate_file {
-            config.set("security.protocol", "ssl");
-            config.set(
-                "ssl.ca.location",
-                path.to_str()
-                    .expect("Converting ssl certificate file path failed"),
-            );
+        if let Some(auth) = kc.auth {
+            auth.configure_client(&mut config);
         }
 
         let k_consumer: BaseConsumer = config.create().expect("Failed to create Kakfa consumer");
@@ -614,14 +608,8 @@ impl Timestamper {
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &kc.url.to_string());
-
-        if let Some(path) = kc.ssl_certificate_file {
-            config.set("security.protocol", "ssl");
-            config.set(
-                "ssl.ca.location",
-                path.to_str()
-                    .expect("Converting ssl certificate file path failed"),
-            );
+        if let Some(auth) = kc.auth {
+            auth.configure_client(&mut config);
         }
 
         let k_consumer: BaseConsumer = config.create().expect("Failed to create Kakfa consumer");
