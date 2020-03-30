@@ -646,7 +646,7 @@ impl Encoder {
                 Value::Union(1, Box::new(row))
             }
         };
-        let after = match diff_pair.before {
+        let after = match diff_pair.after {
             None => Value::Union(0, Box::new(Value::Null)),
             Some(row) => {
                 let row = self.row_to_avro(row.unpack());
