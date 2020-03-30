@@ -32,4 +32,4 @@ uuid = { version = "0.8", features = ["v4"] }
 
 [build-dependencies]
 protoc = "2.8.1"
-protoc-rust = "2.10.2"
+protoc-rust = "2.12.0"
