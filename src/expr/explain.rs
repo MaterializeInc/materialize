@@ -7,10 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use super::{
-    AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
-    ScalarExpr,
-};
 /// This is the implementation for the EXPLAIN command.
 ///
 /// Conventions:
@@ -22,6 +18,10 @@ use super::{
 /// * Collections of columns are written as ranges where possible eg "#2..#5"
 ///
 /// It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
+use super::{
+    AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
+    ScalarExpr,
+};
 use repr::RelationType;
 use std::collections::HashMap;
 
