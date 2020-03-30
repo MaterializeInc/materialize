@@ -32,8 +32,8 @@ use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, CsrSeed, Explainee, Format, Ident, IfExistsBehavior, ObjectName,
-    ObjectType, Query, SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
+    AvroSchema, Connector, CsrSeed, ExplainOptions, Explainee, Format, Ident, IfExistsBehavior,
+    ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
 };
 
 use crate::query::QueryLifetime;
@@ -267,7 +267,11 @@ pub fn handle_statement(
         Statement::ShowCreateView { view_name } => handle_show_create_view(scx, view_name),
         Statement::ShowCreateSource { source_name } => handle_show_create_source(scx, source_name),
         Statement::ShowCreateSink { sink_name } => handle_show_create_sink(scx, sink_name),
-        Statement::Explain { stage, explainee } => handle_explain(scx, stage, explainee, params),
+        Statement::Explain {
+            stage,
+            explainee,
+            options,
+        } => handle_explain(scx, stage, explainee, options, params),
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
     }
@@ -1385,6 +1389,7 @@ fn handle_explain(
     scx: &StatementContext,
     stage: Stage,
     explainee: Explainee,
+    explain_options: ExplainOptions,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let relation_expr = match explainee {
@@ -1405,11 +1410,15 @@ fn handle_explain(
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
+        let mut explanation = relation_expr.explain(scx.catalog);
+        if explain_options.typed {
+            explanation.explain_types();
+        }
         Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            &relation_expr.pretty_humanized(scx.catalog),
+            &*explanation.to_string(),
         )])]))
     } else {
-        Ok(Plan::ExplainPlan(relation_expr))
+        Ok(Plan::ExplainPlan(relation_expr, explain_options))
     }
 }
 

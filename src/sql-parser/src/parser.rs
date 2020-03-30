@@ -2770,9 +2770,14 @@ impl Parser {
         }
     }
 
-    /// Parse an `EXPLAIN [DATAFLOW | PLAN] FOR` statement, assuming that the `EXPLAIN` token
+    /// Parse an `EXPLAIN (TYPED?) [DATAFLOW | PLAN] FOR` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
+        let mut options = ExplainOptions { typed: false };
+        if self.parse_keyword("TYPED") {
+            options.typed = true;
+        }
+
         let stage = if self.parse_keyword("DATAFLOW") {
             Stage::Dataflow
         } else if self.parse_keyword("PLAN") {
@@ -2780,6 +2785,7 @@ impl Parser {
         } else {
             self.expected(self.peek_range(), "DATAFLOW or PLAN", self.peek_token())?
         };
+
         self.expect_keyword("FOR")?;
 
         let explainee = if self.parse_keyword("VIEW") {
@@ -2788,7 +2794,11 @@ impl Parser {
             Explainee::Query(Box::new(self.parse_query()?))
         };
 
-        Ok(Statement::Explain { stage, explainee })
+        Ok(Statement::Explain {
+            stage,
+            explainee,
+            options,
+        })
     }
 }
 

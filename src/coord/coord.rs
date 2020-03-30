@@ -1133,7 +1133,7 @@ where
 
             Plan::SendRows(rows) => Ok(send_immediate_rows(rows)),
 
-            Plan::ExplainPlan(relation_expr) => {
+            Plan::ExplainPlan(relation_expr, explain_options) => {
                 let eval_env = EvalEnv {
                     wall_time: Some(chrono::Utc::now()),
                     logical_time: Some(0),
@@ -1141,8 +1141,11 @@ where
                 let relation_expr =
                     self.optimizer
                         .optimize(relation_expr, self.catalog.indexes(), &eval_env)?;
-                let pretty = relation_expr.as_ref().pretty_humanized(&self.catalog);
-                let rows = vec![Row::pack(&[Datum::from(&*pretty)])];
+                let mut explanation = relation_expr.as_ref().explain(&self.catalog);
+                if explain_options.typed {
+                    explanation.explain_types();
+                }
+                let rows = vec![Row::pack(&[Datum::from(&*explanation.to_string())])];
                 Ok(send_immediate_rows(rows))
             }
 

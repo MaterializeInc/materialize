@@ -906,6 +906,7 @@ pub enum Statement {
     Explain {
         stage: Stage,
         explainee: Explainee,
+        options: ExplainOptions,
     },
 }
 
@@ -913,6 +914,11 @@ pub enum Statement {
 pub enum Explainee {
     View(ObjectName),
     Query(Box<Query>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainOptions {
+    pub typed: bool,
 }
 
 impl fmt::Display for Statement {
@@ -1262,9 +1268,17 @@ impl fmt::Display for Statement {
                 write!(f, "ROLLBACK{}", if *chain { " AND CHAIN" } else { "" },)
             }
             Statement::Tail { name } => write!(f, "TAIL {}", name),
-            Statement::Explain { stage, explainee } => {
-                write!(f, "EXPLAIN {} FOR {}", stage, explainee)
-            }
+            Statement::Explain {
+                stage,
+                explainee,
+                options,
+            } => write!(
+                f,
+                "EXPLAIN {}{} FOR {}",
+                if options.typed { "TYPED " } else { "" },
+                stage,
+                explainee
+            ),
         }
     }
 }

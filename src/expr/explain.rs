@@ -22,6 +22,7 @@ use super::{
     AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
     ScalarExpr,
 };
+use repr::RelationType;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -308,6 +309,21 @@ impl RelationExpr {
         }
 
         Explanation { nodes }
+    }
+}
+
+impl<'a> Explanation<'a> {
+    pub fn explain_types(&mut self) {
+        for node in &mut self.nodes {
+            // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
+            let RelationType { column_types, keys } = node.expr.typ();
+            node.annotations
+                .push(format!("types = ({})", Separated(", ", column_types)));
+            node.annotations.push(format!(
+                "keys = ({})",
+                Separated(", ", keys.iter().map(|key| Indices(key)).collect())
+            ));
+        }
     }
 }
 

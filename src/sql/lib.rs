@@ -19,7 +19,7 @@ use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
-pub use sql_parser::ast::{ObjectType, Statement};
+pub use sql_parser::ast::{ExplainOptions, ObjectType, Statement};
 pub use statement::StatementContext;
 
 pub mod normalize;
@@ -115,7 +115,7 @@ pub enum Plan {
     },
     Tail(CatalogEntry),
     SendRows(Vec<Row>),
-    ExplainPlan(::expr::RelationExpr),
+    ExplainPlan(::expr::RelationExpr, ExplainOptions),
     SendDiffs {
         id: GlobalId,
         updates: Vec<(Row, isize)>,
