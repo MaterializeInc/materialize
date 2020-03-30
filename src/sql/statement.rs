@@ -720,13 +720,14 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     let catalog_entry = scx.catalog.get(&from)?;
 
     let topic_name = format!(
-        "{}-{}-{}",
+        "{}-{}-{}-{}",
         topic,
         scx.catalog
             .creation_time()
             .duration_since(UNIX_EPOCH)?
             .as_secs(),
-        scx.catalog.nonce()
+        scx.catalog.nonce(),
+        scx.catalog.sink_count(),
     );
 
     create_sink_kafka_topic(&url, &topic_name)?;
