@@ -431,7 +431,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                 match sink.connector {
                     SinkConnector::Kafka(c) => {
-                        sink::kafka(scope, &collection.inner, sink_id, c, sink.from.1)
+                        sink::kafka(region, &collection.inner, sink_id, c, sink.from.1)
                     }
                     SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
                 }

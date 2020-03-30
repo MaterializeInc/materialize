@@ -28,15 +28,14 @@ use ore::collections::CollectionExt;
 use repr::{RelationDesc, Row};
 
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
-pub fn kafka<G, H>(
-    scope: &H,
+pub fn kafka<G>(
+    region: &G,
     stream: &Stream<G, (Row, Timestamp, Diff)>,
     id: GlobalId,
     connector: KafkaSinkConnector,
     desc: RelationDesc,
 ) where
     G: Scope<Timestamp = Timestamp>,
-    H: Scope<Timestamp = Timestamp>,
 {
     // NB: This code relies on timely dataflow details about how Exchange channels
     // route data to workers
@@ -46,8 +45,8 @@ pub fn kafka<G, H>(
     // Exchange channels. For the forseeable future, Timely routes data over
     // them by taking the generated u64 key % number_of_workers, so passing
     // the sink hash works
-    let index = scope.index();
-    let peers = scope.peers();
+    let index = region.index();
+    let peers = region.peers();
     let sink_hash = id.hashed() as usize;
     let write_to_kafka = sink_hash % peers == index;
 
