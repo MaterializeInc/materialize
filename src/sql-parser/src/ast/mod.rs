@@ -477,18 +477,27 @@ impl fmt::Display for WindowFrameBound {
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stage {
-    /// The dataflow graph after translation from SQL.
-    Dataflow,
-    /// The dataflow graph after optimization in the coordinator.
-    Plan,
-    // FIXME: Add introspection into dataflow execution.
+    /// The original sql string
+    Sql,
+    /// The sql::RelationExpr after parsing
+    RawPlan,
+    /// The expr::RelationExpr after decorrelation
+    DecorrelatedPlan,
+    /// The expr::RelationExpr after optimization
+    OptimizedPlan {
+        /// Was this stage picked by default or specified explicitly
+        default: bool,
+    },
 }
 
 impl fmt::Display for Stage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Stage::Dataflow => f.write_str("DATAFLOW"),
-            Stage::Plan => f.write_str("PLAN"),
+            Stage::Sql => f.write_str("SQL"),
+            Stage::RawPlan => f.write_str("RAW PLAN"),
+            Stage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
+            Stage::OptimizedPlan { default: false } => f.write_str("OPTIMIZED PLAN"),
+            Stage::OptimizedPlan { default: true } => f.write_str("PLAN"),
         }
     }
 }

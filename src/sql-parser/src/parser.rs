@@ -2770,24 +2770,37 @@ impl Parser {
         }
     }
 
-    /// Parse an `EXPLAIN (TYPED?) [DATAFLOW | PLAN] FOR` statement, assuming that the `EXPLAIN` token
+    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
+        // (TYPED)?
         let mut options = ExplainOptions { typed: false };
         if self.parse_keyword("TYPED") {
             options.typed = true;
         }
 
-        let stage = if self.parse_keyword("DATAFLOW") {
-            Stage::Dataflow
+        // SQL | (RAW | DECORRELATED | OPTIMIZED)? PLAN
+        let stage = if self.parse_keyword("SQL") {
+            Stage::Sql
+        } else if self.parse_keyword("RAW") {
+            self.expect_keyword("PLAN")?;
+            Stage::RawPlan
+        } else if self.parse_keyword("DECORRELATED") {
+            self.expect_keyword("PLAN")?;
+            Stage::DecorrelatedPlan
+        } else if self.parse_keyword("OPTIMIZED") {
+            self.expect_keyword("PLAN")?;
+            Stage::OptimizedPlan { default: false }
         } else if self.parse_keyword("PLAN") {
-            Stage::Plan
+            // default stage
+            Stage::OptimizedPlan { default: true }
         } else {
-            self.expected(self.peek_range(), "DATAFLOW or PLAN", self.peek_token())?
+            self.expected(self.peek_range(), "SQL or PLAN", self.peek_token())?
         };
 
         self.expect_keyword("FOR")?;
 
+        // VIEW view_name | query
         let explainee = if self.parse_keyword("VIEW") {
             Explainee::View(self.parse_object_name()?)
         } else {
