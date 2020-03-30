@@ -517,6 +517,7 @@ pub struct KafkaSourceConnector {
     pub url: Url,
     pub topic: String,
     pub ssl_certificate_file: Option<PathBuf>,
+    pub client_config: Option<Vec<(String, String)>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

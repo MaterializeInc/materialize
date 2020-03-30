@@ -1088,10 +1088,40 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(_) => bail!("consistency must be a string"),
                     };
 
+                    // Represents valid with_option keys. Currently all of these keys can be converted
+                    // to their respective client config settings by replacing underscores with dots.
+                    let allowed_configs = vec![
+                        "security_protocol",
+                        "sasl_mechanisms",
+                        "sasl_kerberos_service_name",
+                        "sasl_kerberos_kinit_cmd",
+                        "sasl_kerberos_min_time_before_relogin",
+                    ];
+
+                    let mut client_configs: Vec<(String, String)> = vec![];
+
+                    for config in allowed_configs {
+                        let c = config.to_string();
+                        match with_options.remove(&c) {
+                            Some(Value::SingleQuotedString(v)) => {
+                                // Convert allowed_config value's underscores with dots to convert it to
+                                // a valid client_config value.
+                                client_configs.push((c.replace("_", "."), v))
+                            }
+                            Some(_) => bail!("{} must be a string", config),
+                            None => {}
+                        };
+                    }
+
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,
                         topic: topic.clone(),
                         ssl_certificate_file,
+                        client_config: if client_configs.is_empty() {
+                            None
+                        } else {
+                            Some(client_configs)
+                        },
                     });
                     let encoding = get_encoding(with_options)?;
                     (connector, encoding)

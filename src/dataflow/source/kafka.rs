@@ -60,6 +60,7 @@ where
         url,
         topic,
         ssl_certificate_file,
+        client_config,
     } = connector.clone();
 
     let ts = if read_kafka {
@@ -100,6 +101,12 @@ where
                 path.to_str()
                     .expect("Converting ssl certificate file path failed"),
             );
+        }
+
+        if let Some(client_config) = client_config {
+            for c in client_config.iter() {
+                config.set(&c.0, &c.1);
+            }
         }
 
         let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if read_kafka {
