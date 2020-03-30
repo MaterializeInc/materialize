@@ -59,32 +59,29 @@ pub fn kafka<G>(
                 match res {
                     Ok(res) => {
                         if res.len() != 1 {
-                            error!(
+                            panic!(
                 "error creating topic {} for sink: kafka topic creation returned {} results, but exactly one result was expected",
                 connector.topic,
                 res.len()
             );
-                            return;
                         }
                         match res.into_element() {
                             Ok(_) => (),
                             Err((_, err)) => {
-                                error!(
+                                panic!(
                                     "error creating topic {} for sink: {}",
                                     connector.topic,
                                     err.to_string()
                                 );
-                                return;
                             }
                         };
                     }
                     Err(err) => {
-                        error!(
+                        panic!(
                             "error creating new topic {} for sink: {}",
                             connector.topic,
                             err.to_string()
                         );
-                        return;
                     }
                 }
             }
