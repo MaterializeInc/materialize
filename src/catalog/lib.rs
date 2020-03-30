@@ -456,6 +456,11 @@ impl Catalog {
                 ),
             }
         }
+
+        if let CatalogItem::Sink(_) = entry.item() {
+            self.increment_sink_count();
+        }
+
         if let CatalogItem::Index(index) = entry.item() {
             self.indexes
                 .entry(index.on)
@@ -761,7 +766,7 @@ impl Catalog {
         self.sink_count
     }
 
-    pub fn increment_sink_count(&mut self) {
+    fn increment_sink_count(&mut self) {
         self.sink_count += 1
     }
 }

@@ -765,7 +765,6 @@ where
                 };
                 match self.catalog_transact(vec![op]) {
                     Ok(()) => {
-                        self.catalog.increment_sink_count();
                         self.create_sink_dataflow(name.to_string(), id, sink);
                         Ok(ExecuteResponse::CreatedSink { existed: false })
                     }
