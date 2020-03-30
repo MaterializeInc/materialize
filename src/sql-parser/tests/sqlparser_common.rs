@@ -4071,6 +4071,7 @@ fn parse_explain() {
         Statement::Explain {
             stage: Stage::Dataflow,
             explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            options: ExplainOptions { typed: false },
         }
     );
 
@@ -4080,6 +4081,7 @@ fn parse_explain() {
         Statement::Explain {
             stage: Stage::Plan,
             explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            options: ExplainOptions { typed: false },
         }
     );
 
@@ -4092,6 +4094,20 @@ fn parse_explain() {
                 value: "FOO".to_owned(),
                 quote_style: None
             }])),
+            options: ExplainOptions { typed: false },
+        }
+    );
+
+    let ast = verified_stmt("EXPLAIN TYPED PLAN FOR VIEW FOO");
+    assert_eq!(
+        ast,
+        Statement::Explain {
+            stage: Stage::Plan,
+            explainee: Explainee::View(ObjectName(vec![Ident {
+                value: "FOO".to_owned(),
+                quote_style: None
+            }])),
+            options: ExplainOptions { typed: true },
         }
     );
 }
