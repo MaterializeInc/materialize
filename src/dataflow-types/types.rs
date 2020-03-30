@@ -543,7 +543,7 @@ pub enum SinkConnector {
 pub struct KafkaSinkConnector {
     pub url: Url,
     pub topic: String,
-    pub schema_registry_url: Url,
+    pub schema_id: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

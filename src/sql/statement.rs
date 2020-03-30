@@ -32,6 +32,7 @@ use dataflow_types::{
     PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnector, SourceConnector,
 };
 use expr::{like_pattern, GlobalId};
+use interchange::avro::Encoder;
 use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
@@ -637,9 +638,27 @@ fn handle_show_create_sink(
 // that we should remove from here, and add to a statement post-planning purify
 // step similar to the pre-planning purify. Leaving it here right now as an easy
 // way to achieve good error handling for sinks
-fn create_sink_kafka_topic(url: &Url, topic: &str) -> Result<(), failure::Error> {
+fn create_sink_kafka_topic(
+    desc: RelationDesc,
+    broker_url: &Url,
+    schema_registry_url: &Url,
+    topic: &str,
+) -> Result<i32, failure::Error> {
+    let encoder = Encoder::new(desc);
+    // Send new schema to registry, get back the schema id for the sink.
+    let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
+    let schema_name = format!("{}-value", topic);
+    let schema = encoder.writer_schema().canonical_form();
+    let schema_id = match ccsr_client.publish_schema(&schema_name, &schema) {
+        Ok(schema_id) => schema_id,
+        Err(err) => bail!(
+            "unable to publish schema to registry in kafka sink: {}",
+            err
+        ),
+    };
+
     let mut config = ClientConfig::new();
-    config.set("bootstrap.servers", &url.to_string());
+    config.set("bootstrap.servers", &broker_url.to_string());
 
     let admin: AdminClient<DefaultClientContext> =
         config.create().expect("creating admin kafka client failed");
@@ -676,7 +695,7 @@ fn create_sink_kafka_topic(url: &Url, topic: &str) -> Result<(), failure::Error>
         }
     }
 
-    Ok(())
+    Ok(schema_id)
 }
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
@@ -714,10 +733,12 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     }
 
     let url = broker.parse()?;
+    let schema_registry_url = schema_registry_url.parse()?;
 
     let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.resolve_name(from)?;
     let catalog_entry = scx.catalog.get(&from)?;
+    let desc = catalog_entry.desc()?.clone();
 
     let topic_name = format!(
         "{}-{}-{}-{}",
@@ -730,7 +751,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         scx.catalog.sink_count(),
     );
 
-    create_sink_kafka_topic(&url, &topic_name)?;
+    let schema_id = create_sink_kafka_topic(desc, &url, &schema_registry_url, &topic_name)?;
 
     let sink = Sink {
         create_sql,
@@ -738,7 +759,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         connector: SinkConnector::Kafka(KafkaSinkConnector {
             url,
             topic: topic_name,
-            schema_registry_url: schema_registry_url.parse()?,
+            schema_id,
         }),
     };
 

@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use differential_dataflow::hashable::Hashable;
-use log::error;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
 use rdkafka::producer::FutureRecord;
@@ -37,46 +36,36 @@ pub fn kafka<G>(
     let sink_hash = id.hashed();
 
     let encoder = Encoder::new(desc);
-    // Send new schema to registry, get back the schema id for the sink.
-    // TODO(benesch): don't block the worker thread here.
-    let ccsr_client = ccsr::Client::new(connector.schema_registry_url.clone());
-    let schema_name = format!("{}-value", connector.topic);
-    let schema = encoder.writer_schema().canonical_form();
-    match ccsr_client.publish_schema(&schema_name, &schema) {
-        Ok(schema_id) => {
-            let mut config = ClientConfig::new();
-            config.set("bootstrap.servers", &connector.url.to_string());
-            let producer: FutureProducer = config.create().unwrap();
+    let mut config = ClientConfig::new();
+    config.set("bootstrap.servers", &connector.url.to_string());
+    let producer: FutureProducer = config.create().unwrap();
 
-            stream.sink(
-                Exchange::new(move |_| sink_hash),
-                &format!("kafka-{}", id),
-                move |input| {
-                    input.for_each(|_, rows| {
-                        for (row, _time, diff) in rows.iter() {
-                            let diff_pair = if *diff < 0 {
-                                DiffPair {
-                                    before: Some(row),
-                                    after: None,
-                                }
-                            } else {
-                                DiffPair {
-                                    before: None,
-                                    after: Some(row),
-                                }
-                            };
-                            let buf = encoder.encode(schema_id, diff_pair);
-                            for _ in 0..diff.abs() {
-                                producer.send(
-                                    FutureRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf),
-                                    1000, /* block_ms */
-                                );
-                            }
+    stream.sink(
+        Exchange::new(move |_| sink_hash),
+        &format!("kafka-{}", id),
+        move |input| {
+            input.for_each(|_, rows| {
+                for (row, _time, diff) in rows.iter() {
+                    let diff_pair = if *diff < 0 {
+                        DiffPair {
+                            before: Some(row),
+                            after: None,
                         }
-                    })
-                },
-            )
-        }
-        Err(e) => error!("unable to publish schema to registry in kafka sink: {}", e),
-    }
+                    } else {
+                        DiffPair {
+                            before: None,
+                            after: Some(row),
+                        }
+                    };
+                    let buf = encoder.encode(connector.schema_id, diff_pair);
+                    for _ in 0..diff.abs() {
+                        producer.send(
+                            FutureRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf),
+                            1000, /* block_ms */
+                        );
+                    }
+                }
+            })
+        },
+    )
 }
