@@ -137,12 +137,12 @@ fn test_materialize_source(config: &Args, stream_arn: &str) -> Result<()> {
 }
 
 /// Creates a new Kinesis stream and puts a record into it.
-fn instantiate_kinesis_for_source(client: &KinesisClient, stream_name: &String) -> Result<String> {
+fn instantiate_kinesis_for_source(client: &KinesisClient, stream_name: &str) -> Result<String> {
     // Create a new Kinesis stream
     log::info!("creating a new Kinesis stream: {}", stream_name);
     let create_stream_input = CreateStreamInput {
         shard_count: 1,
-        stream_name: stream_name.clone(),
+        stream_name: stream_name.to_string(),
     };
     if let Err(e) = block_on(client.create_stream(create_stream_input)) {
         panic!("hit error creating stream: {}", e.to_string());
@@ -153,7 +153,7 @@ fn instantiate_kinesis_for_source(client: &KinesisClient, stream_name: &String) 
     let describe_input = DescribeStreamInput {
         exclusive_start_shard_id: None,
         limit: None,
-        stream_name: stream_name.clone(),
+        stream_name: stream_name.to_string(),
     };
     let arn = match block_on(client.describe_stream(describe_input)) {
         Ok(output) => output.stream_description.stream_arn,
@@ -161,13 +161,12 @@ fn instantiate_kinesis_for_source(client: &KinesisClient, stream_name: &String) 
     };
 
     log::info!("trying to put a record into the stream");
-    let test_string = String::from(TEST_RECORD_STRING);
     let put_input = PutRecordInput {
-        data: Bytes::from(test_string.clone()),
+        data: Bytes::from(String::from(TEST_RECORD_STRING)),
         explicit_hash_key: None,
         partition_key: String::from("test"), // doesn't matter, only one shard
         sequence_number_for_ordering: None,
-        stream_name: stream_name.clone(),
+        stream_name: stream_name.to_string(),
     };
 
     // The stream might not be immediately available to put records
@@ -189,15 +188,15 @@ fn instantiate_kinesis_for_source(client: &KinesisClient, stream_name: &String) 
     log::info!("put a record into the stream");
 
     // Required Kinesis stream has been instantiated.
-    Ok(String::from(arn))
+    Ok(arn)
 }
 
-fn delete_kinesis_stream(client: &KinesisClient, stream_name: &String) -> Result<()> {
+fn delete_kinesis_stream(client: &KinesisClient, stream_name: &str) -> Result<()> {
     log::info!("Trying to delete the stream: {}", stream_name);
 
     let delete_input = DeleteStreamInput {
         enforce_consumer_deletion: Some(true),
-        stream_name: stream_name.clone(),
+        stream_name: stream_name.to_string(),
     };
     match block_on(client.delete_stream(delete_input)) {
         Ok(()) => {
