@@ -7,13 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use differential_dataflow::hashable::Hashable;
-use futures::executor::block_on;
 use log::error;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::FutureProducer;
 use rdkafka::producer::FutureRecord;
@@ -24,12 +19,10 @@ use timely::dataflow::{Scope, Stream};
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
 use interchange::avro::{DiffPair, Encoder};
-use ore::collections::CollectionExt;
 use repr::{RelationDesc, Row};
 
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
 pub fn kafka<G>(
-    region: &G,
     stream: &Stream<G, (Row, Timestamp, Diff)>,
     id: GlobalId,
     connector: KafkaSinkConnector,
@@ -37,18 +30,11 @@ pub fn kafka<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    // NB: This code relies on timely dataflow details about how Exchange channels
-    // route data to workers
-    // We want exactly one worker to create the new sink topic and send all the
-    // data to that topic. Therefore, our logic for selecting a new worker ( to
-    // create the sink topic) must match Timely's logic for routing data via
-    // Exchange channels. For the forseeable future, Timely routes data over
-    // them by taking the generated u64 key % number_of_workers, so passing
-    // the sink hash works
-    let index = region.index();
-    let peers = region.peers();
-    let sink_hash = id.hashed() as usize;
-    let write_to_kafka = sink_hash % peers == index;
+    // We want exactly one worker to send all the data to the sink topic. We
+    // achieve that by using an Exchange channel before the sink and mapping
+    // all records for the sink to the sink's hash, which has the neat property
+    // of also distributing sinks amongst workers
+    let sink_hash = id.hashed();
 
     let encoder = Encoder::new(desc);
     // Send new schema to registry, get back the schema id for the sink.
@@ -60,48 +46,10 @@ pub fn kafka<G>(
         Ok(schema_id) => {
             let mut config = ClientConfig::new();
             config.set("bootstrap.servers", &connector.url.to_string());
-
-            if write_to_kafka {
-                let admin: AdminClient<DefaultClientContext> =
-                    config.create().expect("creating admin kafka client failed");
-
-                let admin_opts =
-                    AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
-                let new_topic = NewTopic::new(&connector.topic, 1, TopicReplication::Fixed(1));
-                let res = block_on(admin.create_topics(&[new_topic], &admin_opts));
-                match res {
-                    Ok(res) => {
-                        if res.len() != 1 {
-                            panic!(
-                "error creating topic {} for sink: kafka topic creation returned {} results, but exactly one result was expected",
-                connector.topic,
-                res.len()
-            );
-                        }
-                        match res.into_element() {
-                            Ok(_) => (),
-                            Err((_, err)) => {
-                                panic!(
-                                    "error creating topic {} for sink: {}",
-                                    connector.topic,
-                                    err.to_string()
-                                );
-                            }
-                        };
-                    }
-                    Err(err) => {
-                        panic!(
-                            "error creating new topic {} for sink: {}",
-                            connector.topic,
-                            err.to_string()
-                        );
-                    }
-                }
-            }
             let producer: FutureProducer = config.create().unwrap();
 
             stream.sink(
-                Exchange::new(move |_| sink_hash as u64),
+                Exchange::new(move |_| sink_hash),
                 &format!("kafka-{}", id),
                 move |input| {
                     input.for_each(|_, rows| {

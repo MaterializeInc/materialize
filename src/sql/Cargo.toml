@@ -23,6 +23,7 @@ interchange = { path = "../interchange" }
 itertools = "0.8"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored"] }
 regex = "1.3.5"
 repr = { path = "../repr" }
 rusoto_core = "0.43.0-beta.1"

@@ -12,11 +12,15 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use std::collections::BTreeMap;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use aws_arn::{Resource, ARN};
 use failure::{bail, format_err, ResultExt};
+use futures::executor::block_on;
 use itertools::Itertools;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::client::DefaultClientContext;
+use rdkafka::config::ClientConfig;
 use rusoto_core::Region;
 use url::Url;
 
@@ -629,6 +633,52 @@ fn handle_show_create_sink(
     ])]))
 }
 
+// TODO(rkhaitan): This function introduces a blocking step to statement planning
+// that we should remove from here, and add to a statement post-planning purify
+// step similar to the pre-planning purify. Leaving it here right now as an easy
+// way to achieve good error handling for sinks
+fn create_sink_kafka_topic(url: &Url, topic: &str) -> Result<(), failure::Error> {
+    let mut config = ClientConfig::new();
+    config.set("bootstrap.servers", &url.to_string());
+
+    let admin: AdminClient<DefaultClientContext> =
+        config.create().expect("creating admin kafka client failed");
+
+    let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
+    let new_topic = NewTopic::new(topic, 1, TopicReplication::Fixed(1));
+    let res = block_on(admin.create_topics(&[new_topic], &admin_opts));
+    match res {
+        Ok(res) => {
+            if res.len() != 1 {
+                bail!(
+                "error creating topic {} for sink: kafka topic creation returned {} results, but exactly one result was expected",
+                topic,
+                res.len()
+            );
+            }
+            match res.into_element() {
+                Ok(_) => (),
+                Err((_, err)) => {
+                    bail!(
+                        "error creating topic {} for sink: {}",
+                        topic,
+                        err.to_string()
+                    );
+                }
+            };
+        }
+        Err(err) => {
+            bail!(
+                "error creating new topic {} for sink: {}",
+                topic,
+                err.to_string()
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, from, connector, format, if_not_exists) = match stmt {
@@ -678,6 +728,8 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             .as_secs(),
         scx.catalog.nonce()
     );
+
+    create_sink_kafka_topic(&url, &topic_name)?;
 
     let sink = Sink {
         create_sql,

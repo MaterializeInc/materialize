@@ -3007,6 +3007,7 @@ dependencies = [
  "itertools",
  "ore",
  "pgrepr",
+ "rdkafka",
  "regex",
  "repr",
  "rusoto_core",
