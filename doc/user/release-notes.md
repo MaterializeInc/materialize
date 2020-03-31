@@ -30,6 +30,7 @@ For information about available versions, see our [Versions page](../versions).
 - Users can now specify the address and port the daemon binds to on startup, [as described here](https://materialize.io/docs/overview/configuration/#listen-address).
 - Support parsing a wider variety of valid Avro schemas.
 
+- Support [`jsonb_agg()` aggregate function](../sql/functions/#functions)
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
