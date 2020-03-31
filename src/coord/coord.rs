@@ -48,9 +48,8 @@ use sql::{ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatem
 
 use crate::persistence::SqlSerializer;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
+use crate::util::ClientTransmitter;
 use crate::{Command, ExecuteResponse, Response, StartupMessage};
-
-type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
 
 pub enum Message {
     Command(Command),
@@ -65,7 +64,7 @@ pub enum Message {
     StatementReady {
         conn_id: u32,
         session: Session,
-        tx: ClientTx,
+        tx: ClientTransmitter<ExecuteResponse>,
         result: Result<sql::Statement, failure::Error>,
         params: Params,
     },
@@ -415,10 +414,7 @@ where
                     if self.catalog.database_resolver(session.database()).is_err() {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
-                    let _ = tx.send(Response {
-                        result: Ok(messages),
-                        session,
-                    });
+                    ClientTransmitter::new(tx).send(Ok(messages), session)
                 }
                 Message::Command(Command::Execute {
                     portal_name,
@@ -459,7 +455,7 @@ where
                                 let _ = internal_cmd_tx
                                     .send(Message::StatementReady {
                                         session,
-                                        tx,
+                                        tx: ClientTransmitter::new(tx),
                                         result,
                                         conn_id,
                                         params,
@@ -478,16 +474,14 @@ where
 
                 Message::StatementReady {
                     conn_id,
-                    mut session,
+                    session,
                     tx,
                     result,
                     params,
-                } => {
-                    let result = result
-                        .and_then(|stmt| self.handle_statement(&session, stmt, &params))
-                        .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
-                    let _ = tx.send(Response { result, session });
-                }
+                } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
+                    Ok(plan) => self.sequence_plan(tx, session, plan, conn_id),
+                    Err(e) => tx.send(Err(e), session),
+                },
 
                 Message::Command(Command::Parse {
                     name,
@@ -594,40 +588,53 @@ where
 
     fn sequence_plan(
         &mut self,
-        session: &mut Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
         plan: Plan,
         conn_id: u32,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) {
         match plan {
             Plan::CreateDatabase {
                 name,
                 if_not_exists,
-            } => self.sequence_create_database(name, if_not_exists),
+            } => tx.send(self.sequence_create_database(name, if_not_exists), session),
 
             Plan::CreateSchema {
                 database_name,
                 schema_name,
                 if_not_exists,
-            } => self.sequence_create_schema(database_name, schema_name, if_not_exists),
+            } => tx.send(
+                self.sequence_create_schema(database_name, schema_name, if_not_exists),
+                session
+            ),
 
             Plan::CreateTable {
                 name,
                 desc,
                 if_not_exists,
-            } => self.sequence_create_table(name, desc, if_not_exists),
+            } => tx.send(
+                self.sequence_create_table(name, desc, if_not_exists),
+                session,
+            ),
 
             Plan::CreateSource {
                 name,
                 source,
                 if_not_exists,
                 materialized,
-            } => self.sequence_create_source(name, source, if_not_exists, materialized),
+            } => tx.send(
+                self.sequence_create_source(name, source, if_not_exists, materialized),
+                session,
+            ),
 
             Plan::CreateSink {
                 name,
                 sink,
                 if_not_exists,
-            } => self.sequence_create_sink(name, sink, if_not_exists),
+            } => tx.send(
+                self.sequence_create_sink(name, sink, if_not_exists),
+                session,
+            ),
 
             Plan::CreateView {
                 name,
@@ -635,51 +642,57 @@ where
                 replace,
                 materialize,
                 if_not_exists,
-            } => self.sequence_create_view(name, view, replace, materialize, if_not_exists),
+            } => tx.send(
+                self.sequence_create_view(name, view, replace, materialize, if_not_exists),
+                session,
+            ),
 
             Plan::CreateIndex {
                 name,
                 index,
                 if_not_exists,
-            } => self.sequence_create_index(name, index, if_not_exists),
+            } => tx.send(
+                self.sequence_create_index(name, index, if_not_exists),
+                session,
+            ),
 
-            Plan::DropDatabase { name } => self.sequence_drop_database(name),
+            Plan::DropDatabase { name } => tx.send(self.sequence_drop_database(name), session),
 
             Plan::DropSchema {
                 database_name,
                 schema_name,
-            } => self.sequence_drop_schema(database_name, schema_name),
+            } => tx.send(
+                self.sequence_drop_schema(database_name, schema_name),
+                session,
+            ),
 
-            Plan::DropItems { items, ty } => self.sequence_drop_items(items, ty),
+            Plan::DropItems { items, ty } => tx.send(self.sequence_drop_items(items, ty), session),
 
-            Plan::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
+            Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
 
-            Plan::ShowAllVariables => self.sequence_show_all_variables(session),
+            Plan::ShowAllVariables => tx.send(self.sequence_show_all_variables(&session), session),
 
             Plan::ShowVariable(name) => {
-                let variable = session.get(&name)?;
-                let row = Row::pack(&[Datum::String(&variable.value())]);
-                Ok(send_immediate_rows(vec![row]))
+                tx.send(self.sequence_show_variable(&session, name), session)
             }
 
             Plan::SetVariable { name, value } => {
-                session.set(&name, &value)?;
-                Ok(ExecuteResponse::SetVariable { name })
+                tx.send(self.sequence_set_variable(&mut session, name, value), session)
             }
 
             Plan::StartTransaction => {
                 session.start_transaction();
-                Ok(ExecuteResponse::StartedTransaction)
+                tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 
             Plan::CommitTransaction => {
                 session.end_transaction();
-                Ok(ExecuteResponse::CommittedTransaction)
+                tx.send(Ok(ExecuteResponse::CommittedTransaction), session)
             }
 
             Plan::AbortTransaction => {
                 session.end_transaction();
-                Ok(ExecuteResponse::AbortedTransaction)
+                tx.send(Ok(ExecuteResponse::AbortedTransaction), session)
             }
 
             Plan::Peek {
@@ -687,29 +700,39 @@ where
                 when,
                 finishing,
                 materialize,
-            } => self.sequence_peek(conn_id, source, when, finishing, materialize),
+            } => tx.send(
+                self.sequence_peek(conn_id, source, when, finishing, materialize),
+                session,
+            ),
 
-            Plan::Tail(source) => self.sequence_tail(conn_id, source),
+            Plan::Tail(source) => tx.send(self.sequence_tail(conn_id, source), session),
 
-            Plan::SendRows(rows) => Ok(send_immediate_rows(rows)),
+            Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
-            Plan::ExplainPlan(relation_expr, explain_options) => {
-                self.sequence_explain_plan(relation_expr, explain_options)
-            }
+            Plan::ExplainPlan(relation_expr, explain_options) => tx.send(
+                self.sequence_explain_plan(relation_expr, explain_options),
+                session,
+            ),
 
             Plan::SendDiffs {
                 id,
                 updates,
                 affected_rows,
                 kind,
-            } => self.sequence_send_diffs(id, updates, affected_rows, kind),
+            } => tx.send(
+                self.sequence_send_diffs(id, updates, affected_rows, kind),
+                session,
+            ),
 
             Plan::ShowViews {
                 ids,
                 full,
                 show_queryable,
                 limit_materialized,
-            } => self.sequence_show_views(ids, full, show_queryable, limit_materialized),
+            } => tx.send(
+                self.sequence_show_views(ids, full, show_queryable, limit_materialized),
+                session,
+            ),
         }
     }
 
@@ -1024,6 +1047,26 @@ where
                 })
                 .collect(),
         ))
+    }
+
+    fn sequence_show_variable(
+        &self,
+        session: &Session,
+        name: String,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let variable = session.get(&name)?;
+        let row = Row::pack(&[Datum::String(&variable.value())]);
+        Ok(send_immediate_rows(vec![row]))
+    }
+
+    fn sequence_set_variable(
+        &self,
+        session: &mut Session,
+        name: String,
+        value: String,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        session.set(&name, &value)?;
+        Ok(ExecuteResponse::SetVariable { name })
     }
 
     fn sequence_peek(
