@@ -53,7 +53,7 @@ impl<'a> std::fmt::Display for Explanation<'a> {
         for node in &self.nodes {
             if node.chain != prev_chain {
                 if node.chain != 0 {
-                    writeln!(f, "")?;
+                    writeln!(f)?;
                 }
                 writeln!(f, "{} =", node.chain)?;
             }
