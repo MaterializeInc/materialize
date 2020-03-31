@@ -750,9 +750,9 @@ where
                 }
                 command_complete!("SET")
             }
-            ExecuteResponse::StartTransaction => command_complete!("BEGIN"),
-            ExecuteResponse::Commit => command_complete!("COMMIT TRANSACTION"),
-            ExecuteResponse::Rollback => command_complete!("ROLLBACK TRANSACTION"),
+            ExecuteResponse::StartedTransaction => command_complete!("BEGIN"),
+            ExecuteResponse::CommittedTransaction => command_complete!("COMMIT"),
+            ExecuteResponse::AbortedTransaction => command_complete!("ROLLBACK"),
             ExecuteResponse::Tailing { rx } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");

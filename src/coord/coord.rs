@@ -669,17 +669,17 @@ where
 
             Plan::StartTransaction => {
                 session.start_transaction();
-                Ok(ExecuteResponse::StartTransaction)
+                Ok(ExecuteResponse::StartedTransaction)
             }
 
-            Plan::Commit => {
+            Plan::CommitTransaction => {
                 session.end_transaction();
-                Ok(ExecuteResponse::Commit)
+                Ok(ExecuteResponse::CommittedTransaction)
             }
 
-            Plan::Rollback => {
+            Plan::AbortTransaction => {
                 session.end_transaction();
-                Ok(ExecuteResponse::Rollback)
+                Ok(ExecuteResponse::AbortedTransaction)
             }
 
             Plan::Peek {

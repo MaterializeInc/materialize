@@ -220,9 +220,9 @@ pub fn handle_statement(
     let scx = &StatementContext { catalog, session };
     match stmt {
         Statement::Tail { name } => handle_tail(scx, name),
-        Statement::StartTransaction { .. } => handle_start_transaction(),
-        Statement::Commit { .. } => handle_commit_transaction(),
-        Statement::Rollback { .. } => handle_rollback_transaction(),
+        Statement::StartTransaction { .. } => Ok(Plan::StartTransaction),
+        Statement::Commit { .. } => Ok(Plan::CommitTransaction),
+        Statement::Rollback { .. } => Ok(Plan::AbortTransaction),
         Statement::CreateDatabase {
             name,
             if_not_exists,
@@ -321,18 +321,6 @@ fn handle_tail(scx: &StatementContext, from: ObjectName) -> Result<Plan, failure
             entry.item().type_string()
         ),
     }
-}
-
-fn handle_start_transaction() -> Result<Plan, failure::Error> {
-    Ok(Plan::StartTransaction)
-}
-
-fn handle_commit_transaction() -> Result<Plan, failure::Error> {
-    Ok(Plan::Commit)
-}
-
-fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
-    Ok(Plan::Rollback)
 }
 
 fn handle_show_databases(

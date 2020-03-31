@@ -69,8 +69,7 @@ pub enum StartupMessage {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum ExecuteResponse {
-    /// The current session has been taken out of transaction mode by COMMIT
-    Commit,
+    CommittedTransaction,
     CreatedDatabase {
         existed: bool,
     },
@@ -102,14 +101,12 @@ pub enum ExecuteResponse {
     DroppedSink,
     EmptyQuery,
     Inserted(usize),
-    /// The current session has been taken out of transaction mode by ROLLBACK
-    Rollback,
+    AbortedTransaction,
     SendRows(#[derivative(Debug = "ignore")] RowsFuture),
     SetVariable {
         name: String,
     },
-    /// The current session has been placed into transaction mode
-    StartTransaction,
+    StartedTransaction,
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
