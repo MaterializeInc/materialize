@@ -22,7 +22,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use failure::bail;
+use failure::{bail, ResultExt};
 use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
@@ -31,7 +31,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem};
+use catalog::{Catalog, CatalogItem, SinkConnectorState};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -49,7 +49,7 @@ use sql::{ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatem
 use crate::persistence::SqlSerializer;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
-use crate::{Command, ExecuteResponse, Response, StartupMessage};
+use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
 
 pub enum Message {
     Command(Command),
@@ -67,6 +67,12 @@ pub enum Message {
         tx: ClientTransmitter<ExecuteResponse>,
         result: Result<sql::Statement, failure::Error>,
         params: Params,
+    },
+    SinkConnectorReady {
+        session: Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        id: GlobalId,
+        result: Result<SinkConnector, failure::Error>,
     },
     Shutdown,
 }
@@ -305,7 +311,15 @@ where
                         coord.insert_view(id, &view);
                     }
                     CatalogItem::Sink(sink) => {
-                        coord.create_sink_dataflow(name.to_string(), id, sink);
+                        let builder = match sink.connector {
+                            SinkConnectorState::Pending(builder) => builder,
+                            SinkConnectorState::Ready(_) => {
+                                panic!("sink already initialized during catalog boot")
+                            }
+                        };
+                        let connector = block_on(sink_connector::build(builder, id))
+                            .with_context(|e| format!("recreating sink {}: {}", name, e))?;
+                        coord.handle_sink_connector_ready(id, connector);
                     }
                     CatalogItem::Index(index) => match id {
                         GlobalId::User(_) => {
@@ -452,7 +466,7 @@ where
                             let params = portal.parameters.clone();
                             tokio::spawn(async move {
                                 let result = sql::purify(stmt).await;
-                                let _ = internal_cmd_tx
+                                internal_cmd_tx
                                     .send(Message::StatementReady {
                                         session,
                                         tx: ClientTransmitter::new(tx),
@@ -460,7 +474,8 @@ where
                                         conn_id,
                                         params,
                                     })
-                                    .await;
+                                    .await
+                                    .expect("sending to internal_cmd_tx cannot fail");
                             });
                         }
                         None => {
@@ -479,8 +494,38 @@ where
                     result,
                     params,
                 } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
-                    Ok(plan) => self.sequence_plan(tx, session, plan, conn_id),
+                    Ok(plan) => self.sequence_plan(&internal_cmd_tx, tx, session, plan, conn_id),
                     Err(e) => tx.send(Err(e), session),
+                },
+
+                Message::SinkConnectorReady {
+                    session,
+                    tx,
+                    id,
+                    result,
+                } => match result {
+                    Ok(connector) => {
+                        // NOTE: we must not fail from here on out. We have a
+                        // connector, which means there is external state (like
+                        // a Kafka topic) that's been created on our behalf. If
+                        // we fail now, we'll leak that external state.
+                        if self.catalog.try_get_by_id(id).is_some() {
+                            self.handle_sink_connector_ready(id, connector);
+                        } else {
+                            // Another session dropped the sink while we were
+                            // creating the connector. Report to the client that
+                            // we created the sink, because from their
+                            // perspective we did, as there is state (e.g. a
+                            // Kafka topic) they need to clean up.
+                        }
+                        tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+                    }
+                    Err(e) => {
+                        self.catalog
+                            .transact(vec![catalog::Op::DropItem(id)])
+                            .expect("corrupt catalog");
+                        tx.send(Err(e), session);
+                    }
                 },
 
                 Message::Command(Command::Parse {
@@ -588,6 +633,7 @@ where
 
     fn sequence_plan(
         &mut self,
+        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: Plan,
@@ -605,7 +651,7 @@ where
                 if_not_exists,
             } => tx.send(
                 self.sequence_create_schema(database_name, schema_name, if_not_exists),
-                session
+                session,
             ),
 
             Plan::CreateTable {
@@ -631,9 +677,13 @@ where
                 name,
                 sink,
                 if_not_exists,
-            } => tx.send(
-                self.sequence_create_sink(name, sink, if_not_exists),
+            } => self.sequence_create_sink(
+                internal_cmd_tx.clone(),
+                tx,
                 session,
+                name,
+                sink,
+                if_not_exists,
             ),
 
             Plan::CreateView {
@@ -676,9 +726,10 @@ where
                 tx.send(self.sequence_show_variable(&session, name), session)
             }
 
-            Plan::SetVariable { name, value } => {
-                tx.send(self.sequence_set_variable(&mut session, name, value), session)
-            }
+            Plan::SetVariable { name, value } => tx.send(
+                self.sequence_set_variable(&mut session, name, value),
+                session,
+            ),
 
             Plan::StartTransaction => {
                 session.start_transaction();
@@ -879,29 +930,63 @@ where
 
     fn sequence_create_sink(
         &mut self,
+        mut internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
         name: FullName,
         sink: sql::Sink,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
-        let sink = catalog::Sink {
-            create_sql: sink.create_sql,
-            from: sink.from,
-            connector: sink.connector,
+    ) {
+        // First try to allocate an ID. If that fails, we're done.
+        let id = match self.catalog.allocate_id() {
+            Ok(id) => id,
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return;
+            }
         };
-        let id = self.catalog.allocate_id()?;
+
+        // Then try to create a placeholder catalog item with an unknown
+        // connector. If that fails, we're done, though if the client specified
+        // `if_not_exists` we'll tell the client we succeeded.
+        //
+        // This placeholder catalog item reserves the name while we create
+        // the sink connector, which could take an arbitrarily long time.
         let op = catalog::Op::CreateItem {
             id,
-            name: name.clone(),
-            item: CatalogItem::Sink(sink.clone()),
+            name,
+            item: CatalogItem::Sink(catalog::Sink {
+                create_sql: sink.create_sql,
+                from: sink.from,
+                connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
+            }),
         };
         match self.catalog_transact(vec![op]) {
-            Ok(()) => {
-                self.create_sink_dataflow(name.to_string(), id, sink);
-                Ok(ExecuteResponse::CreatedSink { existed: false })
+            Ok(()) => (),
+            Err(_) if if_not_exists => {
+                tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
+                return;
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSink { existed: true }),
-            Err(err) => Err(err),
+            Err(e) => {
+                tx.send(Err(e), session);
+                return;
+            }
         }
+
+        // Now we're ready to create the sink connector. Arrange to notify the
+        // main coordinator thread when the future completes.
+        let connector_builder = sink.connector_builder;
+        tokio::spawn(async move {
+            internal_cmd_tx
+                .send(Message::SinkConnectorReady {
+                    session,
+                    tx,
+                    id,
+                    result: sink_connector::build(connector_builder, id).await,
+                })
+                .await
+                .expect("sending to internal_cmd_tx cannot fail");
+        });
     }
 
     fn sequence_create_view(
@@ -1257,12 +1342,12 @@ where
             .get(0)
             .copied()
             .unwrap_or(Timestamp::max_value());
-        let sink = catalog::Sink {
-            create_sql: "<ignored>".into(),
-            from: source_id,
-            connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
-        };
-        self.create_sink_dataflow(sink_name, sink_id, sink);
+        self.create_sink_dataflow(
+            sink_name,
+            sink_id,
+            source_id,
+            SinkConnector::Tail(TailSinkConnector { tx, since }),
+        );
         Ok(ExecuteResponse::Tailing { rx })
     }
 
@@ -1392,7 +1477,17 @@ where
                             views_to_drop.push(entry.id());
                         }
                         CatalogItem::View(_) => views_to_drop.push(entry.id()),
-                        CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
+                        CatalogItem::Sink(catalog::Sink {
+                            connector: SinkConnectorState::Ready(_),
+                            ..
+                        }) => sinks_to_drop.push(entry.id()),
+                        CatalogItem::Sink(catalog::Sink {
+                            connector: SinkConnectorState::Pending(_),
+                            ..
+                        }) => {
+                            // If the sink connector state is pending, the sink
+                            // dataflow was never created, so nothing to drop.
+                        }
                         CatalogItem::Index(idx) => indexes_to_drop.push((entry.id(), idx)),
                     }
                 }
@@ -1569,11 +1664,42 @@ where
         self.build_arrangement(&id, index, on_type, dataflow);
     }
 
-    fn create_sink_dataflow(&mut self, name: String, id: GlobalId, sink: catalog::Sink) {
+    fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
+        // Update catalog entry with sink connector.
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let mut sink = match entry.item() {
+            CatalogItem::Sink(sink) => sink.clone(),
+            _ => unreachable!(),
+        };
+        sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem {
+                id,
+                name: name.clone(),
+                item: CatalogItem::Sink(sink.clone()),
+            },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a sink cannot fail");
+
+        // Create the sink dataflow.
+        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+    }
+
+    fn create_sink_dataflow(
+        &mut self,
+        name: String,
+        id: GlobalId,
+        from: GlobalId,
+        connector: SinkConnector,
+    ) {
         let mut dataflow = DataflowDesc::new(name);
-        self.import_source_or_view(&id, &sink.from, &mut dataflow);
-        let from_type = self.catalog.get_by_id(&sink.from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, sink.from, from_type, sink.connector);
+        self.import_source_or_view(&id, &from, &mut dataflow);
+        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
+        dataflow.add_sink_export(id, from, from_type, connector);
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),

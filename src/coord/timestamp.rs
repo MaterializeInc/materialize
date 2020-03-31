@@ -221,7 +221,7 @@ fn get_kafka_partitions(consumer: &BaseConsumer, topic: &str) -> Vec<i32> {
     partitions
 }
 
-pub(crate) struct Timestamper {
+pub struct Timestamper {
     // Current list of up to date sources that use a real time consistency model
     rt_sources: HashMap<SourceInstanceId, RtTimestampConsumer>,
 

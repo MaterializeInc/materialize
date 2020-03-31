@@ -19,7 +19,7 @@ use log::{info, trace};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::{SinkConnector, SourceConnector};
+use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr};
 use repr::RelationDesc;
 
@@ -61,7 +61,6 @@ pub struct Catalog {
     serialize_item: fn(&CatalogItem) -> Vec<u8>,
     creation_time: SystemTime,
     nonce: u64,
-    sink_count: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,7 +115,13 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connector: SinkConnector,
+    pub connector: SinkConnectorState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SinkConnectorState {
+    Pending(SinkConnectorBuilder),
+    Ready(SinkConnector),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,7 +232,6 @@ impl Catalog {
             serialize_item: S::serialize,
             creation_time: SystemTime::now(),
             nonce: rand::random(),
-            sink_count: 0,
         };
 
         let databases = catalog.storage().load_databases()?;
@@ -385,6 +389,10 @@ impl Catalog {
             .ok_or_else(|| Error::new(ErrorKind::UnknownItem(name.to_string())))
     }
 
+    pub fn try_get_by_id(&self, id: GlobalId) -> Option<&CatalogEntry> {
+        self.by_id.get(&id)
+    }
+
     pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
         &self.by_id[id]
     }
@@ -455,10 +463,6 @@ impl Catalog {
                     u, entry.name
                 ),
             }
-        }
-
-        if let CatalogItem::Sink(_) = entry.item() {
-            self.increment_sink_count();
         }
 
         if let CatalogItem::Index(index) = entry.item() {
@@ -760,14 +764,6 @@ impl Catalog {
 
     pub fn nonce(&self) -> u64 {
         self.nonce
-    }
-
-    pub fn sink_count(&self) -> u64 {
-        self.sink_count
-    }
-
-    fn increment_sink_count(&mut self) {
-        self.sink_count += 1
     }
 }
 
