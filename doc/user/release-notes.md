@@ -16,12 +16,18 @@ For information about available versions, see our [Versions page](../versions).
 <span id="v0.2.0"></span>
 ## 0.1.3 &rarr; v0.2.0 (unreleased)
 
+- Require the `-w` / `--threads` command-line parameter. Consult the
+  [configuration documentation](https://materialize.io/docs/overview/configuration/#worker-threads) to determine the correct value for your deployment.
+
 - Make formatting and parsing for `real` and `double precision` numbers more
   consistent with PostgreSQL. The strings `NaN`, and `[+-]Infinity` are
   accepted as input, to select the special not-a-number and infinity states
   of floating-point numbers.
+
 - Support CSV files with headers (`CREATE SOURCE...FORMAT CSV WITH HEADER`).
+
 - Support naming columns when creating CSV sources.
+
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
