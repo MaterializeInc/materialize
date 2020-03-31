@@ -44,7 +44,7 @@ fn benchmark(schema: &Schema, record: &Value, s: &str, count: usize, runs: usize
         let records = records.clone();
 
         let start = Instant::now();
-        let mut writer = Writer::new(&schema, Vec::new());
+        let mut writer = Writer::new(schema.clone(), Vec::new());
         writer.extend(records.into_iter()).unwrap();
 
         let duration = Instant::now().duration_since(start);

@@ -41,8 +41,8 @@ impl ValidationError {
 }
 
 /// Main interface for writing Avro formatted values.
-pub struct Writer<'a, W> {
-    schema: &'a Schema,
+pub struct Writer<W> {
+    schema: Schema,
     writer: W,
     buffer: Vec<u8>,
     num_values: usize,
@@ -51,17 +51,17 @@ pub struct Writer<'a, W> {
     has_header: bool,
 }
 
-impl<'a, W: Write> Writer<'a, W> {
+impl<W: Write> Writer<W> {
     /// Creates a `Writer` given a `Schema` and something implementing the `io::Write` trait to write
     /// to.
     /// No compression `Codec` will be used.
-    pub fn new(schema: &'a Schema, writer: W) -> Writer<'a, W> {
+    pub fn new(schema: Schema, writer: W) -> Writer<W> {
         Self::with_codec(schema, writer, Codec::Null)
     }
 
     /// Creates a `Writer` with a specific `Codec` given a `Schema` and something implementing the
     /// `io::Write` trait to write to.
-    pub fn with_codec(schema: &'a Schema, writer: W, codec: Codec) -> Writer<'a, W> {
+    pub fn with_codec(schema: Schema, writer: W, codec: Codec) -> Writer<W> {
         let mut marker = Vec::with_capacity(16);
         for _ in 0..16 {
             marker.push(random::<u8>());
@@ -79,8 +79,8 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     /// Get a reference to the `Schema` associated to a `Writer`.
-    pub fn schema(&self) -> &'a Schema {
-        self.schema
+    pub fn schema(&self) -> &Schema {
+        &self.schema
     }
 
     /// Append a compatible value (implementing the `ToAvro` trait) to a `Writer`, also performing
@@ -102,7 +102,7 @@ impl<'a, W: Write> Writer<'a, W> {
         };
 
         let avro = value.avro();
-        write_value_ref(self.schema, &avro, &mut self.buffer)?;
+        write_value_ref(&self.schema, &avro, &mut self.buffer)?;
 
         self.num_values += 1;
 
@@ -130,7 +130,7 @@ impl<'a, W: Write> Writer<'a, W> {
             0
         };
 
-        write_value_ref(self.schema, value, &mut self.buffer)?;
+        write_value_ref(&self.schema, value, &mut self.buffer)?;
 
         self.num_values += 1;
 
@@ -250,7 +250,7 @@ impl<'a, W: Write> Writer<'a, W> {
 
     /// Create an Avro header based on schema, codec and sync marker.
     fn header(&self) -> Result<Vec<u8>, Error> {
-        let schema_bytes = serde_json::to_string(self.schema)?.into_bytes();
+        let schema_bytes = serde_json::to_string(&self.schema)?.into_bytes();
 
         let mut metadata = HashMap::with_capacity(2);
         metadata.insert("avro.schema", Value::Bytes(schema_bytes));

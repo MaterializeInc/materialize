@@ -210,7 +210,7 @@ fn test_file_sources() -> Result<(), Box<dyn Error>> {
     )?;
     let avro_schema = Schema::parse(&avro_schema)?;
     let mut dynamic_file = File::create(&dynamic_path)?;
-    let mut avro_writer = avro::Writer::new(&avro_schema, File::create(&avro_path)?);
+    let mut avro_writer = avro::Writer::new(avro_schema, File::create(&avro_path)?);
 
     // CSV files
     fs::write(

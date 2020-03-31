@@ -121,10 +121,10 @@
 //! # "#;
 //! # let schema = Schema::parse_str(raw_schema).unwrap();
 //! // a writer needs a schema and something to write to
-//! let mut writer = Writer::new(&schema, Vec::new());
+//! let mut writer = Writer::new(schema.clone(), Vec::new());
 //!
 //! // the Record type models our Record schema
-//! let mut record = Record::new(writer.schema().top_node()).unwrap();
+//! let mut record = Record::new(schema.top_node()).unwrap();
 //! record.put("a", 27i64);
 //! record.put("b", "foo");
 //!
@@ -186,7 +186,7 @@
 //! #     }
 //! # "#;
 //! # let schema = Schema::parse_str(raw_schema).unwrap();
-//! let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
+//! let mut writer = Writer::with_codec(schema, Vec::new(), Codec::Deflate);
 //! ```
 //!
 //! # Reading data
@@ -213,8 +213,8 @@
 //! #     }
 //! # "#;
 //! # let schema = Schema::parse_str(raw_schema).unwrap();
-//! # let mut writer = Writer::new(&schema, Vec::new());
-//! # let mut record = Record::new(writer.schema().top_node()).unwrap();
+//! # let mut writer = Writer::new(schema.clone(), Vec::new());
+//! # let mut record = Record::new(schema.top_node()).unwrap();
 //! # record.put("a", 27i64);
 //! # record.put("b", "foo");
 //! # writer.append(record).unwrap();
@@ -243,8 +243,8 @@
 //! #     }
 //! # "#;
 //! # let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
-//! # let mut writer = Writer::new(&writer_schema, Vec::new());
-//! # let mut record = Record::new(writer.schema().top_node()).unwrap();
+//! # let mut writer = Writer::new(writer_schema.clone(), Vec::new());
+//! # let mut record = Record::new(writer_schema.top_node()).unwrap();
 //! # record.put("a", 27i64);
 //! # record.put("b", "foo");
 //! # writer.append(record).unwrap();
@@ -305,9 +305,8 @@
 //! #     }
 //! # "#;
 //! # let schema = Schema::parse_str(raw_schema).unwrap();
-//! # let schema = Schema::parse_str(raw_schema).unwrap();
-//! # let mut writer = Writer::new(&schema, Vec::new());
-//! # let mut record = Record::new(writer.schema().top_node()).unwrap();
+//! # let mut writer = Writer::new(schema.clone(), Vec::new());
+//! # let mut record = Record::new(schema.top_node()).unwrap();
 //! # record.put("a", 27i64);
 //! # record.put("b", "foo");
 //! # writer.append(record).unwrap();
@@ -381,8 +380,8 @@ mod tests {
         "#;
         let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
         let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
-        let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema().top_node()).unwrap();
+        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+        let mut record = Record::new(writer_schema.top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
         writer.append(record).unwrap();
@@ -426,8 +425,8 @@ mod tests {
             }
         "#;
         let schema = Schema::parse_str(raw_schema).unwrap();
-        let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema().top_node()).unwrap();
+        let mut writer = Writer::with_codec(schema.clone(), Vec::new(), Codec::Null);
+        let mut record = Record::new(schema.top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
         record.put("c", "clubs");
@@ -492,8 +491,8 @@ mod tests {
         "#;
         let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
         let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
-        let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema().top_node()).unwrap();
+        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+        let mut record = Record::new(writer_schema.top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
         record.put("c", "clubs");
@@ -531,8 +530,8 @@ mod tests {
             }
         "#;
         let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
-        let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema().top_node()).unwrap();
+        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+        let mut record = Record::new(writer_schema.top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
         record.put("c", "clubs");
@@ -564,8 +563,8 @@ mod tests {
             }
         ]}"#;
         let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
-        let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
-        let mut record = Record::new(writer.schema().top_node()).unwrap();
+        let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
+        let mut record = Record::new(writer_schema.top_node()).unwrap();
         let dt = chrono::NaiveDateTime::from_timestamp(1_000, 995_000_000);
         record.put("a", types::Value::Timestamp(dt));
         writer.append(record).unwrap();

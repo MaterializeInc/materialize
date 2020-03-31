@@ -50,7 +50,7 @@ impl Action for WriteAction {
         let mut file = File::create(path).map_err(|e| e.to_string())?;
         let schema = interchange::avro::parse_schema(&self.schema)
             .map_err(|e| format!("parsing avro schema: {}", e))?;
-        let mut writer = Writer::new(&schema, &mut file);
+        let mut writer = Writer::new(schema.clone(), &mut file);
         for record in &self.records {
             let record = crate::format::avro::json_to_avro(
                 &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {}", e))?,
