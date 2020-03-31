@@ -12,15 +12,11 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use std::collections::BTreeMap;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use aws_arn::{Resource, ARN};
 use failure::{bail, format_err, ResultExt};
-use futures::executor::block_on;
 use itertools::Itertools;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-use rdkafka::client::DefaultClientContext;
-use rdkafka::config::ClientConfig;
 use rusoto_core::Region;
 use url::Url;
 
@@ -28,8 +24,8 @@ use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, Consistency, CsvEncoding, DataEncoding, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, KinesisSourceConnector,
-    PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnector, SourceConnector,
+    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
+    PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnectorBuilder, SourceConnector,
 };
 use expr::{like_pattern, GlobalId};
 use interchange::avro::Encoder;
@@ -626,70 +622,6 @@ fn handle_show_create_sink(
     ])]))
 }
 
-// TODO(rkhaitan): This function introduces a blocking step to statement planning
-// that we should remove from here, and add to a statement post-planning purify
-// step similar to the pre-planning purify. Leaving it here right now as an easy
-// way to achieve good error handling for sinks
-fn create_sink_kafka_topic(
-    desc: RelationDesc,
-    broker_url: &Url,
-    schema_registry_url: &Url,
-    topic: &str,
-) -> Result<i32, failure::Error> {
-    let encoder = Encoder::new(desc);
-    // Send new schema to registry, get back the schema id for the sink.
-    let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
-    let schema_name = format!("{}-value", topic);
-    let schema = encoder.writer_schema().canonical_form();
-    let schema_id = match ccsr_client.publish_schema(&schema_name, &schema) {
-        Ok(schema_id) => schema_id,
-        Err(err) => bail!(
-            "unable to publish schema to registry in kafka sink: {}",
-            err
-        ),
-    };
-
-    let mut config = ClientConfig::new();
-    config.set("bootstrap.servers", &broker_url.to_string());
-
-    let admin: AdminClient<DefaultClientContext> =
-        config.create().expect("creating admin kafka client failed");
-
-    let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
-    let new_topic = NewTopic::new(topic, 1, TopicReplication::Fixed(1));
-    let res = block_on(admin.create_topics(&[new_topic], &admin_opts));
-    match res {
-        Ok(res) => {
-            if res.len() != 1 {
-                bail!(
-                "error creating topic {} for sink: kafka topic creation returned {} results, but exactly one result was expected",
-                topic,
-                res.len()
-            );
-            }
-            match res.into_element() {
-                Ok(_) => (),
-                Err((_, err)) => {
-                    bail!(
-                        "error creating topic {} for sink: {}",
-                        topic,
-                        err.to_string()
-                    );
-                }
-            };
-        }
-        Err(err) => {
-            bail!(
-                "error creating new topic {} for sink: {}",
-                topic,
-                err.to_string()
-            );
-        }
-    }
-
-    Ok(schema_id)
-}
-
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, from, connector, format, if_not_exists) = match stmt {
@@ -703,7 +635,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         _ => unreachable!(),
     };
 
-    let (mut broker, topic) = match connector {
+    let (mut broker, topic_prefix) = match connector {
         Connector::File { .. } => bail!("file sinks are not yet supported"),
         Connector::Kafka { broker, topic } => (broker, topic),
         Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
@@ -715,7 +647,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
-            url
+            url.parse()?
         }
         _ => bail!("only confluent schema registry avro sinks are supported"),
     };
@@ -723,35 +655,33 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     if !broker.contains(':') {
         broker += ":9092";
     }
-
-    let url = broker.parse()?;
-    let schema_registry_url = schema_registry_url.parse()?;
+    let broker_url = broker.parse()?;
 
     let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.resolve_name(from)?;
     let catalog_entry = scx.catalog.get(&from)?;
-    let desc = catalog_entry.desc()?.clone();
 
-    let topic_name = format!(
-        "{}-{}-{}-{}",
-        topic,
+    let encoder = Encoder::new(catalog_entry.desc()?.clone());
+    let value_schema = encoder.writer_schema().canonical_form();
+
+    let topic_suffix = format!(
+        "{}-{}",
         scx.catalog
             .creation_time()
             .duration_since(UNIX_EPOCH)?
             .as_secs(),
-        scx.catalog.nonce(),
-        scx.catalog.sink_count(),
+        scx.catalog.nonce()
     );
-
-    let schema_id = create_sink_kafka_topic(desc, &url, &schema_registry_url, &topic_name)?;
 
     let sink = Sink {
         create_sql,
         from: catalog_entry.id(),
-        connector: SinkConnector::Kafka(KafkaSinkConnector {
-            url,
-            topic: topic_name,
-            schema_id,
+        connector_builder: SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
+            broker_url,
+            schema_registry_url,
+            value_schema,
+            topic_prefix,
+            topic_suffix,
         }),
     };
 

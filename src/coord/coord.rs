@@ -22,7 +22,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use failure::bail;
+use failure::{bail, ResultExt};
 use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
@@ -31,7 +31,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem};
+use catalog::{Catalog, CatalogItem, SinkConnectorState};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -48,9 +48,8 @@ use sql::{ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatem
 
 use crate::persistence::SqlSerializer;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
-use crate::{Command, ExecuteResponse, Response, StartupMessage};
-
-type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
+use crate::util::ClientTransmitter;
+use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
 
 pub enum Message {
     Command(Command),
@@ -65,9 +64,15 @@ pub enum Message {
     StatementReady {
         conn_id: u32,
         session: Session,
-        tx: ClientTx,
+        tx: ClientTransmitter<ExecuteResponse>,
         result: Result<sql::Statement, failure::Error>,
         params: Params,
+    },
+    SinkConnectorReady {
+        session: Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        id: GlobalId,
+        result: Result<SinkConnector, failure::Error>,
     },
     Shutdown,
 }
@@ -133,128 +138,9 @@ where
                 None
             };
 
-            let catalog_path = if let Some(data_directory) = config.data_directory {
-                Some(data_directory.join("catalog"))
-            } else {
-                None
-            };
+            let optimizer = Optimizer::default();
+            let catalog = open_catalog(config.data_directory, config.logging, optimizer)?;
 
-            let mut optimizer = Optimizer::default();
-
-            let catalog_path = catalog_path.as_deref();
-            let catalog = if let Some(logging_config) = config.logging {
-                Catalog::open::<SqlSerializer, _>(catalog_path, |catalog| {
-                    for log_src in logging_config.active_logs() {
-                        let view_name = FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: "mz_catalog".into(),
-                            item: log_src.name().into(),
-                        };
-                        let index_name = format!("{}_primary_idx", log_src.name());
-                        catalog.insert_item(
-                            log_src.id(),
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: "mz_catalog".into(),
-                                item: log_src.name().into(),
-                            },
-                            CatalogItem::Source(catalog::Source {
-                                create_sql: "TODO".to_string(),
-                                connector: dataflow_types::SourceConnector::Local,
-                                desc: log_src.schema(),
-                            }),
-                        );
-                        catalog.insert_item(
-                            log_src.index_id(),
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: "mz_catalog".into(),
-                                item: index_name.clone(),
-                            },
-                            CatalogItem::Index(catalog::Index {
-                                on: log_src.id(),
-                                keys: log_src
-                                    .index_by()
-                                    .into_iter()
-                                    .map(ScalarExpr::Column)
-                                    .collect(),
-                                create_sql: index_sql(
-                                    index_name,
-                                    view_name,
-                                    &log_src.schema(),
-                                    &log_src.index_by(),
-                                ),
-                                eval_env: EvalEnv::default(),
-                            }),
-                        );
-                    }
-
-                    for log_view in logging_config.active_views() {
-                        let params = Params {
-                            datums: Row::pack(&[]),
-                            types: vec![],
-                        };
-                        let stmt = sql::parse(log_view.sql.to_owned())
-                            .expect("failed to parse bootstrap sql")
-                            .into_element();
-                        match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
-                            Ok(Plan::CreateView {
-                                name: _,
-                                view,
-                                replace,
-                                materialize,
-                                if_not_exists,
-                            }) => {
-                                assert!(replace.is_none());
-                                assert!(!if_not_exists);
-                                assert!(materialize);
-                                let eval_env = EvalEnv::default();
-                                let view = catalog::View {
-                                    create_sql: view.create_sql,
-                                    unoptimized_expr: view.expr.clone(),
-                                    optimized_expr: optimizer
-                                        .optimize(view.expr, catalog.indexes(), &eval_env)
-                                        .expect("failed to optimize bootstrap sql"),
-                                    eval_env,
-                                    desc: view.desc,
-                                };
-                                let view_name = FullName {
-                                    database: DatabaseSpecifier::Ambient,
-                                    schema: "mz_catalog".into(),
-                                    item: log_view.name.into(),
-                                };
-                                let index_name = format!("{}_primary_idx", log_view.name);
-                                let index = auto_generate_view_idx(
-                                    index_name.clone(),
-                                    view_name.clone(),
-                                    &view,
-                                    log_view.id,
-                                );
-                                catalog.insert_item(
-                                    log_view.id,
-                                    view_name,
-                                    CatalogItem::View(view),
-                                );
-                                catalog.insert_item(
-                                    log_view.index_id,
-                                    FullName {
-                                        database: DatabaseSpecifier::Ambient,
-                                        schema: "mz_catalog".into(),
-                                        item: index_name,
-                                    },
-                                    CatalogItem::Index(index),
-                                );
-                            }
-                            err => panic!(
-                                "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
-                                log_view.sql, err
-                            ),
-                        }
-                    }
-                })?
-            } else {
-                Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
-            };
             let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
                 let millis = d.as_millis();
                 if millis > Timestamp::max_value() as u128 {
@@ -306,7 +192,15 @@ where
                         coord.insert_view(id, &view);
                     }
                     CatalogItem::Sink(sink) => {
-                        coord.create_sink_dataflow(name.to_string(), id, sink);
+                        let builder = match sink.connector {
+                            SinkConnectorState::Pending(builder) => builder,
+                            SinkConnectorState::Ready(_) => {
+                                panic!("sink already initialized during catalog boot")
+                            }
+                        };
+                        let connector = block_on(sink_connector::build(builder, id))
+                            .with_context(|e| format!("recreating sink {}: {}", name, e))?;
+                        coord.handle_sink_connector_ready(id, connector);
                     }
                     CatalogItem::Index(index) => match id {
                         GlobalId::User(_) => {
@@ -415,10 +309,7 @@ where
                     if self.catalog.database_resolver(session.database()).is_err() {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
-                    let _ = tx.send(Response {
-                        result: Ok(messages),
-                        session,
-                    });
+                    ClientTransmitter::new(tx).send(Ok(messages), session)
                 }
                 Message::Command(Command::Execute {
                     portal_name,
@@ -456,15 +347,16 @@ where
                             let params = portal.parameters.clone();
                             tokio::spawn(async move {
                                 let result = sql::purify(stmt).await;
-                                let _ = internal_cmd_tx
+                                internal_cmd_tx
                                     .send(Message::StatementReady {
                                         session,
-                                        tx,
+                                        tx: ClientTransmitter::new(tx),
                                         result,
                                         conn_id,
                                         params,
                                     })
-                                    .await;
+                                    .await
+                                    .expect("sending to internal_cmd_tx cannot fail");
                             });
                         }
                         None => {
@@ -478,16 +370,44 @@ where
 
                 Message::StatementReady {
                     conn_id,
-                    mut session,
+                    session,
                     tx,
                     result,
                     params,
-                } => {
-                    let result = result
-                        .and_then(|stmt| self.handle_statement(&session, stmt, &params))
-                        .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
-                    let _ = tx.send(Response { result, session });
-                }
+                } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
+                    Ok(plan) => self.sequence_plan(&internal_cmd_tx, tx, session, plan, conn_id),
+                    Err(e) => tx.send(Err(e), session),
+                },
+
+                Message::SinkConnectorReady {
+                    session,
+                    tx,
+                    id,
+                    result,
+                } => match result {
+                    Ok(connector) => {
+                        // NOTE: we must not fail from here on out. We have a
+                        // connector, which means there is external state (like
+                        // a Kafka topic) that's been created on our behalf. If
+                        // we fail now, we'll leak that external state.
+                        if self.catalog.try_get_by_id(id).is_some() {
+                            self.handle_sink_connector_ready(id, connector);
+                        } else {
+                            // Another session dropped the sink while we were
+                            // creating the connector. Report to the client that
+                            // we created the sink, because from their
+                            // perspective we did, as there is state (e.g. a
+                            // Kafka topic) they need to clean up.
+                        }
+                        tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+                    }
+                    Err(e) => {
+                        self.catalog
+                            .transact(vec![catalog::Op::DropItem(id)])
+                            .expect("corrupt catalog");
+                        tx.send(Err(e), session);
+                    }
+                },
 
                 Message::Command(Command::Parse {
                     name,
@@ -594,40 +514,58 @@ where
 
     fn sequence_plan(
         &mut self,
-        session: &mut Session,
+        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
         plan: Plan,
         conn_id: u32,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) {
         match plan {
             Plan::CreateDatabase {
                 name,
                 if_not_exists,
-            } => self.sequence_create_database(name, if_not_exists),
+            } => tx.send(self.sequence_create_database(name, if_not_exists), session),
 
             Plan::CreateSchema {
                 database_name,
                 schema_name,
                 if_not_exists,
-            } => self.sequence_create_schema(database_name, schema_name, if_not_exists),
+            } => tx.send(
+                self.sequence_create_schema(database_name, schema_name, if_not_exists),
+                session,
+            ),
 
             Plan::CreateTable {
                 name,
                 desc,
                 if_not_exists,
-            } => self.sequence_create_table(name, desc, if_not_exists),
+            } => tx.send(
+                self.sequence_create_table(name, desc, if_not_exists),
+                session,
+            ),
 
             Plan::CreateSource {
                 name,
                 source,
                 if_not_exists,
                 materialized,
-            } => self.sequence_create_source(name, source, if_not_exists, materialized),
+            } => tx.send(
+                self.sequence_create_source(name, source, if_not_exists, materialized),
+                session,
+            ),
 
             Plan::CreateSink {
                 name,
                 sink,
                 if_not_exists,
-            } => self.sequence_create_sink(name, sink, if_not_exists),
+            } => self.sequence_create_sink(
+                internal_cmd_tx.clone(),
+                tx,
+                session,
+                name,
+                sink,
+                if_not_exists,
+            ),
 
             Plan::CreateView {
                 name,
@@ -635,51 +573,58 @@ where
                 replace,
                 materialize,
                 if_not_exists,
-            } => self.sequence_create_view(name, view, replace, materialize, if_not_exists),
+            } => tx.send(
+                self.sequence_create_view(name, view, replace, materialize, if_not_exists),
+                session,
+            ),
 
             Plan::CreateIndex {
                 name,
                 index,
                 if_not_exists,
-            } => self.sequence_create_index(name, index, if_not_exists),
+            } => tx.send(
+                self.sequence_create_index(name, index, if_not_exists),
+                session,
+            ),
 
-            Plan::DropDatabase { name } => self.sequence_drop_database(name),
+            Plan::DropDatabase { name } => tx.send(self.sequence_drop_database(name), session),
 
             Plan::DropSchema {
                 database_name,
                 schema_name,
-            } => self.sequence_drop_schema(database_name, schema_name),
+            } => tx.send(
+                self.sequence_drop_schema(database_name, schema_name),
+                session,
+            ),
 
-            Plan::DropItems { items, ty } => self.sequence_drop_items(items, ty),
+            Plan::DropItems { items, ty } => tx.send(self.sequence_drop_items(items, ty), session),
 
-            Plan::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
+            Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
 
-            Plan::ShowAllVariables => self.sequence_show_all_variables(session),
+            Plan::ShowAllVariables => tx.send(self.sequence_show_all_variables(&session), session),
 
             Plan::ShowVariable(name) => {
-                let variable = session.get(&name)?;
-                let row = Row::pack(&[Datum::String(&variable.value())]);
-                Ok(send_immediate_rows(vec![row]))
+                tx.send(self.sequence_show_variable(&session, name), session)
             }
 
-            Plan::SetVariable { name, value } => {
-                session.set(&name, &value)?;
-                Ok(ExecuteResponse::SetVariable { name })
-            }
+            Plan::SetVariable { name, value } => tx.send(
+                self.sequence_set_variable(&mut session, name, value),
+                session,
+            ),
 
             Plan::StartTransaction => {
                 session.start_transaction();
-                Ok(ExecuteResponse::StartedTransaction)
+                tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 
             Plan::CommitTransaction => {
                 session.end_transaction();
-                Ok(ExecuteResponse::CommittedTransaction)
+                tx.send(Ok(ExecuteResponse::CommittedTransaction), session)
             }
 
             Plan::AbortTransaction => {
                 session.end_transaction();
-                Ok(ExecuteResponse::AbortedTransaction)
+                tx.send(Ok(ExecuteResponse::AbortedTransaction), session)
             }
 
             Plan::Peek {
@@ -687,29 +632,39 @@ where
                 when,
                 finishing,
                 materialize,
-            } => self.sequence_peek(conn_id, source, when, finishing, materialize),
+            } => tx.send(
+                self.sequence_peek(conn_id, source, when, finishing, materialize),
+                session,
+            ),
 
-            Plan::Tail(source) => self.sequence_tail(conn_id, source),
+            Plan::Tail(source) => tx.send(self.sequence_tail(conn_id, source), session),
 
-            Plan::SendRows(rows) => Ok(send_immediate_rows(rows)),
+            Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
-            Plan::ExplainPlan(relation_expr, explain_options) => {
-                self.sequence_explain_plan(relation_expr, explain_options)
-            }
+            Plan::ExplainPlan(relation_expr, explain_options) => tx.send(
+                self.sequence_explain_plan(relation_expr, explain_options),
+                session,
+            ),
 
             Plan::SendDiffs {
                 id,
                 updates,
                 affected_rows,
                 kind,
-            } => self.sequence_send_diffs(id, updates, affected_rows, kind),
+            } => tx.send(
+                self.sequence_send_diffs(id, updates, affected_rows, kind),
+                session,
+            ),
 
             Plan::ShowViews {
                 ids,
                 full,
                 show_queryable,
                 limit_materialized,
-            } => self.sequence_show_views(ids, full, show_queryable, limit_materialized),
+            } => tx.send(
+                self.sequence_show_views(ids, full, show_queryable, limit_materialized),
+                session,
+            ),
         }
     }
 
@@ -856,29 +811,63 @@ where
 
     fn sequence_create_sink(
         &mut self,
+        mut internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
         name: FullName,
         sink: sql::Sink,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
-        let sink = catalog::Sink {
-            create_sql: sink.create_sql,
-            from: sink.from,
-            connector: sink.connector,
+    ) {
+        // First try to allocate an ID. If that fails, we're done.
+        let id = match self.catalog.allocate_id() {
+            Ok(id) => id,
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return;
+            }
         };
-        let id = self.catalog.allocate_id()?;
+
+        // Then try to create a placeholder catalog item with an unknown
+        // connector. If that fails, we're done, though if the client specified
+        // `if_not_exists` we'll tell the client we succeeded.
+        //
+        // This placeholder catalog item reserves the name while we create
+        // the sink connector, which could take an arbitrarily long time.
         let op = catalog::Op::CreateItem {
             id,
-            name: name.clone(),
-            item: CatalogItem::Sink(sink.clone()),
+            name,
+            item: CatalogItem::Sink(catalog::Sink {
+                create_sql: sink.create_sql,
+                from: sink.from,
+                connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
+            }),
         };
         match self.catalog_transact(vec![op]) {
-            Ok(()) => {
-                self.create_sink_dataflow(name.to_string(), id, sink);
-                Ok(ExecuteResponse::CreatedSink { existed: false })
+            Ok(()) => (),
+            Err(_) if if_not_exists => {
+                tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
+                return;
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSink { existed: true }),
-            Err(err) => Err(err),
+            Err(e) => {
+                tx.send(Err(e), session);
+                return;
+            }
         }
+
+        // Now we're ready to create the sink connector. Arrange to notify the
+        // main coordinator thread when the future completes.
+        let connector_builder = sink.connector_builder;
+        tokio::spawn(async move {
+            internal_cmd_tx
+                .send(Message::SinkConnectorReady {
+                    session,
+                    tx,
+                    id,
+                    result: sink_connector::build(connector_builder, id).await,
+                })
+                .await
+                .expect("sending to internal_cmd_tx cannot fail");
+        });
     }
 
     fn sequence_create_view(
@@ -1024,6 +1013,26 @@ where
                 })
                 .collect(),
         ))
+    }
+
+    fn sequence_show_variable(
+        &self,
+        session: &Session,
+        name: String,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let variable = session.get(&name)?;
+        let row = Row::pack(&[Datum::String(&variable.value())]);
+        Ok(send_immediate_rows(vec![row]))
+    }
+
+    fn sequence_set_variable(
+        &self,
+        session: &mut Session,
+        name: String,
+        value: String,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        session.set(&name, &value)?;
+        Ok(ExecuteResponse::SetVariable { name })
     }
 
     fn sequence_peek(
@@ -1214,12 +1223,12 @@ where
             .get(0)
             .copied()
             .unwrap_or(Timestamp::max_value());
-        let sink = catalog::Sink {
-            create_sql: "<ignored>".into(),
-            from: source_id,
-            connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
-        };
-        self.create_sink_dataflow(sink_name, sink_id, sink);
+        self.create_sink_dataflow(
+            sink_name,
+            sink_id,
+            source_id,
+            SinkConnector::Tail(TailSinkConnector { tx, since }),
+        );
         Ok(ExecuteResponse::Tailing { rx })
     }
 
@@ -1349,7 +1358,17 @@ where
                             views_to_drop.push(entry.id());
                         }
                         CatalogItem::View(_) => views_to_drop.push(entry.id()),
-                        CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
+                        CatalogItem::Sink(catalog::Sink {
+                            connector: SinkConnectorState::Ready(_),
+                            ..
+                        }) => sinks_to_drop.push(entry.id()),
+                        CatalogItem::Sink(catalog::Sink {
+                            connector: SinkConnectorState::Pending(_),
+                            ..
+                        }) => {
+                            // If the sink connector state is pending, the sink
+                            // dataflow was never created, so nothing to drop.
+                        }
                         CatalogItem::Index(idx) => indexes_to_drop.push((entry.id(), idx)),
                     }
                 }
@@ -1526,11 +1545,42 @@ where
         self.build_arrangement(&id, index, on_type, dataflow);
     }
 
-    fn create_sink_dataflow(&mut self, name: String, id: GlobalId, sink: catalog::Sink) {
+    fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
+        // Update catalog entry with sink connector.
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let mut sink = match entry.item() {
+            CatalogItem::Sink(sink) => sink.clone(),
+            _ => unreachable!(),
+        };
+        sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem {
+                id,
+                name: name.clone(),
+                item: CatalogItem::Sink(sink.clone()),
+            },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a sink cannot fail");
+
+        // Create the sink dataflow.
+        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+    }
+
+    fn create_sink_dataflow(
+        &mut self,
+        name: String,
+        id: GlobalId,
+        from: GlobalId,
+        connector: SinkConnector,
+    ) {
         let mut dataflow = DataflowDesc::new(name);
-        self.import_source_or_view(&id, &sink.from, &mut dataflow);
-        let from_type = self.catalog.get_by_id(&sink.from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, sink.from, from_type, sink.connector);
+        self.import_source_or_view(&id, &from, &mut dataflow);
+        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
+        dataflow.add_sink_export(id, from, from_type, connector);
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -2159,23 +2209,138 @@ fn index_sql(
     .to_string()
 }
 
+fn open_catalog(
+    data_directory: Option<&Path>,
+    logging_config: Option<&LoggingConfig>,
+    mut optimizer: Optimizer,
+) -> Result<Catalog, failure::Error> {
+    let path = if let Some(data_directory) = data_directory {
+        Some(data_directory.join("catalog"))
+    } else {
+        None
+    };
+    let path = path.as_deref();
+    Ok(if let Some(logging_config) = logging_config {
+        Catalog::open::<SqlSerializer, _>(path, |catalog| {
+            for log_src in logging_config.active_logs() {
+                let view_name = FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: "mz_catalog".into(),
+                    item: log_src.name().into(),
+                };
+                let index_name = format!("{}_primary_idx", log_src.name());
+                catalog.insert_item(
+                    log_src.id(),
+                    FullName {
+                        database: DatabaseSpecifier::Ambient,
+                        schema: "mz_catalog".into(),
+                        item: log_src.name().into(),
+                    },
+                    CatalogItem::Source(catalog::Source {
+                        create_sql: "TODO".to_string(),
+                        connector: dataflow_types::SourceConnector::Local,
+                        desc: log_src.schema(),
+                    }),
+                );
+                catalog.insert_item(
+                    log_src.index_id(),
+                    FullName {
+                        database: DatabaseSpecifier::Ambient,
+                        schema: "mz_catalog".into(),
+                        item: index_name.clone(),
+                    },
+                    CatalogItem::Index(catalog::Index {
+                        on: log_src.id(),
+                        keys: log_src
+                            .index_by()
+                            .into_iter()
+                            .map(ScalarExpr::Column)
+                            .collect(),
+                        create_sql: index_sql(
+                            index_name,
+                            view_name,
+                            &log_src.schema(),
+                            &log_src.index_by(),
+                        ),
+                        eval_env: EvalEnv::default(),
+                    }),
+                );
+            }
+
+            for log_view in logging_config.active_views() {
+                let params = Params {
+                    datums: Row::pack(&[]),
+                    types: vec![],
+                };
+                let stmt = sql::parse(log_view.sql.to_owned())
+                    .expect("failed to parse bootstrap sql")
+                    .into_element();
+                match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
+                    Ok(Plan::CreateView {
+                        name: _,
+                        view,
+                        replace,
+                        materialize,
+                        if_not_exists,
+                    }) => {
+                        assert!(replace.is_none());
+                        assert!(!if_not_exists);
+                        assert!(materialize);
+                        let eval_env = EvalEnv::default();
+                        let view = catalog::View {
+                            create_sql: view.create_sql,
+                            unoptimized_expr: view.expr.clone(),
+                            optimized_expr: optimizer
+                                .optimize(view.expr, catalog.indexes(), &eval_env)
+                                .expect("failed to optimize bootstrap sql"),
+                            eval_env,
+                            desc: view.desc,
+                        };
+                        let view_name = FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: "mz_catalog".into(),
+                            item: log_view.name.into(),
+                        };
+                        let index_name = format!("{}_primary_idx", log_view.name);
+                        let index = auto_generate_view_idx(
+                            index_name.clone(),
+                            view_name.clone(),
+                            &view,
+                            log_view.id,
+                        );
+                        catalog.insert_item(log_view.id, view_name, CatalogItem::View(view));
+                        catalog.insert_item(
+                            log_view.index_id,
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "mz_catalog".into(),
+                                item: index_name,
+                            },
+                            CatalogItem::Index(index),
+                        );
+                    }
+                    err => panic!(
+                        "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
+                        log_view.sql, err
+                    ),
+                }
+            }
+        })?
+    } else {
+        Catalog::open::<SqlSerializer, _>(path, |_| ())?
+    })
+}
+
 /// Loads the catalog stored at `data_directory` and returns its serialized state.
 ///
 /// There are no guarantees about the format of the serialized state, except that
 /// the serialized state for two identical catalogs will compare identically.
 pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
-    let (switchboard, runtime) = comm::Switchboard::local()?;
-    // The configuration does not have any requirements other than pointing at the data
-    // directory specified as an argument to the method.
-    let coord = Coordinator::new(Config {
-        switchboard,
-        num_timely_workers: 1,
-        data_directory: Some(data_directory),
-        symbiosis_url: None,
-        logging: Some(&LoggingConfig::new(Duration::from_secs(0))),
-        executor: runtime.handle(),
-        timestamp: None,
-        logical_compaction_window: None,
-    })?;
-    Ok(coord.catalog.dump())
+    let logging_config = LoggingConfig::new(Duration::from_secs(0));
+    let catalog = open_catalog(
+        Some(data_directory),
+        Some(&logging_config),
+        Optimizer::default(),
+    )?;
+    Ok(catalog.dump())
 }

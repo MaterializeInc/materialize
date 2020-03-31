@@ -552,6 +552,20 @@ pub struct TailSinkConnector {
     pub since: Timestamp,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SinkConnectorBuilder {
+    Kafka(KafkaSinkConnectorBuilder),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSinkConnectorBuilder {
+    pub broker_url: Url,
+    pub schema_registry_url: Url,
+    pub value_schema: String,
+    pub topic_prefix: String,
+    pub topic_suffix: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.

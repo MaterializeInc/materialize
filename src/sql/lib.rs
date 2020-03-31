@@ -14,7 +14,7 @@
 use ::expr::GlobalId;
 use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::{Catalog, CatalogEntry};
-use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnector, SourceConnector};
+use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnectorBuilder, SourceConnector};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
@@ -131,7 +131,7 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connector: SinkConnector,
+    pub connector_builder: SinkConnectorBuilder,
 }
 
 #[derive(Clone, Debug)]
