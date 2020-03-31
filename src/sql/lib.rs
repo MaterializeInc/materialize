@@ -14,7 +14,7 @@
 use ::expr::GlobalId;
 use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::{Catalog, CatalogEntry};
-use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnector, SourceConnector};
+use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnectorBuilder, SourceConnector};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
@@ -93,22 +93,12 @@ pub enum Plan {
     ShowAllVariables,
     ShowVariable(String),
     SetVariable {
-        /// The name of the variable
         name: String,
         value: String,
     },
-    /// Nothing needs to happen, but the frontend must be notified
     StartTransaction,
-    /// Commit a transaction
-    ///
-    /// We don't do anything for transactions, so other than changing the session state
-    /// this is a no-op
-    Commit,
-    /// Rollback a transaction
-    ///
-    /// We don't do anything for transactions, so other than changing the session state
-    /// this is a no-op
-    Rollback,
+    CommitTransaction,
+    AbortTransaction,
     Peek {
         source: ::expr::RelationExpr,
         when: PeekWhen,
@@ -149,7 +139,7 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connector: SinkConnector,
+    pub connector_builder: SinkConnectorBuilder,
 }
 
 #[derive(Clone, Debug)]

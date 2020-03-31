@@ -22,7 +22,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use failure::bail;
+use failure::{bail, ResultExt};
 use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
@@ -31,28 +31,26 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem};
+use catalog::{Catalog, CatalogItem, SinkConnectorState};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, SinkConnector, TailSinkConnector, Timestamp,
-    Update,
+    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, RowSetFinishing, SinkConnector,
+    TailSinkConnector, Timestamp, Update,
 };
 use expr::transform::Optimizer;
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr, SourceInstanceId};
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
-use sql::{MutationKind, ObjectType, Plan, Session};
-use sql::{Params, PreparedStatement};
+use sql::{ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatement, Session};
 use sql_parser::ast::ExplainStage;
 
 use crate::persistence::SqlSerializer;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
-use crate::{Command, ExecuteResponse, Response, StartupMessage};
-
-type ClientTx = futures::channel::oneshot::Sender<Response<ExecuteResponse>>;
+use crate::util::ClientTransmitter;
+use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
 
 pub enum Message {
     Command(Command),
@@ -67,9 +65,15 @@ pub enum Message {
     StatementReady {
         conn_id: u32,
         session: Session,
-        tx: ClientTx,
+        tx: ClientTransmitter<ExecuteResponse>,
         result: Result<sql::Statement, failure::Error>,
         params: Params,
+    },
+    SinkConnectorReady {
+        session: Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+        id: GlobalId,
+        result: Result<SinkConnector, failure::Error>,
     },
     Shutdown,
 }
@@ -135,127 +139,8 @@ where
                 None
             };
 
-            let catalog_path = if let Some(data_directory) = config.data_directory {
-                Some(data_directory.join("catalog"))
-            } else {
-                None
-            };
-
-            let mut optimizer = Optimizer::default();
-
-            let catalog_path = catalog_path.as_deref();
-            let catalog = if let Some(logging_config) = config.logging {
-                Catalog::open::<SqlSerializer, _>(catalog_path, |catalog| {
-                    for log_src in logging_config.active_logs() {
-                        let view_name = FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: "mz_catalog".into(),
-                            item: log_src.name().into(),
-                        };
-                        let index_name = format!("{}_primary_idx", log_src.name());
-                        catalog.insert_item(
-                            log_src.id(),
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: "mz_catalog".into(),
-                                item: log_src.name().into(),
-                            },
-                            CatalogItem::Source(catalog::Source {
-                                create_sql: "TODO".to_string(),
-                                connector: dataflow_types::SourceConnector::Local,
-                                desc: log_src.schema(),
-                            }),
-                        );
-                        catalog.insert_item(
-                            log_src.index_id(),
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: "mz_catalog".into(),
-                                item: index_name.clone(),
-                            },
-                            CatalogItem::Index(catalog::Index {
-                                on: log_src.id(),
-                                keys: log_src
-                                    .index_by()
-                                    .into_iter()
-                                    .map(ScalarExpr::Column)
-                                    .collect(),
-                                create_sql: index_sql(
-                                    index_name,
-                                    view_name,
-                                    &log_src.schema(),
-                                    &log_src.index_by(),
-                                ),
-                                eval_env: EvalEnv::default(),
-                            }),
-                        );
-                    }
-
-                    for log_view in logging_config.active_views() {
-                        let params = Params {
-                            datums: Row::pack(&[]),
-                            types: vec![],
-                        };
-                        let stmt = sql::parse(log_view.sql.to_owned())
-                            .expect("failed to parse bootstrap sql")
-                            .into_element();
-                        match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
-                            Ok(Plan::CreateView {
-                                name: _,
-                                view,
-                                replace,
-                                materialize,
-                                if_not_exists,
-                            }) => {
-                                assert!(replace.is_none());
-                                assert!(!if_not_exists);
-                                assert!(materialize);
-                                let eval_env = EvalEnv::default();
-                                let view = catalog::View {
-                                    create_sql: view.create_sql,
-                                    optimized_expr: optimizer
-                                        .optimize(view.expr, catalog.indexes(), &eval_env)
-                                        .expect("failed to optimize bootstrap sql"),
-                                    eval_env,
-                                    desc: view.desc,
-                                };
-                                let view_name = FullName {
-                                    database: DatabaseSpecifier::Ambient,
-                                    schema: "mz_catalog".into(),
-                                    item: log_view.name.into(),
-                                };
-                                let index_name = format!("{}_primary_idx", log_view.name);
-                                let index = auto_generate_view_idx(
-                                    index_name.clone(),
-                                    view_name.clone(),
-                                    &view,
-                                    log_view.id,
-                                );
-                                catalog.insert_item(
-                                    log_view.id,
-                                    view_name,
-                                    CatalogItem::View(view),
-                                );
-                                catalog.insert_item(
-                                    log_view.index_id,
-                                    FullName {
-                                        database: DatabaseSpecifier::Ambient,
-                                        schema: "mz_catalog".into(),
-                                        item: index_name,
-                                    },
-                                    CatalogItem::Index(index),
-                                );
-                            }
-                            err => panic!(
-                                "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
-                                log_view.sql, err
-                            ),
-                        }
-                    }
-                })?
-            } else {
-                Catalog::open::<SqlSerializer, _>(catalog_path, |_| ())?
-            };
+            let optimizer = Optimizer::default();
+            let catalog = open_catalog(config.data_directory, config.logging, optimizer)?;
             let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
                 let millis = d.as_millis();
                 if millis > Timestamp::max_value() as u128 {
@@ -307,7 +192,15 @@ where
                         coord.insert_view(id, &view);
                     }
                     CatalogItem::Sink(sink) => {
-                        coord.create_sink_dataflow(name.to_string(), id, sink);
+                        let builder = match sink.connector {
+                            SinkConnectorState::Pending(builder) => builder,
+                            SinkConnectorState::Ready(_) => {
+                                panic!("sink already initialized during catalog boot")
+                            }
+                        };
+                        let connector = block_on(sink_connector::build(builder, id))
+                            .with_context(|e| format!("recreating sink {}: {}", name, e))?;
+                        coord.handle_sink_connector_ready(id, connector);
                     }
                     CatalogItem::Index(index) => match id {
                         GlobalId::User(_) => {
@@ -416,10 +309,7 @@ where
                     if self.catalog.database_resolver(session.database()).is_err() {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
-                    let _ = tx.send(Response {
-                        result: Ok(messages),
-                        session,
-                    });
+                    ClientTransmitter::new(tx).send(Ok(messages), session)
                 }
                 Message::Command(Command::Execute {
                     portal_name,
@@ -457,15 +347,16 @@ where
                             let params = portal.parameters.clone();
                             tokio::spawn(async move {
                                 let result = sql::purify(stmt).await;
-                                let _ = internal_cmd_tx
+                                internal_cmd_tx
                                     .send(Message::StatementReady {
                                         session,
-                                        tx,
+                                        tx: ClientTransmitter::new(tx),
                                         result,
                                         conn_id,
                                         params,
                                     })
-                                    .await;
+                                    .await
+                                    .expect("sending to internal_cmd_tx cannot fail");
                             });
                         }
                         None => {
@@ -479,16 +370,44 @@ where
 
                 Message::StatementReady {
                     conn_id,
-                    mut session,
+                    session,
                     tx,
                     result,
                     params,
-                } => {
-                    let result = result
-                        .and_then(|stmt| self.handle_statement(&session, stmt, &params))
-                        .and_then(|plan| self.sequence_plan(&mut session, plan, conn_id));
-                    let _ = tx.send(Response { result, session });
-                }
+                } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
+                    Ok(plan) => self.sequence_plan(&internal_cmd_tx, tx, session, plan, conn_id),
+                    Err(e) => tx.send(Err(e), session),
+                },
+
+                Message::SinkConnectorReady {
+                    session,
+                    tx,
+                    id,
+                    result,
+                } => match result {
+                    Ok(connector) => {
+                        // NOTE: we must not fail from here on out. We have a
+                        // connector, which means there is external state (like
+                        // a Kafka topic) that's been created on our behalf. If
+                        // we fail now, we'll leak that external state.
+                        if self.catalog.try_get_by_id(id).is_some() {
+                            self.handle_sink_connector_ready(id, connector);
+                        } else {
+                            // Another session dropped the sink while we were
+                            // creating the connector. Report to the client that
+                            // we created the sink, because from their
+                            // perspective we did, as there is state (e.g. a
+                            // Kafka topic) they need to clean up.
+                        }
+                        tx.send(Ok(ExecuteResponse::CreatedSink { existed: false }), session);
+                    }
+                    Err(e) => {
+                        self.catalog
+                            .transact(vec![catalog::Op::DropItem(id)])
+                            .expect("corrupt catalog");
+                        tx.send(Err(e), session);
+                    }
+                },
 
                 Message::Command(Command::Parse {
                     name,
@@ -593,185 +512,60 @@ where
         }
     }
 
-    pub fn sequence_plan(
+    fn sequence_plan(
         &mut self,
-        session: &mut Session,
+        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
         plan: Plan,
         conn_id: u32,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) {
         match plan {
             Plan::CreateDatabase {
                 name,
                 if_not_exists,
-            } => {
-                let ops = vec![
-                    catalog::Op::CreateDatabase { name: name.clone() },
-                    catalog::Op::CreateSchema {
-                        database_name: DatabaseSpecifier::Name(name),
-                        schema_name: "public".into(),
-                    },
-                ];
-                match self.catalog_transact(ops) {
-                    Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-                    Err(_) if if_not_exists => {
-                        Ok(ExecuteResponse::CreatedDatabase { existed: true })
-                    }
-                    Err(err) => Err(err),
-                }
-            }
+            } => tx.send(self.sequence_create_database(name, if_not_exists), session),
 
             Plan::CreateSchema {
                 database_name,
                 schema_name,
                 if_not_exists,
-            } => {
-                let op = catalog::Op::CreateSchema {
-                    database_name,
-                    schema_name,
-                };
-                match self.catalog_transact(vec![op]) {
-                    Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
-                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
-                    Err(err) => Err(err),
-                }
-            }
+            } => tx.send(
+                self.sequence_create_schema(database_name, schema_name, if_not_exists),
+                session,
+            ),
 
             Plan::CreateTable {
                 name,
                 desc,
                 if_not_exists,
-            } => {
-                let source_id = self.catalog.allocate_id()?;
-                let source = catalog::Source {
-                    create_sql: "TODO".to_string(),
-                    connector: dataflow_types::SourceConnector::Local,
-                    desc,
-                };
-                let index_id = self.catalog.allocate_id()?;
-                let mut index_name = name.clone();
-                index_name.item += "_primary_idx";
-                let index = auto_generate_src_idx(
-                    index_name.item.clone(),
-                    name.clone(),
-                    &source,
-                    source_id,
-                );
-                match self.catalog_transact(vec![
-                    catalog::Op::CreateItem {
-                        id: source_id,
-                        name: name.clone(),
-                        item: CatalogItem::Source(source.clone()),
-                    },
-                    catalog::Op::CreateItem {
-                        id: index_id,
-                        name: index_name,
-                        item: CatalogItem::Index(index.clone()),
-                    },
-                ]) {
-                    Ok(_) => {
-                        self.views.insert(source_id, ViewState::new(false, vec![]));
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::CreateLocalInput {
-                                name: name.to_string(),
-                                index_id,
-                                index: IndexDesc {
-                                    on_id: index.on,
-                                    keys: index.keys.clone(),
-                                },
-                                on_type: source.desc.typ().clone(),
-                                advance_to: self.local_input_time,
-                            },
-                        );
-                        self.insert_index(index_id, &index, self.logical_compaction_window_ms);
-                        Ok(ExecuteResponse::CreatedTable { existed: false })
-                    }
-                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
-                    Err(err) => Err(err),
-                }
-            }
+            } => tx.send(
+                self.sequence_create_table(name, desc, if_not_exists),
+                session,
+            ),
 
             Plan::CreateSource {
                 name,
                 source,
                 if_not_exists,
                 materialized,
-            } => {
-                let source = catalog::Source {
-                    create_sql: source.create_sql,
-                    connector: source.connector,
-                    desc: source.desc,
-                };
-                let source_id = self.catalog.allocate_id()?;
-                let mut ops = vec![catalog::Op::CreateItem {
-                    id: source_id,
-                    name: name.clone(),
-                    item: CatalogItem::Source(source.clone()),
-                }];
-                let (index_id, index) = if materialized {
-                    let mut index_name = name.clone();
-                    index_name.item += "_primary_idx";
-                    let index = auto_generate_src_idx(
-                        index_name.item.clone(),
-                        name.clone(),
-                        &source,
-                        source_id,
-                    );
-                    let index_id = self.catalog.allocate_id()?;
-                    ops.push(catalog::Op::CreateItem {
-                        id: index_id,
-                        name: index_name,
-                        item: CatalogItem::Index(index.clone()),
-                    });
-                    (Some(index_id), Some(index))
-                } else {
-                    (None, None)
-                };
-                match self.catalog_transact(ops) {
-                    Ok(()) => {
-                        self.views.insert(source_id, ViewState::new(false, vec![]));
-                        if materialized {
-                            let mut dataflow = DataflowDesc::new(name.to_string());
-                            self.import_source_or_view(&source_id, &source_id, &mut dataflow);
-                            self.build_arrangement(
-                                &index_id.unwrap(),
-                                index.unwrap(),
-                                source.desc.typ().clone(),
-                                dataflow,
-                            );
-                        }
-                        Ok(ExecuteResponse::CreatedSource { existed: false })
-                    }
-                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
-                    Err(err) => Err(err),
-                }
-            }
+            } => tx.send(
+                self.sequence_create_source(name, source, if_not_exists, materialized),
+                session,
+            ),
 
             Plan::CreateSink {
                 name,
                 sink,
                 if_not_exists,
-            } => {
-                let sink = catalog::Sink {
-                    create_sql: sink.create_sql,
-                    from: sink.from,
-                    connector: sink.connector,
-                };
-                let id = self.catalog.allocate_id()?;
-                let op = catalog::Op::CreateItem {
-                    id,
-                    name: name.clone(),
-                    item: CatalogItem::Sink(sink.clone()),
-                };
-                match self.catalog_transact(vec![op]) {
-                    Ok(()) => {
-                        self.create_sink_dataflow(name.to_string(), id, sink);
-                        Ok(ExecuteResponse::CreatedSink { existed: false })
-                    }
-                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSink { existed: true }),
-                    Err(err) => Err(err),
-                }
-            }
+            } => self.sequence_create_sink(
+                internal_cmd_tx.clone(),
+                tx,
+                session,
+                name,
+                sink,
+                if_not_exists,
+            ),
 
             Plan::CreateView {
                 name,
@@ -779,162 +573,58 @@ where
                 replace,
                 materialize,
                 if_not_exists,
-            } => {
-                let mut ops = vec![];
-                if let Some(id) = replace {
-                    ops.extend(self.catalog.drop_items_ops(&[id]));
-                }
-                let view_id = self.catalog.allocate_id()?;
-                let eval_env = EvalEnv::default();
-                let view = catalog::View {
-                    create_sql: view.create_sql,
-                    optimized_expr: self.optimizer.optimize(
-                        view.expr,
-                        self.catalog.indexes(),
-                        &eval_env,
-                    )?,
-                    desc: view.desc,
-                    eval_env,
-                };
-                ops.push(catalog::Op::CreateItem {
-                    id: view_id,
-                    name: name.clone(),
-                    item: CatalogItem::View(view.clone()),
-                });
-                let (index_id, index) = if materialize {
-                    let mut index_name = name.clone();
-                    index_name.item += "_primary_idx";
-                    let index = auto_generate_view_idx(
-                        index_name.item.clone(),
-                        name.clone(),
-                        &view,
-                        view_id,
-                    );
-                    let index_id = self.catalog.allocate_id()?;
-                    ops.push(catalog::Op::CreateItem {
-                        id: index_id,
-                        name: index_name,
-                        item: CatalogItem::Index(index.clone()),
-                    });
-                    (Some(index_id), Some(index))
-                } else {
-                    (None, None)
-                };
-                match self.catalog_transact(ops) {
-                    Ok(()) => {
-                        self.insert_view(view_id, &view);
-                        if materialize {
-                            let mut dataflow = DataflowDesc::new(name.to_string());
-                            self.build_view_collection(&view_id, &view, &mut dataflow);
-                            self.build_arrangement(
-                                &index_id.unwrap(),
-                                index.unwrap(),
-                                view.desc.typ().clone(),
-                                dataflow,
-                            );
-                        }
-                        Ok(ExecuteResponse::CreatedView { existed: false })
-                    }
-                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
-                    Err(err) => Err(err),
-                }
-            }
+            } => tx.send(
+                self.sequence_create_view(name, view, replace, materialize, if_not_exists),
+                session,
+            ),
 
             Plan::CreateIndex {
                 name,
                 index,
                 if_not_exists,
-            } => {
-                let index = catalog::Index {
-                    create_sql: index.create_sql,
-                    keys: index.keys,
-                    on: index.on,
-                    eval_env: EvalEnv::default(),
-                };
-                let id = self.catalog.allocate_id()?;
-                let op = catalog::Op::CreateItem {
-                    id,
-                    name: name.clone(),
-                    item: CatalogItem::Index(index.clone()),
-                };
-                match self.catalog_transact(vec![op]) {
-                    Ok(()) => {
-                        self.create_index_dataflow(name.to_string(), id, index);
-                        Ok(ExecuteResponse::CreatedIndex { existed: false })
-                    }
-                    Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
-                    Err(err) => Err(err),
-                }
-            }
+            } => tx.send(
+                self.sequence_create_index(name, index, if_not_exists),
+                session,
+            ),
 
-            Plan::DropDatabase { name } => {
-                let ops = self.catalog.drop_database_ops(name);
-                self.catalog_transact(ops)?;
-                Ok(ExecuteResponse::DroppedDatabase)
-            }
+            Plan::DropDatabase { name } => tx.send(self.sequence_drop_database(name), session),
 
             Plan::DropSchema {
                 database_name,
                 schema_name,
-            } => {
-                let ops = self.catalog.drop_schema_ops(database_name, schema_name);
-                self.catalog_transact(ops)?;
-                Ok(ExecuteResponse::DroppedSchema)
-            }
+            } => tx.send(
+                self.sequence_drop_schema(database_name, schema_name),
+                session,
+            ),
 
-            Plan::DropItems { items, ty } => {
-                let ops = self.catalog.drop_items_ops(&items);
-                self.catalog_transact(ops)?;
-                Ok(match ty {
-                    ObjectType::Schema => unreachable!(),
-                    ObjectType::Source => ExecuteResponse::DroppedSource,
-                    ObjectType::View => ExecuteResponse::DroppedView,
-                    ObjectType::Table => ExecuteResponse::DroppedTable,
-                    ObjectType::Sink => ExecuteResponse::DroppedSink,
-                    ObjectType::Index => ExecuteResponse::DroppedIndex,
-                })
-            }
+            Plan::DropItems { items, ty } => tx.send(self.sequence_drop_items(items, ty), session),
 
-            Plan::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
+            Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
 
-            Plan::ShowAllVariables => Ok(send_immediate_rows(
-                session
-                    .vars()
-                    .iter()
-                    .map(|v| {
-                        Row::pack(&[
-                            Datum::String(v.name()),
-                            Datum::String(&v.value()),
-                            Datum::String(v.description()),
-                        ])
-                    })
-                    .collect(),
-            )),
+            Plan::ShowAllVariables => tx.send(self.sequence_show_all_variables(&session), session),
 
             Plan::ShowVariable(name) => {
-                let variable = session.get(&name)?;
-                let row = Row::pack(&[Datum::String(&variable.value())]);
-                Ok(send_immediate_rows(vec![row]))
+                tx.send(self.sequence_show_variable(&session, name), session)
             }
 
-            Plan::SetVariable { name, value } => {
-                session.set(&name, &value)?;
-                Ok(ExecuteResponse::SetVariable { name })
-            }
+            Plan::SetVariable { name, value } => tx.send(
+                self.sequence_set_variable(&mut session, name, value),
+                session,
+            ),
 
             Plan::StartTransaction => {
                 session.start_transaction();
-                Ok(ExecuteResponse::StartTransaction)
+                tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 
-            Plan::Commit => {
+            Plan::CommitTransaction => {
                 session.end_transaction();
-                Ok(ExecuteResponse::Commit)
+                tx.send(Ok(ExecuteResponse::CommittedTransaction), session)
             }
 
-            Plan::Rollback => {
+            Plan::AbortTransaction => {
                 session.end_transaction();
-                Ok(ExecuteResponse::Rollback)
+                tx.send(Ok(ExecuteResponse::AbortedTransaction), session)
             }
 
             Plan::Peek {
@@ -942,193 +632,14 @@ where
                 when,
                 finishing,
                 materialize,
-            } => {
-                let timestamp = self.determine_timestamp(&source, when)?;
-                let eval_env = EvalEnv {
-                    wall_time: Some(chrono::Utc::now()),
-                    logical_time: Some(timestamp),
-                };
-                // TODO (wangandi): Is there anything that optimizes to a
-                // constant expression that originally contains a global get? Is
-                // there anything not containing a global get that cannot be
-                // optimized to a constant expression?
-                let mut source =
-                    self.optimizer
-                        .optimize(source, self.catalog.indexes(), &eval_env)?;
+            } => tx.send(
+                self.sequence_peek(conn_id, source, when, finishing, materialize),
+                session,
+            ),
 
-                // If this optimizes to a constant expression, we can immediately return the result.
-                if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
-                    let mut results = Vec::new();
-                    for &(ref row, count) in rows {
-                        assert!(
-                            count >= 0,
-                            "Negative multiplicity in constant result: {}",
-                            count
-                        );
-                        for _ in 0..count {
-                            results.push(row.clone());
-                        }
-                    }
-                    finishing.finish(&mut results);
-                    Ok(send_immediate_rows(results))
-                } else {
-                    // Peeks describe a source of data and a timestamp at which to view its contents.
-                    //
-                    // We need to determine both an appropriate timestamp from the description, and
-                    // also to ensure that there is a view in place to query, if the source of data
-                    // for the peek is not a base relation.
+            Plan::Tail(source) => tx.send(self.sequence_tail(conn_id, source), session),
 
-                    // Choose a timestamp for all workers to use in the peek.
-                    // We minimize over all participating views, to ensure that the query will not
-                    // need to block on the arrival of further input data.
-                    let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-
-                    let (project, filter) = Self::plan_peek(source.as_mut());
-
-                    let (fast_path, index_id) = if let RelationExpr::Get {
-                        id: Id::Global(id),
-                        typ: _,
-                    } = source.as_ref()
-                    {
-                        if let Some(Some((index_id, _))) =
-                            self.views.get(&id).map(|v| &v.default_idx)
-                        {
-                            (true, *index_id)
-                        } else if materialize {
-                            (false, self.catalog.allocate_id()?)
-                        } else {
-                            bail!(
-                                "{} is not materialized",
-                                self.catalog.humanize_id(expr::Id::Global(*id)).unwrap()
-                            )
-                        }
-                    } else {
-                        (false, self.catalog.allocate_id()?)
-                    };
-
-                    let index = if !fast_path {
-                        // Slow path. We need to perform some computation, so build
-                        // a new transient dataflow that will be dropped after the
-                        // peek completes.
-                        let typ = source.as_ref().typ();
-                        let ncols = typ.column_types.len();
-                        // Cheat a little bit here to get a relation description. A
-                        // relation description is just a relation type with column
-                        // names, but we don't know the column names for `source`
-                        // here. Nothing in the dataflow layer cares about column
-                        // names, so just set them all to `None`. The column names
-                        // will ultimately be correctly transmitted to the client
-                        // because they are safely stashed in the connection's
-                        // session.
-                        let desc = RelationDesc::new(
-                            typ.clone(),
-                            iter::repeat::<Option<ColumnName>>(None).take(ncols),
-                        );
-                        let view_id = self.catalog.allocate_id()?;
-                        let view_name = FullName {
-                            database: DatabaseSpecifier::Ambient,
-                            schema: "temp".into(),
-                            item: format!("temp-view-{}", view_id),
-                        };
-                        let index_name = format!("temp-index-on-{}", view_id);
-                        let mut dataflow = DataflowDesc::new(view_name.to_string());
-                        dataflow.as_of(Some(vec![timestamp.clone()]));
-                        let view = catalog::View {
-                            create_sql: "<none>".into(),
-                            optimized_expr: source,
-                            desc,
-                            eval_env: eval_env.clone(),
-                        };
-                        self.build_view_collection(&view_id, &view, &mut dataflow);
-                        let index = auto_generate_view_idx(index_name, view_name, &view, view_id);
-                        self.build_arrangement(&index_id, index.clone(), typ, dataflow);
-                        Some(index)
-                    } else {
-                        None
-                    };
-
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::Peek {
-                            id: index_id,
-                            conn_id,
-                            tx: rows_tx,
-                            timestamp,
-                            finishing: finishing.clone(),
-                            project,
-                            filter,
-                            eval_env,
-                        },
-                    );
-
-                    if !fast_path {
-                        self.drop_indexes(vec![(index_id, &index.unwrap())]);
-                    }
-
-                    let rows_rx = rows_rx
-                        .try_fold(PeekResponse::Rows(vec![]), |memo, resp| {
-                            match (memo, resp) {
-                                (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
-                                    memo.extend(rows);
-                                    future::ok(PeekResponse::Rows(memo))
-                                }
-                                (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
-                                    future::ok(PeekResponse::Error(e))
-                                }
-                                (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
-                                    future::ok(PeekResponse::Canceled)
-                                }
-                            }
-                        })
-                        .map_ok(move |mut resp| {
-                            if let PeekResponse::Rows(rows) = &mut resp {
-                                finishing.finish(rows)
-                            }
-                            resp
-                        })
-                        .err_into();
-
-                    Ok(ExecuteResponse::SendRows(Box::pin(rows_rx)))
-                }
-            }
-
-            Plan::Tail(source) => {
-                let source_id = source.id();
-                let index_id = if let Some(Some((index_id, _))) = self
-                    .views
-                    .get(&source_id)
-                    .map(|view_state| &view_state.default_idx)
-                {
-                    index_id
-                } else {
-                    bail!("Cannot tail a view that has not been materialized.")
-                };
-
-                let sink_name = format!(
-                    "tail-source-{}",
-                    self.catalog
-                        .humanize_id(Id::Global(source_id))
-                        .expect("Source id is known to exist in catalog")
-                );
-                let sink_id = self.catalog.allocate_id()?;
-                self.active_tails.insert(conn_id, sink_id);
-                let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-                let since = self
-                    .upper_of(index_id)
-                    .expect("name missing at coordinator")
-                    .get(0)
-                    .copied()
-                    .unwrap_or(Timestamp::max_value());
-                let sink = catalog::Sink {
-                    create_sql: "<ignored>".into(),
-                    from: source_id,
-                    connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
-                };
-                self.create_sink_dataflow(sink_name, sink_id, sink);
-                Ok(ExecuteResponse::Tailing { rx })
-            }
-
-            Plan::SendRows(rows) => Ok(send_immediate_rows(rows)),
+            Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
             Plan::ExplainPlan {
                 sql,
@@ -1136,127 +647,722 @@ where
                 decorrelated_plan,
                 stage,
                 options,
-            } => {
-                let explanation_string = match stage {
-                    ExplainStage::Sql => sql.clone(),
-                    ExplainStage::RawPlan => {
-                        let mut explanation = raw_plan.explain(&self.catalog);
-                        if options.typed {
-                            // TODO(jamii) does this fail?
-                            explanation.explain_types(&BTreeMap::new());
-                        }
-                        explanation.to_string()
-                    }
-                    ExplainStage::DecorrelatedPlan => {
-                        let mut explanation = decorrelated_plan.explain(&self.catalog);
-                        if options.typed {
-                            explanation.explain_types();
-                        }
-                        explanation.to_string()
-                    }
-                    ExplainStage::OptimizedPlan { .. } => {
-                        let eval_env = EvalEnv {
-                            wall_time: Some(chrono::Utc::now()),
-                            logical_time: Some(0),
-                        };
-                        let optimized_plan = self
-                            .optimizer
-                            .optimize(decorrelated_plan, self.catalog.indexes(), &eval_env)?
-                            .unwrap();
-                        let mut explanation = optimized_plan.explain(&self.catalog);
-                        if options.typed {
-                            explanation.explain_types();
-                        }
-                        explanation.to_string()
-                    }
-                };
-                let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
-                Ok(send_immediate_rows(rows))
-            }
+            } => tx.send(
+                self.sequence_explain_plan(sql, raw_plan, decorrelated_plan, stage, options),
+                session,
+            ),
 
             Plan::SendDiffs {
                 id,
                 updates,
                 affected_rows,
                 kind,
-            } => {
-                let updates = updates
-                    .into_iter()
-                    .map(|(row, diff)| Update {
-                        row,
-                        diff,
-                        timestamp: self.local_input_time,
-                    })
-                    .collect();
-
-                self.local_input_time += 1;
-
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::Insert {
-                        id,
-                        updates,
-                        advance_to: self.local_input_time,
-                    },
-                );
-
-                Ok(match kind {
-                    MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
-                    MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
-                    MutationKind::Update => ExecuteResponse::Updated(affected_rows),
-                })
-            }
+            } => tx.send(
+                self.sequence_send_diffs(id, updates, affected_rows, kind),
+                session,
+            ),
 
             Plan::ShowViews {
                 ids,
                 full,
                 show_queryable,
                 limit_materialized,
-            } => {
-                let view_information = ids
-                    .into_iter()
-                    .filter_map(|(name, id)| {
-                        let class = match id {
-                            GlobalId::System(_) => "SYSTEM",
-                            GlobalId::User(_) => "USER",
-                        };
-                        if let Some(view_state) = self.views.get(&id) {
-                            if !limit_materialized || view_state.default_idx.is_some() {
-                                Some((
-                                    name,
-                                    class,
-                                    view_state.queryable,
-                                    view_state.default_idx.is_some(),
-                                ))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
+            } => tx.send(
+                self.sequence_show_views(ids, full, show_queryable, limit_materialized),
+                session,
+            ),
+        }
+    }
 
-                let mut rows = view_information
-                    .into_iter()
-                    .map(|(name, class, queryable, materialized)| {
-                        let mut datums = vec![Datum::from(name.as_str())];
-                        if full {
-                            datums.push(Datum::from(class));
-                            if show_queryable {
-                                datums.push(Datum::from(queryable));
-                            }
-                            if !limit_materialized {
-                                datums.push(Datum::from(materialized));
-                            }
-                        }
-                        Row::pack(&datums)
-                    })
-                    .collect::<Vec<_>>();
-                rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
-                Ok(send_immediate_rows(rows))
+    fn sequence_create_database(
+        &mut self,
+        name: String,
+        if_not_exists: bool,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let ops = vec![
+            catalog::Op::CreateDatabase { name: name.clone() },
+            catalog::Op::CreateSchema {
+                database_name: DatabaseSpecifier::Name(name),
+                schema_name: "public".into(),
+            },
+        ];
+        match self.catalog_transact(ops) {
+            Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn sequence_create_schema(
+        &mut self,
+        database_name: DatabaseSpecifier,
+        schema_name: String,
+        if_not_exists: bool,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let op = catalog::Op::CreateSchema {
+            database_name,
+            schema_name,
+        };
+        match self.catalog_transact(vec![op]) {
+            Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn sequence_create_table(
+        &mut self,
+        name: FullName,
+        desc: RelationDesc,
+        if_not_exists: bool,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let source_id = self.catalog.allocate_id()?;
+        let source = catalog::Source {
+            create_sql: "TODO".to_string(),
+            connector: dataflow_types::SourceConnector::Local,
+            desc,
+        };
+        let index_id = self.catalog.allocate_id()?;
+        let mut index_name = name.clone();
+        index_name.item += "_primary_idx";
+        let index =
+            auto_generate_src_idx(index_name.item.clone(), name.clone(), &source, source_id);
+        match self.catalog_transact(vec![
+            catalog::Op::CreateItem {
+                id: source_id,
+                name: name.clone(),
+                item: CatalogItem::Source(source.clone()),
+            },
+            catalog::Op::CreateItem {
+                id: index_id,
+                name: index_name,
+                item: CatalogItem::Index(index.clone()),
+            },
+        ]) {
+            Ok(_) => {
+                self.views.insert(source_id, ViewState::new(false, vec![]));
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::CreateLocalInput {
+                        name: name.to_string(),
+                        index_id,
+                        index: IndexDesc {
+                            on_id: index.on,
+                            keys: index.keys.clone(),
+                        },
+                        on_type: source.desc.typ().clone(),
+                        advance_to: self.local_input_time,
+                    },
+                );
+                self.insert_index(index_id, &index, self.logical_compaction_window_ms);
+                Ok(ExecuteResponse::CreatedTable { existed: false })
+            }
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn sequence_create_source(
+        &mut self,
+        name: FullName,
+        source: sql::Source,
+        if_not_exists: bool,
+        materialized: bool,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let source = catalog::Source {
+            create_sql: source.create_sql,
+            connector: source.connector,
+            desc: source.desc,
+        };
+        let source_id = self.catalog.allocate_id()?;
+        let mut ops = vec![catalog::Op::CreateItem {
+            id: source_id,
+            name: name.clone(),
+            item: CatalogItem::Source(source.clone()),
+        }];
+        let (index_id, index) = if materialized {
+            let mut index_name = name.clone();
+            index_name.item += "_primary_idx";
+            let index =
+                auto_generate_src_idx(index_name.item.clone(), name.clone(), &source, source_id);
+            let index_id = self.catalog.allocate_id()?;
+            ops.push(catalog::Op::CreateItem {
+                id: index_id,
+                name: index_name,
+                item: CatalogItem::Index(index.clone()),
+            });
+            (Some(index_id), Some(index))
+        } else {
+            (None, None)
+        };
+        match self.catalog_transact(ops) {
+            Ok(()) => {
+                self.views.insert(source_id, ViewState::new(false, vec![]));
+                if materialized {
+                    let mut dataflow = DataflowDesc::new(name.to_string());
+                    self.import_source_or_view(&source_id, &source_id, &mut dataflow);
+                    self.build_arrangement(
+                        &index_id.unwrap(),
+                        index.unwrap(),
+                        source.desc.typ().clone(),
+                        dataflow,
+                    );
+                }
+                Ok(ExecuteResponse::CreatedSource { existed: false })
+            }
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn sequence_create_sink(
+        &mut self,
+        mut internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        name: FullName,
+        sink: sql::Sink,
+        if_not_exists: bool,
+    ) {
+        // First try to allocate an ID. If that fails, we're done.
+        let id = match self.catalog.allocate_id() {
+            Ok(id) => id,
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return;
+            }
+        };
+
+        // Then try to create a placeholder catalog item with an unknown
+        // connector. If that fails, we're done, though if the client specified
+        // `if_not_exists` we'll tell the client we succeeded.
+        //
+        // This placeholder catalog item reserves the name while we create
+        // the sink connector, which could take an arbitrarily long time.
+        let op = catalog::Op::CreateItem {
+            id,
+            name,
+            item: CatalogItem::Sink(catalog::Sink {
+                create_sql: sink.create_sql,
+                from: sink.from,
+                connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
+            }),
+        };
+        match self.catalog_transact(vec![op]) {
+            Ok(()) => (),
+            Err(_) if if_not_exists => {
+                tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
+                return;
+            }
+            Err(e) => {
+                tx.send(Err(e), session);
+                return;
             }
         }
+
+        // Now we're ready to create the sink connector. Arrange to notify the
+        // main coordinator thread when the future completes.
+        let connector_builder = sink.connector_builder;
+        tokio::spawn(async move {
+            internal_cmd_tx
+                .send(Message::SinkConnectorReady {
+                    session,
+                    tx,
+                    id,
+                    result: sink_connector::build(connector_builder, id).await,
+                })
+                .await
+                .expect("sending to internal_cmd_tx cannot fail");
+        });
+    }
+
+    fn sequence_create_view(
+        &mut self,
+        name: FullName,
+        view: sql::View,
+        replace: Option<GlobalId>,
+        materialize: bool,
+        if_not_exists: bool,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let mut ops = vec![];
+        if let Some(id) = replace {
+            ops.extend(self.catalog.drop_items_ops(&[id]));
+        }
+        let view_id = self.catalog.allocate_id()?;
+        let eval_env = EvalEnv::default();
+        let view = catalog::View {
+            create_sql: view.create_sql,
+            optimized_expr: self.optimizer.optimize(
+                view.expr,
+                self.catalog.indexes(),
+                &eval_env,
+            )?,
+            desc: view.desc,
+            eval_env,
+        };
+        ops.push(catalog::Op::CreateItem {
+            id: view_id,
+            name: name.clone(),
+            item: CatalogItem::View(view.clone()),
+        });
+        let (index_id, index) = if materialize {
+            let mut index_name = name.clone();
+            index_name.item += "_primary_idx";
+            let index =
+                auto_generate_view_idx(index_name.item.clone(), name.clone(), &view, view_id);
+            let index_id = self.catalog.allocate_id()?;
+            ops.push(catalog::Op::CreateItem {
+                id: index_id,
+                name: index_name,
+                item: CatalogItem::Index(index.clone()),
+            });
+            (Some(index_id), Some(index))
+        } else {
+            (None, None)
+        };
+        match self.catalog_transact(ops) {
+            Ok(()) => {
+                self.insert_view(view_id, &view);
+                if materialize {
+                    let mut dataflow = DataflowDesc::new(name.to_string());
+                    self.build_view_collection(&view_id, &view, &mut dataflow);
+                    self.build_arrangement(
+                        &index_id.unwrap(),
+                        index.unwrap(),
+                        view.desc.typ().clone(),
+                        dataflow,
+                    );
+                }
+                Ok(ExecuteResponse::CreatedView { existed: false })
+            }
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn sequence_create_index(
+        &mut self,
+        name: FullName,
+        index: sql::Index,
+        if_not_exists: bool,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let index = catalog::Index {
+            create_sql: index.create_sql,
+            keys: index.keys,
+            on: index.on,
+            eval_env: EvalEnv::default(),
+        };
+        let id = self.catalog.allocate_id()?;
+        let op = catalog::Op::CreateItem {
+            id,
+            name: name.clone(),
+            item: CatalogItem::Index(index.clone()),
+        };
+        match self.catalog_transact(vec![op]) {
+            Ok(()) => {
+                self.create_index_dataflow(name.to_string(), id, index);
+                Ok(ExecuteResponse::CreatedIndex { existed: false })
+            }
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn sequence_drop_database(&mut self, name: String) -> Result<ExecuteResponse, failure::Error> {
+        let ops = self.catalog.drop_database_ops(name);
+        self.catalog_transact(ops)?;
+        Ok(ExecuteResponse::DroppedDatabase)
+    }
+
+    fn sequence_drop_schema(
+        &mut self,
+        database_name: DatabaseSpecifier,
+        schema_name: String,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let ops = self.catalog.drop_schema_ops(database_name, schema_name);
+        self.catalog_transact(ops)?;
+        Ok(ExecuteResponse::DroppedSchema)
+    }
+
+    fn sequence_drop_items(
+        &mut self,
+        items: Vec<GlobalId>,
+        ty: ObjectType,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let ops = self.catalog.drop_items_ops(&items);
+        self.catalog_transact(ops)?;
+        Ok(match ty {
+            ObjectType::Schema => unreachable!(),
+            ObjectType::Source => ExecuteResponse::DroppedSource,
+            ObjectType::View => ExecuteResponse::DroppedView,
+            ObjectType::Table => ExecuteResponse::DroppedTable,
+            ObjectType::Sink => ExecuteResponse::DroppedSink,
+            ObjectType::Index => ExecuteResponse::DroppedIndex,
+        })
+    }
+
+    fn sequence_show_all_variables(
+        &mut self,
+        session: &Session,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        Ok(send_immediate_rows(
+            session
+                .vars()
+                .iter()
+                .map(|v| {
+                    Row::pack(&[
+                        Datum::String(v.name()),
+                        Datum::String(&v.value()),
+                        Datum::String(v.description()),
+                    ])
+                })
+                .collect(),
+        ))
+    }
+
+    fn sequence_show_variable(
+        &self,
+        session: &Session,
+        name: String,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let variable = session.get(&name)?;
+        let row = Row::pack(&[Datum::String(&variable.value())]);
+        Ok(send_immediate_rows(vec![row]))
+    }
+
+    fn sequence_set_variable(
+        &self,
+        session: &mut Session,
+        name: String,
+        value: String,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        session.set(&name, &value)?;
+        Ok(ExecuteResponse::SetVariable { name })
+    }
+
+    fn sequence_peek(
+        &mut self,
+        conn_id: u32,
+        source: RelationExpr,
+        when: PeekWhen,
+        finishing: RowSetFinishing,
+        materialize: bool,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let timestamp = self.determine_timestamp(&source, when)?;
+        let eval_env = EvalEnv {
+            wall_time: Some(chrono::Utc::now()),
+            logical_time: Some(timestamp),
+        };
+        // TODO (wangandi): Is there anything that optimizes to a
+        // constant expression that originally contains a global get? Is
+        // there anything not containing a global get that cannot be
+        // optimized to a constant expression?
+        let mut source = self
+            .optimizer
+            .optimize(source, self.catalog.indexes(), &eval_env)?;
+
+        // If this optimizes to a constant expression, we can immediately return the result.
+        if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+            let mut results = Vec::new();
+            for &(ref row, count) in rows {
+                assert!(
+                    count >= 0,
+                    "Negative multiplicity in constant result: {}",
+                    count
+                );
+                for _ in 0..count {
+                    results.push(row.clone());
+                }
+            }
+            finishing.finish(&mut results);
+            Ok(send_immediate_rows(results))
+        } else {
+            // Peeks describe a source of data and a timestamp at which to view its contents.
+            //
+            // We need to determine both an appropriate timestamp from the description, and
+            // also to ensure that there is a view in place to query, if the source of data
+            // for the peek is not a base relation.
+
+            // Choose a timestamp for all workers to use in the peek.
+            // We minimize over all participating views, to ensure that the query will not
+            // need to block on the arrival of further input data.
+            let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+
+            let (project, filter) = Self::plan_peek(source.as_mut());
+
+            let (fast_path, index_id) = if let RelationExpr::Get {
+                id: Id::Global(id),
+                typ: _,
+            } = source.as_ref()
+            {
+                if let Some(Some((index_id, _))) = self.views.get(&id).map(|v| &v.default_idx) {
+                    (true, *index_id)
+                } else if materialize {
+                    (false, self.catalog.allocate_id()?)
+                } else {
+                    bail!(
+                        "{} is not materialized",
+                        self.catalog.humanize_id(expr::Id::Global(*id)).unwrap()
+                    )
+                }
+            } else {
+                (false, self.catalog.allocate_id()?)
+            };
+
+            let index = if !fast_path {
+                // Slow path. We need to perform some computation, so build
+                // a new transient dataflow that will be dropped after the
+                // peek completes.
+                let typ = source.as_ref().typ();
+                let ncols = typ.column_types.len();
+                // Cheat a little bit here to get a relation description. A
+                // relation description is just a relation type with column
+                // names, but we don't know the column names for `source`
+                // here. Nothing in the dataflow layer cares about column
+                // names, so just set them all to `None`. The column names
+                // will ultimately be correctly transmitted to the client
+                // because they are safely stashed in the connection's
+                // session.
+                let desc = RelationDesc::new(
+                    typ.clone(),
+                    iter::repeat::<Option<ColumnName>>(None).take(ncols),
+                );
+                let view_id = self.catalog.allocate_id()?;
+                let view_name = FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: "temp".into(),
+                    item: format!("temp-view-{}", view_id),
+                };
+                let index_name = format!("temp-index-on-{}", view_id);
+                let mut dataflow = DataflowDesc::new(view_name.to_string());
+                dataflow.as_of(Some(vec![timestamp.clone()]));
+                let view = catalog::View {
+                    create_sql: "<none>".into(),
+                    optimized_expr: source,
+                    desc,
+                    eval_env: eval_env.clone(),
+                };
+                self.build_view_collection(&view_id, &view, &mut dataflow);
+                let index = auto_generate_view_idx(index_name, view_name, &view, view_id);
+                self.build_arrangement(&index_id, index.clone(), typ, dataflow);
+                Some(index)
+            } else {
+                None
+            };
+
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::Peek {
+                    id: index_id,
+                    conn_id,
+                    tx: rows_tx,
+                    timestamp,
+                    finishing: finishing.clone(),
+                    project,
+                    filter,
+                    eval_env,
+                },
+            );
+
+            if !fast_path {
+                self.drop_indexes(vec![(index_id, &index.unwrap())]);
+            }
+
+            let rows_rx = rows_rx
+                .try_fold(PeekResponse::Rows(vec![]), |memo, resp| {
+                    match (memo, resp) {
+                        (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
+                            memo.extend(rows);
+                            future::ok(PeekResponse::Rows(memo))
+                        }
+                        (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
+                            future::ok(PeekResponse::Error(e))
+                        }
+                        (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
+                            future::ok(PeekResponse::Canceled)
+                        }
+                    }
+                })
+                .map_ok(move |mut resp| {
+                    if let PeekResponse::Rows(rows) = &mut resp {
+                        finishing.finish(rows)
+                    }
+                    resp
+                })
+                .err_into();
+
+            Ok(ExecuteResponse::SendingRows(Box::pin(rows_rx)))
+        }
+    }
+
+    fn sequence_tail(
+        &mut self,
+        conn_id: u32,
+        source: catalog::CatalogEntry,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let source_id = source.id();
+        let index_id = if let Some(Some((index_id, _))) = self
+            .views
+            .get(&source_id)
+            .map(|view_state| &view_state.default_idx)
+        {
+            index_id
+        } else {
+            bail!("Cannot tail a view that has not been materialized.")
+        };
+
+        let sink_name = format!(
+            "tail-source-{}",
+            self.catalog
+                .humanize_id(Id::Global(source_id))
+                .expect("Source id is known to exist in catalog")
+        );
+        let sink_id = self.catalog.allocate_id()?;
+        self.active_tails.insert(conn_id, sink_id);
+        let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+        let since = self
+            .upper_of(index_id)
+            .expect("name missing at coordinator")
+            .get(0)
+            .copied()
+            .unwrap_or(Timestamp::max_value());
+        self.create_sink_dataflow(
+            sink_name,
+            sink_id,
+            source_id,
+            SinkConnector::Tail(TailSinkConnector { tx, since }),
+        );
+        Ok(ExecuteResponse::Tailing { rx })
+    }
+
+    fn sequence_explain_plan(
+        &mut self,
+        sql: String,
+        raw_plan: sql::RelationExpr,
+        decorrelated_plan: expr::RelationExpr,
+        stage: ExplainStage,
+        options: ExplainOptions,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let explanation_string = match stage {
+            ExplainStage::Sql => sql.clone(),
+            ExplainStage::RawPlan => {
+                let mut explanation = raw_plan.explain(&self.catalog);
+                if options.typed {
+                    // TODO(jamii) does this fail?
+                    explanation.explain_types(&BTreeMap::new());
+                }
+                explanation.to_string()
+            }
+            ExplainStage::DecorrelatedPlan => {
+                let mut explanation = decorrelated_plan.explain(&self.catalog);
+                if options.typed {
+                    explanation.explain_types();
+                }
+                explanation.to_string()
+            }
+            ExplainStage::OptimizedPlan { .. } => {
+                let eval_env = EvalEnv {
+                    wall_time: Some(chrono::Utc::now()),
+                    logical_time: Some(0),
+                };
+                let optimized_plan = self
+                    .optimizer
+                    .optimize(decorrelated_plan, self.catalog.indexes(), &eval_env)?
+                    .unwrap();
+                let mut explanation = optimized_plan.explain(&self.catalog);
+                if options.typed {
+                    explanation.explain_types();
+                }
+                explanation.to_string()
+            }
+        };
+        let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
+        Ok(send_immediate_rows(rows))
+    }
+
+    fn sequence_send_diffs(
+        &mut self,
+        id: GlobalId,
+        updates: Vec<(Row, isize)>,
+        affected_rows: usize,
+        kind: MutationKind,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let updates = updates
+            .into_iter()
+            .map(|(row, diff)| Update {
+                row,
+                diff,
+                timestamp: self.local_input_time,
+            })
+            .collect();
+
+        self.local_input_time += 1;
+
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::Insert {
+                id,
+                updates,
+                advance_to: self.local_input_time,
+            },
+        );
+
+        Ok(match kind {
+            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
+            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
+            MutationKind::Update => ExecuteResponse::Updated(affected_rows),
+        })
+    }
+
+    fn sequence_show_views(
+        &mut self,
+        ids: Vec<(String, GlobalId)>,
+        full: bool,
+        show_queryable: bool,
+        limit_materialized: bool,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let view_information = ids
+            .into_iter()
+            .filter_map(|(name, id)| {
+                let class = match id {
+                    GlobalId::System(_) => "SYSTEM",
+                    GlobalId::User(_) => "USER",
+                };
+                if let Some(view_state) = self.views.get(&id) {
+                    if !limit_materialized || view_state.default_idx.is_some() {
+                        Some((
+                            name,
+                            class,
+                            view_state.queryable,
+                            view_state.default_idx.is_some(),
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut rows = view_information
+            .into_iter()
+            .map(|(name, class, queryable, materialized)| {
+                let mut datums = vec![Datum::from(name.as_str())];
+                if full {
+                    datums.push(Datum::from(class));
+                    if show_queryable {
+                        datums.push(Datum::from(queryable));
+                    }
+                    if !limit_materialized {
+                        datums.push(Datum::from(materialized));
+                    }
+                }
+                Row::pack(&datums)
+            })
+            .collect::<Vec<_>>();
+        rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
+        Ok(send_immediate_rows(rows))
     }
 
     fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), failure::Error> {
@@ -1280,7 +1386,17 @@ where
                             views_to_drop.push(entry.id());
                         }
                         CatalogItem::View(_) => views_to_drop.push(entry.id()),
-                        CatalogItem::Sink(_) => sinks_to_drop.push(entry.id()),
+                        CatalogItem::Sink(catalog::Sink {
+                            connector: SinkConnectorState::Ready(_),
+                            ..
+                        }) => sinks_to_drop.push(entry.id()),
+                        CatalogItem::Sink(catalog::Sink {
+                            connector: SinkConnectorState::Pending(_),
+                            ..
+                        }) => {
+                            // If the sink connector state is pending, the sink
+                            // dataflow was never created, so nothing to drop.
+                        }
                         CatalogItem::Index(idx) => indexes_to_drop.push((entry.id(), idx)),
                     }
                 }
@@ -1457,11 +1573,42 @@ where
         self.build_arrangement(&id, index, on_type, dataflow);
     }
 
-    fn create_sink_dataflow(&mut self, name: String, id: GlobalId, sink: catalog::Sink) {
+    fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {
+        // Update catalog entry with sink connector.
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let mut sink = match entry.item() {
+            CatalogItem::Sink(sink) => sink.clone(),
+            _ => unreachable!(),
+        };
+        sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem {
+                id,
+                name: name.clone(),
+                item: CatalogItem::Sink(sink.clone()),
+            },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a sink cannot fail");
+
+        // Create the sink dataflow.
+        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+    }
+
+    fn create_sink_dataflow(
+        &mut self,
+        name: String,
+        id: GlobalId,
+        from: GlobalId,
+        connector: SinkConnector,
+    ) {
         let mut dataflow = DataflowDesc::new(name);
-        self.import_source_or_view(&id, &sink.from, &mut dataflow);
-        let from_type = self.catalog.get_by_id(&sink.from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, sink.from, from_type, sink.connector);
+        self.import_source_or_view(&id, &from, &mut dataflow);
+        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
+        dataflow.add_sink_export(id, from, from_type, connector);
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -1916,7 +2063,7 @@ fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedC
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     let (tx, rx) = futures::channel::oneshot::channel();
     tx.send(PeekResponse::Rows(rows)).unwrap();
-    ExecuteResponse::SendRows(Box::pin(rx.err_into()))
+    ExecuteResponse::SendingRows(Box::pin(rx.err_into()))
 }
 
 pub struct IndexState {
@@ -2090,23 +2237,137 @@ fn index_sql(
     .to_string()
 }
 
+fn open_catalog(
+    data_directory: Option<&Path>,
+    logging_config: Option<&LoggingConfig>,
+    mut optimizer: Optimizer,
+) -> Result<Catalog, failure::Error> {
+    let path = if let Some(data_directory) = data_directory {
+        Some(data_directory.join("catalog"))
+    } else {
+        None
+    };
+    let path = path.as_deref();
+    Ok(if let Some(logging_config) = logging_config {
+        Catalog::open::<SqlSerializer, _>(path, |catalog| {
+            for log_src in logging_config.active_logs() {
+                let view_name = FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: "mz_catalog".into(),
+                    item: log_src.name().into(),
+                };
+                let index_name = format!("{}_primary_idx", log_src.name());
+                catalog.insert_item(
+                    log_src.id(),
+                    FullName {
+                        database: DatabaseSpecifier::Ambient,
+                        schema: "mz_catalog".into(),
+                        item: log_src.name().into(),
+                    },
+                    CatalogItem::Source(catalog::Source {
+                        create_sql: "TODO".to_string(),
+                        connector: dataflow_types::SourceConnector::Local,
+                        desc: log_src.schema(),
+                    }),
+                );
+                catalog.insert_item(
+                    log_src.index_id(),
+                    FullName {
+                        database: DatabaseSpecifier::Ambient,
+                        schema: "mz_catalog".into(),
+                        item: index_name.clone(),
+                    },
+                    CatalogItem::Index(catalog::Index {
+                        on: log_src.id(),
+                        keys: log_src
+                            .index_by()
+                            .into_iter()
+                            .map(ScalarExpr::Column)
+                            .collect(),
+                        create_sql: index_sql(
+                            index_name,
+                            view_name,
+                            &log_src.schema(),
+                            &log_src.index_by(),
+                        ),
+                        eval_env: EvalEnv::default(),
+                    }),
+                );
+            }
+
+            for log_view in logging_config.active_views() {
+                let params = Params {
+                    datums: Row::pack(&[]),
+                    types: vec![],
+                };
+                let stmt = sql::parse(log_view.sql.to_owned())
+                    .expect("failed to parse bootstrap sql")
+                    .into_element();
+                match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
+                    Ok(Plan::CreateView {
+                        name: _,
+                        view,
+                        replace,
+                        materialize,
+                        if_not_exists,
+                    }) => {
+                        assert!(replace.is_none());
+                        assert!(!if_not_exists);
+                        assert!(materialize);
+                        let eval_env = EvalEnv::default();
+                        let view = catalog::View {
+                            create_sql: view.create_sql,
+                            optimized_expr: optimizer
+                                .optimize(view.expr, catalog.indexes(), &eval_env)
+                                .expect("failed to optimize bootstrap sql"),
+                            eval_env,
+                            desc: view.desc,
+                        };
+                        let view_name = FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: "mz_catalog".into(),
+                            item: log_view.name.into(),
+                        };
+                        let index_name = format!("{}_primary_idx", log_view.name);
+                        let index = auto_generate_view_idx(
+                            index_name.clone(),
+                            view_name.clone(),
+                            &view,
+                            log_view.id,
+                        );
+                        catalog.insert_item(log_view.id, view_name, CatalogItem::View(view));
+                        catalog.insert_item(
+                            log_view.index_id,
+                            FullName {
+                                database: DatabaseSpecifier::Ambient,
+                                schema: "mz_catalog".into(),
+                                item: index_name,
+                            },
+                            CatalogItem::Index(index),
+                        );
+                    }
+                    err => panic!(
+                        "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
+                        log_view.sql, err
+                    ),
+                }
+            }
+        })?
+    } else {
+        Catalog::open::<SqlSerializer, _>(path, |_| ())?
+    })
+}
+
 /// Loads the catalog stored at `data_directory` and returns its serialized state.
 ///
 /// There are no guarantees about the format of the serialized state, except that
 /// the serialized state for two identical catalogs will compare identically.
 pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
-    let (switchboard, runtime) = comm::Switchboard::local()?;
-    // The configuration does not have any requirements other than pointing at the data
-    // directory specified as an argument to the method.
-    let coord = Coordinator::new(Config {
-        switchboard,
-        num_timely_workers: 1,
-        data_directory: Some(data_directory),
-        symbiosis_url: None,
-        logging: Some(&LoggingConfig::new(Duration::from_secs(0))),
-        executor: runtime.handle(),
-        timestamp: None,
-        logical_compaction_window: None,
-    })?;
-    Ok(coord.catalog.dump())
+    let logging_config = LoggingConfig::new(Duration::from_secs(0));
+    let catalog = open_catalog(
+        Some(data_directory),
+        Some(&logging_config),
+        Optimizer::default(),
+    )?;
+    Ok(catalog.dump())
 }

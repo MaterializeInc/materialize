@@ -11,23 +11,25 @@ path = "lib.rs"
 [dependencies]
 catalog = { path = "../catalog" }
 chrono = "0.4"
+ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
+derivative = "2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.3"
-itertools = "0.8"
+itertools = "0.9"
 log = "0.4"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 repr = { path = "../repr" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
 regex = "1.3.4"
-rusoto_core = "0.43.0-beta.1"
-rusoto_credential = "0.43.0-beta.1"
-rusoto_kinesis = "0.43.0-beta.1"
+rusoto_core = "0.43.0"
+rusoto_credential = "0.43.0"
+rusoto_kinesis = "0.43.0"
 rusqlite = { version = "0.20", features = ["bundled"] }
 serde = "1"
 serde_json = "1.0.41"

@@ -538,14 +538,14 @@ impl State {
 
         // send plan, read response
         let (desc, rows_rx) = match self.run_sql(sql) {
-            Ok((desc, ExecuteResponse::SendRows(rx))) => (
+            Ok((desc, ExecuteResponse::SendingRows(rx))) => (
                 desc.expect("RelationDesc missing for query that returns rows"),
                 rx,
             ),
             Ok(other) => {
                 return Ok(Outcome::PlanFailure {
                     error: failure::format_err!(
-                        "Query did not result in SendRows, instead got {:?}",
+                        "Query did not result in SendingRows, instead got {:?}",
                         other
                     ),
                 });

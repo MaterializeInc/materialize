@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+
+use derivative::Derivative;
 
 use dataflow_types::{PeekResponse, Update};
 use sql::Session;
@@ -59,113 +60,66 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Error>> + Send>>;
 
+/// Notifications that may be generated in response to [`Command::Startup`].
 #[derive(Debug)]
 pub enum StartupMessage {
+    /// The database specified in the initial session does not exist.
     UnknownSessionDatabase,
 }
 
-/// Response from the queue to an `Execute` command.
+/// The response to [`Command::Execute]`.
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub enum ExecuteResponse {
-    /// The current session has been taken out of transaction mode by COMMIT
-    Commit,
-    CreatedDatabase {
-        existed: bool,
-    },
-    CreatedSchema {
-        existed: bool,
-    },
-    CreatedIndex {
-        existed: bool,
-    },
-    CreatedSink {
-        existed: bool,
-    },
-    CreatedSource {
-        existed: bool,
-    },
-    CreatedTable {
-        existed: bool,
-    },
-    CreatedView {
-        existed: bool,
-    },
+    /// The active transaction was rolled back.
+    AbortedTransaction,
+    /// The active transaction was committed.
+    CommittedTransaction,
+    /// The requested database was created.
+    CreatedDatabase { existed: bool },
+    /// The requested schema was created.
+    CreatedSchema { existed: bool },
+    /// The requested index was created.
+    CreatedIndex { existed: bool },
+    /// The requested sink was created.
+    CreatedSink { existed: bool },
+    /// The requested source was created.
+    CreatedSource { existed: bool },
+    /// The requested table was created.
+    CreatedTable { existed: bool },
+    /// The requested view was created.
+    CreatedView { existed: bool },
+    /// The specified number of rows were deleted from the requested table.
     Deleted(usize),
+    /// The requested database was dropped.
     DroppedDatabase,
+    /// The requested schema was dropped.
     DroppedSchema,
+    /// The requested source was dropped.
     DroppedSource,
+    /// The requested table was dropped.
     DroppedTable,
+    /// The requested view was dropped.
     DroppedView,
+    /// The requested index was dropped.
     DroppedIndex,
+    /// The requested sink wqs dropped.
     DroppedSink,
+    /// The provided query was empty.
     EmptyQuery,
+    /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
-    /// The current session has been taken out of transaction mode by ROLLBACK
-    Rollback,
-    SendRows(RowsFuture),
-    SetVariable {
-        name: String,
-    },
-    /// The current session has been placed into transaction mode
-    StartTransaction,
+    /// Rows will be delivered via the specified future.
+    SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
+    /// The specified variable was set to a new value.
+    SetVariable { name: String },
+    /// A new transaction was started.
+    StartedTransaction,
+    /// Updates to the requested source or view will be streamed to the
+    /// contained receiver.
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
+    /// The specified number of rows were updated in the requested table.
     Updated(usize),
-}
-
-impl fmt::Debug for ExecuteResponse {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ExecuteResponse::CreatedDatabase { existed } => write!(
-                f,
-                "ExecuteResponse::CreatedDatabase {{ existed: {} }}",
-                existed
-            ),
-            ExecuteResponse::CreatedSchema { existed } => write!(
-                f,
-                "ExecuteResponse::CreatedSchema {{ existed: {} }}",
-                existed
-            ),
-            ExecuteResponse::CreatedIndex { existed } => write!(
-                f,
-                "ExecuteResponse::CreatedIndex {{ existed: {} }}",
-                existed
-            ),
-            ExecuteResponse::CreatedSink { existed } => {
-                write!(f, "ExecuteResponse::CreatedSink {{ existed: {} }}", existed)
-            }
-            ExecuteResponse::CreatedSource { existed } => write!(
-                f,
-                "ExecuteResponse::CreatedSource {{ existed: {} }}",
-                existed
-            ),
-            ExecuteResponse::CreatedTable { existed } => write!(
-                f,
-                "ExecuteResponse::CreatedTable {{ existed: {} }}",
-                existed
-            ),
-            ExecuteResponse::CreatedView { existed } => {
-                write!(f, "ExecuteResponse::CreatedView {{ existed: {} }}", existed)
-            }
-            ExecuteResponse::Deleted(n) => write!(f, "ExecuteResponse::Deleted({})", n),
-            ExecuteResponse::DroppedDatabase => f.write_str("ExecuteResponse::DroppedDatabase"),
-            ExecuteResponse::DroppedSchema => f.write_str("ExecuteResponse::DroppedSchema"),
-            ExecuteResponse::DroppedIndex => f.write_str("ExecuteResponse::DroppedIndex"),
-            ExecuteResponse::DroppedSink => f.write_str("ExecuteResponse::DroppedSink"),
-            ExecuteResponse::DroppedSource => f.write_str("ExecuteResponse::DroppedSource"),
-            ExecuteResponse::DroppedTable => f.write_str("ExecuteResponse::DroppedTable"),
-            ExecuteResponse::DroppedView => f.write_str("ExecuteResponse::DroppedView"),
-            ExecuteResponse::EmptyQuery => f.write_str("ExecuteResponse::EmptyQuery"),
-            ExecuteResponse::Commit => f.write_str("ExecuteResponse::Commit"),
-            ExecuteResponse::Rollback => f.write_str("ExecuteResponse::Rollback"),
-            ExecuteResponse::Inserted(n) => write!(f, "ExecuteResponse::Inserted({})", n),
-            ExecuteResponse::SendRows(_) => write!(f, "ExecuteResponse::SendRows(<rx>)"),
-            ExecuteResponse::SetVariable { name } => {
-                write!(f, "ExecuteResponse::SetVariable({})", name)
-            }
-            ExecuteResponse::StartTransaction => f.write_str("ExecuteResponse::StartTransaction"),
-            ExecuteResponse::Tailing { rx: _ } => f.write_str("ExecuteResponse::Tailing"),
-            ExecuteResponse::Updated(n) => write!(f, "ExecuteResponse::Updated({})", n),
-        }
-    }
 }

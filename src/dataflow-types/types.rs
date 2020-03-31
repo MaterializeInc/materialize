@@ -543,13 +543,27 @@ pub enum SinkConnector {
 pub struct KafkaSinkConnector {
     pub url: Url,
     pub topic: String,
-    pub schema_registry_url: Url,
+    pub schema_id: i32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Update>>,
     pub since: Timestamp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SinkConnectorBuilder {
+    Kafka(KafkaSinkConnectorBuilder),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSinkConnectorBuilder {
+    pub broker_url: Url,
+    pub schema_registry_url: Url,
+    pub value_schema: String,
+    pub topic_prefix: String,
+    pub topic_suffix: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

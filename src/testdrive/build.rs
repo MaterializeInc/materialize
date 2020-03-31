@@ -14,7 +14,7 @@ use std::env;
 use std::fs;
 
 fn main() {
-    let out_dir = "protobuf/gen";
+    let out_dir = "src/format/protobuf/gen";
     let input = &[
         "src/format/protobuf/billing.proto",
         "src/format/protobuf/simple.proto",

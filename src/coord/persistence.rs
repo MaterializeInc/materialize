@@ -124,7 +124,7 @@ impl CatalogItemSerializer for SqlSerializer {
             Plan::CreateSink { sink, .. } => catalog::CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connector: sink.connector,
+                connector: catalog::SinkConnectorState::Pending(sink.connector_builder),
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })

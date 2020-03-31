@@ -19,7 +19,7 @@ use log::{info, trace};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use dataflow_types::{SinkConnector, SourceConnector};
+use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
 
@@ -115,7 +115,13 @@ pub struct Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connector: SinkConnector,
+    pub connector: SinkConnectorState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SinkConnectorState {
+    Pending(SinkConnectorBuilder),
+    Ready(SinkConnector),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,6 +388,10 @@ impl Catalog {
             .ok_or_else(|| Error::new(ErrorKind::UnknownItem(name.to_string())))
     }
 
+    pub fn try_get_by_id(&self, id: GlobalId) -> Option<&CatalogEntry> {
+        self.by_id.get(&id)
+    }
+
     pub fn get_by_id(&self, id: &GlobalId) -> &CatalogEntry {
         &self.by_id[id]
     }
@@ -453,6 +463,7 @@ impl Catalog {
                 ),
             }
         }
+
         if let CatalogItem::Index(index) = entry.item() {
             self.indexes
                 .entry(index.on)

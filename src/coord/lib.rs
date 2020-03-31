@@ -23,7 +23,9 @@
 mod command;
 mod coord;
 mod persistence;
+mod sink_connector;
 mod timestamp;
+mod util;
 
 pub use self::coord::{dump_catalog, Config, Coordinator};
 pub use self::timestamp::TimestampConfig;

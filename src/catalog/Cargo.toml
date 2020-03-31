@@ -16,7 +16,7 @@ expr = { path = "../expr" }
 failure = "0.1.6"
 lazy_static = "1.4.0"
 log = "0.4.8"
-itertools = "0.8.2"
+itertools = "0.9"
 ore = { path = "../ore" }
 rand = "0.7.3"
 regex = "1"

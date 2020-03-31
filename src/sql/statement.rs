@@ -24,10 +24,11 @@ use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, Consistency, CsvEncoding, DataEncoding, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnector, KafkaSourceConnector, KinesisSourceConnector,
-    PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnector, SourceConnector,
+    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
+    PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnectorBuilder, SourceConnector,
 };
 use expr::{like_pattern, GlobalId};
+use interchange::avro::Encoder;
 use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
@@ -218,9 +219,9 @@ pub fn handle_statement(
     let scx = &StatementContext { catalog, session };
     match stmt {
         Statement::Tail { name } => handle_tail(scx, name),
-        Statement::StartTransaction { .. } => handle_start_transaction(),
-        Statement::Commit { .. } => handle_commit_transaction(),
-        Statement::Rollback { .. } => handle_rollback_transaction(),
+        Statement::StartTransaction { .. } => Ok(Plan::StartTransaction),
+        Statement::Commit { .. } => Ok(Plan::CommitTransaction),
+        Statement::Rollback { .. } => Ok(Plan::AbortTransaction),
         Statement::CreateDatabase {
             name,
             if_not_exists,
@@ -319,18 +320,6 @@ fn handle_tail(scx: &StatementContext, from: ObjectName) -> Result<Plan, failure
             entry.item().type_string()
         ),
     }
-}
-
-fn handle_start_transaction() -> Result<Plan, failure::Error> {
-    Ok(Plan::StartTransaction)
-}
-
-fn handle_commit_transaction() -> Result<Plan, failure::Error> {
-    Ok(Plan::Commit)
-}
-
-fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
-    Ok(Plan::Rollback)
 }
 
 fn handle_show_databases(
@@ -649,7 +638,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         _ => unreachable!(),
     };
 
-    let (mut broker, topic) = match connector {
+    let (mut broker, topic_prefix) = match connector {
         Connector::File { .. } => bail!("file sinks are not yet supported"),
         Connector::Kafka { broker, topic } => (broker, topic),
         Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
@@ -661,7 +650,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
-            url
+            url.parse()?
         }
         _ => bail!("only confluent schema registry avro sinks are supported"),
     };
@@ -669,16 +658,17 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     if !broker.contains(':') {
         broker += ":9092";
     }
-
-    let url = broker.parse()?;
+    let broker_url = broker.parse()?;
 
     let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.resolve_name(from)?;
     let catalog_entry = scx.catalog.get(&from)?;
 
-    let topic_name = format!(
-        "{}-{}-{}",
-        topic,
+    let encoder = Encoder::new(catalog_entry.desc()?.clone());
+    let value_schema = encoder.writer_schema().canonical_form();
+
+    let topic_suffix = format!(
+        "{}-{}",
         scx.catalog
             .creation_time()
             .duration_since(UNIX_EPOCH)?
@@ -689,10 +679,12 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     let sink = Sink {
         create_sql,
         from: catalog_entry.id(),
-        connector: SinkConnector::Kafka(KafkaSinkConnector {
-            url,
-            topic: topic_name,
-            schema_registry_url: schema_registry_url.parse()?,
+        connector_builder: SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
+            broker_url,
+            schema_registry_url,
+            value_schema,
+            topic_prefix,
+            topic_suffix,
         }),
     };
 

@@ -21,7 +21,7 @@ expr = { path = "../expr" }
 failure = "0.1"
 futures = "0.3"
 interchange = { path = "../interchange" }
-itertools = "0.8"
+itertools = "0.9"
 lazy_static = "1.4"
 log = "0.4"
 notify = "4.0"
@@ -33,12 +33,12 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 regex = "1.3.5"
 repr = { path = "../repr" }
 rusoto_core = "0.43.0-beta.1"
-rusoto_credential = "0.43.0-beta.1"
-rusoto_kinesis = "0.43.0-beta.1"
+rusoto_credential = "0.43.0"
+rusoto_kinesis = "0.43.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.50"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = { version = "0.2", features = ["blocking", "fs", "rt-threaded"] }
-tokio-util = { version = "0.2", features = ["codec"] }
+tokio-util = { version = "0.3", features = ["codec"] }
 url = { version = "2.1.1", features = ["serde"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
