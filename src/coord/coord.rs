@@ -637,7 +637,7 @@ where
                 session,
             ),
 
-            Plan::Tail(source) => tx.send(self.sequence_tail(conn_id, source), session),
+            Plan::Tail(id) => tx.send(self.sequence_tail(conn_id, id), session),
 
             Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
@@ -1195,9 +1195,8 @@ where
     fn sequence_tail(
         &mut self,
         conn_id: u32,
-        source: catalog::CatalogEntry,
+        source_id: GlobalId,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let source_id = source.id();
         let index_id = if let Some(Some((index_id, _))) = self
             .views
             .get(&source_id)

@@ -309,9 +309,8 @@ fn handle_tail(scx: &StatementContext, from: ObjectName) -> Result<Plan, failure
     let from = scx.resolve_name(from)?;
     let entry = scx.catalog.get(&from)?;
     match entry.item() {
-        CatalogItem::View(_) => Ok(Plan::Tail(entry.clone())),
-        CatalogItem::Source(_) => Ok(Plan::Tail(entry.clone())),
-        _ => bail!(
+        CatalogItem::Source(_) | CatalogItem::View(_) => Ok(Plan::Tail(entry.id())),
+        CatalogItem::Index(_) | CatalogItem::Sink(_) => bail!(
             "'{}' cannot be tailed because it is a {}",
             from,
             entry.item().type_string()
