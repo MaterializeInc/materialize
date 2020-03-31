@@ -60,55 +60,66 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Error>> + Send>>;
 
+/// Notifications that may be generated in response to [`Command::Startup`].
 #[derive(Debug)]
 pub enum StartupMessage {
+    /// The database specified in the initial session does not exist.
     UnknownSessionDatabase,
 }
 
-/// Response from the queue to an `Execute` command.
+/// The response to [`Command::Execute]`.
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum ExecuteResponse {
-    CommittedTransaction,
-    CreatedDatabase {
-        existed: bool,
-    },
-    CreatedSchema {
-        existed: bool,
-    },
-    CreatedIndex {
-        existed: bool,
-    },
-    CreatedSink {
-        existed: bool,
-    },
-    CreatedSource {
-        existed: bool,
-    },
-    CreatedTable {
-        existed: bool,
-    },
-    CreatedView {
-        existed: bool,
-    },
-    Deleted(usize),
-    DroppedDatabase,
-    DroppedSchema,
-    DroppedSource,
-    DroppedTable,
-    DroppedView,
-    DroppedIndex,
-    DroppedSink,
-    EmptyQuery,
-    Inserted(usize),
+    /// The active transaction was rolled back.
     AbortedTransaction,
+    /// The active transaction was committed.
+    CommittedTransaction,
+    /// The requested database was created.
+    CreatedDatabase { existed: bool },
+    /// The requested schema was created.
+    CreatedSchema { existed: bool },
+    /// The requested index was created.
+    CreatedIndex { existed: bool },
+    /// The requested sink was created.
+    CreatedSink { existed: bool },
+    /// The requested source was created.
+    CreatedSource { existed: bool },
+    /// The requested table was created.
+    CreatedTable { existed: bool },
+    /// The requested view was created.
+    CreatedView { existed: bool },
+    /// The specified number of rows were deleted from the requested table.
+    Deleted(usize),
+    /// The requested database was dropped.
+    DroppedDatabase,
+    /// The requested schema was dropped.
+    DroppedSchema,
+    /// The requested source was dropped.
+    DroppedSource,
+    /// The requested table was dropped.
+    DroppedTable,
+    /// The requested view was dropped.
+    DroppedView,
+    /// The requested index was dropped.
+    DroppedIndex,
+    /// The requested sink wqs dropped.
+    DroppedSink,
+    /// The provided query was empty.
+    EmptyQuery,
+    /// The specified number of rows were inserted into the requested table.
+    Inserted(usize),
+    /// Rows will be delivered via the specified future.
     SendRows(#[derivative(Debug = "ignore")] RowsFuture),
-    SetVariable {
-        name: String,
-    },
+    /// The specified variable was set to a new value.
+    SetVariable { name: String },
+    /// A new transaction was started.
     StartedTransaction,
+    /// Updates to the requested source or view will be streamed to the
+    /// contained receiver.
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
+    /// The specified number of rows were updated in the requested table.
     Updated(usize),
 }
