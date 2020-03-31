@@ -119,24 +119,20 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
                 }
             }
 
-            self.codec = meta
-                .get("avro.codec")
-                .ok_or_else(|| DecodeError::new("unable to parse codec: 'avro.codec' missing"))
-                .and_then(|codec| {
-                    if let Value::Bytes(ref bytes) = *codec {
-                        from_utf8(bytes.as_ref())
-                            .map_err(|e| DecodeError::new(format!("unable to decode codec: {}", e)))
-                    } else {
-                        Err(DecodeError::new(format!(
-                            "unable to parse codec: expected bytes, got: {:?}",
-                            codec
-                        )))
-                    }
-                })
-                .and_then(|codec| {
-                    Codec::from_str(codec)
-                        .map_err(|_| DecodeError::new(format!("unrecognized codec '{}'", codec)))
-                })?;
+            self.codec = match meta.get("avro.codec") {
+                Some(Value::Bytes(ref bytes)) => from_utf8(bytes.as_ref())
+                    .map_err(|e| DecodeError::new(format!("unable to decode codec: {}", e)))
+                    .and_then(|codec| {
+                        Codec::from_str(codec).map_err(|_| {
+                            DecodeError::new(format!("unrecognized codec '{}'", codec))
+                        })
+                    }),
+                Some(codec) => Err(DecodeError::new(format!(
+                    "unable to parse codec: expected bytes, got: {:?}",
+                    codec
+                ))),
+                None => Ok(Codec::Null),
+            }?;
         } else {
             return Err(DecodeError::new("no metadata in header").into());
         }
