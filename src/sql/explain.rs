@@ -352,7 +352,7 @@ impl ScalarExpr {
                 (0..i.level).map(|_| '^').collect::<String>(),
                 i.column
             ),
-            Parameter(i) => format!("{}", i),
+            Parameter(i) => format!("${}", i),
             Literal(row, _) => format!("{}", row.unpack_first()),
             CallNullary(func) => format!("{}()", func),
             CallUnary { func, expr } => format!("{}({})", func, expr.fmt_with(subqueries)),

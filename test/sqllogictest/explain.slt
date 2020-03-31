@@ -310,3 +310,23 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 | | keys = ()
 
 EOF
+
+# These currently all fail - https://github.com/MaterializeInc/materialize/issues/2498
+#
+# query T multiline
+# EXPLAIN PLAN FOR SELECT $1
+# ----
+#
+# EOF
+#
+# query T multiline
+# EXPLAIN RAW PLAN FOR SELECT $1
+# ----
+#
+# EOF
+#
+# query T multiline
+# EXPLAIN TYPED RAW PLAN FOR SELECT $1
+# ----
+#
+# EOF
