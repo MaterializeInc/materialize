@@ -162,7 +162,7 @@ ORDER BY
 | Get materialize.public.lineitem (u21)
 | Filter (#10 <= 1998-12-01)
 | Reduce group=(#8, #9) sum(#4) sum(#5) sum((#5 * (100dec - #6))) sum(((#5 * (100dec - #6)) * (100dec + #7))) countall(null) countall(null) sum(#6) countall(null) countall(null)
-| Map (((#2 * 10000000dec) / (i64todec(#6) * 100dec)) * 10dec) (((#3 * 10000000dec) / (i64todec(#7) * 100dec)) * 10dec) (((#8 * 10000000dec) / (i64todec(#9) * 100dec)) * 10dec)
+| Map (((#2 * 10000000dec) / (i64todec(#6) * 100dec)) * 10dec), (((#3 * 10000000dec) / (i64todec(#7) * 100dec)) * 10dec), (((#8 * 10000000dec) / (i64todec(#9) * 100dec)) * 10dec)
 | Project (#0..#5, #11..#13, #10)
 
 EOF
@@ -229,7 +229,7 @@ ORDER BY
 | Join %0 %1 %2 %3 %4 (= #23 #25) (= #12 #21) (= #9 #17) (= #0 #16)
 | | implementation = DeltaQuery %0 %2.(#0) %1.(#0) %3.(#0) %4.(#0) | %1 %3.(#0) %4.(#0) %2.(#1) %0.(#0) | %2 %0.(#0) %1.(#0) %3.(#0) %4.(#0) | %3 %4.(#0) %1.(#3) %2.(#1) %0.(#0) | %4 %3.(#2) %1.(#3) %2.(#1) %0.(#0)
 | | demand = (#0, #2, #4, #5, #10, #11, #13..#15, #19, #22, #26)
-| Filter "^.*BRASS$" ~(#4) (#5 = 15) (#26 = "EUROPE")
+| Filter "^.*BRASS$" ~(#4), (#5 = 15), (#26 = "EUROPE")
 
 6 =
 | Get %5
@@ -313,7 +313,7 @@ ORDER BY
 | Join %0 %1 %2 (= #8 #17) (= #0 #9)
 | | implementation = DeltaQuery %0 %1.(#1) %2.(#0) | %1 %0.(#0) %2.(#0) | %2 %1.(#0) %0.(#0)
 | | demand = (#6, #8, #12, #15, #22, #23, #27)
-| Filter (#6 = "BUILDING") (#12 < 1995-03-15) (#27 > 1995-03-15)
+| Filter (#6 = "BUILDING"), (#12 < 1995-03-15), (#27 > 1995-03-15)
 | Reduce group=(#8, #12, #15) sum((#22 * (100dec - #23)))
 | Project (#0, #3, #1, #2)
 
@@ -346,7 +346,7 @@ ORDER BY
 ----
 0 =
 | Get materialize.public.orders (u18)
-| Filter (datetots(#4) < 1993-10-01 00:00:00) (#4 >= 1993-07-01)
+| Filter (datetots(#4) < 1993-10-01 00:00:00), (#4 >= 1993-07-01)
 
 1 =
 | Get %0
@@ -430,7 +430,7 @@ ORDER BY
 | Join %0 %1 %2 %3 %4 %5 (= #0 #9) (= #3 #36 #40) (= #8 #17) (= #19 #33) (= #42 #44)
 | | implementation = Differential %2 %1.(#0) %0.(#0) %3.(#0, #3) %4.(#0) %5.(#0)
 | | demand = (#12, #22, #23, #41, #45)
-| Filter (#45 = "ASIA") (#12 < 1995-01-01) (#12 >= 1994-01-01)
+| Filter (#45 = "ASIA"), (#12 < 1995-01-01), (#12 >= 1994-01-01)
 | Reduce group=(#41) sum((#22 * (100dec - #23)))
 
 EOF
@@ -450,7 +450,7 @@ WHERE
 ----
 0 =
 | Get materialize.public.lineitem (u21)
-| Filter (#4 < 2400dec) (datetots(#10) < 1995-01-01 00:00:00) (#6 <= 7dec) (#6 >= 5dec) (#10 >= 1994-01-01)
+| Filter (#4 < 2400dec), (datetots(#10) < 1995-01-01 00:00:00), (#6 <= 7dec), (#6 >= 5dec), (#10 >= 1994-01-01)
 | Reduce group=() sum((#5 * #6))
 
 1 =
@@ -544,7 +544,7 @@ ORDER BY
 | Join %0 %1 %2 %3 %4 %5 (= #35 #44) (= #24 #32) (= #7 #23) (= #3 #40) (= #0 #9)
 | | implementation = DeltaQuery %0 %4.(#0) %1.(#2) %2.(#0) %3.(#0) %5.(#0) | %1 %0.(#0) %2.(#0) %3.(#0) %4.(#0) %5.(#0) | %2 %3.(#0) %5.(#0) %1.(#0) %0.(#0) %4.(#0) | %3 %5.(#0) %2.(#1) %1.(#0) %0.(#0) %4.(#0) | %4 %0.(#3) %1.(#2) %2.(#0) %3.(#0) %5.(#0) | %5 %3.(#3) %2.(#1) %1.(#0) %0.(#0) %4.(#0)
 | | demand = (#12, #13, #17, #41, #45)
-| Filter (((#41 = "FRANCE") && (#45 = "GERMANY")) || ((#41 = "GERMANY") && (#45 = "FRANCE"))) (#17 <= 1996-12-31) (#17 >= 1995-01-01)
+| Filter (((#41 = "FRANCE") && (#45 = "GERMANY")) || ((#41 = "GERMANY") && (#45 = "FRANCE"))), (#17 <= 1996-12-31), (#17 >= 1995-01-01)
 | Reduce group=(#41, #45, tsextractyear(datetots(#17))) sum((#12 * (100dec - #13)))
 
 EOF
@@ -626,7 +626,7 @@ ORDER BY
 | Join %0 %1 %2 %3 %4 %5 %6 %7 (= #51 #57) (= #44 #49) (= #33 #41) (= #16 #32) (= #12 #53) (= #9 #18) (= #0 #17)
 | | implementation = DeltaQuery %0 %2.(#1) %1.(#0) %3.(#0) %4.(#0) %5.(#0) %6.(#0) %7.(#0) | %1 %6.(#0) %2.(#2) %0.(#0) %3.(#0) %4.(#0) %5.(#0) %7.(#0) | %2 %0.(#0) %1.(#0) %3.(#0) %4.(#0) %5.(#0) %6.(#0) %7.(#0) | %3 %4.(#0) %5.(#0) %7.(#0) %2.(#0) %0.(#0) %1.(#0) %6.(#0) | %4 %5.(#0) %7.(#0) %3.(#1) %2.(#0) %0.(#0) %1.(#0) %6.(#0) | %5 %7.(#0) %4.(#3) %3.(#1) %2.(#0) %0.(#0) %1.(#0) %6.(#0) | %6 %1.(#3) %2.(#2) %0.(#0) %3.(#0) %4.(#0) %5.(#0) %7.(#0) | %7 %5.(#2) %4.(#3) %3.(#1) %2.(#0) %0.(#0) %1.(#0) %6.(#0)
 | | demand = (#4, #21, #22, #36, #54, #58)
-| Filter (#4 = "ECONOMY ANODIZED STEEL") (#58 = "AMERICA") (#36 <= 1996-12-31) (#36 >= 1995-01-01)
+| Filter (#4 = "ECONOMY ANODIZED STEEL"), (#58 = "AMERICA"), (#36 <= 1996-12-31), (#36 >= 1995-01-01)
 | Reduce group=(tsextractyear(datetots(#36))) sum(if (#54 = "BRAZIL") then {(#21 * (100dec - #22))} else {0dec}) sum((#21 * (100dec - #22)))
 | Map (((#1 * 10000000dec) / #2) * 1000dec)
 | Project (#0, #3)
@@ -758,7 +758,7 @@ ORDER BY
 | Join %0 %1 %2 %3 (= #8 #17) (= #3 #33) (= #0 #9)
 | | implementation = DeltaQuery %0 %3.(#0) %1.(#1) %2.(#0) | %1 %0.(#0) %3.(#0) %2.(#0) | %2 %1.(#0) %0.(#0) %3.(#0) | %3 %0.(#3) %1.(#1) %2.(#0)
 | | demand = (#0..#2, #4, #5, #7, #12, #22, #23, #25, #34)
-| Filter (#25 = "R") (#12 < 1994-01-01) (datetots(#12) < 1994-01-01 00:00:00) (#12 >= 1993-10-01)
+| Filter (#25 = "R"), (#12 < 1994-01-01), (datetots(#12) < 1994-01-01 00:00:00), (#12 >= 1993-10-01)
 | Reduce group=(#0, #1, #5, #4, #34, #2, #7) sum((#22 * (100dec - #23)))
 | Project (#0, #1, #7, #2, #4, #5, #3, #6)
 
@@ -876,7 +876,7 @@ ORDER BY
 | Join %0 %1 (= #0 #9)
 | | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
 | | demand = (#5, #19..#21, #23)
-| Filter ((#23 = "MAIL") || (#23 = "SHIP")) (#19 < #20) (#20 < #21) (datetots(#21) < 1995-01-01 00:00:00) (#21 >= 1994-01-01)
+| Filter ((#23 = "MAIL") || (#23 = "SHIP")), (#19 < #20), (#20 < #21), (datetots(#21) < 1995-01-01 00:00:00), (#21 >= 1994-01-01)
 | Reduce group=(#23) sum(if ((#5 = "1-URGENT") || (#5 = "2-HIGH")) then {1} else {0}) sum(if ((#5 != "1-URGENT") && (#5 != "2-HIGH")) then {1} else {0})
 
 EOF
@@ -932,7 +932,7 @@ ORDER BY
 
 6 =
 | Union %4 %5
-| Map null null null null null null null null null
+| Map null, null, null, null, null, null, null, null, null
 
 7 =
 | Union %3 %6
@@ -970,7 +970,7 @@ WHERE
 | Join %0 %1 (= #1 #16)
 | | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#1)
 | | demand = (#5, #6, #10, #20)
-| Filter (datetots(#10) < 1996-02-01 00:00:00) (#10 >= 1996-01-01)
+| Filter (datetots(#10) < 1996-02-01 00:00:00), (#10 >= 1996-01-01)
 | Reduce group=() sum(if "^PROMO.*$" ~(#20) then {(#5 * (100dec - #6))} else {0dec}) sum((#5 * (100dec - #6)))
 
 3 =
@@ -986,7 +986,7 @@ WHERE
 
 6 =
 | Union %4 %5
-| Map null null
+| Map null, null
 
 7 =
 | Union %3 %6
@@ -1102,7 +1102,7 @@ ORDER BY
 | Join %0 %1 (= #0 #5)
 | | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
 | | demand = (#1, #8..#10)
-| Filter !("^MEDIUM POLISHED.*$" ~(#9)) ((((((((#10 = 49) || (#10 = 14)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9)) (#8 != "Brand#45")
+| Filter !("^MEDIUM POLISHED.*$" ~(#9)), ((((((((#10 = 49) || (#10 = 14)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9)), (#8 != "Brand#45")
 
 3 =
 | Get %2
@@ -1186,7 +1186,7 @@ WHERE
 | Join %0 %1 (= #1 #16)
 | | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#1)
 | | demand = (#1, #4, #5, #19, #22)
-| Filter (#19 = "Brand#23") (#22 = "MED BOX")
+| Filter (#19 = "Brand#23"), (#22 = "MED BOX")
 
 3 =
 | Get %2
@@ -1370,7 +1370,7 @@ WHERE
 | Join %0 %1 (= #1 #16)
 | | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#1)
 | | demand = (#4..#6, #13, #14, #19, #21, #22)
-| Filter (((((((#19 = "Brand#12") && ((((#22 = "SM CASE") || (#22 = "SM BOX")) || (#22 = "SM PACK")) || (#22 = "SM PKG"))) && (#4 >= 100dec)) && (#4 <= 1100dec)) && (#21 <= 5)) || (((((#19 = "Brand#23") && ((((#22 = "MED BAG") || (#22 = "MED BOX")) || (#22 = "MED PKG")) || (#22 = "MED PACK"))) && (#4 >= 1000dec)) && (#4 <= 2000dec)) && (#21 <= 10))) || (((((#19 = "Brand#34") && ((((#22 = "LG CASE") || (#22 = "LG BOX")) || (#22 = "LG PACK")) || (#22 = "LG PKG"))) && (#4 >= 2000dec)) && (#4 <= 3000dec)) && (#21 <= 15))) ((#14 = "AIR") || (#14 = "AIR REG")) (#13 = "DELIVER IN PERSON") (#21 >= 1)
+| Filter (((((((#19 = "Brand#12") && ((((#22 = "SM CASE") || (#22 = "SM BOX")) || (#22 = "SM PACK")) || (#22 = "SM PKG"))) && (#4 >= 100dec)) && (#4 <= 1100dec)) && (#21 <= 5)) || (((((#19 = "Brand#23") && ((((#22 = "MED BAG") || (#22 = "MED BOX")) || (#22 = "MED PKG")) || (#22 = "MED PACK"))) && (#4 >= 1000dec)) && (#4 <= 2000dec)) && (#21 <= 10))) || (((((#19 = "Brand#34") && ((((#22 = "LG CASE") || (#22 = "LG BOX")) || (#22 = "LG PACK")) || (#22 = "LG PKG"))) && (#4 >= 2000dec)) && (#4 <= 3000dec)) && (#21 <= 15))), ((#14 = "AIR") || (#14 = "AIR REG")), (#13 = "DELIVER IN PERSON"), (#21 >= 1)
 | Reduce group=() sum((#5 * (100dec - #6)))
 
 3 =
@@ -1499,7 +1499,7 @@ ORDER BY
 | Join %12 %13 (= #0 #3) (= #1 #4)
 | | implementation = DeltaQuery %12 %13.(#1, #2) | %13 %12.(#0, #1)
 | | demand = (#0, #1, #6, #12)
-| Filter (datetots(#12) < 1996-01-01 00:00:00) (#12 >= 1995-01-01)
+| Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
 | Reduce group=(#0, #1) sum(#6)
 | Map (5dec * #2)
 | ArrangeBy (#0, #1)
@@ -1583,7 +1583,7 @@ ORDER BY
 | Join %0 %1 %2 %3 (= #7 #23) (= #3 #32) (= #0 #9)
 | | implementation = DeltaQuery %0 %3.(#0) %1.(#2) %2.(#0) | %1 %0.(#0) %2.(#0) %3.(#0) | %2 %1.(#0) %0.(#0) %3.(#0) | %3 %0.(#3) %1.(#2) %2.(#0)
 | | demand = (#0, #1, #7, #18, #19, #25, #33)
-| Filter (#25 = "F") (#33 = "SAUDI ARABIA") (#19 > #18)
+| Filter (#25 = "F"), (#33 = "SAUDI ARABIA"), (#19 > #18)
 
 5 =
 | Get %4
@@ -1629,7 +1629,7 @@ ORDER BY
 | Join %12 %13 (= #0 #2)
 | | implementation = Differential %12 %13.(#0)
 | | demand = (#0, #1, #4, #13, #14)
-| Filter (#4 != #1) (#14 > #13)
+| Filter (#4 != #1), (#14 > #13)
 | Distinct group=(#0, #1)
 | Map true
 | Negate
@@ -1706,7 +1706,7 @@ ORDER BY
 
 1 =
 | Get materialize.public.customer (u15)
-| Filter (((((((substr(#4, 1, 2) = "13") || (substr(#4, 1, 2) = "31")) || (substr(#4, 1, 2) = "23")) || (substr(#4, 1, 2) = "29")) || (substr(#4, 1, 2) = "30")) || (substr(#4, 1, 2) = "18")) || (substr(#4, 1, 2) = "17")) (#5 > 0dec)
+| Filter (((((((substr(#4, 1, 2) = "13") || (substr(#4, 1, 2) = "31")) || (substr(#4, 1, 2) = "23")) || (substr(#4, 1, 2) = "29")) || (substr(#4, 1, 2) = "30")) || (substr(#4, 1, 2) = "18")) || (substr(#4, 1, 2) = "17")), (#5 > 0dec)
 | Reduce group=() sum(#5) countall(null)
 | Map (((#0 * 10000000dec) / (i64todec(#1) * 100dec)) * 10dec)
 | ArrangeBy ()
@@ -1750,5 +1750,119 @@ ORDER BY
 | | implementation = Differential %8 %3.(#0)
 | | demand = (#4, #5)
 | Reduce group=(substr(#4, 1, 2)) countall(null) sum(#5)
+
+EOF
+
+################################################################################
+# end of optimized plans - below here is a sampling of other plan info
+################################################################################
+
+query T multiline
+-- Query 20
+EXPLAIN RAW PLAN FOR SELECT
+    s_name,
+    s_address
+FROM
+    supplier,
+    nation
+WHERE
+    s_suppkey IN (
+        SELECT
+            ps_suppkey
+        FROM
+            partsupp
+        WHERE
+            ps_partkey IN (
+                SELECT
+                    p_partkey
+                FROM
+                    part
+                WHERE
+                    p_name like 'forest%'
+            )
+            AND ps_availqty > (
+                SELECT
+                    0.5 * sum(l_quantity)
+                FROM
+                    lineitem
+                WHERE
+                    l_partkey = ps_partkey
+                    AND l_suppkey = ps_suppkey
+                    AND l_shipdate >= DATE '1995-01-01'
+                    AND l_shipdate < DATE '1995-01-01' + INTERVAL '1' year
+            )
+    )
+    AND s_nationkey = n_nationkey
+    AND n_name = 'CANADA'
+ORDER BY
+    s_name
+----
+0 =
+| Constant ()
+
+1 =
+| Get materialize.public.supplier (u8)
+
+2 =
+| InnerJoin 0 1 on true
+
+3 =
+| Get materialize.public.nation (u1)
+
+4 =
+| InnerJoin 2 3 on true
+| Filter ((select(%7) && (#3 = #7)) && (#8 = "CANADA"))
+| |
+| | 5 =
+| | | Constant ()
+| |
+| | 6 =
+| | | Get materialize.public.partsupp (u11)
+| |
+| | 7 =
+| | | InnerJoin 5 6 on true
+| | | Filter (select(%10) && ((i32todec(#2) * 1000dec) > select(%14)))
+| | | |
+| | | | 8 =
+| | | | | Constant ()
+| | | |
+| | | | 9 =
+| | | | | Get materialize.public.part (u6)
+| | | |
+| | | | 10 =
+| | | | | InnerJoin 8 9 on true
+| | | | | Filter like(#1, "forest%")
+| | | | | Map #0
+| | | | | Project (#9)
+| | | | | Map
+| | | | | Project (#0)
+| | | | | Reduce group=() any((#^0 = #0))
+| | | |
+| | | |
+| | | | 12 =
+| | | | | Constant ()
+| | | |
+| | | | 13 =
+| | | | | Get materialize.public.lineitem (u21)
+| | | |
+| | | | 14 =
+| | | | | InnerJoin 12 13 on true
+| | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= 1995-01-01)) && (datetots(#10) < (1995-01-01 + 1 year)))
+| | | | | Map
+| | | | | Reduce group=() sum(#4)
+| | | | | Map (5dec * #0)
+| | | | | Project (#1)
+| | | | | Map
+| | | | | Project (#0)
+| | | |
+| | | Map #1
+| | | Project (#5)
+| | | Map
+| | | Project (#0)
+| | | Reduce group=() any((#^0 = #0))
+| |
+| Map #1, #2
+| Project (#11, #12)
+| Map
 
 EOF

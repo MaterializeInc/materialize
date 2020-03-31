@@ -43,6 +43,8 @@ pub struct ExplanationNode<'a> {
     pub annotations: Vec<String>,
     /// Nodes are grouped into chains of linear operations for easy printing
     pub chain: usize,
+    /// Nodes with subqueries have a nested explanation for the subquery
+    pub subqueries: Vec<Explanation<'a>>,
 }
 
 impl<'a> std::fmt::Display for Explanation<'a> {
@@ -51,16 +53,25 @@ impl<'a> std::fmt::Display for Explanation<'a> {
         for node in &self.nodes {
             if node.chain != prev_chain {
                 if node.chain != 0 {
-                    writeln!(f)?;
+                    writeln!(f, "")?;
                 }
                 writeln!(f, "{} =", node.chain)?;
             }
             prev_chain = node.chain;
 
-            // explain output shows up in SLT where the linter will not allow trailing whitespace, so trim stuff
+            // explain output shows up in SLT where the linter will not allow trailing whitespace, so need to trim stuff
             writeln!(f, "| {}", node.pretty.trim())?;
             for annotation in &node.annotations {
                 writeln!(f, "| | {}", annotation.trim())?;
+            }
+            for subquery in &node.subqueries {
+                for line in subquery.to_string().split("\n") {
+                    if line.is_empty() {
+                        writeln!(f, "| |")?;
+                    } else {
+                        writeln!(f, "| | {}", line)?;
+                    }
+                }
             }
         }
 
@@ -71,6 +82,14 @@ impl<'a> std::fmt::Display for Explanation<'a> {
 impl RelationExpr {
     /// Create an Explanation, to which annotations can be added before printing
     pub fn explain(&self, id_humanizer: &impl IdHumanizer) -> Explanation {
+        self.explain_internal(id_humanizer, &mut 0)
+    }
+
+    fn explain_internal(
+        &self,
+        id_humanizer: &impl IdHumanizer,
+        next_chain: &mut usize,
+    ) -> Explanation {
         use RelationExpr::*;
 
         // get nodes in post-order
@@ -82,7 +101,8 @@ impl RelationExpr {
                 parent_expr,
                 pretty: String::new(),
                 annotations: vec![],
-                chain: 0, // will fix this up later
+                chain: 0,           // will fix this up later
+                subqueries: vec![], // will fix this up later
             });
             expr.visit1(&mut |child_expr| {
                 stack.push((Some(expr), child_expr));
@@ -95,9 +115,10 @@ impl RelationExpr {
         let mut expr_chain: HashMap<*const RelationExpr, usize> = HashMap::new();
 
         // group into linear chains of exprs
-        let mut chain = 0;
+        let mut current_chain = *next_chain;
+        *next_chain += 1;
         for node in &mut nodes {
-            node.chain = chain;
+            node.chain = current_chain;
             let breaks_chain = match &node.parent_expr {
                 None => true,
                 Some(parent_expr) => match parent_expr {
@@ -115,8 +136,48 @@ impl RelationExpr {
                 },
             };
             if breaks_chain {
-                expr_chain.insert(node.expr as *const RelationExpr, chain);
-                chain += 1;
+                expr_chain.insert(node.expr as *const RelationExpr, current_chain);
+                current_chain = *next_chain;
+                *next_chain += 1;
+            }
+
+            // look for subqueries
+            let mut scalar_exprs = vec![];
+            match &node.expr {
+                Constant { .. }
+                | Get { .. }
+                | Project { .. }
+                | Distinct { .. }
+                | Negate { .. }
+                | Threshold { .. }
+                | Union { .. }
+                | TopK { .. } => (),
+                Map { scalars, .. } => scalar_exprs.extend(scalars),
+                Filter { predicates, .. } => scalar_exprs.extend(predicates),
+                FlatMapUnary { expr, .. } => scalar_exprs.push(expr),
+                Join { on, .. } => scalar_exprs.push(on),
+                Reduce { aggregates, .. } => {
+                    scalar_exprs.extend(aggregates.iter().map(|a| &*a.expr))
+                }
+            }
+            for scalar_expr in scalar_exprs {
+                scalar_expr.visit(&mut |scalar_expr| {
+                    use ScalarExpr::*;
+                    match scalar_expr {
+                        Column(..)
+                        | Parameter(..)
+                        | Literal(..)
+                        | CallNullary(..)
+                        | CallUnary { .. }
+                        | CallBinary { .. }
+                        | CallVariadic { .. }
+                        | If { .. } => (),
+                        Exists(relation_expr) | Select(relation_expr) => {
+                            node.subqueries
+                                .push(relation_expr.explain_internal(id_humanizer, next_chain));
+                        }
+                    }
+                });
             }
         }
 
@@ -126,11 +187,14 @@ impl RelationExpr {
         for ExplanationNode {
             expr,
             pretty,
-            annotations,
+            subqueries,
             ..
         } in nodes.iter_mut()
         {
             use std::fmt::Write;
+
+            // going to pop these off as we go through scalar_exprs
+            let mut subqueries = subqueries.iter().collect::<Vec<_>>();
 
             // write the expr
             match expr {
@@ -155,13 +219,41 @@ impl RelationExpr {
                     write!(pretty, "Project {}", Bracketed("(", ")", Indices(outputs))).unwrap()
                 }
                 Map { scalars, .. } => {
-                    write!(pretty, "Map {}", Separated(" ", scalars.clone())).unwrap();
+                    write!(
+                        pretty,
+                        "Map {}",
+                        Separated(
+                            ", ",
+                            scalars
+                                .iter()
+                                .map(|s| s.fmt_with(&mut subqueries))
+                                .collect()
+                        )
+                    )
+                    .unwrap();
                 }
                 FlatMapUnary { func, expr, .. } => {
-                    write!(pretty, "FlatMapUnary {}({})", func, expr).unwrap();
+                    write!(
+                        pretty,
+                        "FlatMapUnary {}({})",
+                        func,
+                        expr.fmt_with(&mut subqueries)
+                    )
+                    .unwrap();
                 }
                 Filter { predicates, .. } => {
-                    write!(pretty, "Filter {}", Separated(" ", predicates.clone())).unwrap();
+                    write!(
+                        pretty,
+                        "Filter {}",
+                        Separated(
+                            ", ",
+                            predicates
+                                .iter()
+                                .map(|p| p.fmt_with(&mut subqueries))
+                                .collect()
+                        )
+                    )
+                    .unwrap();
                 }
                 Join {
                     left,
@@ -175,7 +267,7 @@ impl RelationExpr {
                         kind,
                         expr_chain(left),
                         expr_chain(right),
-                        on
+                        on.fmt_with(&mut subqueries),
                     )
                     .unwrap();
                 }
@@ -188,7 +280,13 @@ impl RelationExpr {
                         pretty,
                         "Reduce group={} {}",
                         Bracketed("(", ")", Separated(", ", group_key.clone())),
-                        Separated(" ", aggregates.clone())
+                        Separated(
+                            " ",
+                            aggregates
+                                .iter()
+                                .map(|a| a.fmt_with(&mut subqueries))
+                                .collect()
+                        )
                     )
                     .unwrap();
                 }
@@ -245,51 +343,66 @@ impl<'a> Explanation<'a> {
     }
 }
 
-impl std::fmt::Display for ScalarExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl ScalarExpr {
+    fn fmt_with(&self, subqueries: &mut Vec<&Explanation>) -> String {
         use ScalarExpr::*;
         match self {
-            Column(i) => write!(
-                f,
+            Column(i) => format!(
                 "#{}{}",
                 (0..i.level).map(|_| '^').collect::<String>(),
                 i.column
-            )?,
-            Parameter(i) => write!(f, "?{}", i)?,
-            Literal(row, _) => write!(f, "{}", row.unpack_first())?,
-            CallNullary(func) => write!(f, "{}()", func)?,
-            CallUnary { func, expr } => {
-                write!(f, "{}({})", func, expr)?;
-            }
+            ),
+            Parameter(i) => format!("{}", i),
+            Literal(row, _) => format!("{}", row.unpack_first()),
+            CallNullary(func) => format!("{}()", func),
+            CallUnary { func, expr } => format!("{}({})", func, expr.fmt_with(subqueries)),
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {
-                    write!(f, "({} {} {})", expr1, func, expr2)?;
+                    format!(
+                        "({} {} {})",
+                        expr1.fmt_with(subqueries),
+                        func,
+                        expr2.fmt_with(subqueries)
+                    )
                 } else {
-                    write!(f, "{}({}, {})", func, expr1, expr2)?;
+                    format!(
+                        "{}({}, {})",
+                        func,
+                        expr1.fmt_with(subqueries),
+                        expr2.fmt_with(subqueries)
+                    )
                 }
             }
-            CallVariadic { func, exprs } => {
-                write!(f, "{}({})", func, Separated(", ", exprs.clone()))?;
+            CallVariadic { func, exprs } => format!(
+                "{}({})",
+                func,
+                Separated(", ", exprs.iter().map(|e| e.fmt_with(subqueries)).collect())
+            ),
+            If { cond, then, els } => format!(
+                "if {} then {{{}}} else {{{}}}",
+                cond.fmt_with(subqueries),
+                then.fmt_with(subqueries),
+                els.fmt_with(subqueries)
+            ),
+            Exists(..) => {
+                let chain = subqueries.remove(0).nodes.last().unwrap().chain;
+                format!("exists(%{})", chain)
             }
-            If { cond, then, els } => {
-                write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)?;
+            Select(..) => {
+                let chain = subqueries.remove(0).nodes.last().unwrap().chain;
+                format!("select(%{})", chain)
             }
-            // TODO(jamii)
-            Exists(..) => write!(f, "exists(..)")?,
-            Select(..) => write!(f, "select(..)")?,
         }
-        Ok(())
     }
 }
 
-impl std::fmt::Display for AggregateExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        write!(
-            f,
+impl AggregateExpr {
+    fn fmt_with(&self, subqueries: &mut Vec<&Explanation>) -> String {
+        format!(
             "{}({}{})",
             self.func,
             if self.distinct { "distinct " } else { "" },
-            self.expr
+            self.expr.fmt_with(subqueries)
         )
     }
 }

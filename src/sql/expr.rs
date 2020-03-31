@@ -490,9 +490,9 @@ impl RelationExpr {
         }
     }
 
-    pub fn visit<F>(&self, f: &mut F)
+    pub fn visit<'a, F>(&'a self, f: &mut F)
     where
-        F: FnMut(&Self),
+        F: FnMut(&'a Self),
     {
         self.visit1(|e: &RelationExpr| e.visit(f));
         f(self);
@@ -1334,6 +1334,40 @@ impl ScalarExpr {
             func,
             expr1: Box::new(self),
             expr2: Box::new(other),
+        }
+    }
+
+    pub fn visit<'a, F>(&'a self, f: &mut F)
+    where
+        F: FnMut(&'a Self),
+    {
+        self.visit1(|e: &ScalarExpr| e.visit(f));
+        f(self);
+    }
+
+    pub fn visit1<'a, F>(&'a self, mut f: F)
+    where
+        F: FnMut(&'a Self),
+    {
+        use ScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+            Exists(..) | Select(..) => (),
         }
     }
 }

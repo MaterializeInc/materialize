@@ -41,7 +41,23 @@ EXPLAIN RAW PLAN FOR SELECT (SELECT (SELECT 1))
 ----
 0 =
 | Constant ()
-| Map select(..)
+| Map select(%1)
+| |
+| | 1 =
+| | | Constant ()
+| | | Map select(%2)
+| | | |
+| | | | 2 =
+| | | | | Constant ()
+| | | | | Map 1
+| | | | | Project (#0)
+| | | | | Map
+| | | | | Project (#0)
+| | | |
+| | | Project (#0)
+| | | Map
+| | | Project (#0)
+| |
 | Project (#0)
 | Map
 

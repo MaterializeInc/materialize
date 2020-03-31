@@ -189,7 +189,7 @@ impl RelationExpr {
                     write!(pretty, "Project {}", Bracketed("(", ")", Indices(outputs))).unwrap()
                 }
                 Map { scalars, .. } => {
-                    write!(pretty, "Map {}", Separated(" ", scalars.clone())).unwrap();
+                    write!(pretty, "Map {}", Separated(", ", scalars.clone())).unwrap();
                 }
                 FlatMapUnary {
                     func, expr, demand, ..
@@ -201,7 +201,7 @@ impl RelationExpr {
                     }
                 }
                 Filter { predicates, .. } => {
-                    write!(pretty, "Filter {}", Separated(" ", predicates.clone())).unwrap();
+                    write!(pretty, "Filter {}", Separated(", ", predicates.clone())).unwrap();
                 }
                 Join {
                     inputs,
