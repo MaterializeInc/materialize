@@ -20,8 +20,13 @@ For information about available versions, see our [Versions page](../versions).
   consistent with PostgreSQL. The strings `NaN`, and `[+-]Infinity` are
   accepted as input, to select the special not-a-number and infinity states
   of floating-point numbers.
+
 - Support CSV files with headers (`CREATE SOURCE...FORMAT CSV WITH HEADER`).
+
 - Support naming columns when creating CSV sources.
+
+- Require the `-w` / `--threads` command-line parameter. Consult the
+  [configuration documentation](https://materialize.io/docs/overview/configuration/#worker-threads) to determine the correct value for your deployment.
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
