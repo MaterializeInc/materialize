@@ -721,9 +721,9 @@ where
                 // have OIDs.
                 command_complete!("INSERT 0 {}", n)
             }
-            ExecuteResponse::SendRows(rx) => {
+            ExecuteResponse::SendingRows(rx) => {
                 let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::SendRows");
+                    row_desc.expect("missing row description for ExecuteResponse::SendingRows");
                 match rx.await? {
                     PeekResponse::Canceled => {
                         self.error(session, "57014", "canceling statement due to user request")
@@ -750,9 +750,9 @@ where
                 }
                 command_complete!("SET")
             }
-            ExecuteResponse::StartTransaction => command_complete!("BEGIN"),
-            ExecuteResponse::Commit => command_complete!("COMMIT TRANSACTION"),
-            ExecuteResponse::Rollback => command_complete!("ROLLBACK TRANSACTION"),
+            ExecuteResponse::StartedTransaction => command_complete!("BEGIN"),
+            ExecuteResponse::CommittedTransaction => command_complete!("COMMIT"),
+            ExecuteResponse::AbortedTransaction => command_complete!("ROLLBACK"),
             ExecuteResponse::Tailing { rx } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");

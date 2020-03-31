@@ -91,22 +91,12 @@ pub enum Plan {
     ShowAllVariables,
     ShowVariable(String),
     SetVariable {
-        /// The name of the variable
         name: String,
         value: String,
     },
-    /// Nothing needs to happen, but the frontend must be notified
     StartTransaction,
-    /// Commit a transaction
-    ///
-    /// We don't do anything for transactions, so other than changing the session state
-    /// this is a no-op
-    Commit,
-    /// Rollback a transaction
-    ///
-    /// We don't do anything for transactions, so other than changing the session state
-    /// this is a no-op
-    Rollback,
+    CommitTransaction,
+    AbortTransaction,
     Peek {
         source: ::expr::RelationExpr,
         when: PeekWhen,
