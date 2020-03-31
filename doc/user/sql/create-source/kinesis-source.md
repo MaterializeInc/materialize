@@ -38,6 +38,7 @@ Field | Value | Description
 ------|-------|------------
 `access_key` | `text` | _(Required)_ A valid [access key](https://docs.aws.amazon.com/streams/latest/dev/controlling-access.html) to the Kinesis stream.
 `secret_access_key` | `text` | _(Required)_ A valid [secret access key](https://docs.aws.amazon.com/streams/latest/dev/controlling-access.html) to the Kinesis stream.
+`endpoint` | `text` | _(Optional)_ If the stream exists in a custom AWS region, a valid endpoint for the stream must be provided.
 
 For details about the IAM account whose details you provide, see [Kinesis source
 details](#kinesis-source-details).
@@ -87,7 +88,7 @@ Materialize.
 CREATE SOURCE kinesis_source
 FROM KINESIS ARN ...
 WITH (access_key=...,
-             secret_access_key=...)
+      secret_access_key=...)
 FORMAT BYES;
 ```
 

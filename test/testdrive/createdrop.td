@@ -226,3 +226,19 @@ a
   FORMAT BYTES;
 
 > DROP SOURCE f
+
+# This tests Materialize's logic around custom AWS regions
+! CREATE SOURCE custom_source
+  FROM KINESIS ARN 'arn:aws:kinesis:custom-region::stream/fake-stream'
+  WITH (access_key = 'fake_access_key', secret_access_key = 'fake_secret_access_key')
+  FORMAT BYTES;
+If providing a custom region, an `endpoint` option must also be provided
+
+> CREATE SOURCE custom_source
+  FROM KINESIS ARN 'arn:aws:kinesis:custom-region::stream/fake-stream'
+  WITH (access_key = 'fake_access_key',
+        secret_access_key = 'fake_secret_access_key',
+        endpoint = 'fake_endpoint')
+  FORMAT BYTES;
+
+> DROP SOURCE custom_source
