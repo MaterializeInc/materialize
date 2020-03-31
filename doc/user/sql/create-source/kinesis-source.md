@@ -38,7 +38,7 @@ Field | Value | Description
 ------|-------|------------
 `access_key` | `text` | _(Required)_ A valid [access key](https://docs.aws.amazon.com/streams/latest/dev/controlling-access.html) to the Kinesis stream.
 `secret_access_key` | `text` | _(Required)_ A valid [secret access key](https://docs.aws.amazon.com/streams/latest/dev/controlling-access.html) to the Kinesis stream.
-`endpoint` | `text` | _(Optional)_ If the stream exists in a custom AWS region, a valid endpoint for the stream must be provided.
+`endpoint` | `text` | If the stream exists in a custom AWS region, the hostname for the Kinesis endpoint.
 
 For details about the IAM account whose details you provide, see [Kinesis source
 details](#kinesis-source-details).
@@ -107,6 +107,20 @@ FROM (
     SELECT CONVERT_FROM(data, 'utf8') AS data
     FROM kinesis_source
 )
+```
+
+It's also possible to create a Kinesis source from a Kinesis stream in a
+custom AWS region. To do that, create a source as you normally would
+(the custom region will be contained in your stream's ARN) and provide
+an endpoint from your stream:
+```sql
+
+CREATE SOURCE kinesis_source
+FROM KINESIS ARN ...
+WITH (access_key = ...,
+      secret_access_key = ...,
+      endpoint = ...)
+FORMAT BYTES;
 ```
 
 ## Related pages
