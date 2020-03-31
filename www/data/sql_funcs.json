@@ -61,6 +61,10 @@
             {
                 "signature": "variance_samp(x: T) -> T",
                 "description": "Sample variance of `T`'s values *(imprecise)*"
+            },
+            {
+                "signature": "jsonb_agg(expression) -> jsonb",
+                "description": "Aggregate values (including nulls) as a jsonb array"
             }
         ]
     },
