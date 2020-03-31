@@ -28,8 +28,7 @@ For information about available versions, see our [Versions page](../versions).
 
 - Support naming columns when creating CSV sources.
 
-- Support jsonb_agg().
-
+- Support [`jsonb_agg()` aggregate function](../sql/functions/#functions)
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
