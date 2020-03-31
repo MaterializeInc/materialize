@@ -721,9 +721,9 @@ where
                 // have OIDs.
                 command_complete!("INSERT 0 {}", n)
             }
-            ExecuteResponse::SendRows(rx) => {
+            ExecuteResponse::SendingRows(rx) => {
                 let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::SendRows");
+                    row_desc.expect("missing row description for ExecuteResponse::SendingRows");
                 match rx.await? {
                     PeekResponse::Canceled => {
                         self.error(session, "57014", "canceling statement due to user request")

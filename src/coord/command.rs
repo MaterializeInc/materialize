@@ -110,7 +110,7 @@ pub enum ExecuteResponse {
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
     /// Rows will be delivered via the specified future.
-    SendRows(#[derivative(Debug = "ignore")] RowsFuture),
+    SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.
     SetVariable { name: String },
     /// A new transaction was started.

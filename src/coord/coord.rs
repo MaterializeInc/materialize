@@ -1179,7 +1179,7 @@ where
                 })
                 .err_into();
 
-            Ok(ExecuteResponse::SendRows(Box::pin(rows_rx)))
+            Ok(ExecuteResponse::SendingRows(Box::pin(rows_rx)))
         }
     }
 
@@ -1985,7 +1985,7 @@ fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedC
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     let (tx, rx) = futures::channel::oneshot::channel();
     tx.send(PeekResponse::Rows(rows)).unwrap();
-    ExecuteResponse::SendRows(Box::pin(rx.err_into()))
+    ExecuteResponse::SendingRows(Box::pin(rx.err_into()))
 }
 
 pub struct IndexState {

@@ -136,7 +136,7 @@ fn no_block() {
         let Response { result, session: _ } = oneshot_rx.await.unwrap();
         let response: ExecuteResponse = result.unwrap();
         let rows = match response {
-            ExecuteResponse::SendRows(rows) => rows,
+            ExecuteResponse::SendingRows(rows) => rows,
             _ => panic!(),
         }
         .await
