@@ -18,12 +18,14 @@ use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnector, SourceConnector};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
+pub use crate::expr::RelationExpr;
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 pub use statement::StatementContext;
 
 pub mod normalize;
 
+mod explain;
 mod expr;
 mod query;
 mod scope;
@@ -117,9 +119,8 @@ pub enum Plan {
     SendRows(Vec<Row>),
     ExplainPlan {
         sql: String,
+        raw_plan: crate::expr::RelationExpr,
         decorrelated_plan: ::expr::RelationExpr,
-        // the planner might not know the optimized plan
-        optimized_plan: Option<::expr::RelationExpr>,
         stage: ExplainStage,
         options: ExplainOptions,
     },

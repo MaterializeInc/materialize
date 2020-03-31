@@ -213,7 +213,6 @@ where
                                 let eval_env = EvalEnv::default();
                                 let view = catalog::View {
                                     create_sql: view.create_sql,
-                                    unoptimized_expr: view.expr.clone(),
                                     optimized_expr: optimizer
                                         .optimize(view.expr, catalog.indexes(), &eval_env)
                                         .expect("failed to optimize bootstrap sql"),
@@ -789,7 +788,6 @@ where
                 let eval_env = EvalEnv::default();
                 let view = catalog::View {
                     create_sql: view.create_sql,
-                    unoptimized_expr: view.expr.clone(),
                     optimized_expr: self.optimizer.optimize(
                         view.expr,
                         self.catalog.indexes(),
@@ -954,7 +952,6 @@ where
                 // constant expression that originally contains a global get? Is
                 // there anything not containing a global get that cannot be
                 // optimized to a constant expression?
-                let unoptimized_source = source.clone();
                 let mut source =
                     self.optimizer
                         .optimize(source, self.catalog.indexes(), &eval_env)?;
@@ -1038,7 +1035,6 @@ where
                         dataflow.as_of(Some(vec![timestamp.clone()]));
                         let view = catalog::View {
                             create_sql: "<none>".into(),
-                            unoptimized_expr: unoptimized_source,
                             optimized_expr: source,
                             desc,
                             eval_env: eval_env.clone(),
@@ -1136,37 +1132,38 @@ where
 
             Plan::ExplainPlan {
                 sql,
+                raw_plan,
                 decorrelated_plan,
-                optimized_plan,
                 stage,
                 options,
             } => {
                 let explanation_string = match stage {
-                    ExplainStage::Sql => sql,
-                    ExplainStage::RawPlan => panic!("TODO(jamii)"),
-                    ExplainStage::DecorrelatedPlan | ExplainStage::OptimizedPlan { .. } => {
-                        let expr = match stage {
-                            ExplainStage::DecorrelatedPlan => decorrelated_plan,
-                            ExplainStage::OptimizedPlan { .. } => match optimized_plan {
-                                Some(optimized_plan) => optimized_plan,
-                                None => {
-                                    // if the planner doesn't have a cached optimized plan we'll have to make our own
-                                    let eval_env = EvalEnv {
-                                        wall_time: Some(chrono::Utc::now()),
-                                        logical_time: Some(0),
-                                    };
-                                    self.optimizer
-                                        .optimize(
-                                            decorrelated_plan,
-                                            self.catalog.indexes(),
-                                            &eval_env,
-                                        )?
-                                        .unwrap()
-                                }
-                            },
-                            _ => unreachable!(),
+                    ExplainStage::Sql => sql.clone(),
+                    ExplainStage::RawPlan => {
+                        let mut explanation = raw_plan.explain(&self.catalog);
+                        if options.typed {
+                            // TODO(jamii) does this fail?
+                            explanation.explain_types(&BTreeMap::new());
+                        }
+                        explanation.to_string()
+                    }
+                    ExplainStage::DecorrelatedPlan => {
+                        let mut explanation = decorrelated_plan.explain(&self.catalog);
+                        if options.typed {
+                            explanation.explain_types();
+                        }
+                        explanation.to_string()
+                    }
+                    ExplainStage::OptimizedPlan { .. } => {
+                        let eval_env = EvalEnv {
+                            wall_time: Some(chrono::Utc::now()),
+                            logical_time: Some(0),
                         };
-                        let mut explanation = expr.explain(&self.catalog);
+                        let optimized_plan = self
+                            .optimizer
+                            .optimize(decorrelated_plan, self.catalog.indexes(), &eval_env)?
+                            .unwrap();
+                        let mut explanation = optimized_plan.explain(&self.catalog);
                         if options.typed {
                             explanation.explain_types();
                         }

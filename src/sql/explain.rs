@@ -7,23 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This is the implementation for the EXPLAIN (DECORRELATED | OPTIMIZED) PLAN command.
+//! This is the implementation for the EXPLAIN RAW PLAN command.
 //!
 //! Conventions:
 //! * RelationExprs are printed in post-order, left to right
 //! * RelationExprs which only have a single input are grouped together
 //! * Each group of RelationExprs is referred by id eg %4
 //! * RelationExprs may be followed by additional annotations on lines starting with | |
-//! * Columns are referred to by position eg #4
+//! * Columns are referred by position eg #4
+//! * References to columns in outer scopes are indicated by adding a ^ per level of nesting eg #^^4
 //! * Collections of columns are written as ranges where possible eg "#2..#5"
 //!
 //! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
-use super::{
-    AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
-    ScalarExpr,
-};
-use repr::RelationType;
-use std::collections::HashMap;
+
+use crate::expr::{AggregateExpr, JoinKind, RelationExpr, ScalarExpr};
+use expr::{Id, IdHumanizer};
+use repr::{RelationType, ScalarType};
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug)]
 pub struct Explanation<'a> {
@@ -56,11 +56,6 @@ impl<'a> std::fmt::Display for Explanation<'a> {
                 writeln!(f, "{} =", node.chain)?;
             }
             prev_chain = node.chain;
-
-            // skip Let
-            if let RelationExpr::Let { .. } = node.expr {
-                continue;
-            }
 
             // explain output shows up in SLT where the linter will not allow trailing whitespace, so trim stuff
             writeln!(f, "| {}", node.pretty.trim())?;
@@ -114,12 +109,8 @@ impl RelationExpr {
                     | TopK { .. }
                     | Negate { .. }
                     | Threshold { .. }
-                    | ArrangeBy { .. } => false,
+                    | Distinct { .. } => false,
                     Join { .. } | Union { .. } => true,
-                    Let { value, .. } => {
-                        // only the value child goes in a different chain
-                        (node.expr as *const RelationExpr) == ((&**value) as *const RelationExpr)
-                    }
                     Constant { .. } | Get { .. } => unreachable!(), // these don't have children
                 },
             };
@@ -131,15 +122,6 @@ impl RelationExpr {
 
         // slighly easier to use
         let expr_chain = |expr: &RelationExpr| expr_chain[&(expr as *const RelationExpr)];
-
-        // track which chain each LocalId refers to so we can map them directly
-        // assumes LocalId is unique
-        let mut local_id_chain: HashMap<&LocalId, usize> = HashMap::new();
-        for node in &mut nodes {
-            if let Let { id, value, .. } = node.expr {
-                local_id_chain.insert(id, expr_chain(value));
-            }
-        }
 
         for ExplanationNode {
             expr,
@@ -153,27 +135,12 @@ impl RelationExpr {
             // write the expr
             match expr {
                 Constant { rows, .. } => {
-                    write!(
-                        pretty,
-                        "Constant {}",
-                        Separated(
-                            " ",
-                            rows.iter()
-                                .flat_map(|(row, count)| (0..*count).map(move |_| row))
-                                .collect::<Vec<_>>()
-                        )
-                    )
-                    .unwrap();
+                    write!(pretty, "Constant {}", Separated(" ", rows.clone())).unwrap();
                 }
                 Get { id, .. } => match id {
-                    Id::Local(local_id) => write!(
-                        pretty,
-                        "Get %{}",
-                        local_id_chain
-                            .get(local_id)
-                            .map_or_else(|| "?".to_owned(), |i| i.to_string())
-                    )
-                    .unwrap(),
+                    Id::Local(_) => {
+                        unimplemented!("sql::RelationExpr::Get can't contain LocalId yet")
+                    }
                     Id::Global(_) => write!(
                         pretty,
                         "Get {} ({})",
@@ -184,85 +151,49 @@ impl RelationExpr {
                     )
                     .unwrap(),
                 },
-                Let { id, .. } => write!(pretty, "Let %{}", local_id_chain[id]).unwrap(),
                 Project { outputs, .. } => {
                     write!(pretty, "Project {}", Bracketed("(", ")", Indices(outputs))).unwrap()
                 }
                 Map { scalars, .. } => {
                     write!(pretty, "Map {}", Separated(" ", scalars.clone())).unwrap();
                 }
-                FlatMapUnary {
-                    func, expr, demand, ..
-                } => {
+                FlatMapUnary { func, expr, .. } => {
                     write!(pretty, "FlatMapUnary {}({})", func, expr).unwrap();
-                    if let Some(demand) = demand {
-                        annotations
-                            .push(format!("demand = {}", Bracketed("(", ")", Indices(demand))));
-                    }
                 }
                 Filter { predicates, .. } => {
                     write!(pretty, "Filter {}", Separated(" ", predicates.clone())).unwrap();
                 }
                 Join {
-                    inputs,
-                    equivalences,
-                    demand,
-                    implementation,
+                    left,
+                    right,
+                    on,
+                    kind,
                 } => {
-                    let input_chains = inputs.iter().map(expr_chain).collect::<Vec<_>>();
                     write!(
                         pretty,
-                        "Join {} {}",
-                        Separated(
-                            " ",
-                            inputs
-                                .iter()
-                                .map(|input| Bracketed("%", "", expr_chain(input)))
-                                .collect()
-                        ),
-                        Separated(
-                            " ",
-                            equivalences
-                                .iter()
-                                .map(|equivalence| Bracketed(
-                                    "(= ",
-                                    ")",
-                                    Separated(" ", equivalence.clone())
-                                ))
-                                .collect()
-                        )
+                        "{}Join {} {} on {}",
+                        kind,
+                        expr_chain(left),
+                        expr_chain(right),
+                        on
                     )
                     .unwrap();
-                    annotations.push(format!(
-                        "implementation = {}",
-                        implementation.fmt_with(&input_chains)
-                    ));
-                    if let Some(demand) = demand {
-                        annotations
-                            .push(format!("demand = {}", Bracketed("(", ")", Indices(demand))));
-                    }
                 }
                 Reduce {
                     group_key,
                     aggregates,
                     ..
                 } => {
-                    if aggregates.is_empty() {
-                        write!(
-                            pretty,
-                            "Distinct group={}",
-                            Bracketed("(", ")", Separated(", ", group_key.clone())),
-                        )
-                        .unwrap();
-                    } else {
-                        write!(
-                            pretty,
-                            "Reduce group={} {}",
-                            Bracketed("(", ")", Separated(", ", group_key.clone())),
-                            Separated(" ", aggregates.clone())
-                        )
-                        .unwrap();
-                    }
+                    write!(
+                        pretty,
+                        "Reduce group={} {}",
+                        Bracketed("(", ")", Separated(", ", group_key.clone())),
+                        Separated(" ", aggregates.clone())
+                    )
+                    .unwrap();
+                }
+                Distinct { .. } => {
+                    write!(pretty, "Distinct").unwrap();
                 }
                 TopK {
                     group_key,
@@ -292,19 +223,6 @@ impl RelationExpr {
                 Union { left, right } => {
                     write!(pretty, "Union %{} %{}", expr_chain(left), expr_chain(right)).unwrap();
                 }
-                ArrangeBy { keys, .. } => {
-                    write!(
-                        pretty,
-                        "ArrangeBy {}",
-                        Separated(
-                            " ",
-                            keys.iter()
-                                .map(|key| Bracketed("(", ")", Separated(", ", key.clone())))
-                                .collect::<Vec<_>>()
-                        ),
-                    )
-                    .unwrap();
-                }
             }
         }
 
@@ -313,10 +231,10 @@ impl RelationExpr {
 }
 
 impl<'a> Explanation<'a> {
-    pub fn explain_types(&mut self) {
+    pub fn explain_types(&mut self, params: &BTreeMap<usize, ScalarType>) {
         for node in &mut self.nodes {
             // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
-            let RelationType { column_types, keys } = node.expr.typ();
+            let RelationType { column_types, keys } = node.expr.typ(&[], params);
             node.annotations
                 .push(format!("types = ({})", Separated(", ", column_types)));
             node.annotations.push(format!(
@@ -331,9 +249,14 @@ impl std::fmt::Display for ScalarExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         use ScalarExpr::*;
         match self {
-            Column(i) => write!(f, "#{}", i)?,
-            Literal(Ok(row), _) => write!(f, "{}", row.unpack_first())?,
-            Literal(Err(e), _) => write!(f, "(err: {})", e)?,
+            Column(i) => write!(
+                f,
+                "#{}{}",
+                (0..i.level).map(|_| '^').collect::<String>(),
+                i.column
+            )?,
+            Parameter(i) => write!(f, "?{}", i)?,
+            Literal(row, _) => write!(f, "{}", row.unpack_first())?,
             CallNullary(func) => write!(f, "{}()", func)?,
             CallUnary { func, expr } => {
                 write!(f, "{}({})", func, expr)?;
@@ -351,6 +274,9 @@ impl std::fmt::Display for ScalarExpr {
             If { cond, then, els } => {
                 write!(f, "if {} then {{{}}} else {{{}}}", cond, then, els)?;
             }
+            // TODO(jamii)
+            Exists(..) => write!(f, "exists(..)")?,
+            Select(..) => write!(f, "select(..)")?,
         }
         Ok(())
     }
@@ -365,82 +291,6 @@ impl std::fmt::Display for AggregateExpr {
             if self.distinct { "distinct " } else { "" },
             self.expr
         )
-    }
-}
-
-impl std::fmt::Display for EvalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            EvalError::DivisionByZero => f.write_str("division by zero"),
-            EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
-            EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
-            EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
-            EvalError::InvalidByteSequence {
-                byte_sequence,
-                encoding_name,
-            } => write!(
-                f,
-                "invalid byte sequence '{}' for encoding '{}'",
-                byte_sequence, encoding_name
-            ),
-            EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
-            EvalError::UnterminatedLikeEscapeSequence => {
-                f.write_str("unterminated escape sequence in LIKE")
-            }
-        }
-    }
-}
-
-impl JoinImplementation {
-    fn fmt_with(&self, input_chains: &[usize]) -> String {
-        use JoinImplementation::*;
-        match self {
-            Differential(pos, inputs) => format!(
-                "Differential %{} {}",
-                input_chains[*pos],
-                Separated(
-                    " ",
-                    inputs
-                        .iter()
-                        .map(|(pos, input)| {
-                            format!(
-                                "%{}.({})",
-                                input_chains[*pos],
-                                Separated(", ", input.clone())
-                            )
-                        })
-                        .collect()
-                )
-            ),
-            DeltaQuery(inputss) => format!(
-                "DeltaQuery {}",
-                Separated(
-                    " | ",
-                    inputss
-                        .iter()
-                        .enumerate()
-                        .map(|(pos, inputs)| format!(
-                            "%{} {}",
-                            input_chains[pos],
-                            Separated(
-                                " ",
-                                inputs
-                                    .iter()
-                                    .map(|(pos, input)| {
-                                        format!(
-                                            "%{}.({})",
-                                            input_chains[*pos],
-                                            Separated(", ", input.clone())
-                                        )
-                                    })
-                                    .collect()
-                            )
-                        ))
-                        .collect()
-                )
-            ),
-            Unimplemented => "Unimplemented".to_owned(),
-        }
     }
 }
 
@@ -500,5 +350,20 @@ impl<'a> std::fmt::Display for Indices<'a> {
             }
         }
         Ok(())
+    }
+}
+
+impl std::fmt::Display for JoinKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        write!(
+            f,
+            "{}",
+            match self {
+                JoinKind::Inner => "Inner",
+                JoinKind::LeftOuter => "LeftOuter",
+                JoinKind::RightOuter => "RightOuter",
+                JoinKind::FullOuter => "FullOuter",
+            }
+        )
     }
 }

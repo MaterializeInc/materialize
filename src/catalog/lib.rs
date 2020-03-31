@@ -20,7 +20,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use dataflow_types::{SinkConnector, SourceConnector};
-use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr};
+use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
 
 use crate::error::{Error, ErrorKind};
@@ -121,7 +121,6 @@ pub struct Sink {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct View {
     pub create_sql: String,
-    pub unoptimized_expr: RelationExpr,
     pub optimized_expr: OptimizedRelationExpr,
     pub eval_env: EvalEnv,
     pub desc: RelationDesc,

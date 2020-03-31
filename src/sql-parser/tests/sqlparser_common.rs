@@ -4087,8 +4087,8 @@ fn parse_explain() {
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::Sql,
-            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            stage: ExplainStage::Sql,
+            explainee: Explainee::Query(verified_query("SELECT 665")),
             options: ExplainOptions { typed: false },
         }
     );
@@ -4097,8 +4097,8 @@ fn parse_explain() {
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::OptimizedPlan { default: true },
-            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            stage: ExplainStage::OptimizedPlan { default: true },
+            explainee: Explainee::Query(verified_query("SELECT 665")),
             options: ExplainOptions { typed: false },
         }
     );
@@ -4107,8 +4107,8 @@ fn parse_explain() {
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::RawPlan,
-            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            stage: ExplainStage::RawPlan,
+            explainee: Explainee::Query(verified_query("SELECT 665")),
             options: ExplainOptions { typed: false },
         }
     );
@@ -4117,8 +4117,8 @@ fn parse_explain() {
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::DecorrelatedPlan,
-            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            stage: ExplainStage::DecorrelatedPlan,
+            explainee: Explainee::Query(verified_query("SELECT 665")),
             options: ExplainOptions { typed: false },
         }
     );
@@ -4127,8 +4127,8 @@ fn parse_explain() {
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::OptimizedPlan { default: false },
-            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            stage: ExplainStage::OptimizedPlan { default: false },
+            explainee: Explainee::Query(verified_query("SELECT 665")),
             options: ExplainOptions { typed: false },
         }
     );
@@ -4137,7 +4137,7 @@ fn parse_explain() {
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::OptimizedPlan { default: true },
+            stage: ExplainStage::OptimizedPlan { default: true },
             explainee: Explainee::View(ObjectName(vec![Ident {
                 value: "FOO".to_owned(),
                 quote_style: None
@@ -4150,7 +4150,7 @@ fn parse_explain() {
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::OptimizedPlan { default: true },
+            stage: ExplainStage::OptimizedPlan { default: true },
             explainee: Explainee::View(ObjectName(vec![Ident {
                 value: "FOO".to_owned(),
                 quote_style: None

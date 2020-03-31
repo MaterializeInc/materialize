@@ -10,6 +10,85 @@
 mode cockroach
 
 query T multiline
+EXPLAIN SQL FOR SELECT * FROM (SELECT 1)
+----
+SELECT * FROM (SELECT 1)
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT * FROM (SELECT 1)
+----
+0 =
+| Constant ()
+
+1 =
+| Constant ()
+| Map 1
+| Project (#0)
+| Map
+| Project (#0)
+
+2 =
+| InnerJoin 0 1 on true
+| Map #0
+| Project (#1)
+| Map
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT (SELECT (SELECT 1))
+----
+0 =
+| Constant ()
+| Map select(..)
+| Project (#0)
+| Map
+
+EOF
+
+query T multiline
+EXPLAIN TYPED RAW PLAN FOR SELECT * FROM (SELECT 1)
+----
+0 =
+| Constant ()
+| | types = ()
+| | keys = ()
+
+1 =
+| Constant ()
+| | types = ()
+| | keys = ()
+| Map 1
+| | types = (i32)
+| | keys = ()
+| Project (#0)
+| | types = (i32)
+| | keys = ()
+| Map
+| | types = (i32)
+| | keys = ()
+| Project (#0)
+| | types = (i32)
+| | keys = ()
+
+2 =
+| InnerJoin 0 1 on true
+| | types = (i32)
+| | keys = ()
+| Map #0
+| | types = (i32, i32)
+| | keys = ()
+| Project (#1)
+| | types = (i32)
+| | keys = ()
+| Map
+| | types = (i32)
+| | keys = ()
+
+EOF
+
+query T multiline
 EXPLAIN DECORRELATED PLAN FOR SELECT * FROM (SELECT 1)
 ----
 0 =

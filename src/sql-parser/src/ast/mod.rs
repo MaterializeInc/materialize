@@ -922,7 +922,7 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee {
     View(ObjectName),
-    Query(Box<Query>),
+    Query(Query),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

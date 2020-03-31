@@ -490,6 +490,58 @@ impl RelationExpr {
         }
     }
 
+    pub fn visit<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Self),
+    {
+        self.visit1(|e: &RelationExpr| e.visit(f));
+        f(self);
+    }
+
+    pub fn visit1<'a, F>(&'a self, mut f: F)
+    where
+        F: FnMut(&'a Self),
+    {
+        match self {
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+            RelationExpr::Project { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Map { input, .. } => {
+                f(input);
+            }
+            RelationExpr::FlatMapUnary { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Filter { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Join { left, right, .. } => {
+                f(left);
+                f(right);
+            }
+            RelationExpr::Reduce { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Distinct { input } => {
+                f(input);
+            }
+            RelationExpr::TopK { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Negate { input } => {
+                f(input);
+            }
+            RelationExpr::Threshold { input } => {
+                f(input);
+            }
+            RelationExpr::Union { left, right } => {
+                f(left);
+                f(right);
+            }
+        }
+    }
+
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),

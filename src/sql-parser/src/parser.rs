@@ -2804,7 +2804,7 @@ impl Parser {
         let explainee = if self.parse_keyword("VIEW") {
             Explainee::View(self.parse_object_name()?)
         } else {
-            Explainee::Query(Box::new(self.parse_query()?))
+            Explainee::Query(self.parse_query()?)
         };
 
         Ok(Statement::Explain {
