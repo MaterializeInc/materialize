@@ -16,6 +16,7 @@
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{BufRead, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -25,6 +26,51 @@ use avro::Schema;
 use chrono::{DateTime, Utc};
 
 pub mod util;
+
+#[test]
+fn test_no_block() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    // Create a listener that will simulate a slow Confluent Schema Registry.
+    let listener = TcpListener::bind("localhost:0")?;
+    let listener_port = listener.local_addr()?.port();
+
+    let (server, mut client) = util::start_server(util::Config::default())?;
+
+    let slow_thread = thread::spawn(move || {
+        client.batch_execute(&format!(
+            "CREATE SOURCE foo \
+             FROM KAFKA BROKER 'localhost:9092' TOPIC 'foo' \
+             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
+            listener_port,
+        ))
+    });
+
+    // Wait for materialized to contact the schema registry, which indicates
+    // the coordinator is processing the CREATE SOURCE command. It will be
+    // unable to complete the query until we respond.
+    let (mut stream, _) = listener.accept()?;
+
+    // Verify that the coordinator can still process other requests from other
+    // sessions.
+    let mut client = server.connect()?;
+    let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
+    assert_eq!(answer, 2);
+
+    // Return an error to the coordinator, so that we can shutdown cleanly.
+    write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
+    drop(stream);
+
+    // Verify that the schema registry error was returned to the client, for
+    // good measure.
+    let slow_res = slow_thread.join().unwrap();
+    assert!(slow_res
+        .unwrap_err()
+        .to_string()
+        .contains("server error 503"));
+
+    Ok(())
+}
 
 #[test]
 fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
