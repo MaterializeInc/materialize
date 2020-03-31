@@ -27,6 +27,8 @@ For information about available versions, see our [Versions page](../versions).
 - Support CSV files with headers (`CREATE SOURCE...FORMAT CSV WITH HEADER`).
 
 - Support naming columns when creating CSV sources.
+- Users can now specify the address and port the daemon binds to on startup, [as described here](https://materialize.io/docs/overview/configuration/#listen-address).
+- Support parsing a wider variety of valid Avro schemas.
 
 
 <span id="v0.1.3"></span>
