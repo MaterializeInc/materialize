@@ -4,5 +4,6 @@ create_source_misc ::=
   'FORMAT' (
     'REGEX' regex |
     'TEXT' |
+    'AVRO OCF' |
     'BYTES'
   )
