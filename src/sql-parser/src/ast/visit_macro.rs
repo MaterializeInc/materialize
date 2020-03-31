@@ -414,7 +414,7 @@ macro_rules! make_visitor {
                 name: &'ast $($mut)* ObjectName,
                 from: &'ast $($mut)* ObjectName,
                 connector: &'ast $($mut)* Connector,
-                format: &'ast $($mut)* Format,
+                format: Option<&'ast $($mut)* Format>,
                 if_not_exists: bool,
             ) {
                 visit_create_sink(self, name, from, connector, format, if_not_exists)
@@ -688,7 +688,7 @@ macro_rules! make_visitor {
                     connector,
                     format,
                     if_not_exists,
-                } => visitor.visit_create_sink(name, from, connector, format, *if_not_exists),
+                } => visitor.visit_create_sink(name, from, connector, format.as_auto_ref(), *if_not_exists),
                 Statement::CreateView {
                     name,
                     columns,
@@ -1424,13 +1424,15 @@ macro_rules! make_visitor {
             name: &'ast $($mut)* ObjectName,
             from: &'ast $($mut)* ObjectName,
             connector: &'ast $($mut)* Connector,
-            format: &'ast $($mut)* Format,
+            format: Option<&'ast $($mut)* Format>,
             _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_object_name(from);
             visitor.visit_connector(connector);
-            visitor.visit_format(format);
+            if let Some(format) = format {
+                visitor.visit_format(format);
+            }
         }
 
         pub fn visit_drop_database<'ast, V: $name<'ast> + ?Sized>(

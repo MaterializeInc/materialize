@@ -762,7 +762,7 @@ pub enum Statement {
         name: ObjectName,
         from: ObjectName,
         connector: Connector,
-        format: Format,
+        format: Option<Format>,
         if_not_exists: bool,
     },
     /// `CREATE VIEW`
@@ -1046,11 +1046,10 @@ impl fmt::Display for Statement {
                 if *if_not_exists {
                     write!(f, "IF NOT EXISTS ")?;
                 }
-                write!(
-                    f,
-                    "{} FROM {} INTO {} FORMAT {}",
-                    name, from, connector, format
-                )?;
+                write!(f, "{} FROM {} INTO {}", name, from, connector)?;
+                if let Some(format) = format {
+                    write!(f, " FORMAT {}", format)?;
+                }
                 Ok(())
             }
             Statement::CreateView {

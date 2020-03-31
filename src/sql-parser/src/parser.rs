@@ -1290,8 +1290,11 @@ impl Parser {
         let from = self.parse_object_name()?;
         self.expect_keyword("INTO")?;
         let connector = self.parse_connector()?;
-        self.expect_keyword("FORMAT")?;
-        let format = self.parse_format()?;
+        let format = if self.parse_keyword("FORMAT") {
+            Some(self.parse_format()?)
+        } else {
+            None
+        };
         Ok(Statement::CreateSink {
             name,
             from,
