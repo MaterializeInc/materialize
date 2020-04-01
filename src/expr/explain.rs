@@ -87,7 +87,7 @@ impl RelationExpr {
                 parent_expr,
                 pretty: String::new(),
                 annotations: vec![],
-                chain: 0, // will fix this up later
+                chain: 0, // will set this later
             });
             expr.visit1(&mut |child_expr| {
                 stack.push((Some(expr), child_expr));
