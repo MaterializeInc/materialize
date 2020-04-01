@@ -634,11 +634,16 @@ impl Encoder {
         buf.write_u8(0).expect("writing to vec cannot fail");
         buf.write_i32::<NetworkEndian>(schema_id)
             .expect("writing to vec cannot fail");
-        buf.extend(self.diff_pair_to_avro(diff_pair));
+        avro::write_avro_datum(
+            &self.writer_schema,
+            self.diff_pair_to_avro(diff_pair),
+            &mut buf,
+        )
+        .expect("schema constructed to match val");
         buf
     }
 
-    fn diff_pair_to_avro(&self, diff_pair: DiffPair<&Row>) -> Vec<u8> {
+    pub fn diff_pair_to_avro(&self, diff_pair: DiffPair<&Row>) -> Value {
         let before = match diff_pair.before {
             None => Value::Union(0, Box::new(Value::Null)),
             Some(row) => {
@@ -653,8 +658,7 @@ impl Encoder {
                 Value::Union(1, Box::new(row))
             }
         };
-        let val = Value::Record(vec![("before".into(), before), ("after".into(), after)]);
-        avro::to_avro_datum(&self.writer_schema, val).expect("schema constructed to match val")
+        Value::Record(vec![("before".into(), before), ("after".into(), after)])
     }
 
     fn row_to_avro(&self, row: Vec<Datum>) -> Value {

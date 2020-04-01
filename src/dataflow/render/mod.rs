@@ -434,6 +434,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         sink::kafka(&collection.inner, sink_id, c, sink.from.1)
                     }
                     SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
+                    SinkConnector::AvroOcf(c) => {
+                        sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1)
+                    }
                 }
                 dataflow_drops.insert(sink_id, Box::new(tokens));
             }

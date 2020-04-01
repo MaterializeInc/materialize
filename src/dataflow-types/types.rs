@@ -537,6 +537,7 @@ pub struct FileSourceConnector {
 pub enum SinkConnector {
     Kafka(KafkaSinkConnector),
     Tail(TailSinkConnector),
+    AvroOcf(AvroOcfSinkConnector),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -544,6 +545,11 @@ pub struct KafkaSinkConnector {
     pub url: Url,
     pub topic: String,
     pub schema_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AvroOcfSinkConnector {
+    pub path: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -555,6 +561,13 @@ pub struct TailSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkConnectorBuilder {
     Kafka(KafkaSinkConnectorBuilder),
+    AvroOcf(AvroOcfSinkConnectorBuilder),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AvroOcfSinkConnectorBuilder {
+    pub path: PathBuf,
+    pub file_name_suffix: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -3381,7 +3381,28 @@ fn parse_create_sink() {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", from.to_string());
             assert_eq!(Connector::File { path: "baz".into() }, connector);
-            assert_eq!(Format::Bytes, format);
+            assert_eq!(Format::Bytes, format.unwrap());
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_sink_without_format() {
+    let sql = "CREATE SINK foo FROM bar INTO AVRO OCF 'baz'";
+    match verified_stmt(sql) {
+        Statement::CreateSink {
+            name,
+            from,
+            connector,
+            format,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", from.to_string());
+            assert_eq!(Connector::AvroOcf { path: "baz".into() }, connector);
+            assert!(format.is_none());
             assert!(!if_not_exists);
         }
         _ => unreachable!(),

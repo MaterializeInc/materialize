@@ -12,6 +12,7 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
 use aws_arn::{Resource, ARN};
@@ -23,9 +24,10 @@ use url::Url;
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
-    AvroEncoding, Consistency, CsvEncoding, DataEncoding, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
-    PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnectorBuilder, SourceConnector,
+    AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding,
+    ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
+    KinesisSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnectorBuilder,
+    SourceConnector,
 };
 use expr::{like_pattern, GlobalId};
 use interchange::avro::Encoder;
@@ -624,28 +626,15 @@ fn handle_show_create_sink(
     ])]))
 }
 
-fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, from, connector, format, if_not_exists) = match stmt {
-        Statement::CreateSink {
-            name,
-            from,
-            connector,
-            format,
-            if_not_exists,
-        } => (name, from, connector, format, if_not_exists),
-        _ => unreachable!(),
-    };
-
-    let (mut broker, topic_prefix) = match connector {
-        Connector::File { .. } => bail!("file sinks are not yet supported"),
-        Connector::Kafka { broker, topic } => (broker, topic),
-        Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
-        Connector::AvroOcf { .. } => bail!("Avro object sinks are not yet supported"),
-    };
-
+fn kafka_sink_builder(
+    format: Option<Format>,
+    mut broker: String,
+    topic_prefix: String,
+    desc: RelationDesc,
+    topic_suffix: String,
+) -> Result<SinkConnectorBuilder, failure::Error> {
     let schema_registry_url = match format {
-        Format::Avro(AvroSchema::CsrUrl { url, seed }) => {
+        Some(Format::Avro(AvroSchema::CsrUrl { url, seed })) => {
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
@@ -659,14 +648,55 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     }
     let broker_url = broker.parse()?;
 
-    let name = scx.allocate_name(normalize::object_name(name)?);
-    let from = scx.resolve_name(from)?;
-    let catalog_entry = scx.catalog.get(&from)?;
-
-    let encoder = Encoder::new(catalog_entry.desc()?.clone());
+    let encoder = Encoder::new(desc);
     let value_schema = encoder.writer_schema().canonical_form();
 
-    let topic_suffix = format!(
+    Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
+        broker_url,
+        schema_registry_url,
+        value_schema,
+        topic_prefix,
+        topic_suffix,
+    }))
+}
+
+fn avro_ocf_sink_builder(
+    format: Option<Format>,
+    path: String,
+    file_name_suffix: String,
+) -> Result<SinkConnectorBuilder, failure::Error> {
+    if format.is_some() {
+        bail!("avro ocf sinks cannot specify a format");
+    }
+
+    let path = PathBuf::from(path);
+
+    if path.is_dir() {
+        bail!("avro ocf sink cannot write to a directory");
+    }
+
+    Ok(SinkConnectorBuilder::AvroOcf(AvroOcfSinkConnectorBuilder {
+        path,
+        file_name_suffix,
+    }))
+}
+
+fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+    let create_sql = normalize::create_statement(scx, stmt.clone())?;
+    let (name, from, connector, format, if_not_exists) = match stmt {
+        Statement::CreateSink {
+            name,
+            from,
+            connector,
+            format,
+            if_not_exists,
+        } => (name, from, connector, format, if_not_exists),
+        _ => unreachable!(),
+    };
+
+    let name = scx.allocate_name(normalize::object_name(name)?);
+    let from = scx.catalog.get(&scx.resolve_name(from)?)?;
+    let suffix = format!(
         "{}-{}",
         scx.catalog
             .creation_time()
@@ -675,21 +705,22 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         scx.catalog.nonce()
     );
 
-    let sink = Sink {
-        create_sql,
-        from: catalog_entry.id(),
-        connector_builder: SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
-            broker_url,
-            schema_registry_url,
-            value_schema,
-            topic_prefix,
-            topic_suffix,
-        }),
+    let connector_builder = match connector {
+        Connector::File { .. } => bail!("file sinks are not yet supported"),
+        Connector::Kafka { broker, topic } => {
+            kafka_sink_builder(format, broker, topic, from.desc()?.clone(), suffix)?
+        }
+        Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
+        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
     };
 
     Ok(Plan::CreateSink {
         name,
-        sink,
+        sink: Sink {
+            create_sql,
+            from: from.id(),
+            connector_builder,
+        },
         if_not_exists,
     })
 }

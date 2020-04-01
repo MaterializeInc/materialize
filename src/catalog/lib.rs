@@ -290,7 +290,7 @@ impl Catalog {
                 }
                 Err(e) => {
                     return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!("failed to deserialize item: {}", e),
+                        detail: format!("failed to deserialize item {} ({}): {}", id, name, e),
                     }))
                 }
             };
