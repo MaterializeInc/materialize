@@ -400,7 +400,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
                     let client = KinesisClient::new_with(
                         HttpClient::new().unwrap(),
                         EnvironmentProvider::default(),
-                        region.clone(),
+                        region,
                     );
                     (
                         client,

@@ -89,7 +89,7 @@ impl Action for VerifyAction {
                         }
                     }
                     None | Some(_) => {
-                        return Err(format!("Kinesis stream must have exactly one shard."))
+                        return Err(String::from("Kinesis stream must have exactly one shard."))
                     }
                 },
                 Err(e) => {

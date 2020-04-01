@@ -25,7 +25,6 @@ pub fn build_create_stream(mut cmd: BuiltinCommand) -> Result<CreateStreamAction
 
 impl Action for CreateStreamAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
-        // Delete stale Kinesis streams.
         let list_streams_input = ListStreamsInput {
             exclusive_start_stream_name: None,
             limit: None,
@@ -53,7 +52,7 @@ impl Action for CreateStreamAction {
                 .block_on(state.kinesis_client.delete_stream(delete_stream_input))
             {
                 Ok(_output) => {
-                    println!("Deleted stale Kinesis stream: {}", &stream_name);
+                    println!("deleted stale Kinesis stream: {}", &stream_name);
                 }
                 Err(e) => {
                     return Err(format!(
@@ -68,11 +67,11 @@ impl Action for CreateStreamAction {
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
-        println!("Creating Kinesis stream {}", stream_name);
+        println!("creating Kinesis stream {}", stream_name);
 
         let create_stream_input = CreateStreamInput {
             shard_count: 1,
-            stream_name: stream_name.to_string(),
+            stream_name,
         };
         if let Err(e) = state
             .tokio_runtime

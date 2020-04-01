@@ -30,9 +30,6 @@ fn run() -> Result<(), Error> {
     let mut opts = Options::new();
     opts.optopt("", "kafka-addr", "kafka bootstrap address", "HOST:PORT");
     opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
-    // this should be localhost:4568 (default kinesis port for localstack)
-    //      - if localhost, use custom regions? the client just needs to be made in the custom region.
-    // or nothing?
     opts.optopt(
         "",
         "kinesis-region",
