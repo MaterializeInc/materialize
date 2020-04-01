@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use differential_dataflow::hashable::Hashable;
+use log::error;
 use rdkafka::config::ClientConfig;
-use rdkafka::producer::FutureProducer;
-use rdkafka::producer::FutureRecord;
+use rdkafka::producer::{BaseRecord, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -38,11 +38,12 @@ pub fn kafka<G>(
     let encoder = Encoder::new(desc);
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.url.to_string());
-    let producer: FutureProducer = config.create().unwrap();
+    let producer: ThreadedProducer<_> = config.create().unwrap();
 
+    let name = format!("kafka-{}", id);
     stream.sink(
         Exchange::new(move |_| sink_hash),
-        &format!("kafka-{}", id),
+        &name.clone(),
         move |input| {
             input.for_each(|_, rows| {
                 for (row, _time, diff) in rows.iter() {
@@ -59,11 +60,12 @@ pub fn kafka<G>(
                     };
                     let buf = encoder.encode(connector.schema_id, diff_pair);
                     for _ in 0..diff.abs() {
-                        producer.send(
-                            FutureRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf),
-                            1000, /* block_ms */
-                        );
+                        let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf);
+                        if let Err((e, _)) = producer.send(record) {
+                            error!("unable to produce in {}: {}", name, e);
+                        }
                     }
+                    producer.flush(None);
                 }
             })
         },

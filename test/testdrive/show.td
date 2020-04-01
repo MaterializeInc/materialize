@@ -207,6 +207,7 @@ mz_catalog_names                  SYSTEM true
 mz_dataflow_channels              SYSTEM true
 mz_dataflow_operator_addresses    SYSTEM true
 mz_dataflow_operators             SYSTEM true
+mz_kafka_sinks                    SYSTEM true
 mz_materialization_dependencies   SYSTEM true
 mz_materialization_frontiers      SYSTEM true
 mz_materializations               SYSTEM true

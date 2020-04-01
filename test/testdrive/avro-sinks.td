@@ -9,10 +9,14 @@
 
 # Test Avro sinks.
 
-> CREATE VIEW data AS SELECT 1 AS a, 2 AS b
+> CREATE VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
 
 > CREATE SINK data_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-# TODO(ruchirK): restore kafka-verify here.
+$ kafka-verify format=avro sink=materialize.public.data_sink
+{"before": null, "after": {"a": 1, "b": 1}}
+{"before": null, "after": {"a": 2, "b": 1}}
+{"before": null, "after": {"a": 3, "b": 1}}
+{"before": null, "after": {"a": 1, "b": 2}}

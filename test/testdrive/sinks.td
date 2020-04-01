@@ -9,8 +9,8 @@
 
 $ file-write path=test.csv
 a,b
-1,2
-3,4
+jack,jill
+goofus,gallant
 
 > CREATE SOURCE src
   FROM FILE '${testdrive.temp-dir}/test.csv'
@@ -37,19 +37,37 @@ a,b
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK snk2 FROM src_materialized
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk2'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK snk3 FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk3'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK snk4 FROM v2
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk4'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK snk5 FROM v3
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk5'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-# TODO(ruchirK): add kafka-verify for each of the above sinks.
+$ kafka-verify format=avro sink=materialize.public.snk1
+{"before": null, "after": {"a": "jack", "b": "jill", "mz_line_no": 2}}
+{"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
+
+$ kafka-verify format=avro sink=materialize.public.snk2
+{"before": null, "after": {"a": "jack", "b": "jill", "mz_line_no": 2}}
+{"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
+
+$ kafka-verify format=avro sink=materialize.public.snk3
+{"before": null, "after": {"c": "jackjill", "mz_line_no": 2}}
+{"before": null, "after": {"c": "goofusgallant", "mz_line_no": 3}}
+
+$ kafka-verify format=avro sink=materialize.public.snk4
+{"before": null, "after": {"c": "jackjill", "mz_line_no": 2}}
+{"before": null, "after": {"c": "goofusgallant", "mz_line_no": 3}}
+
+$ kafka-verify format=avro sink=materialize.public.snk5
+{"before": null, "after": {"c": "jackjill", "mz_line_no": 2}}
+{"before": null, "after": {"c": "goofusgallant", "mz_line_no": 3}}
