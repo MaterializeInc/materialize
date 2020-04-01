@@ -484,10 +484,7 @@ pub enum ExplainStage {
     /// The expr::RelationExpr after decorrelation
     DecorrelatedPlan,
     /// The expr::RelationExpr after optimization
-    OptimizedPlan {
-        /// Was this stage picked by default or specified explicitly
-        default: bool,
-    },
+    OptimizedPlan,
 }
 
 impl fmt::Display for ExplainStage {
@@ -496,8 +493,7 @@ impl fmt::Display for ExplainStage {
             ExplainStage::Sql => f.write_str("SQL"),
             ExplainStage::RawPlan => f.write_str("RAW PLAN"),
             ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
-            ExplainStage::OptimizedPlan { default: false } => f.write_str("OPTIMIZED PLAN"),
-            ExplainStage::OptimizedPlan { default: true } => f.write_str("PLAN"),
+            ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
         }
     }
 }

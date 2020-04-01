@@ -4093,16 +4093,6 @@ fn parse_explain() {
         }
     );
 
-    let ast = verified_stmt("EXPLAIN PLAN FOR SELECT 665");
-    assert_eq!(
-        ast,
-        Statement::Explain {
-            stage: ExplainStage::OptimizedPlan { default: true },
-            explainee: Explainee::Query(verified_query("SELECT 665")),
-            options: ExplainOptions { typed: false },
-        }
-    );
-
     let ast = verified_stmt("EXPLAIN RAW PLAN FOR SELECT 665");
     assert_eq!(
         ast,
@@ -4127,17 +4117,22 @@ fn parse_explain() {
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: ExplainStage::OptimizedPlan { default: false },
+            stage: ExplainStage::OptimizedPlan,
             explainee: Explainee::Query(verified_query("SELECT 665")),
             options: ExplainOptions { typed: false },
         }
     );
 
-    let ast = verified_stmt("EXPLAIN PLAN FOR VIEW FOO");
+    one_statement_parses_to(
+        "EXPLAIN PLAN FOR SELECT 665",
+        "EXPLAIN OPTIMIZED PLAN FOR SELECT 665",
+    );
+
+    let ast = verified_stmt("EXPLAIN OPTIMIZED PLAN FOR VIEW FOO");
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: ExplainStage::OptimizedPlan { default: true },
+            stage: ExplainStage::OptimizedPlan,
             explainee: Explainee::View(ObjectName(vec![Ident {
                 value: "FOO".to_owned(),
                 quote_style: None
@@ -4146,11 +4141,11 @@ fn parse_explain() {
         }
     );
 
-    let ast = verified_stmt("EXPLAIN TYPED PLAN FOR VIEW FOO");
+    let ast = verified_stmt("EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW FOO");
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: ExplainStage::OptimizedPlan { default: true },
+            stage: ExplainStage::OptimizedPlan,
             explainee: Explainee::View(ObjectName(vec![Ident {
                 value: "FOO".to_owned(),
                 quote_style: None

@@ -1260,7 +1260,7 @@ where
                 }
                 explanation.to_string()
             }
-            ExplainStage::OptimizedPlan { .. } => {
+            ExplainStage::OptimizedPlan => {
                 let eval_env = EvalEnv {
                     wall_time: Some(chrono::Utc::now()),
                     logical_time: Some(0),

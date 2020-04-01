@@ -2790,10 +2790,10 @@ impl Parser {
             ExplainStage::DecorrelatedPlan
         } else if self.parse_keyword("OPTIMIZED") {
             self.expect_keyword("PLAN")?;
-            ExplainStage::OptimizedPlan { default: false }
+            ExplainStage::OptimizedPlan
         } else if self.parse_keyword("PLAN") {
             // default stage
-            ExplainStage::OptimizedPlan { default: true }
+            ExplainStage::OptimizedPlan
         } else {
             self.expected(self.peek_range(), "SQL or PLAN", self.peek_token())?
         };
