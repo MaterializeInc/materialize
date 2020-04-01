@@ -104,7 +104,7 @@ if [[ "$BUILDKITE_BRANCH" = master ]]; then
     ci_collapsed_heading "Building .deb package"
     # shellcheck disable=SC2016
     # TODO (brennan) - fix this version number
-    docker_run 'cargo-deb --deb-version 0.1.0-$(git rev-list HEAD | wc -l)-$(git rev-parse HEAD) -p materialized -o target/debian/materialized.deb'
+    docker_run 'cargo-deb --no-strip --deb-version 0.1.0-$(git rev-list HEAD | wc -l)-$(git rev-parse HEAD) -p materialized -o target/debian/materialized.deb'
     aws s3 cp \
         --acl=public-read \
         target/debian/materialized.deb \
