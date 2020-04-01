@@ -13,39 +13,27 @@ use std::thread;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures::executor::block_on;
-use rusoto_core::{HttpClient, Region, RusotoError};
-use rusoto_kinesis::{
-    CreateStreamInput, DeleteStreamInput, DescribeStreamInput, Kinesis, KinesisClient,
-    ListStreamsInput, PutRecordError, PutRecordInput,
-};
-
-use ore::collections::CollectionExt;
+use rusoto_core::RusotoError;
+use rusoto_kinesis::{Kinesis, PutRecordError, PutRecordInput};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
 pub struct IngestAction {
     stream_prefix: String,
-    format: Format,
     rows: Vec<String>,
-}
-
-enum Format {
-    Bytes,
 }
 
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let stream_prefix = format!("testdrive-{}", cmd.args.string("stream")?);
-    let format = match cmd.args.string("format")?.as_str() {
-        "bytes" => Format::Bytes,
+    match cmd.args.string("format")?.as_str() {
+        "bytes" => (),
         f => return Err(format!("unsupported message format for Kinesis: {}", f)),
-    };
+    }
     cmd.args.done()?;
 
     Ok(IngestAction {
         stream_prefix,
-        format,
         rows: cmd.input,
     })
 }
@@ -53,7 +41,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
 impl Action for IngestAction {
     // Delete any stale stuff??
     // Won't be a thing....?
-    fn undo(&self, state: &mut State) -> Result<(), String> {
+    fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 
@@ -76,17 +64,12 @@ impl Action for IngestAction {
             // The stream might not be immediately available to put records
             // into. Try a few times.
             // todo: have some sort of upper limit for failure here.
-            let mut put_record = false;
-            while !put_record {
+            loop {
                 match state
                     .tokio_runtime
                     .block_on(state.kinesis_client.put_record(put_input.clone()))
                 {
-                    Ok(output) => {
-                        put_record = true;
-                        println!("put a record!!");
-                        dbg!(&output);
-                    }
+                    Ok(_output) => break,
                     Err(RusotoError::Service(PutRecordError::ResourceNotFound(err_string))) => {
                         println!("{} trying again in 1 second...", err_string);
                         thread::sleep(Duration::from_secs(1));

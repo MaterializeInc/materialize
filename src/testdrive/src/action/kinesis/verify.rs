@@ -9,7 +9,6 @@
 
 /// The undo should do nothing.
 /// The redo should check expected output.
-use futures::executor::block_on;
 use rusoto_kinesis::{GetRecordsInput, GetShardIteratorInput, Kinesis, ListShardsInput};
 
 use crate::action::{Action, State};
@@ -42,12 +41,9 @@ impl Action for VerifyAction {
     // Consume messages from the stream, assert they match the expected.
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
-        println!("Reading from Kinesis stream {}", &stream_name);
-
         // Right now, we only support reading from a single
         // Kinesis stream&shard.
         // todo@jldlaughin: Update this when we support multiple shards.
-
         let mut records = Vec::new();
         while records.is_empty() {
             let list_shards_input = ListShardsInput {
@@ -78,43 +74,29 @@ impl Action for VerifyAction {
                             Ok(output) => match output.shard_iterator {
                                 Some(iterator) => iterator,
                                 None => {
-                                    println!(
+                                    return Err(format!(
                                         "unable to find a shard iterator for Kinesis stream {}",
                                         &stream_name
-                                    );
-                                    continue;
-                                    //                                        return Err(format!(
-                                    //                                            "unable to find a shard iterator for Kinesis stream {}",
-                                    //                                            &stream_name
-                                    //                                        ))
+                                    ))
                                 }
                             },
                             Err(e) => {
-                                println!(
+                                return Err(format!(
                                     "hit error trying to get Kinesis shard iterator: {}",
                                     e.to_string()
-                                );
-                                continue;
-                                //                                    return Err(format!(
-                                //                                        "hit error trying to get Kinesis shard iterator: {}",
-                                //                                        e.to_string()
-                                //                                    ))
+                                ))
                             }
                         }
                     }
                     None | Some(_) => {
-                        println!("Kinesis stream must have exactly one shard.");
-                        continue;
-                        //                            return Err(format!("Kinesis stream must have exactly one shard."))
+                        return Err(format!("Kinesis stream must have exactly one shard."))
                     }
                 },
                 Err(e) => {
-                    println!("hit error trying to get Kinesis shards: {}", e.to_string());
-                    continue;
-                    //                        return Err(format!(
-                    //                            "hit error trying to get Kinesis shards: {}",
-                    //                            e.to_string()
-                    //                        ))
+                    return Err(format!(
+                        "hit error trying to get Kinesis shards: {}",
+                        e.to_string()
+                    ))
                 }
             };
 
@@ -148,7 +130,6 @@ impl Action for VerifyAction {
             };
             assert_eq!(expected, record_string);
         }
-        println!("all equal!");
 
         Ok(())
     }

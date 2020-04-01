@@ -7,16 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::thread;
-use std::time::Duration;
-
-use futures::executor::block_on;
-use rusoto_kinesis::{
-    CreateStreamInput, DeleteStreamInput, DescribeStreamInput, Kinesis, KinesisClient,
-    ListStreamsInput, PutRecordError, PutRecordInput,
-};
-
-use ore::collections::CollectionExt;
+use rusoto_kinesis::{CreateStreamInput, DeleteStreamInput, Kinesis, ListStreamsInput};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -26,7 +17,6 @@ pub struct CreateStreamAction {
 }
 
 pub fn build_create_stream(mut cmd: BuiltinCommand) -> Result<CreateStreamAction, String> {
-    println!("in build create stream");
     let stream_name = format!("testdrive-{}", cmd.args.string("stream")?);
     cmd.args.done()?;
 
@@ -34,13 +24,8 @@ pub fn build_create_stream(mut cmd: BuiltinCommand) -> Result<CreateStreamAction
 }
 
 impl Action for CreateStreamAction {
-    // delete the stream, if it exists
     fn undo(&self, state: &mut State) -> Result<(), String> {
-        println!(
-            "Deleting stale Kinesis streams with prefix {}",
-            self.stream_name
-        );
-
+        // Delete stale Kinesis streams.
         let list_streams_input = ListStreamsInput {
             exclusive_start_stream_name: None,
             limit: None,
@@ -67,7 +52,7 @@ impl Action for CreateStreamAction {
                 .tokio_runtime
                 .block_on(state.kinesis_client.delete_stream(delete_stream_input))
             {
-                Ok(output) => {
+                Ok(_output) => {
                     println!("Deleted stale Kinesis stream: {}", &stream_name);
                 }
                 Err(e) => {
@@ -95,30 +80,6 @@ impl Action for CreateStreamAction {
         {
             return Err(format!("hit error creating stream: {}", e.to_string()));
         }
-        println!("created stream! fuck yeah!");
-
-        // We need the ARN of the created stream to create a
-        // Kinesis source in Materialize.
-        let describe_input = DescribeStreamInput {
-            exclusive_start_shard_id: None,
-            limit: None,
-            stream_name: stream_name.to_string(),
-        };
-        let arn = match state
-            .tokio_runtime
-            .block_on(state.kinesis_client.describe_stream(describe_input))
-        {
-            Ok(output) => {
-                dbg!(&output);
-                output.stream_description.stream_arn
-            }
-            Err(err) => {
-                return Err(format!(
-                    "hit error trying to describe Kinesis stream: {}",
-                    err.to_string()
-                ))
-            }
-        };
 
         Ok(())
     }
