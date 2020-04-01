@@ -65,7 +65,7 @@ impl<'a> std::fmt::Display for Explanation<'a> {
                 writeln!(f, "| | {}", annotation.trim())?;
             }
             for subquery in &node.subqueries {
-                for line in subquery.to_string().split("\n") {
+                for line in subquery.to_string().split('\n') {
                     if line.is_empty() {
                         writeln!(f, "| |")?;
                     } else {
