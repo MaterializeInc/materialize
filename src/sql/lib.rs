@@ -13,7 +13,7 @@
 
 use ::expr::GlobalId;
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogEntry};
+use catalog::Catalog;
 use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnectorBuilder, SourceConnector};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
@@ -103,7 +103,7 @@ pub enum Plan {
         finishing: RowSetFinishing,
         materialize: bool,
     },
-    Tail(CatalogEntry),
+    Tail(GlobalId),
     SendRows(Vec<Row>),
     ExplainPlan(::expr::RelationExpr, ExplainOptions),
     SendDiffs {
