@@ -45,6 +45,36 @@ docker_run "cargo build --locked --release"
 ci_collapsed_heading "Building test binaries"
 docker_run "cargo test --locked --no-run && cargo test --locked --no-run --message-format=json > test-binaries.json"
 
+if true; then # XXX(brennan) replace this with the line below before landing, it is just here for testing my PR
+#if [[ "$BUILDKITE_BRANCH" = master ]]; then
+    ci_collapsed_heading "Building .deb package"
+    # shellcheck disable=SC2016
+    # TODO (brennan) - fix this version number
+    docker_run 'cargo-deb --no-strip --deb-version 0.1.0-$(git rev-list HEAD | wc -l)-$(git rev-parse HEAD) -p materialized -o target/debian/materialized.deb'
+    aws s3 cp \
+        --acl=public-read \
+        target/debian/materialized.deb \
+        s3://downloads.mtrlz.dev/materialized-"$BUILDKITE_BUILD_NUMBER"-x86_64.deb
+    #TODO (brennan) - remove the s3 upload once we move off Gemfury
+    # and fully onto Bintray.
+
+    # Note - The below will not cause anything to become public;
+    # a separate step to "publish" the files will be run in deploy.sh .
+    #
+    # Step 1 - create a new version.
+    COMMIT_INDEX=$(git rev-list HEAD | wc -l)
+    COMMIT_HASH=$(git rev-parse HEAD)
+    curl -f -X POST -H "Content-Type: application/json" -d "
+        {
+            \"name\": \"dev-$COMMIT_INDEX-$COMMIT_HASH\",
+            \"desc\": \"git master\",
+            \"vcs_tag\": \"$COMMIT_HASH\"
+        }" -u ci@materialize:"$BINTRAY_API_KEY" \
+        https://api.bintray.com/packages/materialize/apt/materialized-unstable/versions
+    # Step 2 - upload the .deb for the version.
+    curl -f -T target/debian/materialized.deb -u ci@materialize:"$BINTRAY_API_KEY" "https://api.bintray.com/content/materialize/apt/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/materialized-$COMMIT_HASH.deb;deb_distribution=generic;deb_component=main;deb_architecture=amd64"
+fi
+
 ci_collapsed_heading "Preparing Docker context"
 {
     cp target/release/materialized misc/docker/ci-raw-materialized
@@ -99,35 +129,6 @@ ci_collapsed_heading "Preparing Docker context"
     mv target/release/peeker misc/docker/ci-peeker
     mv target/release/billing-demo misc/docker/ci-billing-demo
 }
-
-if [[ "$BUILDKITE_BRANCH" = master ]]; then
-    ci_collapsed_heading "Building .deb package"
-    # shellcheck disable=SC2016
-    # TODO (brennan) - fix this version number
-    docker_run 'cargo-deb --no-strip --deb-version 0.1.0-$(git rev-list HEAD | wc -l)-$(git rev-parse HEAD) -p materialized -o target/debian/materialized.deb'
-    aws s3 cp \
-        --acl=public-read \
-        target/debian/materialized.deb \
-        s3://downloads.mtrlz.dev/materialized-"$BUILDKITE_BUILD_NUMBER"-x86_64.deb
-    #TODO (brennan) - remove the s3 upload once we move off Gemfury
-    # and fully onto Bintray.
-
-    # Note - The below will not cause anything to become public;
-    # a separate step to "publish" the files will be run in deploy.sh .
-    #
-    # Step 1 - create a new version.
-    COMMIT_INDEX=$(git rev-list HEAD | wc -l)
-    COMMIT_HASH=$(git rev-parse HEAD)
-    curl -f -X POST -H "Content-Type: application/json" -d "
-        {
-            \"name\": \"dev-$COMMIT_INDEX-$COMMIT_HASH\",
-            \"desc\": \"git master\",
-            \"vcs_tag\": \"$COMMIT_HASH\"
-        }" -u ci@materialize:"$BINTRAY_API_KEY" \
-        https://api.bintray.com/packages/materialize/apt/materialized-unstable/versions
-    # Step 2 - upload the .deb for the version.
-    curl -f -T target/debian/materialized.deb -u ci@materialize:"$BINTRAY_API_KEY" "https://api.bintray.com/content/materialize/apt/materialized-unstable/dev-$COMMIT_INDEX-$COMMIT_HASH/materialized-$COMMIT_HASH.deb;deb_distribution=generic;deb_component=main;deb_architecture=amd64"
-fi
 
 images=(
     materialized
