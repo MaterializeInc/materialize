@@ -276,9 +276,9 @@ impl<W: Write> Writer<W> {
 /// Encode a compatible value (implementing the `ToAvro` trait) into Avro format, also performing
 /// schema validation.
 ///
-/// This is an internal function which gets the bytes buffer where to write as parameter instead of
+/// This is a function which gets the bytes buffer where to write as parameter instead of
 /// creating a new one like `to_avro_datum`.
-fn write_avro_datum<T: ToAvro>(
+pub fn write_avro_datum<T: ToAvro>(
     schema: &Schema,
     value: T,
     buffer: &mut Vec<u8>,
