@@ -14,6 +14,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use avro::schema::Schema;
+use avro::types::Value;
+
+use lazy_static::lazy_static;
 use log::{error, info};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
@@ -24,12 +28,67 @@ use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
 
 use catalog::sql::SqlVal;
-use dataflow_types::{Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, Envelope};
+use dataflow_types::{
+    Consistency, Envelope, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
+    KinesisSourceConnector,
+};
 use expr::SourceInstanceId;
 
 use crate::coord;
 
 use itertools::Itertools;
+
+lazy_static! {
+    static ref DEBEZIUM_TRX_SCHEMA: Schema = {
+        Schema::parse_str(
+            r#"    {
+    "name": "io.debezium.connector.common.TransactionMetadataValue",
+    "type": "record",
+    "fields": [
+        {
+            "name": "id",
+            "type": "string"
+        },
+        {
+            "name": "status",
+            "type": "string"
+        },
+        {
+            "name": "event_count",
+            "type": [
+                "long",
+                "null"
+            ]
+        },
+        {
+            "name": "data_collections",
+            "type": [
+                {
+                    "type": "array",
+                    "items": {
+                        "name": "data",
+                        "type": "record",
+                        "fields": [
+                            {
+                                "name": "event_count",
+                                "type": "long"
+                            },
+                            {
+                                "name": "data_collection",
+                                "type": "string"
+                            }
+                        ]
+                    }
+                },
+                "null"
+            ]
+        }
+    ]
+}"#,
+        )
+        .unwrap()
+    };
+}
 
 pub struct TimestampConfig {
     pub frequency: Duration,
@@ -38,7 +97,12 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, ExternalSourceConnector, Consistency, Envelope),
+    Add(
+        SourceInstanceId,
+        ExternalSourceConnector,
+        Consistency,
+        Envelope,
+    ),
     DropInstance(SourceInstanceId),
     Shutdown,
 }
@@ -59,11 +123,19 @@ enum RtTimestampConnector {
 /// Timestamp consumer: wrapper around source consumers that stores necessary information
 /// about topics and offset for byo consistency
 struct ByoTimestampConsumer {
+    // Source Connector
     connector: ByoTimestampConnector,
+    // The name of the source with which this connector is associated
     source_name: String,
+    // The format of the connector
     envelope: Envelope,
+    // The last timestamp assigned per partition
     last_partition_ts: HashMap<i32, u64>,
+    // The max assigned timestamp. Should be max(last_partition_ts)
     last_ts: u64,
+    // The max offset for which a timestamp has been assigned
+    last_offset: i64,
+    // The total number of partitions for the data topic
     current_partition_count: i32,
 }
 
@@ -242,6 +314,50 @@ pub struct Timestamper {
     max_increment_size: i64,
 }
 
+/// A debezium record contains a set of update counts for each topic that the transaction
+/// updated. This function extracts the set of (topic, update_count) as a vector.
+fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
+    let mut result = vec![];
+    for (key, value) in record {
+        if key == "data_collections" {
+            if let Value::Union(value) = value {
+                if let Value::Array(items) = *value {
+                    for v in items {
+                        if let Value::Record(item) = v {
+                            let mut value: String = String::new();
+                            let mut write_count = 0;
+                            for (k, v) in item {
+                                if k == "data_collection" {
+                                    if let Value::String(data) = v {
+                                        value = data;
+                                    } else {
+                                        error!("Incorrect AVRO format. String expected");
+                                    }
+                                } else if k == "event_count" {
+                                    if let Value::Long(e) = v {
+                                        write_count = e;
+                                    } else {
+                                        error!("Incorrect AVRO format. Long expected");
+                                    }
+                                }
+                            }
+                            result.push((value, write_count))
+                        } else {
+                            error!("Incorrect AVRO format. Record expected");
+                        }
+                    }
+                }
+            } else {
+                error!(
+                    "Incorrect AVRO format. Union of Null/Array expected {:?}",
+                    value
+                );
+            }
+        }
+    }
+    result
+}
+
 impl Timestamper {
     pub fn new(
         config: &TimestampConfig,
@@ -342,7 +458,8 @@ impl Timestamper {
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
                                 info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}", id, consistency_topic);
-                                let consumer = self.create_byo_connector(id, sc, consistency_topic, envelope);
+                                let consumer =
+                                    self.create_byo_connector(id, sc, consistency_topic, envelope);
                                 self.byo_sources.insert(id, consumer);
                             }
                         }
@@ -376,7 +493,7 @@ impl Timestamper {
     /// This is necessary to guarantee that this timestamp *could not have been closed yet*
     ///
     /// Supports two envelopes: None and Debezium. Currently compatible with Debezium format 1.1
-     fn update_byo_timestamp(&mut self) {
+    fn update_byo_timestamp(&mut self) {
         for (id, byo_consumer) in &mut self.byo_sources {
             // Get the next set of messages from the Consistency topic
             let messages = byo_query_source(byo_consumer, self.max_increment_size);
@@ -384,19 +501,19 @@ impl Timestamper {
                 Envelope::None => {
                     for (partition_count, partition, timestamp, offset) in
                         byo_extract_ts_update(byo_consumer, messages)
-                        {
-                            let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
-                                Some(ts) => *ts,
-                                None => 0,
-                            };
-                            if timestamp == 0
-                                || timestamp == std::u64::MAX
-                                || timestamp < byo_consumer.last_ts
-                                || timestamp <= last_p_ts
-                                || (partition_count > byo_consumer.current_partition_count
+                    {
+                        let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
+                            Some(ts) => *ts,
+                            None => 0,
+                        };
+                        if timestamp == 0
+                            || timestamp == std::u64::MAX
+                            || timestamp < byo_consumer.last_ts
+                            || timestamp <= last_p_ts
+                            || (partition_count > byo_consumer.current_partition_count
                                 && timestamp == byo_consumer.last_ts)
-                            {
-                                error!("The timestamp assignment rules have been violated. The rules are as follows:\n\
+                        {
+                            error!("The timestamp assignment rules have been violated. The rules are as follows:\n\
                      1) A timestamp should be greater than 0\n\
                      2) The timestamp should be strictly smaller than u64::MAX\n\
                      2) If no new partition is added, a new timestamp should be:\n \
@@ -404,47 +521,91 @@ impl Timestamper {
                         - greater or equal to all the timestamps that have been assigned across all partitions\n \
                         If a new partition is added, a new timestamp should be:\n  \
                         - strictly greater than the last timestamp\n");
-                            } else {
-                                if byo_consumer.current_partition_count < partition_count {
-                                    // A new partition has been added. Partitions always gets added with
-                                    // newPartitionId = previousLastPartitionId + 1 and start from 0.
-                                    // So this new partition will have ID "partition_count - 1"
-                                    // We ensure that the first messages in this partition will always have
-                                    // timestamps > the last closed timestamp. We need to explicitly close
-                                    // out all prior timestamps. To achieve this, we send an additional
-                                    // timestamp message to the coord/worker
-                                    self.tx
-                                        .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                            id:*id,
-                                            partition_count,          // The new partition count
-                                            pid: partition_count - 1, // the ID of the new partition
-                                            timestamp: byo_consumer.last_ts,
-                                            offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
-                                            // the empty interval
-                                        })
-                                        .expect("Failed to send update to coordinator");
-                                }
-                                byo_consumer.current_partition_count = partition_count;
-                                byo_consumer.last_ts = timestamp;
-                                byo_consumer.last_partition_ts.insert(partition, timestamp);
+                        } else {
+                            if byo_consumer.current_partition_count < partition_count {
+                                // A new partition has been added. Partitions always gets added with
+                                // newPartitionId = previousLastPartitionId + 1 and start from 0.
+                                // So this new partition will have ID "partition_count - 1"
+                                // We ensure that the first messages in this partition will always have
+                                // timestamps > the last closed timestamp. We need to explicitly close
+                                // out all prior timestamps. To achieve this, we send an additional
+                                // timestamp message to the coord/worker
                                 self.tx
                                     .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                        id:*id,
-                                        partition_count,
-                                        pid: partition,
-                                        timestamp,
-                                        offset,
+                                        id: *id,
+                                        partition_count, // The new partition count
+                                        pid: partition_count - 1, // the ID of the new partition
+                                        timestamp: byo_consumer.last_ts,
+                                        offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
+                                                   // the empty interval
+                                    })
+                                    .expect("Failed to send update to coordinator");
+                            }
+                            byo_consumer.current_partition_count = partition_count;
+                            byo_consumer.last_ts = timestamp;
+                            byo_consumer.last_partition_ts.insert(partition, timestamp);
+                            self.tx
+                                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                                    id: *id,
+                                    partition_count,
+                                    pid: partition,
+                                    timestamp,
+                                    offset,
+                                })
+                                .expect("Failed to send update to coordinator");
+                        }
+                    }
+                }
+                Envelope::Debezium => {
+                    for msg in messages {
+                        // Skip the first few bytes
+                        let mut bytes = &msg[5..];
+                        let res = futures::executor::block_on(avro::from_avro_datum(
+                            &DEBEZIUM_TRX_SCHEMA,
+                            &mut bytes,
+                            None,
+                        ));
+                        let results = match res {
+                            Ok(record) => {
+                                if let Value::Record(record) = record {
+                                    parse_debezium(record)
+                                } else {
+                                    error!("Incorrect Avro format. Expected Record");
+                                    vec![]
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to parse Debezium consistency message {} {}", e,
+                                    str::from_utf8(bytes).unwrap()
+                                );
+                                vec![]
+                            }
+                        };
+                        //TODO(natacha): this is (potentially)
+                        // inefficient every customer processes the same
+                        // consistency topic.
+                        for (topic, count) in results {
+                            if byo_consumer.source_name == topic {
+                                // TODO(natacha): consistency topic for Debezium currently supports only one partition
+                                byo_consumer.last_offset = byo_consumer.last_offset + count;
+                                byo_consumer.last_ts = byo_consumer.last_ts + 1;
+                                self.tx
+                                    .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                                        id: *id,
+                                        partition_count:1,
+                                        pid: 0,
+                                        timestamp: byo_consumer.last_ts,
+                                        offset: byo_consumer.last_offset,
                                     })
                                     .expect("Failed to send update to coordinator");
                             }
                         }
-                },
-                Envelope::Debezium =>  {
-                    unimplemented!();
+                    }
                 }
             }
         }
-   }
+    }
 
     /// Creates a RT connector
     fn create_rt_connector(
@@ -538,7 +699,7 @@ impl Timestamper {
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
         timestamp_topic: String,
-        e: Envelope
+        e: Envelope,
     ) -> ByoTimestampConsumer {
         match sc {
             ExternalSourceConnector::Kafka(kc) => ByoTimestampConsumer {
@@ -552,6 +713,7 @@ impl Timestamper {
                 last_partition_ts: HashMap::new(),
                 last_ts: 0,
                 current_partition_count: 0,
+                last_offset: 0,
             },
             ExternalSourceConnector::File(fc) | ExternalSourceConnector::AvroOcf(fc) => {
                 error!("File sources are unsupported for timestamping");
@@ -566,8 +728,8 @@ impl Timestamper {
                     last_partition_ts: HashMap::new(),
                     last_ts: 0,
                     current_partition_count: 0,
-                }
-            }
+                    last_offset: 0,
+                } }
             ExternalSourceConnector::Kinesis(kinc) => {
                 error!("Kinesis sources are unsupported for timestamping");
                 ByoTimestampConsumer {
@@ -581,6 +743,7 @@ impl Timestamper {
                     last_partition_ts: HashMap::new(),
                     last_ts: 0,
                     current_partition_count: 0,
+                    last_offset: 0
                 }
             }
         }

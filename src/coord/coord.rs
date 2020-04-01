@@ -453,10 +453,15 @@ where
                     message: WorkerFeedback::CreateSource(source_id, sc, consistency),
                 }) => {
                     let entry = self.catalog.get_by_id(&source_id.sid).item();
-                    let envelope =
-                    if let CatalogItem::Source(s) = entry {
-                        if let SourceConnector::External{connector:_,encoding:_,envelope,consistency:_} = &s.connector {
-                           envelope
+                    let envelope = if let CatalogItem::Source(s) = entry {
+                        if let SourceConnector::External {
+                            connector: _,
+                            encoding: _,
+                            envelope,
+                            consistency: _,
+                        } = &s.connector
+                        {
+                            envelope
                         } else {
                             panic!("Catalog Entry of Type ExternalSourceConnector is expected");
                         }

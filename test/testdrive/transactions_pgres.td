@@ -30,40 +30,153 @@ $ set schema={
   }
 
 $ set trxschema={
-    "name": "trx",
-    "type": "record",
-    "fields": [
-      {"name": "id", "type": "string"},
-      {"name": "status", "type": "string"},
-      {"name": "event_count", "type": ["long","null"]},
-      {"name": "data_collections", "type": ["array","null"],
-       "items": {
-         "name": "data",
-         "type": "record",
-         "fields": [
-           {"name": "event_count", "type": "long"},
-           {"name": "data_collection", "type": "string"}
-         ]
-        }
-      }
-     ]
+      "name": "io.debezium.connector.common.TransactionMetadataValue",
+      "type": "record",
+      "fields": [
+          {
+              "name": "id",
+              "type": "string"
+          },
+          {
+              "name": "status",
+              "type": "string"
+          },
+          {
+              "name": "event_count",
+              "type": [
+                  "long",
+                  "null"
+              ]
+          },
+          {
+              "name": "data_collections",
+              "type": [
+                  {
+                      "type": "array",
+                      "items": {
+                          "name": "data",
+                          "type": "record",
+                          "fields": [
+                              {
+                                  "name": "event_count",
+                                  "type": "long"
+                              },
+                              {
+                                  "name": "data_collection",
+                                  "type": "string"
+                              }
+                          ]
+                      }
+                  },
+                  "null"
+              ]
+          }
+      ]
   }
 
-$ kafka-create-topic topic=data-consistency
+$ kafka-create-topic topic=consistency
 
-$ kafka-create-topic topic=data
+$ kafka-create-topic topic=foo
 
-$ kafka-ingest format=bytes topic=data-consistency timestamp=1
-{ "status": "BEGIN", "id": "570", "event_count": null, "data_collections": null}
-{ "status": "END", "id": "570", "event_count": 1, "data_collections": [ { "data_collection": "data", "event_count": 4}, {"data_collection": "foo2", "event_count": 0 }]}
+$ kafka-create-topic topic=bar
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+$ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 1}}
-{"before": null, "after": {"a": 2, "b": 1}}
-{"before": null, "after": {"a": 3, "b": 1}}
-{"before": null, "after": {"a": 1, "b": 2}}
+{"before": null, "after": {"a": 2, "b": 2}}
 
-> CREATE MATERIALIZED SOURCE data_byo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-    WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
+$ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
+{"before": null, "after": {"a": 10, "b": 1}}
+
+> CREATE MATERIALIZED SOURCE data_foo
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
+    WITH (consistency = 'testdrive-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+
+> CREATE MATERIALIZED SOURCE data_bar
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bar-${testdrive.seed}'
+    WITH (consistency = 'testdrive-consistency-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+
+
+> CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo GROUP BY b
+
+> CREATE MATERIALIZED VIEW bar AS SELECT b, sum(a) FROM data_bar GROUP BY b
+
+> CREATE MATERIALIZED VIEW join AS SELECT * FROM foo JOIN bar USING (b);
+
+! SELECT * FROM bar;
+At least one input has no complete timestamps yet.
+
+! SELECT * FROM foo;
+At least one input has no complete timestamps yet.
+
+! SELECT * FROM join ;
+At least one input has no complete timestamps yet.
+
+$ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
+{"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
+{"status":"END","id":"1","event_count":0,"data_collections":[]}
+{"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
+{"status":"END","id":"2","event_count":2,"data_collections":[{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}
+
+> SELECT * FROM foo;
+b  sum
+------
+1  1
+2  2
+
+> SELECT * FROM bar;
+b  sum
+------
+1  10
+
+> SELECT * FROM join;
+a  a  b
+------
+1  1  10
+
+$ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
+{"before": null, "after": {"a": 3, "b": 3}}
+
+$ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
+{"before": null, "after": {"a": 30, "b": 3}}
+
+$ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
+{"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
+{"status":"END","id":"3","event_count":2,"data_collections":[{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}
+
+> SELECT * FROM foo;
+b  sum
+------
+1  1
+2  2
+
+> SELECT * FROM bar;
+b  sum
+------
+1  10
+3  30
+
+> SELECT * FROM join;
+a  a  b
+------
+1  1  10
+
+$ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
+{"before": null, "after": {"a": 4, "b": 4}}
+
+> SELECT * FROM foo;
+b  sum
+------
+1  1
+2  2
+3  3
+4  4
+
+> SELECT * FROM join;
+a  a  b
+------
+1  1  10
+3  3  30
+
+
