@@ -2631,6 +2631,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "retry"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "789e7aad247a37b785401b4d82bbad03212bb516fe7c0c2cc42f37bccb00b9b2"
+dependencies = [
+ "rand",
+]
+
+[[package]]
 name = "rle-decode-fast"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3246,6 +3255,7 @@ dependencies = [
  "regex",
  "repr",
  "reqwest",
+ "retry",
  "serde",
  "serde-protobuf",
  "serde_json",

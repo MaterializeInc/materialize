@@ -36,8 +36,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, PeekResponse, PeekWhen, RowSetFinishing, SinkConnector,
-    TailSinkConnector, Timestamp, Update,
+    DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen, RowSetFinishing,
+    SinkConnector, TailSinkConnector, Timestamp, Update,
 };
 use expr::transform::Optimizer;
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr, SourceInstanceId};
@@ -1359,9 +1359,25 @@ where
                         }
                         CatalogItem::View(_) => views_to_drop.push(entry.id()),
                         CatalogItem::Sink(catalog::Sink {
-                            connector: SinkConnectorState::Ready(_),
+                            connector: SinkConnectorState::Ready(connector),
                             ..
-                        }) => sinks_to_drop.push(entry.id()),
+                        }) => {
+                            sinks_to_drop.push(entry.id());
+                            #[allow(clippy::single_match)]
+                            match connector {
+                                SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
+                                    broadcast(
+                                        &mut self.broadcast_tx,
+                                        SequencedCommand::AppendLog(MaterializedEvent::KafkaSink {
+                                            id: entry.id(),
+                                            topic: topic.clone(),
+                                            insert: false,
+                                        }),
+                                    );
+                                }
+                                _ => (),
+                            }
+                        }
                         CatalogItem::Sink(catalog::Sink {
                             connector: SinkConnectorState::Pending(_),
                             ..
@@ -1577,6 +1593,20 @@ where
         from: GlobalId,
         connector: SinkConnector,
     ) {
+        #[allow(clippy::single_match)]
+        match &connector {
+            SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::KafkaSink {
+                        id,
+                        topic: topic.clone(),
+                        insert: true,
+                    }),
+                );
+            }
+            _ => (),
+        }
         let mut dataflow = DataflowDesc::new(name);
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();

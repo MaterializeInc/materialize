@@ -88,6 +88,7 @@ pub enum MaterializedLog {
     PrimaryKeys,
     ForeignKeys,
     Catalog,
+    KafkaSinks,
 }
 
 impl LogVariant {
@@ -109,6 +110,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys),
             LogVariant::Materialized(MaterializedLog::ForeignKeys),
             LogVariant::Materialized(MaterializedLog::Catalog),
+            LogVariant::Materialized(MaterializedLog::KafkaSinks),
         ]
     }
 
@@ -135,6 +137,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys",
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys",
             LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names",
+            LogVariant::Materialized(MaterializedLog::KafkaSinks) => "mz_kafka_sinks",
         }
     }
 
@@ -157,6 +160,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(27),
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(29),
             LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(31),
+            LogVariant::Materialized(MaterializedLog::KafkaSinks) => GlobalId::system(55),
         }
     }
 
@@ -179,6 +183,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(28),
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(30),
             LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(32),
+            LogVariant::Materialized(MaterializedLog::KafkaSinks) => GlobalId::system(56),
         }
     }
 
@@ -296,6 +301,11 @@ impl LogVariant {
                 .add_column("global_id", ScalarType::String)
                 .add_column("name", ScalarType::String)
                 .add_keys(vec![0]),
+
+            LogVariant::Materialized(MaterializedLog::KafkaSinks) => RelationDesc::empty()
+                .add_column("global_id", ScalarType::String)
+                .add_column("topic", ScalarType::String)
+                .add_keys(vec![0]),
         }
     }
 
@@ -349,6 +359,7 @@ impl LogVariant {
                 ),
             ],
             LogVariant::Materialized(MaterializedLog::Catalog) => vec![],
+            LogVariant::Materialized(MaterializedLog::KafkaSinks) => vec![],
         }
     }
 }
@@ -544,5 +555,5 @@ const VIEW_PERF_PEEK_DURATIONS_AGGREGATES: LogView = LogView {
 FROM mz_catalog.mz_peek_durations lpd
 GROUP BY worker",
     id: GlobalId::System(53),
-    index_id: GlobalId::System(55),
+    index_id: GlobalId::System(54),
 };

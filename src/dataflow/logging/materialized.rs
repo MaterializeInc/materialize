@@ -38,6 +38,12 @@ pub enum MaterializedEvent {
         dataflow: GlobalId,
         source: GlobalId,
     },
+    /// Kafka sink.
+    KafkaSink {
+        id: GlobalId,
+        topic: String,
+        insert: bool,
+    },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
     /// Available frontier information for views.
@@ -100,6 +106,7 @@ pub fn construct<A: Allocate>(
         let (mut primary_out, primary) = demux.new_output();
         let (mut foreign_out, foreign) = demux.new_output();
         let (mut catalog_out, catalog) = demux.new_output();
+        let (mut kafka_sinks_out, kafka_sinks) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -116,6 +123,7 @@ pub fn construct<A: Allocate>(
                 let mut primary = primary_out.activate();
                 let mut foreign = foreign_out.activate();
                 let mut catalog = catalog_out.activate();
+                let mut kafka_sinks = kafka_sinks_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -127,6 +135,7 @@ pub fn construct<A: Allocate>(
                     let mut primary_session = primary.session(&time);
                     let mut foreign_session = foreign.session(&time);
                     let mut catalog_session = catalog.session(&time);
+                    let mut kafka_sinks_session = kafka_sinks.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos() as Timestamp;
@@ -216,6 +225,16 @@ pub fn construct<A: Allocate>(
                                         key.0, source, worker,
                                     ),
                                 }
+                            }
+                            MaterializedEvent::KafkaSink { id, topic, insert } => {
+                                kafka_sinks_session.give((
+                                    Row::pack(&[
+                                        Datum::String(&id.to_string()),
+                                        Datum::String(&topic),
+                                    ]),
+                                    time_ms,
+                                    if insert { 1 } else { -1 },
+                                ))
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
                                 peek_session.give((peek, worker, is_install, time_ns))
@@ -333,6 +352,7 @@ pub fn construct<A: Allocate>(
         let catalog = catalog.as_collection().map({
             move |(id, name)| Row::pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
         });
+        let kafka_sinks = kafka_sinks.as_collection();
 
         // Duration statistics derive from the non-rounded event times.
         use differential_dataflow::operators::reduce::Count;
@@ -428,6 +448,10 @@ pub fn construct<A: Allocate>(
                 foreign_key,
             ),
             (LogVariant::Materialized(MaterializedLog::Catalog), catalog),
+            (
+                LogVariant::Materialized(MaterializedLog::KafkaSinks),
+                kafka_sinks,
+            ),
         ];
 
         use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;

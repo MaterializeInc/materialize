@@ -14,27 +14,23 @@ use futures::stream::StreamExt;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
+use retry::delay::Fibonacci;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
 pub struct VerifyAction {
-    topic_prefix: String,
-    schema: String,
+    sink: String,
     expected_messages: Vec<String>,
 }
 
 pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
     let _format = cmd.args.string("format")?;
-    let topic_prefix = cmd.args.string("topic")?;
-    let schema = cmd.args.string("schema")?;
+    let sink = cmd.args.string("sink")?;
     let expected_messages = cmd.input;
-
     cmd.args.done()?;
-
     Ok(VerifyAction {
-        topic_prefix,
-        schema,
+        sink,
         expected_messages,
     })
 }
@@ -45,12 +41,34 @@ impl Action for VerifyAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
+        let topic: String = retry::retry(Fibonacci::from_millis(100).take(5), || {
+            let row = state.pgclient.query_one(
+                "SELECT topic FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks \
+                 WHERE name = $1",
+                &[&self.sink],
+            )?;
+            Ok::<_, postgres::Error>(row.get("topic"))
+        })
+        .map_err(|e| format!("retrieving topic name: {}", e.to_string()))?;
+
+        println!("Verifying results in Kafka topic {}", topic);
+
+        let schema = state
+            .tokio_runtime
+            .block_on(
+                state
+                    .ccsr_client
+                    .get_schema_by_subject(&format!("{}-value", topic)),
+            )
+            .map_err(|e| format!("fetching schema: {}", e))?
+            .raw;
+
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &state.kafka_addr);
         config.set("auto.offset.reset", "earliest");
         config.set("group.id", "materialize-testdrive");
 
-        let schema = interchange::avro::parse_schema(&self.schema)
+        let schema = interchange::avro::parse_schema(&schema)
             .map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut converted_expected_messages = Vec::new();
         for expected in &self.expected_messages {
@@ -66,9 +84,7 @@ impl Action for VerifyAction {
         let consumer: StreamConsumer = config
             .create()
             .map_err(|e| format!("creating kafka consumer: {}", e))?;
-        consumer
-            .subscribe(&[&self.topic_prefix])
-            .map_err(|e| e.to_string())?;
+        consumer.subscribe(&[&topic]).map_err(|e| e.to_string())?;
         let mut message_stream = consumer.start();
         let mut actual_messages = Vec::new();
         for _i in 0..converted_expected_messages.len() {
@@ -104,12 +120,7 @@ impl Action for VerifyAction {
                     },
                     Err(e) => return Err(e.to_string()),
                 },
-                None => {
-                    return Err(format!(
-                        "No Kafka messages found for topic {}",
-                        &self.topic_prefix
-                    ))
-                }
+                None => return Err(format!("No Kafka messages found for topic {}", &topic,)),
             }
         }
         // NB: We can't compare messages as they come in because

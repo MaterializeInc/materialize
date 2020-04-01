@@ -157,6 +157,7 @@ mz_catalog_names
 mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators
+mz_kafka_sinks
 mz_materialization_dependencies
 mz_materialization_frontiers
 mz_materializations
