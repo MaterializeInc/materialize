@@ -84,6 +84,8 @@ impl Action for AppendAction {
         let path = state.temp_dir.path().join(&self.path);
         println!("Appending to {}", path.display());
         let mut buf = fs::read(&path).map_err(|e| e.to_string())?;
+        // TODO(benesch): we'll be able to open the writer on the file directly
+        // once the Avro reader is no longer asynchronous.
         let mut writer = state
             .tokio_runtime
             .block_on(Writer::append_to(Cursor::new(&mut buf)))

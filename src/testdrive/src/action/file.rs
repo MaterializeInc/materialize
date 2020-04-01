@@ -7,37 +7,45 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
-pub struct WriteAction {
+pub struct AppendAction {
     path: String,
     contents: String,
 }
 
-pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, String> {
+pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
     let path = cmd.args.string("path")?;
-    let contents = cmd.input.join("\n");
+    let contents = cmd.input.join("\n") + "\n";
     cmd.args.done()?;
     if path.contains(path::MAIN_SEPARATOR) {
         // The goal isn't security, but preventing mistakes.
         return Err("separators in paths are forbidden".into());
     }
-    Ok(WriteAction { path, contents })
+    Ok(AppendAction { path, contents })
 }
 
-impl Action for WriteAction {
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
+impl Action for AppendAction {
+    fn undo(&self, _: &mut State) -> Result<(), String> {
         // Files are written to a fresh temporary directory, so no need to
         // explicitly remove the file here.
         Ok(())
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        fs::write(state.temp_dir.path().join(&self.path), &self.contents)
+        let path = state.temp_dir.path().join(&self.path);
+        println!("Appending to file {}", path.display());
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| e.to_string())?;
+        file.write_all(self.contents.as_bytes())
             .map_err(|e| e.to_string())?;
         Ok(())
     }
