@@ -1244,7 +1244,7 @@ where
         options: ExplainOptions,
     ) -> Result<ExecuteResponse, failure::Error> {
         let explanation_string = match stage {
-            ExplainStage::Sql => sql.clone(),
+            ExplainStage::Sql => sql,
             ExplainStage::RawPlan => {
                 let mut explanation = raw_plan.explain(&self.catalog);
                 if options.typed {
