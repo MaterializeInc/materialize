@@ -87,7 +87,7 @@ Materialize.
 CREATE SOURCE kinesis_source
 FROM KINESIS ARN ...
 WITH (access_key=...,
-             secret_access_key=...)
+      secret_access_key=...)
 FORMAT BYES;
 ```
 

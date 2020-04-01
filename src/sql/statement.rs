@@ -1106,7 +1106,23 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     let region: Region = match arn.region {
                         Some(region) => match region.parse() {
                             Ok(region) => region,
-                            Err(e) => bail!("Unable to parse AWS region: {}", e),
+                            Err(e) => {
+                                // Region's fromstr doesn't support parsing custom regions.
+                                // If a Kinesis stream's ARN indicates it exists in a custom
+                                // region, support it iff a valid endpoint for the stream
+                                // is also provided.
+                                match with_options.remove("endpoint") {
+                                    Some(Value::SingleQuotedString(endpoint)) => Region::Custom {
+                                        name: region,
+                                        endpoint,
+                                    },
+                                    _ => bail!(
+                                        "Unable to parse AWS region: {}. If providing a custom \
+                                         region, an `endpoint` option must also be provided",
+                                        e
+                                    ),
+                                }
+                            }
                         },
                         None => bail!("Provided ARN does not include an AWS region"),
                     };

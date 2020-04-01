@@ -217,12 +217,3 @@ a
 > CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
 
 > DROP VIEW test1
-
-# todo@jldlaughlin: Add a MATERIALIZED VIEW on top of this
-# source and drop it. Depends on #2103.
-> CREATE SOURCE f
-  FROM KINESIS ARN 'arn:aws:kinesis:us-east-2::stream/fake-stream'
-  WITH (access_key = 'fake_access_key', secret_access_key = 'fake_secret_access_key')
-  FORMAT BYTES;
-
-> DROP SOURCE f
