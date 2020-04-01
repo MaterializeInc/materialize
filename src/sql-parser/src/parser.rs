@@ -2795,7 +2795,9 @@ impl Parser {
             // default stage
             ExplainStage::OptimizedPlan
         } else {
-            self.expected(self.peek_range(), "SQL or PLAN", self.peek_token())?
+            return Err(self
+                .expect_one_of_keywords(&["SQL", "RAW", "DECORRELATED", "OPTIMIZED", "PLAN"])
+                .unwrap_err());
         };
 
         self.expect_keyword("FOR")?;
