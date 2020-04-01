@@ -13,19 +13,27 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use futures::executor::block_on;
 use lazy_static::lazy_static;
 use protobuf::Message;
 use rand::Rng;
 use regex::{Captures, Regex};
+use rusoto_core::{HttpClient, Region};
+use rusoto_credential::{
+    AwsCredentials, CredentialsError, EnvironmentProvider, ProvideAwsCredentials, StaticProvider,
+};
+use rusoto_kinesis::KinesisClient;
 
 use repr::strconv;
 
+use crate::error::Error::General;
 use crate::error::{Error, InputError, ResultExt};
 use crate::parser::{Command, PosCommand, SqlExpectedResult};
 
 mod avro_ocf;
 mod file;
 mod kafka;
+mod kinesis;
 mod sql;
 
 const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
@@ -35,6 +43,7 @@ const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 pub struct Config {
     pub kafka_addr: Option<String>,
     pub schema_registry_url: Option<String>,
+    pub kinesis_region: Option<String>,
     pub materialized_url: Option<String>,
     pub materialized_catalog_path: Option<String>,
 }
@@ -53,6 +62,8 @@ pub struct State {
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
     kafka_topics: HashMap<String, i32>,
+    kinesis_region: String,
+    kinesis_client: KinesisClient,
 }
 
 impl State {
@@ -129,6 +140,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             path.display().to_string()
         });
     }
+    vars.insert(
+        "testdrive.kinesis-region".into(),
+        state.kinesis_region.clone(),
+    );
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
@@ -152,6 +167,11 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "kafka-ingest" => Box::new(kafka::build_ingest(builtin).map_err(wrap_err)?),
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
+                    "kinesis-create-stream" => {
+                        Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)
+                    }
+                    "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
+                    "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
@@ -341,6 +361,46 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         (addr.to_owned(), admin, admin_opts, producer, topics)
     };
 
+    let (kinesis_region, kinesis_client) = {
+        use rusoto_core::RusotoError;
+        use rusoto_kinesis::{
+            CreateStreamInput, DeleteStreamInput, DescribeStreamInput, Kinesis, PutRecordError,
+            PutRecordInput,
+        };
+        println!("trying to make kinesis client");
+
+        match config.kinesis_region.clone() {
+            Some(region) => match region.parse::<Region>() {
+                Ok(region) => {
+                    //                    // Hit real AWS!
+                    //                    // Will need these variables set in the environment:
+                    //                    //      - AWS_ACCESS_KEY_ID
+                    //                    //      - AWS_SECRET_ACCESS_KEY
+                    //                    //                    let credentials = match block_on(get_environment_credentials_for_aws()) {
+                    //                    //                        Ok(credentials) => credentials,
+                    //                    //                        Err(err) => return Err(Error::from(EnvironmentError { msg: String::from("No environment credentials") })),
+                    //                    //                    };
+                    //                    let client = KinesisClient::new_with(
+                    //                        HttpClient::new().unwrap(),
+                    //                        EnvironmentProvider::default(),
+                    //                        region.clone(),
+                    //                    );
+                    //                    (region., client)
+                    println!("this is unsupported.");
+                    (String::from("custom"), get_kinesis_client_for_localstack())
+                }
+                Err(e) => {
+                    // Hit fake AWS!
+                    (String::from("custom"), get_kinesis_client_for_localstack())
+                }
+            },
+            None => {
+                // Hit fake AWS!
+                (String::from("custom"), get_kinesis_client_for_localstack())
+            }
+        }
+    };
+
     Ok(State {
         seed,
         temp_dir,
@@ -355,5 +415,23 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         kafka_admin_opts,
         kafka_producer,
         kafka_topics,
+        kinesis_region,
+        kinesis_client,
     })
+}
+
+fn get_kinesis_client_for_localstack() -> KinesisClient {
+    let region = Region::Custom {
+        name: String::from("custom-test"), // NB: This must match the region localstack is started up with!!
+        endpoint: "http://localhost:4568".to_string(),
+    };
+    // Create a new KinesisClient
+    let provider = StaticProvider::new(
+        String::from("fake-access-key"),
+        String::from("fake-secret-access-key"),
+        None,
+        None,
+    );
+    println!("have region and provider");
+    KinesisClient::new_with(HttpClient::new().unwrap(), provider, region)
 }

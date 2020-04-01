@@ -30,6 +30,15 @@ fn run() -> Result<(), Error> {
     let mut opts = Options::new();
     opts.optopt("", "kafka-addr", "kafka bootstrap address", "HOST:PORT");
     opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
+    // this should be localhost:4568 (default kinesis port for localstack)
+    //      - if localhost, use custom regions? the client just needs to be made in the custom region.
+    // or nothing?
+    opts.optopt(
+        "",
+        "kinesis-region",
+        "optional custom kinesis region",
+        "custom",
+    );
     opts.optopt(
         "",
         "materialized-url",
@@ -62,6 +71,7 @@ fn run() -> Result<(), Error> {
     let config = Config {
         kafka_addr: opts.opt_str("kafka-addr"),
         schema_registry_url: opts.opt_str("schema-registry-url"),
+        kinesis_region: opts.opt_str("kinesis-region"),
         materialized_url: opts.opt_str("materialized-url"),
         materialized_catalog_path: opts.opt_str("validate-catalog"),
     };
