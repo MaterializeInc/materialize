@@ -1268,7 +1268,7 @@ where
                 let optimized_plan = self
                     .optimizer
                     .optimize(decorrelated_plan, self.catalog.indexes(), &eval_env)?
-                    .unwrap();
+                    .into_inner();
                 let mut explanation = optimized_plan.explain(&self.catalog);
                 if options.typed {
                     explanation.explain_types();

@@ -266,7 +266,7 @@ impl OptimizedRelationExpr {
         OptimizedRelationExpr(expr)
     }
 
-    pub fn unwrap(self) -> RelationExpr {
+    pub fn into_inner(self) -> RelationExpr {
         self.0
     }
 }
