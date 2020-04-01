@@ -18,12 +18,14 @@ use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnectorBuilder, SourceConn
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
+pub use crate::expr::RelationExpr;
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
-pub use sql_parser::ast::{ExplainOptions, ObjectType, Statement};
+pub use sql_parser::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 pub use statement::StatementContext;
 
 pub mod normalize;
 
+mod explain;
 mod expr;
 mod query;
 mod scope;
@@ -105,7 +107,13 @@ pub enum Plan {
     },
     Tail(GlobalId),
     SendRows(Vec<Row>),
-    ExplainPlan(::expr::RelationExpr, ExplainOptions),
+    ExplainPlan {
+        sql: String,
+        raw_plan: crate::expr::RelationExpr,
+        decorrelated_plan: ::expr::RelationExpr,
+        stage: ExplainStage,
+        options: ExplainOptions,
+    },
     SendDiffs {
         id: GlobalId,
         updates: Vec<(Row, isize)>,

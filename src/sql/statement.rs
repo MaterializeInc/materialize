@@ -33,8 +33,9 @@ use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, CsrSeed, ExplainOptions, Explainee, Format, Ident, IfExistsBehavior,
-    ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
+    AvroSchema, Connector, CsrSeed, ExplainOptions, ExplainStage, Explainee, Format, Ident,
+    IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
+    Statement, Value,
 };
 
 use crate::query::QueryLifetime;
@@ -66,8 +67,10 @@ pub fn describe_statement(
         Statement::Explain { stage, .. } => (
             Some(RelationDesc::empty().add_column(
                 match stage {
-                    Stage::Dataflow => "Dataflow",
-                    Stage::Plan => "Plan",
+                    ExplainStage::Sql => "Sql",
+                    ExplainStage::RawPlan => "Raw Plan",
+                    ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+                    ExplainStage::OptimizedPlan{..} => "Optimized Plan",
                 },
                 ScalarType::String,
             )),
@@ -793,7 +796,7 @@ fn handle_create_view(
     } else {
         None
     };
-    let (mut relation_expr, mut desc, finishing) =
+    let (_, mut relation_expr, mut desc, finishing) =
         handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
     if !finishing.is_trivial() {
         //TODO: materialize#724 - persist finishing information with the view?
@@ -1383,7 +1386,8 @@ fn handle_select(
     query: Query,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
+    let (_, relation_expr, _, finishing) =
+        handle_query(scx, query, params, QueryLifetime::OneShot)?;
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
@@ -1394,39 +1398,43 @@ fn handle_select(
 
 fn handle_explain(
     scx: &StatementContext,
-    stage: Stage,
+    stage: ExplainStage,
     explainee: Explainee,
-    explain_options: ExplainOptions,
+    options: ExplainOptions,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let relation_expr = match explainee {
+    let (sql, query) = match explainee {
         Explainee::View(name) => {
             let full_name = scx.resolve_name(name.clone())?;
             let entry = scx.catalog.get(&full_name)?;
-            match entry.item() {
-                CatalogItem::View(view) => view.unoptimized_expr.clone(),
+            let view = match entry.item() {
+                CatalogItem::View(view) => view,
                 other => bail!(
                     "Expected {} to be a view, not a {}",
                     name,
                     other.type_string()
                 ),
-            }
+            };
+            let parsed = crate::parse(view.create_sql.clone())
+                .expect("Sql for existing view should be valid sql");
+            let query = match parsed.into_last() {
+                Statement::CreateView { query, .. } => query,
+                _ => panic!("Sql for existing view should parse as a view"),
+            };
+            (view.create_sql.clone(), *query)
         }
-        Explainee::Query(query) => handle_query(scx, *query, params, QueryLifetime::OneShot)?.0,
+        Explainee::Query(query) => (query.to_string(), query),
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    if stage == Stage::Dataflow {
-        let mut explanation = relation_expr.explain(scx.catalog);
-        if explain_options.typed {
-            explanation.explain_types();
-        }
-        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            &*explanation.to_string(),
-        )])]))
-    } else {
-        Ok(Plan::ExplainPlan(relation_expr, explain_options))
-    }
+    let (sql_expr, expr, _, _) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
+    Ok(Plan::ExplainPlan {
+        sql,
+        raw_plan: sql_expr,
+        decorrelated_plan: expr,
+        stage,
+        options,
+    })
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
@@ -1436,10 +1444,18 @@ fn handle_query(
     query: Query,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<(expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+) -> Result<
+    (
+        crate::expr::RelationExpr,
+        ::expr::RelationExpr,
+        RelationDesc,
+        RowSetFinishing,
+    ),
+    failure::Error,
+> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
-    Ok((expr.decorrelate()?, desc, finishing))
+    Ok((expr.clone(), expr.decorrelate()?, desc, finishing))
 }
 
 #[derive(Debug)]

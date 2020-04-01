@@ -7,17 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/// This is the implementation for the EXPLAIN command.
-///
-/// Conventions:
-/// * RelationExprs are printed in post-order, left to right
-/// * RelationExprs which only have a single input are grouped together
-/// * Each group of RelationExprs is referred by id eg %4
-/// * RelationExprs may be followed by additional annotations on lines starting with | |
-/// * Columns are referred to by position eg #4
-/// * Collections of columns are written as ranges where possible eg "#2..#5"
-///
-/// It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
+//! This is the implementation for the EXPLAIN (DECORRELATED | OPTIMIZED) PLAN command.
+//!
+//! Conventions:
+//! * RelationExprs are printed in post-order, left to right
+//! * RelationExprs which only have a single input are grouped together
+//! * Each group of RelationExprs is referred by id eg %4
+//! * RelationExprs may be followed by additional annotations on lines starting with | |
+//! * Columns are referred to by position eg #4
+//! * Collections of columns are written as ranges where possible eg "#2..#5"
+//!
+//! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
 use super::{
     AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
     ScalarExpr,
@@ -87,7 +87,7 @@ impl RelationExpr {
                 parent_expr,
                 pretty: String::new(),
                 annotations: vec![],
-                chain: 0, // will fix this up later
+                chain: 0, // will set this later
             });
             expr.visit1(&mut |child_expr| {
                 stack.push((Some(expr), child_expr));
@@ -189,7 +189,7 @@ impl RelationExpr {
                     write!(pretty, "Project {}", Bracketed("(", ")", Indices(outputs))).unwrap()
                 }
                 Map { scalars, .. } => {
-                    write!(pretty, "Map {}", Separated(" ", scalars.clone())).unwrap();
+                    write!(pretty, "Map {}", Separated(", ", scalars.clone())).unwrap();
                 }
                 FlatMapUnary {
                     func, expr, demand, ..
@@ -201,7 +201,7 @@ impl RelationExpr {
                     }
                 }
                 Filter { predicates, .. } => {
-                    write!(pretty, "Filter {}", Separated(" ", predicates.clone())).unwrap();
+                    write!(pretty, "Filter {}", Separated(", ", predicates.clone())).unwrap();
                 }
                 Join {
                     inputs,

@@ -45,6 +45,7 @@ use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
 use sql::{ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatement, Session};
+use sql_parser::ast::ExplainStage;
 
 use crate::persistence::SqlSerializer;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
@@ -140,7 +141,6 @@ where
 
             let optimizer = Optimizer::default();
             let catalog = open_catalog(config.data_directory, config.logging, optimizer)?;
-
             let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
                 let millis = d.as_millis();
                 if millis > Timestamp::max_value() as u128 {
@@ -641,8 +641,14 @@ where
 
             Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
-            Plan::ExplainPlan(relation_expr, explain_options) => tx.send(
-                self.sequence_explain_plan(relation_expr, explain_options),
+            Plan::ExplainPlan {
+                sql,
+                raw_plan,
+                decorrelated_plan,
+                stage,
+                options,
+            } => tx.send(
+                self.sequence_explain_plan(sql, raw_plan, decorrelated_plan, stage, options),
                 session,
             ),
 
@@ -886,7 +892,6 @@ where
         let eval_env = EvalEnv::default();
         let view = catalog::View {
             create_sql: view.create_sql,
-            unoptimized_expr: view.expr.clone(),
             optimized_expr: self.optimizer.optimize(
                 view.expr,
                 self.catalog.indexes(),
@@ -1052,7 +1057,6 @@ where
         // constant expression that originally contains a global get? Is
         // there anything not containing a global get that cannot be
         // optimized to a constant expression?
-        let unoptimized_source = source.clone();
         let mut source = self
             .optimizer
             .optimize(source, self.catalog.indexes(), &eval_env)?;
@@ -1134,7 +1138,6 @@ where
                 dataflow.as_of(Some(vec![timestamp.clone()]));
                 let view = catalog::View {
                     create_sql: "<none>".into(),
-                    unoptimized_expr: unoptimized_source,
                     optimized_expr: source,
                     desc,
                     eval_env: eval_env.clone(),
@@ -1233,21 +1236,46 @@ where
 
     fn sequence_explain_plan(
         &mut self,
-        relation_expr: RelationExpr,
-        explain_options: ExplainOptions,
+        sql: String,
+        raw_plan: sql::RelationExpr,
+        decorrelated_plan: expr::RelationExpr,
+        stage: ExplainStage,
+        options: ExplainOptions,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let eval_env = EvalEnv {
-            wall_time: Some(chrono::Utc::now()),
-            logical_time: Some(0),
+        let explanation_string = match stage {
+            ExplainStage::Sql => sql,
+            ExplainStage::RawPlan => {
+                let mut explanation = raw_plan.explain(&self.catalog);
+                if options.typed {
+                    // TODO(jamii) does this fail?
+                    explanation.explain_types(&BTreeMap::new());
+                }
+                explanation.to_string()
+            }
+            ExplainStage::DecorrelatedPlan => {
+                let mut explanation = decorrelated_plan.explain(&self.catalog);
+                if options.typed {
+                    explanation.explain_types();
+                }
+                explanation.to_string()
+            }
+            ExplainStage::OptimizedPlan => {
+                let eval_env = EvalEnv {
+                    wall_time: Some(chrono::Utc::now()),
+                    logical_time: Some(0),
+                };
+                let optimized_plan = self
+                    .optimizer
+                    .optimize(decorrelated_plan, self.catalog.indexes(), &eval_env)?
+                    .into_inner();
+                let mut explanation = optimized_plan.explain(&self.catalog);
+                if options.typed {
+                    explanation.explain_types();
+                }
+                explanation.to_string()
+            }
         };
-        let relation_expr =
-            self.optimizer
-                .optimize(relation_expr, self.catalog.indexes(), &eval_env)?;
-        let mut explanation = relation_expr.as_ref().explain(&self.catalog);
-        if explain_options.typed {
-            explanation.explain_types();
-        }
-        let rows = vec![Row::pack(&[Datum::from(&*explanation.to_string())])];
+        let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))
     }
 
@@ -2318,7 +2346,6 @@ fn open_catalog(
                         let eval_env = EvalEnv::default();
                         let view = catalog::View {
                             create_sql: view.create_sql,
-                            unoptimized_expr: view.expr.clone(),
                             optimized_expr: optimizer
                                 .optimize(view.expr, catalog.indexes(), &eval_env)
                                 .expect("failed to optimize bootstrap sql"),

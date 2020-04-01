@@ -10,7 +10,102 @@
 mode cockroach
 
 query T multiline
-EXPLAIN DATAFLOW FOR SELECT * FROM (SELECT 1)
+EXPLAIN SQL FOR SELECT * FROM (SELECT 1)
+----
+SELECT * FROM (SELECT 1)
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT * FROM (SELECT 1)
+----
+0 =
+| Constant ()
+
+1 =
+| Constant ()
+| Map 1
+| Project (#0)
+| Map
+| Project (#0)
+
+2 =
+| InnerJoin 0 1 on true
+| Map #0
+| Project (#1)
+| Map
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT (SELECT (SELECT 1))
+----
+0 =
+| Constant ()
+| Map select(%1)
+| |
+| | 1 =
+| | | Constant ()
+| | | Map select(%2)
+| | | |
+| | | | 2 =
+| | | | | Constant ()
+| | | | | Map 1
+| | | | | Project (#0)
+| | | | | Map
+| | | | | Project (#0)
+| | | |
+| | | Project (#0)
+| | | Map
+| | | Project (#0)
+| |
+| Project (#0)
+| Map
+
+EOF
+
+query T multiline
+EXPLAIN TYPED RAW PLAN FOR SELECT * FROM (SELECT 1)
+----
+0 =
+| Constant ()
+| | types = ()
+| | keys = ()
+
+1 =
+| Constant ()
+| | types = ()
+| | keys = ()
+| Map 1
+| | types = (i32)
+| | keys = ()
+| Project (#0)
+| | types = (i32)
+| | keys = ()
+| Map
+| | types = (i32)
+| | keys = ()
+| Project (#0)
+| | types = (i32)
+| | keys = ()
+
+2 =
+| InnerJoin 0 1 on true
+| | types = (i32)
+| | keys = ()
+| Map #0
+| | types = (i32, i32)
+| | keys = ()
+| Project (#1)
+| | types = (i32)
+| | keys = ()
+| Map
+| | types = (i32)
+| | keys = ()
+
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR SELECT * FROM (SELECT 1)
 ----
 0 =
 | Constant ()
@@ -58,6 +153,14 @@ EXPLAIN DATAFLOW FOR SELECT * FROM (SELECT 1)
 EOF
 
 query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM (SELECT 1)
+----
+0 =
+| Constant (1)
+
+EOF
+
+query T multiline
 EXPLAIN PLAN FOR SELECT * FROM (SELECT 1)
 ----
 0 =
@@ -69,7 +172,13 @@ statement ok
 CREATE VIEW foo AS SELECT * FROM (SELECT 1)
 
 query T multiline
-EXPLAIN DATAFLOW FOR VIEW foo
+EXPLAIN SQL FOR VIEW foo
+----
+CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM (SELECT 1)
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR VIEW foo
 ----
 0 =
 | Constant ()
@@ -125,7 +234,7 @@ EXPLAIN PLAN FOR VIEW foo
 EOF
 
 query T multiline
-EXPLAIN TYPED DATAFLOW FOR VIEW foo
+EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 ----
 0 =
 | Constant ()
@@ -207,3 +316,23 @@ EXPLAIN TYPED DATAFLOW FOR VIEW foo
 | | keys = ()
 
 EOF
+
+# These currently all fail - https://github.com/MaterializeInc/materialize/issues/2498
+#
+# query T multiline
+# EXPLAIN PLAN FOR SELECT $1
+# ----
+#
+# EOF
+#
+# query T multiline
+# EXPLAIN RAW PLAN FOR SELECT $1
+# ----
+#
+# EOF
+#
+# query T multiline
+# EXPLAIN TYPED RAW PLAN FOR SELECT $1
+# ----
+#
+# EOF
