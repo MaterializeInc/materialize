@@ -755,6 +755,7 @@ pub enum Statement {
     /// `CREATE SOURCE`
     CreateSource {
         name: ObjectName,
+        col_names: Vec<Ident>,
         connector: Connector,
         with_options: Vec<SqlOption>,
         format: Option<Format>,
@@ -1013,6 +1014,7 @@ impl fmt::Display for Statement {
             }
             Statement::CreateSource {
                 name,
+                col_names,
                 connector,
                 with_options,
                 format,
@@ -1028,7 +1030,11 @@ impl fmt::Display for Statement {
                 if *if_not_exists {
                     write!(f, "IF NOT EXISTS ")?;
                 }
-                write!(f, "{} FROM {}", name, connector,)?;
+                write!(f, "{} ", name)?;
+                if !col_names.is_empty() {
+                    write!(f, "({}) ", display_comma_separated(col_names))?;
+                }
+                write!(f, "FROM {}", connector,)?;
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }

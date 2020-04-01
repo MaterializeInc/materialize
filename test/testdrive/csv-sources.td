@@ -39,8 +39,8 @@ Rochester      NY        14618   2
 "bad,place\""  CA        92679   4
 
 # Static CSV with manual headers.
-> CREATE MATERIALIZED SOURCE static_csv_manual_header
-  FROM FILE '${testdrive.temp-dir}/static.csv' WITH (col_names='city_man,state_man,zip_man')
+> CREATE MATERIALIZED SOURCE static_csv_manual_header (city_man, state_man, zip_man)
+  FROM FILE '${testdrive.temp-dir}/static.csv'
   FORMAT CSV WITH HEADER
 
 > SELECT * FROM static_csv_manual_header

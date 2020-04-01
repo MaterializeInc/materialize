@@ -1258,6 +1258,7 @@ impl Parser {
         self.expect_keyword("SOURCE")?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
+        let col_names = self.parse_parenthesized_column_list(Optional)?;
         self.expect_keyword("FROM")?;
         let connector = self.parse_connector()?;
         let with_options = self.parse_with_options()?;
@@ -1274,6 +1275,7 @@ impl Parser {
 
         Ok(Statement::CreateSource {
             name,
+            col_names,
             connector,
             with_options,
             format,

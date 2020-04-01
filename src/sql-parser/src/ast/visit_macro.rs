@@ -359,6 +359,7 @@ macro_rules! make_visitor {
             fn visit_create_source(
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
+                col_names: &'ast $($mut)* [Ident],
                 connector: &'ast $($mut)* Connector,
                 with_options: &'ast $($mut)* [SqlOption],
                 format: Option<&'ast $($mut)* Format>,
@@ -366,7 +367,7 @@ macro_rules! make_visitor {
                 if_not_exists: bool,
                 materialized: bool,
             ) {
-                visit_create_source(self, name, connector, with_options, format, envelope, if_not_exists, materialized)
+                visit_create_source(self, name, col_names, connector, with_options, format, envelope, if_not_exists, materialized)
             }
 
             fn visit_connector(
@@ -675,13 +676,14 @@ macro_rules! make_visitor {
                 }
                 Statement::CreateSource {
                     name,
+                    col_names,
                     connector,
                     with_options,
                     format,
                     envelope,
                     if_not_exists,
                     materialized,
-                } => visitor.visit_create_source(name, connector, with_options, format.as_auto_ref(), envelope, *if_not_exists, *materialized),
+                } => visitor.visit_create_source(name, col_names, connector, with_options, format.as_auto_ref(), envelope, *if_not_exists, *materialized),
                 Statement::CreateSink {
                     name,
                     from,
@@ -1332,6 +1334,7 @@ macro_rules! make_visitor {
         pub fn visit_create_source<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             name: &'ast $($mut)* ObjectName,
+            col_names: &'ast $($mut)* [Ident],
             connector: &'ast $($mut)* Connector,
             with_options: &'ast $($mut)* [SqlOption],
             format: Option<&'ast $($mut)* Format>,
@@ -1340,6 +1343,9 @@ macro_rules! make_visitor {
             _materialized: bool,
         ) {
             visitor.visit_object_name(name);
+            for column in col_names {
+                visitor.visit_ident(column);
+            }
             visitor.visit_connector(connector);
             for option in with_options {
                 visitor.visit_option(option);

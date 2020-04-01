@@ -389,26 +389,16 @@ impl DataEncoding {
                         .collect(),
                 )
             }
-            DataEncoding::Csv(CsvEncoding {
-                n_cols, col_names, ..
-            }) => {
-                let cols = match col_names {
-                    Some(col_names) => col_names
-                        .iter()
-                        .map(|v| (ColumnType::new(ScalarType::String), Some(v.to_string())))
-                        .collect(),
-                    None => (1..=*n_cols)
-                        .map(|i| {
-                            (
-                                ColumnType::new(ScalarType::String),
-                                Some(format!("column{}", i)),
-                            )
-                        })
-                        .collect(),
-                };
-
-                RelationDesc::from_cols(cols)
-            }
+            DataEncoding::Csv(CsvEncoding { n_cols, .. }) => RelationDesc::from_cols(
+                (1..=*n_cols)
+                    .map(|i| {
+                        (
+                            ColumnType::new(ScalarType::String),
+                            Some(format!("column{}", i)),
+                        )
+                    })
+                    .collect(),
+            ),
             DataEncoding::Text => RelationDesc::from_cols(vec![(
                 ColumnType::new(ScalarType::String),
                 Some("text".to_owned()),
@@ -432,7 +422,6 @@ pub struct AvroEncoding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
     pub header_row: bool,
-    pub col_names: Option<Vec<String>>,
     pub n_cols: usize,
     pub delimiter: u8,
 }
