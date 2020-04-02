@@ -420,3 +420,19 @@ EXPLAIN TYPED OPTIMIZED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LI
 Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
 
 EOF
+
+statement ok
+CREATE VIEW ordered_view AS SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+
+query T multiline
+EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW ordered_view
+----
+0 =
+| Get materialize.public.ordered (u2)
+| | types = (i32?, string?)
+| | keys = ()
+| TopK group=() order=(#1 asc, #0 desc) limit=5 offset=0
+| | types = (i32?, string?)
+| | keys = ()
+
+EOF

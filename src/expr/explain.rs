@@ -336,22 +336,20 @@ impl<'a> Explanation<'a> {
     }
 
     pub fn explain_row_set_finishing(&mut self, row_set_finishing: RowSetFinishing) {
-        if !row_set_finishing.is_trivial() {
-            self.appendix.push_str(&format!(
-                "Finish order_by={} limit={} offset={} project={}",
-                Bracketed(
-                    "(",
-                    ")",
-                    Separated(", ", row_set_finishing.order_by.clone())
-                ),
-                match row_set_finishing.limit {
-                    Some(limit) => limit.to_string(),
-                    None => "none".to_owned(),
-                },
-                row_set_finishing.offset,
-                Bracketed("(", ")", Indices(&row_set_finishing.project))
-            ))
-        }
+        self.appendix.push_str(&format!(
+            "Finish order_by={} limit={} offset={} project={}",
+            Bracketed(
+                "(",
+                ")",
+                Separated(", ", row_set_finishing.order_by.clone())
+            ),
+            match row_set_finishing.limit {
+                Some(limit) => limit.to_string(),
+                None => "none".to_owned(),
+            },
+            row_set_finishing.offset,
+            Bracketed("(", ")", Indices(&row_set_finishing.project))
+        ))
     }
 }
 

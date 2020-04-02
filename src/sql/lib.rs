@@ -110,8 +110,8 @@ pub enum Plan {
     ExplainPlan {
         sql: String,
         raw_plan: crate::expr::RelationExpr,
-        decorrelated_plan: ::expr::RelationExpr,
-        row_set_finishing: RowSetFinishing,
+        decorrelated_plan: Result<::expr::RelationExpr, failure::Error>,
+        row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
     },

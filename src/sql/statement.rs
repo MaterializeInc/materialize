@@ -826,21 +826,13 @@ fn handle_create_view(
     } else {
         None
     };
-    let (_, mut relation_expr, mut desc, finishing) =
-        handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
-    if !finishing.is_trivial() {
-        //TODO: materialize#724 - persist finishing information with the view?
-        relation_expr = expr::RelationExpr::Project {
-            input: Box::new(expr::RelationExpr::TopK {
-                input: Box::new(relation_expr),
-                group_key: vec![],
-                order_key: finishing.order_by,
-                limit: finishing.limit,
-                offset: finishing.offset,
-            }),
-            outputs: finishing.project,
-        }
-    }
+    let (mut relation_expr, mut desc, finishing, _) =
+        query::plan_root_query(scx, *query.clone(), QueryLifetime::Static)?;
+    // TODO(jamii) can views even have parameters?
+    relation_expr.bind_parameters(&params);
+    //TODO: materialize#724 - persist finishing information with the view?
+    relation_expr.finish(finishing);
+    let relation_expr = relation_expr.decorrelate()?;
     let typ = desc.typ();
     if !columns.is_empty() {
         if columns.len() != typ.column_types.len() {
@@ -1416,8 +1408,7 @@ fn handle_select(
     query: Query,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (_, relation_expr, _, finishing) =
-        handle_query(scx, query, params, QueryLifetime::OneShot)?;
+    let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
@@ -1431,8 +1422,13 @@ fn handle_explain(
     stage: ExplainStage,
     explainee: Explainee,
     options: ExplainOptions,
-    params: &Params,
+    _params: &Params,
 ) -> Result<Plan, failure::Error> {
+    let is_view = if let Explainee::View(_) = explainee {
+        true
+    } else {
+        false
+    };
     let (sql, query) = match explainee {
         Explainee::View(name) => {
             let full_name = scx.resolve_name(name.clone())?;
@@ -1457,13 +1453,23 @@ fn handle_explain(
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let (sql_expr, expr, _, row_set_finishing) =
-        handle_query(scx, query, params, QueryLifetime::OneShot)?;
+    let (mut sql_expr, _desc, finishing, _param_types) =
+        query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+    let finishing = if is_view {
+        // views don't use a separate finishing
+        sql_expr.finish(finishing);
+        None
+    } else if finishing.is_trivial() {
+        None
+    } else {
+        Some(finishing)
+    };
+    let expr = sql_expr.clone().decorrelate();
     Ok(Plan::ExplainPlan {
         sql,
         raw_plan: sql_expr,
         decorrelated_plan: expr,
-        row_set_finishing,
+        row_set_finishing: finishing,
         stage,
         options,
     })
@@ -1476,18 +1482,10 @@ fn handle_query(
     query: Query,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<
-    (
-        crate::expr::RelationExpr,
-        ::expr::RelationExpr,
-        RelationDesc,
-        RowSetFinishing,
-    ),
-    failure::Error,
-> {
+) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
-    Ok((expr.clone(), expr.decorrelate()?, desc, finishing))
+    Ok((expr.decorrelate()?, desc, finishing))
 }
 
 #[derive(Debug)]
