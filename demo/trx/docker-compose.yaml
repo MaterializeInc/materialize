@@ -1,3 +1,8 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
@@ -16,11 +21,10 @@ x-port-mappings:
   - &metabase 3030:3000
   - &prometheus 9090:9090
 
-
 version: '3.7'
 services:
   zookeeper:
-    image: debezium/zookeeper:1.1 
+    image: debezium/zookeeper:1.1
     ports:
      - 2181:2181
      - 2888:2888
@@ -43,7 +47,7 @@ services:
      - POSTGRES_USER=postgres
      - POSTGRES_PASSWORD=postgres
   materialized:
-    image: materialize/materialized:local
+    image: materialize/materialized:latest
     ports:
      - 6875:6875
     command: -w1
@@ -58,7 +62,7 @@ services:
       # 1000 was chosen by fair dice roll
       - DIFFERENTIAL_EAGER_MERGE=1000
   connect:
-    image: debezium/connect:1.1 
+    image: debezium/connect:1.1
     ports:
      - 8083:8083
     links:
@@ -72,6 +76,10 @@ services:
      - STATUS_STORAGE_TOPIC=my_connect_statuses
      - POSTGRES_USER=postgres
      - POSTGRES_PASSWORD=postgres
+     - KEY_CONVERTER=io.confluent.connect.avro.AvroConverter
+     - VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter
+     - CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
+     - CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081
     depends_on: [kafka, schema-registry]
   schema-registry:
     build: schema-registry
@@ -87,7 +95,7 @@ services:
     restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:
-      - 9021:9021 
+      - 9021:9021
     environment:
       CONTROL_CENTER_BOOTSTRAP_SERVERS: "kafka:9092"
       CONTROL_CENTER_ZOOKEEPER_CONNECT: "zookeeper:2181"
@@ -129,7 +137,7 @@ services:
     restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:
-      - 9021:9021 
+      - 9021:9021
     environment:
       CONTROL_CENTER_BOOTSTRAP_SERVERS: "kafka:9092"
       CONTROL_CENTER_ZOOKEEPER_CONNECT: "zookeeper:2181"
@@ -145,5 +153,3 @@ services:
       CONTROL_CENTER_CONNECT_CLUSTER: "http://connect:8083"
       CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
-
-  

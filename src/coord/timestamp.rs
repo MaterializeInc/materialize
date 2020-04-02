@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use avro::schema::Schema;
 use avro::types::Value;
+use avro::Reader;
 
 use lazy_static::lazy_static;
 use log::{error, info};
@@ -29,7 +30,7 @@ use rusqlite::{params, NO_PARAMS};
 
 use catalog::sql::SqlVal;
 use dataflow_types::{
-    Consistency, Envelope, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
+    Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
     KinesisSourceConnector,
 };
 use expr::SourceInstanceId;
@@ -39,7 +40,22 @@ use crate::coord;
 use itertools::Itertools;
 
 lazy_static! {
-    static ref DEBEZIUM_TRX_SCHEMA: Schema = {
+    static ref DEBEZIUM_TRX_SCHEMA_KEY: Schema = {
+        Schema::parse_str(
+            r#"    {
+    "name": "io.debezium.connector.common.TransactionMetadataKey",
+    "type": "record",
+    "fields": [
+        {
+            "name": "id",
+            "type": "string"
+        }
+    ]
+}"#,
+        )
+        .unwrap()
+    };
+    static ref DEBEZIUM_TRX_SCHEMA_VALUE: Schema = {
         Schema::parse_str(
             r#"    {
     "name": "io.debezium.connector.common.TransactionMetadataValue",
@@ -97,12 +113,7 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(
-        SourceInstanceId,
-        ExternalSourceConnector,
-        Consistency,
-        Envelope,
-    ),
+    Add(SourceInstanceId, ExternalSourceConnector, Consistency),
     DropInstance(SourceInstanceId),
     Shutdown,
 }
@@ -128,7 +139,7 @@ struct ByoTimestampConsumer {
     // The name of the source with which this connector is associated
     source_name: String,
     // The format of the connector
-    envelope: Envelope,
+    envelope: ConsistencyFormatting,
     // The last timestamp assigned per partition
     last_partition_ts: HashMap<i32, u64>,
     // The max assigned timestamp. Should be max(last_partition_ts)
@@ -139,6 +150,21 @@ struct ByoTimestampConsumer {
     current_partition_count: i32,
 }
 
+/// Supported format/envelope pairs for consistency topic decoding
+/// TODO(natacha): this should be removed
+enum ConsistencyFormatting {
+    // The formatting of this consistency source is currently unknown
+    Unknown,
+    // The formatting of this consistency source follows the
+    // SourceName,PartitionCount,PartitionId,TS,Offset
+    Raw,
+    // The formatting of this consistency source follows the
+    // Debezium Kafka format
+    DebeziumKafka,
+    // The formatting of this consistency source follows the
+    // Debezium format (OCF + Avro)
+    DebeziumOcf,
+}
 enum ByoTimestampConnector {
     Kafka(ByoKafkaConnector),
     File(ByoFileConnector),
@@ -320,7 +346,7 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
     let mut result = vec![];
     for (key, value) in record {
         if key == "data_collections" {
-            if let Value::Union(value) = value {
+            if let Value::Union(_, value) = value {
                 if let Value::Array(items) = *value {
                     for v in items {
                         if let Value::Record(item) = v {
@@ -356,6 +382,65 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
         }
     }
     result
+}
+/// Determines what format does a given consistency source abide to
+/// TODO(Natacha): this information should be included as metadata
+/// This function tries to decode to all known formats. If a decoding
+/// is successful, it assumes that all subsequent messages of that stream
+/// will have been encoded using the same formatting/envelope
+fn identify_consistency_format(msgs: &[Vec<u8>]) -> ConsistencyFormatting {
+    if let Some(msg) = msgs.first() {
+        let mut bytes = &msg[5..];
+        let res = futures::executor::block_on(avro::from_avro_datum(
+            &DEBEZIUM_TRX_SCHEMA_VALUE,
+            &mut bytes,
+        ));
+        if res.is_err() {
+            let mut bytes = &msg[5..];
+            let res = futures::executor::block_on(avro::from_avro_datum(
+                &DEBEZIUM_TRX_SCHEMA_KEY,
+                &mut bytes,
+            ));
+            if res.is_err() {
+                let bytes = &msg[..];
+                let reader = futures::executor::block_on(Reader::with_schema(
+                    &DEBEZIUM_TRX_SCHEMA_VALUE,
+                    bytes,
+                ));
+                if reader.is_ok() {
+                    ConsistencyFormatting::DebeziumOcf
+                } else {
+                    let bytes = &msg[..];
+                    let reader = futures::executor::block_on(Reader::with_schema(
+                        &DEBEZIUM_TRX_SCHEMA_KEY,
+                        bytes,
+                    ));
+                    if reader.is_ok() {
+                        ConsistencyFormatting::DebeziumOcf
+                    } else {
+                        let res = str::from_utf8(msg);
+                        match res {
+                            Err(_) => ConsistencyFormatting::Unknown,
+                            Ok(res) => {
+                                let split: Vec<&str> = res.split(',').collect();
+                                if split.len() == 5 {
+                                    ConsistencyFormatting::Raw
+                                } else {
+                                    ConsistencyFormatting::Unknown
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                ConsistencyFormatting::DebeziumKafka
+            }
+        } else {
+            ConsistencyFormatting::DebeziumKafka
+        }
+    } else {
+        ConsistencyFormatting::Unknown
+    }
 }
 
 impl Timestamper {
@@ -446,7 +531,7 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.rx.try_recv() {
             match update {
-                TimestampMessage::Add(id, sc, consistency, envelope) => {
+                TimestampMessage::Add(id, sc, consistency) => {
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
                         // Did not know about source, must update
                         match consistency {
@@ -458,8 +543,7 @@ impl Timestamper {
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
                                 info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}", id, consistency_topic);
-                                let consumer =
-                                    self.create_byo_connector(id, sc, consistency_topic, envelope);
+                                let consumer = self.create_byo_connector(id, sc, consistency_topic);
                                 self.byo_sources.insert(id, consumer);
                             }
                         }
@@ -497,8 +581,13 @@ impl Timestamper {
         for (id, byo_consumer) in &mut self.byo_sources {
             // Get the next set of messages from the Consistency topic
             let messages = byo_query_source(byo_consumer, self.max_increment_size);
+            // TODO(Natacha): move from automatic detection of source format to explicit formatting
+            // information
+            if let ConsistencyFormatting::Unknown = byo_consumer.envelope {
+                byo_consumer.envelope = identify_consistency_format(&messages);
+            }
             match byo_consumer.envelope {
-                Envelope::None => {
+                ConsistencyFormatting::Raw => {
                     for (partition_count, partition, timestamp, offset) in
                         byo_extract_ts_update(byo_consumer, messages)
                     {
@@ -556,14 +645,13 @@ impl Timestamper {
                         }
                     }
                 }
-                Envelope::Debezium => {
+                ConsistencyFormatting::DebeziumKafka => {
                     for msg in messages {
-                        // Skip the first few bytes
+                        // The first 5 bytes are reserved for the schema id/schema registry information
                         let mut bytes = &msg[5..];
                         let res = futures::executor::block_on(avro::from_avro_datum(
-                            &DEBEZIUM_TRX_SCHEMA,
+                            &DEBEZIUM_TRX_SCHEMA_VALUE,
                             &mut bytes,
-                            None,
                         ));
                         let results = match res {
                             Ok(record) => {
@@ -574,11 +662,8 @@ impl Timestamper {
                                     vec![]
                                 }
                             }
-                            Err(e) => {
-                                error!(
-                                    "Failed to parse Debezium consistency message {} {}", e,
-                                    str::from_utf8(bytes).unwrap()
-                                );
+                            Err(_) => {
+                                // This message was a key message. We can safely ignore it
                                 vec![]
                             }
                         };
@@ -588,12 +673,12 @@ impl Timestamper {
                         for (topic, count) in results {
                             if byo_consumer.source_name == topic {
                                 // TODO(natacha): consistency topic for Debezium currently supports only one partition
-                                byo_consumer.last_offset = byo_consumer.last_offset + count;
-                                byo_consumer.last_ts = byo_consumer.last_ts + 1;
+                                byo_consumer.last_offset += count;
+                                byo_consumer.last_ts += 1;
                                 self.tx
                                     .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                                         id: *id,
-                                        partition_count:1,
+                                        partition_count: 1,
                                         pid: 0,
                                         timestamp: byo_consumer.last_ts,
                                         offset: byo_consumer.last_offset,
@@ -602,6 +687,14 @@ impl Timestamper {
                             }
                         }
                     }
+                }
+                ConsistencyFormatting::DebeziumOcf => {
+                    error!("Avro OCF sources are not currently supported");
+                }
+                ConsistencyFormatting::Unknown => {
+                    // Could not identify the source formatting. This could
+                    // either be because there were no messages, or because
+                    // they were formatted incorrectly
                 }
             }
         }
@@ -699,7 +792,6 @@ impl Timestamper {
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
         timestamp_topic: String,
-        e: Envelope,
     ) -> ByoTimestampConsumer {
         match sc {
             ExternalSourceConnector::Kafka(kc) => ByoTimestampConsumer {
@@ -709,7 +801,7 @@ impl Timestamper {
                     kc,
                     timestamp_topic,
                 )),
-                envelope: e,
+                envelope: ConsistencyFormatting::Unknown,
                 last_partition_ts: HashMap::new(),
                 last_ts: 0,
                 current_partition_count: 0,
@@ -724,12 +816,13 @@ impl Timestamper {
                         fc,
                         timestamp_topic,
                     )),
-                    envelope: e,
+                    envelope: ConsistencyFormatting::Unknown,
                     last_partition_ts: HashMap::new(),
                     last_ts: 0,
                     current_partition_count: 0,
                     last_offset: 0,
-                } }
+                }
+            }
             ExternalSourceConnector::Kinesis(kinc) => {
                 error!("Kinesis sources are unsupported for timestamping");
                 ByoTimestampConsumer {
@@ -739,11 +832,11 @@ impl Timestamper {
                         kinc,
                         timestamp_topic,
                     )),
-                    envelope: e,
+                    envelope: ConsistencyFormatting::Unknown,
                     last_partition_ts: HashMap::new(),
                     last_ts: 0,
                     current_partition_count: 0,
-                    last_offset: 0
+                    last_offset: 0,
                 }
             }
         }

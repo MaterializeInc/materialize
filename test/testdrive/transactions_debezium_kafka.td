@@ -29,18 +29,30 @@ $ set schema={
     ]
   }
 
-$ set trxschema={
-      "name": "io.debezium.connector.common.TransactionMetadataValue",
+$ set trxschemakey={
+      "name": "io.debezium.connector.common.TransactionMetadataKey",
       "type": "record",
       "fields": [
           {
               "name": "id",
               "type": "string"
-          },
-          {
+          }
+      ]
+  }
+
+
+$ set trxschema={
+      "name": "io.debezium.connector.common.TransactionMetadataValue",
+      "type": "record",
+      "fields": [
+        {
+              "name": "id",
+              "type": "string"
+         },
+         {
               "name": "status",
               "type": "string"
-          },
+         },
           {
               "name": "event_count",
               "type": [
@@ -113,6 +125,9 @@ At least one input has no complete timestamps yet.
 ! SELECT * FROM join ;
 At least one input has no complete timestamps yet.
 
+$ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschemakey}
+{"id": "1"}
+
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
 {"status":"END","id":"1","event_count":0,"data_collections":[]}
@@ -178,5 +193,3 @@ a  a  b
 ------
 1  1  10
 3  3  30
-
-
