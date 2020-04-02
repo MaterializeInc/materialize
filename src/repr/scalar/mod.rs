@@ -844,6 +844,15 @@ impl Interval {
         s + ns
     }
 
+    /// Computes the nanosecond part of the interval.
+    pub fn nanoseconds(&self) -> i64 {
+        if self.is_positive_dur {
+            self.duration.subsec_nanos() as i64
+        } else {
+            -(self.duration.subsec_nanos() as i64)
+        }
+    }
+
     /// Computes the total number of seconds in the interval.
     pub fn as_seconds(&self) -> f64 {
         (self.months as f64) * 60.0 * 60.0 * 24.0 * 30.0

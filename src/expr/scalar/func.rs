@@ -403,6 +403,20 @@ fn cast_date_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
     Datum::String(temp_storage.push_string(buf))
 }
 
+fn cast_time_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    let mut buf = String::new();
+    strconv::format_time(&mut buf, a.unwrap_time());
+    Datum::String(temp_storage.push_string(buf))
+}
+
+fn cast_time_to_interval<'a>(a: Datum<'a>) -> Datum<'a> {
+    let t = a.unwrap_time();
+    Datum::Interval(repr::Interval {
+        duration: std::time::Duration::new(t.num_seconds_from_midnight() as u64, t.nanosecond()),
+        ..Default::default()
+    })
+}
+
 fn cast_timestamp_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Date(a.unwrap_timestamp().date())
 }
@@ -435,6 +449,28 @@ fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datu
     let mut buf = String::new();
     strconv::format_interval(&mut buf, a.unwrap_interval());
     Datum::String(temp_storage.push_string(buf))
+}
+
+fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
+    let i = a.unwrap_interval();
+    let i = if i.is_positive_dur {
+        i
+    } else {
+        // Negative intervals are computed as times using their difference from
+        // 24 hours.
+        let j = repr::Interval {
+            duration: std::time::Duration::from_secs(86400),
+            ..Default::default()
+        };
+        j + i
+    };
+
+    Datum::Time(NaiveTime::from_hms_nano(
+        i.hours() as u32,
+        i.minutes() as u32,
+        i.seconds() as u32,
+        i.nanoseconds() as u32,
+    ))
 }
 
 fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -2313,6 +2349,8 @@ pub enum UnaryFunc {
     CastDateToTimestamp,
     CastDateToTimestampTz,
     CastDateToString,
+    CastTimeToInterval,
+    CastTimeToString,
     CastTimestampToDate,
     CastTimestampToTimestampTz,
     CastTimestampToString,
@@ -2320,6 +2358,7 @@ pub enum UnaryFunc {
     CastTimestampTzToTimestamp,
     CastTimestampTzToString,
     CastIntervalToString,
+    CastIntervalToTime,
     CastBytesToString,
     CastStringToJsonb,
     JsonbStringify,
@@ -2447,6 +2486,8 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToString(scale) => {
                 Ok(cast_decimal_to_string(a, *scale, temp_storage))
             }
+            UnaryFunc::CastTimeToInterval => Ok(cast_time_to_interval(a)),
+            UnaryFunc::CastTimeToString => Ok(cast_time_to_string(a, temp_storage)),
             UnaryFunc::CastTimestampToDate => Ok(cast_timestamp_to_date(a)),
             UnaryFunc::CastTimestampToTimestampTz => Ok(cast_timestamp_to_timestamptz(a)),
             UnaryFunc::CastTimestampToString => Ok(cast_timestamp_to_string(a, temp_storage)),
@@ -2454,6 +2495,7 @@ impl UnaryFunc {
             UnaryFunc::CastTimestampTzToTimestamp => Ok(cast_timestamptz_to_timestamp(a)),
             UnaryFunc::CastTimestampTzToString => Ok(cast_timestamptz_to_string(a, temp_storage)),
             UnaryFunc::CastIntervalToString => Ok(cast_interval_to_string(a, temp_storage)),
+            UnaryFunc::CastIntervalToTime => Ok(cast_interval_to_time(a)),
             UnaryFunc::CastBytesToString => Ok(cast_bytes_to_string(a, temp_storage)),
             UnaryFunc::CastStringToJsonb => Ok(cast_string_to_jsonb(a, temp_storage)),
             UnaryFunc::JsonbStringify => Ok(jsonb_stringify(a, temp_storage)),
@@ -2565,7 +2607,9 @@ impl UnaryFunc {
             CastStringToTime => ColumnType::new(ScalarType::Time).nullable(true),
             CastStringToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             CastStringToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
-            CastStringToInterval => ColumnType::new(ScalarType::Interval).nullable(true),
+            CastStringToInterval | CastTimeToInterval => {
+                ColumnType::new(ScalarType::Interval).nullable(true)
+            }
 
             CastBoolToStringExplicit
             | CastBoolToStringImplicit
@@ -2575,6 +2619,7 @@ impl UnaryFunc {
             | CastFloat64ToString
             | CastDecimalToString(_)
             | CastDateToString
+            | CastTimeToString
             | CastTimestampToString
             | CastTimestampTzToString
             | CastIntervalToString
@@ -2607,6 +2652,8 @@ impl UnaryFunc {
             CastTimestampToDate | CastTimestampTzToDate => {
                 ColumnType::new(ScalarType::Date).nullable(in_nullable)
             }
+
+            CastIntervalToTime => ColumnType::new(ScalarType::Time).nullable(in_nullable),
 
             CastDateToTimestamp | CastTimestampTzToTimestamp => {
                 ColumnType::new(ScalarType::Timestamp).nullable(in_nullable)
@@ -2728,7 +2775,9 @@ impl UnaryFunc {
             | UnaryFunc::CastStringToBytes
             | UnaryFunc::CastDateToTimestamp
             | UnaryFunc::CastDateToTimestampTz
-            | UnaryFunc::CastDateToString => true,
+            | UnaryFunc::CastDateToString
+            | UnaryFunc::CastTimeToInterval
+            | UnaryFunc::CastTimeToString => true,
             _ => false,
         }
     }
@@ -2789,6 +2838,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
             UnaryFunc::CastDateToString => f.write_str("datetostr"),
+            UnaryFunc::CastTimeToInterval => f.write_str("timetoiv"),
+            UnaryFunc::CastTimeToString => f.write_str("timetostr"),
             UnaryFunc::CastTimestampToDate => f.write_str("tstodate"),
             UnaryFunc::CastTimestampToTimestampTz => f.write_str("tstotstz"),
             UnaryFunc::CastTimestampToString => f.write_str("tstostr"),
@@ -2796,6 +2847,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastTimestampTzToTimestamp => f.write_str("tstztots"),
             UnaryFunc::CastTimestampTzToString => f.write_str("tstztostr"),
             UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
+            UnaryFunc::CastIntervalToTime => f.write_str("ivtotime"),
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
             UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
             UnaryFunc::JsonbStringify => f.write_str("jsonbtostr"),

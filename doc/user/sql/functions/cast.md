@@ -42,6 +42,8 @@ Source type | Return type
 `date` | `timestamp`
 `date` | `timestamptz`
 `date` | `string`
+`time` | `interval`
+`time` | `string`
 
 <sup>1</sup> Casting a `float` to a `decimal` can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 
