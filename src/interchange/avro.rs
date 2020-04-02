@@ -526,7 +526,7 @@ fn build_schema(desc: &RelationDesc) -> Schema {
                 "scale": s,
             }),
             ScalarType::Date => json!({
-                "type": "string",
+                "type": "int",
                 "logicalType": "date",
             }),
             ScalarType::Time => json!({
@@ -534,7 +534,7 @@ fn build_schema(desc: &RelationDesc) -> Schema {
                 "logicalType": "time-micros",
             }),
             ScalarType::Timestamp | ScalarType::TimestampTz => json!({
-                "type": "string",
+                "type": "long",
                 "connect.name": "io.debezium.time.MicroTimestamp",
                 "logicalType": "timestamp-micros"
             }),
