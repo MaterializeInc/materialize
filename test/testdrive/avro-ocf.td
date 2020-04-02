@@ -93,3 +93,54 @@ a  b  mz_obj_no
 ---------------
 1  2  1
 3  4  2
+
+$ set timestamp-schema={
+    "name": "row",
+    "type": "record",
+    "fields": [
+      {
+        "name": "date",
+        "type": {
+          "type": "int",
+          "logicalType": "date"
+        }
+      },
+      {
+        "name": "ts",
+        "type": {
+          "type": "long",
+          "connect.name": "io.debezium.time.MicroTimestamp",
+          "logicalType": "timestamp-micros"
+        }
+      },
+      {
+        "name": "ts_tz",
+        "type": {
+          "type": "long",
+          "connect.name": "io.debezium.time.MicroTimestamp",
+          "logicalType": "timestamp-micros"
+        }
+      }
+    ]
+  }
+
+$ avro-ocf-write path=timestamp.ocf schema=${timestamp-schema}
+{"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}
+{"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}
+
+> CREATE MATERIALIZED SOURCE timestamp_source
+  FROM AVRO OCF '${testdrive.temp-dir}/timestamp.ocf'
+
+> SELECT * FROM timestamp_source
+date  ts ts_tz  mz_obj_no
+-------------------------
+"2000-02-01" "2000-02-01 10:10:10.000297" "2000-02-01 08:10:10.000232" 1
+"2000-01-01" "2000-01-01 10:10:10.000890" "2000-01-01 08:10:10.000857" 2
+
+> SHOW COLUMNS FROM timestamp_source
+Field      Nullable  Type
+-------------------------
+date          NO      date
+ts            NO      timestamp
+ts_tz         NO      timestamp
+mz_obj_no     NO      int8
