@@ -21,6 +21,7 @@
 //! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
 
 use crate::expr::{AggregateExpr, JoinKind, RelationExpr, ScalarExpr};
+use expr::explain::{Bracketed, Indices, Separated};
 use expr::{Id, IdHumanizer, RowSetFinishing};
 use repr::{RelationType, ScalarType};
 use std::collections::{BTreeMap, HashMap};
@@ -430,65 +431,6 @@ impl AggregateExpr {
             if self.distinct { "distinct " } else { "" },
             self.expr.fmt_with(subqueries)
         )
-    }
-}
-
-#[derive(Debug)]
-pub struct Separated<'a, T>(&'a str, Vec<T>);
-
-impl<'a, T> std::fmt::Display for Separated<'a, T>
-where
-    T: std::fmt::Display,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        for (i, elem) in self.1.iter().enumerate() {
-            if i != 0 {
-                write!(f, "{}", self.0)?;
-            }
-            write!(f, "{}", elem)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct Bracketed<'a, T>(&'a str, &'a str, T);
-
-impl<'a, T> std::fmt::Display for Bracketed<'a, T>
-where
-    T: std::fmt::Display,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        write!(f, "{}{}{}", self.0, self.2, self.1)
-    }
-}
-
-#[derive(Debug)]
-pub struct Indices<'a>(&'a [usize]);
-
-impl<'a> std::fmt::Display for Indices<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let mut is_first = true;
-        let mut slice = self.0;
-        while !slice.is_empty() {
-            if !is_first {
-                write!(f, ", ")?;
-            }
-            is_first = false;
-            let lead = &slice[0];
-            if slice.len() > 2 && slice[1] == lead + 1 && slice[2] == lead + 2 {
-                let mut last = 3;
-                while slice.get(last) == Some(&(lead + last)) {
-                    last += 1;
-                }
-                write!(f, "#{}..#{}", lead, lead + last - 1)?;
-                slice = &slice[last..];
-            } else {
-                write!(f, "#{}", slice[0])?;
-                slice = &slice[1..];
-            }
-        }
-        Ok(())
     }
 }
 

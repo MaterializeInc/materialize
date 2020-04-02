@@ -471,7 +471,7 @@ impl JoinImplementation {
 }
 
 #[derive(Debug)]
-pub struct Separated<'a, T>(&'a str, Vec<T>);
+pub struct Separated<'a, T>(pub &'a str, pub Vec<T>);
 
 impl<'a, T> std::fmt::Display for Separated<'a, T>
 where
@@ -489,7 +489,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct Bracketed<'a, T>(&'a str, &'a str, T);
+pub struct Bracketed<'a, T>(pub &'a str, pub &'a str, pub T);
 
 impl<'a, T> std::fmt::Display for Bracketed<'a, T>
 where
@@ -501,7 +501,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct Indices<'a>(&'a [usize]);
+pub struct Indices<'a>(pub &'a [usize]);
 
 impl<'a> std::fmt::Display for Indices<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
