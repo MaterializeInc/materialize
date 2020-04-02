@@ -45,8 +45,7 @@ docker_run "cargo build --locked --release"
 ci_collapsed_heading "Building test binaries"
 docker_run "cargo test --locked --no-run && cargo test --locked --no-run --message-format=json > test-binaries.json"
 
-if true; then # XXX(brennan) replace this with the line below before landing, it is just here for testing my PR
-#if [[ "$BUILDKITE_BRANCH" = master ]]; then
+if [[ "$BUILDKITE_BRANCH" = master ]]; then
     ci_collapsed_heading "Building .deb package"
     release_version=$(docker_run "cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == \"materialized\") | .version | match(\"[0-9]\\\\.[0-9]\\\\.[0-9]\") | .string'")
     commit_index=$(git rev-list HEAD | wc -l)
