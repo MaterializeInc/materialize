@@ -105,7 +105,7 @@ Text-formatted sources reads lines from a file.
 Raw byte-formatted sources provide Materialize the raw bytes received from the
 source without applying any formatting or decoding.
 
-Bext-formatted sources have one column, which, by default, is named `bytes`.
+Raw byte-formatted sources have one column, which, by default, is named `bytes`.
 
 ### Envelope details
 

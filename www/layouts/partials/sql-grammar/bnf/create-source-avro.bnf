@@ -2,6 +2,5 @@ create_source ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic
-  'FORMAT' 'AVRO' 'USING' ('CONFLUENT SCHEMA REGISTRY' url |
-    'SCHEMA' ('FILE' schema_file_path | inline_schema))
-  ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
+  'FORMAT' format_spec
+  ('ENVELOPE' ('NONE'|'DEBEZIUM'| ('UPSERT' ('FORMAT' format_spec)?)))?
