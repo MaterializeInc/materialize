@@ -26,10 +26,9 @@ use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
     AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding,
     ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
-    KinesisSourceConnector, PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnectorBuilder,
-    SourceConnector,
+    KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
 };
-use expr::{like_pattern, GlobalId};
+use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::Encoder;
 use ore::collections::CollectionExt;
 use repr::strconv;
@@ -1458,11 +1457,13 @@ fn handle_explain(
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let (sql_expr, expr, _, _) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
+    let (sql_expr, expr, _, row_set_finishing) =
+        handle_query(scx, query, params, QueryLifetime::OneShot)?;
     Ok(Plan::ExplainPlan {
         sql,
         raw_plan: sql_expr,
         decorrelated_plan: expr,
+        row_set_finishing,
         stage,
         options,
     })

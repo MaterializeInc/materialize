@@ -11,10 +11,10 @@
 
 #![deny(missing_debug_implementations)]
 
-use ::expr::GlobalId;
+use ::expr::{GlobalId, RowSetFinishing};
 use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::Catalog;
-use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnectorBuilder, SourceConnector};
+use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
@@ -111,6 +111,7 @@ pub enum Plan {
         sql: String,
         raw_plan: crate::expr::RelationExpr,
         decorrelated_plan: ::expr::RelationExpr,
+        row_set_finishing: RowSetFinishing,
         stage: ExplainStage,
         options: ExplainOptions,
     },

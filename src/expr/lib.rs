@@ -21,7 +21,10 @@ pub mod transform;
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, SourceInstanceId};
 pub use relation::func::{AggregateFunc, UnaryTableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
-pub use relation::{AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr};
+pub use relation::{
+    compare_columns, AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr,
+    RowSetFinishing,
+};
 pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalEnv, EvalError, ScalarExpr};
 pub use transform::OptimizedRelationExpr;
