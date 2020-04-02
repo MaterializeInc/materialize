@@ -10,8 +10,8 @@
 $ kafka-create-topic topic=bytes
 
 $ kafka-ingest format=bytes topic=bytes timestamp=1
-©1
-©2
+"©1"
+"©2"
 
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
