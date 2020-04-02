@@ -13,24 +13,62 @@ This page details changes between versions of Materialize, including:
 
 For information about available versions, see our [Versions page](../versions).
 
+{{< comment >}}
+# How to write a good release note
+
+Every release note should be phrased in the imperative mood, like a Git
+commit message. They should complete the sentence, "This release will...".
+
+Good release notes:
+
+  - [This release will...] Require the `-w` / `--threads` command-line option.
+  - [This release will...] In the event of a crash, print the stack trace.
+
+Misbehaved release notes:
+
+  - Users must now specify the `-w` / `-threads` command line option.
+  - Materialize will print a stack trace if it crashes.
+  - Instead of limiting SQL statements to 8KiB, limit them to 1024KiB instead.
+
+Link to at least one page where users can learn more about either the change or
+the area which the change was made. Notes about new features can be concise if
+the new feature has comprehensive documentation. Notes about changes to features
+must be more detailed, as the note is likely the only documentation of the
+change in behavior.
+
+Strive for some variety of verbs. "Support new feature" gets boring as a release
+note.
+
+Use relative links (../path/to/doc), not absolute links
+(https://materialize.io/docs/path/to/doc).
+{{< /comment >}}
+
 <span id="v0.2.0"></span>
 ## 0.1.3 &rarr; v0.2.0 (unreleased)
 
-- Require the `-w` / `--threads` command-line parameter. Consult the
-  [configuration documentation](https://materialize.io/docs/overview/configuration/#worker-threads) to determine the correct value for your deployment.
+- Require the `-w` / `--threads` command-line option. Consult the
+  [configuration documentation](../overview/configuration/#worker-threads)
+  to determine the correct value for your deployment.
 
-- Make formatting and parsing for `real` and `double precision` numbers more
+- Make formatting and parsing for [`real`](../sql/types/float) and
+  [`double precision`](../sql/types/float) numbers more
   consistent with PostgreSQL. The strings `NaN`, and `[+-]Infinity` are
-  accepted as input, to select the special not-a-number and infinity states
-  of floating-point numbers.
+  accepted as input, to select the special not-a-number and infinity states,
+  respectively,  of floating-point numbers.
 
-- Support CSV files with headers (`CREATE SOURCE...FORMAT CSV WITH HEADER`).
+- Allow [CSV-formatted sources](../sql/create-source/csv) to include a
+  header row (`CREATE SOURCE ... FORMAT CSV WITH HEADER`).
 
-- Support naming columns when creating CSV sources.
-- Users can now specify the address and port the daemon binds to on startup, [as described here](https://materialize.io/docs/overview/configuration/#listen-address).
-- Support parsing a wider variety of valid Avro schemas.
+- Support naming columns when creating CSV-formatted sources.
 
-- Support [`jsonb_agg()` aggregate function](../sql/functions/#functions)
+- Introduce the [`--listen-addr`](../overview/configuration#listen-address)
+  command-line option to control the address and port that `materialized` binds
+  to.
+
+- Improve conformance of the Avro parser, enabling support for
+  a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro).
+
+- Add the [`jsonb_agg()`](../sql/functions/#aggregate-func) aggregate function.
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
