@@ -34,6 +34,7 @@ retry = "1.0"
 rusoto_core = "0.43.0-beta.1"
 rusoto_credential = "0.43.0-beta.1"
 rusoto_kinesis = "0.43.0-beta.1"
+rusoto_sts = "0.43.0-beta.1"
 serde = "1.0.105"
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
 serde_json = { version = "1.0.50", features = ["preserve_order"] }

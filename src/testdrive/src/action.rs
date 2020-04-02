@@ -18,8 +18,9 @@ use protobuf::Message;
 use rand::Rng;
 use regex::{Captures, Regex};
 use rusoto_core::{HttpClient, Region};
-use rusoto_credential::{EnvironmentProvider, ProvideAwsCredentials, StaticProvider};
+use rusoto_credential::{ChainProvider, ProvideAwsCredentials, StaticProvider};
 use rusoto_kinesis::KinesisClient;
+use rusoto_sts::{GetAccessKeyInfoRequest, Sts, StsClient};
 
 use repr::strconv;
 
@@ -65,7 +66,7 @@ pub struct State {
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
     kafka_topics: HashMap<String, i32>,
     kinesis_client: KinesisClient,
-    kinesis_region: String,
+    aws_region: String,
     aws_account: String,
     aws_access_key: String,
     aws_secret_access_key: String,
@@ -145,10 +146,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             path.display().to_string()
         });
     }
-    vars.insert(
-        "testdrive.kinesis-region".into(),
-        state.kinesis_region.clone(),
-    );
+    vars.insert("testdrive.aws-region".into(), state.aws_region.clone());
     vars.insert("testdrive.aws-account".into(), state.aws_account.clone());
     vars.insert(
         "testdrive.aws-access-key".into(),
@@ -157,6 +155,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     vars.insert(
         "testdrive.aws-secret-access-key".into(),
         state.aws_secret_access_key.clone(),
+    );
+    vars.insert(
+        "testdrive.kinesis-endpoint".into(),
+        LOCALSTACK_ENDPOINT.to_string(),
     );
     for cmd in cmds {
         let pos = cmd.pos;
@@ -375,16 +377,14 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         (addr.to_owned(), admin, admin_opts, producer, topics)
     };
 
-    let (kinesis_client, kinesis_region, aws_account, aws_access_key, aws_secret_access_key) = {
+    let (kinesis_client, aws_region, aws_account, aws_access_key, aws_secret_access_key) = {
         match config.kinesis_region.clone() {
             Some(region_str) => match region_str.parse::<Region>() {
                 Ok(region) => {
-                    // Hit real AWS!
-                    // Will need these variables set in the CI environment:
-                    //      - AWS_ACCESS_KEY_ID
-                    //      - AWS_SECRET_ACCESS_KEY
-                    let env = EnvironmentProvider::default();
-                    let credentials = match tokio_runtime.block_on(env.credentials()) {
+                    // If given a real AWS region, hit real AWS!
+                    let mut chain_provider = ChainProvider::new();
+                    chain_provider.set_timeout(Duration::from_secs(60));
+                    let credentials = match tokio_runtime.block_on(chain_provider.credentials()) {
                         Ok(credentials) => credentials,
                         Err(e) => {
                             return Err(Error::General {
@@ -397,39 +397,55 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
                             })
                         }
                     };
-                    let client = KinesisClient::new_with(
-                        HttpClient::new().unwrap(),
-                        EnvironmentProvider::default(),
-                        region,
-                    );
+
+                    // Get the AWS account info for the Kinesis stream ARNs
+                    let sts_client = StsClient::new(region.clone());
+                    let get_access_key = GetAccessKeyInfoRequest {
+                        access_key_id: credentials.aws_access_key_id().to_string(),
+                    };
+                    let account = match tokio_runtime
+                        .block_on(sts_client.get_access_key_info(get_access_key))
+                    {
+                        Ok(output) => match output.account {
+                            Some(account) => account,
+                            None => {
+                                return Err(Error::General {
+                                    ctx: String::from("expected to find AWS account, found none"),
+                                    cause: None,
+                                    hints: vec![],
+                                })
+                            }
+                        },
+                        Err(e) => {
+                            return Err(Error::General {
+                                ctx: format!(
+                                    "hit error trying to get AWS account from environment: {}",
+                                    e.to_string()
+                                ),
+                                cause: None,
+                                hints: vec![],
+                            })
+                        }
+                    };
+
+                    let client =
+                        KinesisClient::new_with(HttpClient::new().unwrap(), chain_provider, region);
                     (
                         client,
-                        region_str.clone(),
-                        DUMMY_AWS_ACCOUNT.to_string(), // todo: can we grab the account dynamically? or have this preset?
+                        region_str,
+                        account,
                         credentials.aws_access_key_id().to_string(),
                         credentials.aws_secret_access_key().to_string(),
                     )
                 }
                 Err(_e) => {
                     // Hit fake AWS!
-                    (
-                        get_kinesis_client_for_localstack(),
-                        DUMMY_AWS_REGION.to_string(),
-                        DUMMY_AWS_ACCOUNT.to_string(),
-                        DUMMY_AWS_ACCESS_KEY.to_string(),
-                        DUMMY_AWS_SECRET_ACCESS_KEY.to_string(),
-                    )
+                    get_kinesis_details_for_localstack()
                 }
             },
             None => {
                 // Hit fake AWS!
-                (
-                    get_kinesis_client_for_localstack(),
-                    DUMMY_AWS_REGION.to_string(),
-                    DUMMY_AWS_ACCOUNT.to_string(),
-                    DUMMY_AWS_ACCESS_KEY.to_string(),
-                    DUMMY_AWS_SECRET_ACCESS_KEY.to_string(),
-                )
+                get_kinesis_details_for_localstack()
             }
         }
     };
@@ -449,14 +465,14 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         kafka_producer,
         kafka_topics,
         kinesis_client,
-        kinesis_region,
+        aws_region,
         aws_account,
         aws_access_key,
         aws_secret_access_key,
     })
 }
 
-fn get_kinesis_client_for_localstack() -> KinesisClient {
+fn get_kinesis_details_for_localstack() -> (KinesisClient, String, String, String, String) {
     let region = Region::Custom {
         name: DUMMY_AWS_REGION.to_string(), // NB: This must match the region localstack is started up with!!
         endpoint: LOCALSTACK_ENDPOINT.to_string(),
@@ -468,5 +484,12 @@ fn get_kinesis_client_for_localstack() -> KinesisClient {
         None,
         None,
     );
-    KinesisClient::new_with(HttpClient::new().unwrap(), provider, region)
+    let kinesis_client = KinesisClient::new_with(HttpClient::new().unwrap(), provider, region);
+    (
+        kinesis_client,
+        DUMMY_AWS_REGION.to_string(),
+        DUMMY_AWS_ACCOUNT.to_string(),
+        DUMMY_AWS_ACCESS_KEY.to_string(),
+        DUMMY_AWS_SECRET_ACCESS_KEY.to_string(),
+    )
 }

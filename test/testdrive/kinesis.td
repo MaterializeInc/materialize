@@ -16,10 +16,10 @@ $ kinesis-verify stream=test
 here's a test string
 
 > CREATE SOURCE f
-  FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.kinesis-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
+  FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
   WITH (access_key = '${testdrive.aws-access-key}',
         secret_access_key = '${testdrive.aws-secret-access-key}',
-        endpoint = 'http://localhost:4568')
+        endpoint = '${testdrive.kinesis-endpoint}')
   FORMAT BYTES;
 
 > CREATE MATERIALIZED VIEW f_view
