@@ -17,6 +17,7 @@ services:
       && wait-for-it --timeout=30 materialized:6875
       && testdrive
       --kafka-addr=kafka:9092
+      --kinesis-region=us-east-2
       --schema-registry-url=http://schema-registry:8081
       --materialized-url=postgres://ignored@materialized:6875
       --validate-catalog=/share/mzdata
