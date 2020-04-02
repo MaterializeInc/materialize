@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ file-write path=request.log
+$ file-append path=request.log
 123.17.127.5 - - [22/Jan/2020 18:59:52] "GET / HTTP/1.1" 200 -
 8.15.119.56 - - [22/Jan/2020 18:59:52] "GET /detail/nNZpqxzR HTTP/1.1" 200 -
 96.12.83.72 - - [22/Jan/2020 18:59:52] "GET /search/?kw=helper+ins+hennaed HTTP/1.1" 200 -

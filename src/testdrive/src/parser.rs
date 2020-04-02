@@ -223,9 +223,17 @@ fn split_line(pos: usize, line: &str) -> Result<Vec<String>, InputError> {
             }
         } else if c == '\\' && !escaping && in_quotes.is_some() {
             escaping = true;
+        } else if escaping {
+            field.push(match c {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                '0' => '\0',
+                c => c,
+            });
+            escaping = false;
         } else {
             field.push(c);
-            escaping = false;
         }
     }
     if let Some(i) = in_quotes {

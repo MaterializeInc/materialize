@@ -143,7 +143,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                 }
                 match builtin.name.as_ref() {
                     "avro-ocf-write" => Box::new(avro_ocf::build_write(builtin).map_err(wrap_err)?),
-                    "file-write" => Box::new(file::build_write(builtin).map_err(wrap_err)?),
+                    "avro-ocf-append" => {
+                        Box::new(avro_ocf::build_append(builtin).map_err(wrap_err)?)
+                    }
+                    "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
                     "kafka-add-partitions" => {
                         Box::new(kafka::build_add_partitions(builtin).map_err(wrap_err)?)
                     }

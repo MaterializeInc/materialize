@@ -36,7 +36,6 @@ a          NO        int8
 b          NO        int4
 mz_obj_no  NO        int8
 
-
 $ set reader-schema={
     "name": "row",
     "type": "record",
@@ -67,3 +66,30 @@ mz_obj_no  NO        int8
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
   WITH (reader_schema = '{"bad": "news", "bears"')
 validating avro ocf reader schema:
+
+> CREATE MATERIALIZED SOURCE tailed
+  FROM AVRO OCF '${testdrive.temp-dir}/data.ocf' WITH (tail = true)
+
+> SELECT * FROM tailed
+a  b  mz_obj_no
+---------------
+1  2  1
+3  4  2
+
+$ avro-ocf-append path=data.ocf
+{"a": 7, "b": 10}
+{"a": 9, "b": 12}
+
+> SELECT * FROM tailed
+a  b  mz_obj_no
+---------------
+1  2   1
+3  4   2
+7  10  3
+9  12  4
+
+> SELECT * FROM basic
+a  b  mz_obj_no
+---------------
+1  2  1
+3  4  2

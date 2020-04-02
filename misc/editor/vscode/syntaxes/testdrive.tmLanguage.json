@@ -70,7 +70,7 @@
 			"patterns": [
 				{
 					"name": "constant.character.escape.testdrive",
-					"match": "\\\\\""
+					"match": "\\\\(\"|n|t|r|0)"
 				}
 			]
         },

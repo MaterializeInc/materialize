@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fs::File;
+use std::fs::{self, File};
+use std::io::{Cursor, Write};
 use std::path;
 
 use avro::Writer;
@@ -46,25 +47,71 @@ impl Action for WriteAction {
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let path = state.temp_dir.path().join(&self.path);
-        println!("writing to {}", path.display());
+        println!("Writing to {}", path.display());
         let mut file = File::create(path).map_err(|e| e.to_string())?;
         let schema = interchange::avro::parse_schema(&self.schema)
             .map_err(|e| format!("parsing avro schema: {}", e))?;
-        let mut writer = Writer::new(schema.clone(), &mut file);
-        for record in &self.records {
-            let record = crate::format::avro::json_to_avro(
-                &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {}", e))?,
-                schema.top_node(),
-            )?;
-            writer
-                .append(record)
-                .map_err(|e| format!("writing avro record: {}", e))?;
-        }
-        writer
-            .flush()
-            .map_err(|e| format!("flushing avro writer: {}", e))?;
+        let mut writer = Writer::new(schema, &mut file);
+        write_records(&mut writer, &self.records)?;
         file.sync_all()
             .map_err(|e| format!("error syncing file: {}", e))?;
         Ok(())
     }
+}
+
+pub struct AppendAction {
+    path: String,
+    records: Vec<String>,
+}
+
+pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
+    let path = cmd.args.string("path")?;
+    let records = cmd.input;
+    cmd.args.done()?;
+    if path.contains(path::MAIN_SEPARATOR) {
+        // The goal isn't security, but preventing mistakes.
+        return Err("separators in paths are forbidden".into());
+    }
+    Ok(AppendAction { path, records })
+}
+
+impl Action for AppendAction {
+    fn undo(&self, _state: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn redo(&self, state: &mut State) -> Result<(), String> {
+        let path = state.temp_dir.path().join(&self.path);
+        println!("Appending to {}", path.display());
+        let mut buf = fs::read(&path).map_err(|e| e.to_string())?;
+        // TODO(benesch): we'll be able to open the writer on the file directly
+        // once the Avro reader is no longer asynchronous.
+        let mut writer = state
+            .tokio_runtime
+            .block_on(Writer::append_to(Cursor::new(&mut buf)))
+            .map_err(|e| e.to_string())?;
+        write_records(&mut writer, &self.records)?;
+        fs::write(path, buf).map_err(|e| format!("error syncing file: {}", e))?;
+        Ok(())
+    }
+}
+
+fn write_records<W>(writer: &mut Writer<W>, records: &[String]) -> Result<(), String>
+where
+    W: Write,
+{
+    let schema = writer.schema().clone();
+    for record in records {
+        let record = crate::format::avro::json_to_avro(
+            &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {}", e))?,
+            schema.top_node(),
+        )?;
+        writer
+            .append(record)
+            .map_err(|e| format!("writing avro record: {}", e))?;
+    }
+    writer
+        .flush()
+        .map_err(|e| format!("flushing avro writer: {}", e))?;
+    Ok(())
 }
