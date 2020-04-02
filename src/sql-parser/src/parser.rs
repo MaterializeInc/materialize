@@ -354,6 +354,15 @@ impl Parser {
             );
         }
         let args = self.parse_optional_args()?;
+        let filter = if self.parse_keyword("FILTER") {
+            self.expect_token(&Token::LParen)?;
+            self.expect_keyword("WHERE")?;
+            let expr = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+            Some(Box::new(expr))
+        } else {
+            None
+        };
         let over = if self.parse_keyword("OVER") {
             // TBD: support window names (`OVER mywin`) in place of inline specification
             self.expect_token(&Token::LParen)?;
@@ -388,6 +397,7 @@ impl Parser {
         Ok(Expr::Function(Function {
             name,
             args,
+            filter,
             over,
             distinct,
         }))
