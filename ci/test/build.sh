@@ -48,7 +48,7 @@ docker_run "cargo test --locked --no-run && cargo test --locked --no-run --messa
 if true; then # XXX(brennan) replace this with the line below before landing, it is just here for testing my PR
 #if [[ "$BUILDKITE_BRANCH" = master ]]; then
     ci_collapsed_heading "Building .deb package"
-    release_version=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "materialized") | .version | match("[0-9]\\.[0-9]\\.[0-9]") | .string')
+    release_version=$(docker_run "cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == \"materialized\") | .version | match(\"[0-9]\\\\.[0-9]\\\\.[0-9]\") | .string'")
     commit_index=$(git rev-list HEAD | wc -l)
     commit_hash=$(git rev-parse HEAD)
     docker_run "cargo-deb --no-strip --deb-version $release_version-$commit_index-$commit_hash -p materialized -o target/debian/materialized.deb"
