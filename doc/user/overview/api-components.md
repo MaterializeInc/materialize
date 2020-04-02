@@ -156,7 +156,7 @@ Creating additional indexes on materialized views lets you store some subset of 
 ## Related pages
 
 - [`CREATE SOURCE`](../../sql/create-source)
-- [`CREATE MATERIALIAZED VIEW`](../../sql/create-materialized-view)
+- [`CREATE MATERIALIZED VIEW`](../../sql/create-materialized-view)
 - [`CREATE VIEW`](../../sql/create-view)
 - [`CREATE INDEX`](../../sql/create-index)
 
