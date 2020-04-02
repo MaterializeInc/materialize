@@ -12,7 +12,7 @@ aliases:
 with its data as if it were in a SQL table.
 
 This document details how to connect Materialize to a stream of JSON data over
-AWS Kinesis. For other options, view [`CREATE  SOURCE`](../).
+AWS Kinesis. For other options, view [`CREATE SOURCE`](../).
 
 ## Conceptual framework
 
@@ -57,8 +57,8 @@ This document assumes you're using Kafka to send JSON data to Materialize.
 ### Byte format details
 
 Materialize receives all data from Kinesis streams as bytes, which you must
-convert to [`text`](/docs/sql/data-types/text), and then to
-[`jsonb`](/docs/sql/data-types/jsonb).
+convert to [`text`](/docs/sql/types/text), and then to
+[`jsonb`](/docs/sql/types/jsonb).
 
 Here is an example of using a Kinesis source, converting the streams bytes into
 `jsonb` data:
