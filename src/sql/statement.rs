@@ -863,6 +863,7 @@ fn handle_create_view(
 
 pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Error> {
     if let Statement::CreateSource {
+        col_names,
         connector,
         format,
         with_options,
@@ -925,26 +926,25 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                     *schema = sql_parser::ast::Schema::Inline(buf);
                 }
             }
-            Some(Format::Csv { header_row, .. }) => {
-                if *header_row {
+            Some(Format::Csv {
+                header_row,
+                delimiter,
+                ..
+            }) => {
+                if *header_row && col_names.is_empty() {
                     match connector {
                         Connector::File { path } => {
-                            if !with_options_map.contains_key("col_names") {
-                                let path = path.clone();
-                                let f = tokio::fs::File::open(path).await?;
-                                let f = tokio::io::BufReader::new(f);
-                                let csv_header = f.lines().next_line().await?;
-                                match csv_header {
-                                    Some(csv_header) => {
-                                        with_options.push(sql_parser::ast::SqlOption {
-                                            name: sql_parser::ast::Ident::new("col_names"),
-                                            value: sql_parser::ast::Value::SingleQuotedString(
-                                                csv_header,
-                                            ),
-                                        });
-                                    }
-                                    None => bail!("CSV file expected header line, but is empty"),
+                            let path = path.clone();
+                            let f = tokio::fs::File::open(path).await?;
+                            let f = tokio::io::BufReader::new(f);
+                            let csv_header = f.lines().next_line().await?;
+                            match csv_header {
+                                Some(csv_header) => {
+                                    csv_header
+                                        .split(*delimiter as char)
+                                        .for_each(|v| col_names.push(Ident::from(v)));
                                 }
+                                None => bail!("CSV file expected header line, but is empty"),
                             }
                         }
                         _ => bail!("CSV format with headers only works with file connectors"),
@@ -961,6 +961,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
     match &stmt {
         Statement::CreateSource {
             name,
+            col_names,
             connector,
             with_options,
             format,
@@ -973,7 +974,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
             };
 
-            let get_encoding = |mut with_options: std::collections::HashMap<String, Value>| {
+            let get_encoding = || {
                 let format = format
                     .as_ref()
                     .ok_or_else(|| format_err!("Source format must be specified"))?;
@@ -1043,39 +1044,17 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         n_cols,
                         delimiter,
                     } => {
-                        let (col_names, n_cols) = match with_options.remove("col_names") {
-                            Some(Value::SingleQuotedString(s)) => {
-                                let col_names: Vec<String> =
-                                    s.split(*delimiter as char).map(|v| v.to_string()).collect();
-                                let n_cols_derived = col_names.len();
-                                // If user specified number of columns, ensure it matches the
-                                // number of names provided.
-                                if let Some(n_cols) = n_cols {
-                                    if *n_cols != n_cols_derived {
-                                        bail!(
-                                            "Provided names for {} columns, but specified {} columns \
-                                             when creating source",
-                                            n_cols_derived,
-                                            n_cols
-                                        )
-                                    }
-                                };
-                                (Some(col_names), n_cols_derived)
+                        let n_cols = if col_names.is_empty() {
+                            match n_cols {
+                                Some(n) => *n,
+                                None => bail!("Cannot determine number of columns in CSV source; specify using \
+                                CREATE SOURCE...FORMAT CSV WITH X COLUMNS")
                             }
-                            _ => {
-                                match n_cols {
-                                    Some(n_cols) => (None, *n_cols),
-                                    None => bail!(
-                                        "Cannot determine number of columns in CSV source; specify using \
-                                        CREATE SOURCE...FORMAT CSV WITH X COLUMNS"
-                                    )
-                                }
-                            },
+                        } else {
+                            col_names.len()
                         };
-
                         DataEncoding::Csv(CsvEncoding {
                             header_row: *header_row,
-                            col_names,
                             n_cols,
                             delimiter: match *delimiter as u32 {
                                 0..=127 => *delimiter as u8,
@@ -1109,7 +1088,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         topic: topic.clone(),
                         ssl_certificate_file,
                     });
-                    let encoding = get_encoding(with_options)?;
+                    let encoding = get_encoding()?;
                     (connector, encoding)
                 }
                 Connector::Kinesis { arn, .. } => {
@@ -1168,7 +1147,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         access_key,
                         secret_access_key,
                     });
-                    let encoding = get_encoding(with_options)?;
+                    let encoding = get_encoding()?;
                     (connector, encoding)
                 }
                 Connector::File { path, .. } => {
@@ -1181,7 +1160,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         path: path.clone().into(),
                         tail,
                     });
-                    let encoding = get_encoding(with_options)?;
+                    let encoding = get_encoding()?;
                     (connector, encoding)
                 }
                 Connector::AvroOcf { path, .. } => {
@@ -1210,6 +1189,21 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             };
 
             let mut desc = encoding.desc(envelope)?;
+
+            let typ = desc.typ();
+            if !col_names.is_empty() {
+                if col_names.len() != typ.column_types.len() {
+                    bail!(
+                        "SOURCE definition has {} columns, but expected {} columns",
+                        col_names.len(),
+                        typ.column_types.len()
+                    )
+                }
+                for (i, name) in col_names.iter().enumerate() {
+                    desc.set_name(i, Some(normalize::column_name(name.clone())));
+                }
+            }
+
             // TODO(benesch): the available metadata columns should not depend
             // on the format.
             match encoding {

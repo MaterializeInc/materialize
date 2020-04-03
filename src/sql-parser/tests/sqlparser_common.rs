@@ -2962,6 +2962,7 @@ fn parse_create_source_inline_schema() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -2992,6 +2993,7 @@ fn parse_create_source_kafka() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3036,6 +3038,7 @@ fn parse_create_source_file_schema_protobuf_multiple_args() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3069,6 +3072,7 @@ fn parse_create_source_regex() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3095,6 +3099,41 @@ fn parse_create_source_regex() {
 }
 
 #[test]
+fn parse_create_source_regex_col_names() {
+    let sql = "CREATE SOURCE IF NOT EXISTS foo (one, two) \
+               FROM FILE 'bar' WITH (tail = true) \
+               FORMAT REGEX '(asdf)|(jkl)'";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            col_names,
+            connector,
+            with_options,
+            format,
+            envelope,
+            if_not_exists,
+            materialized,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!(vec![Ident::new("one"), Ident::new("two")], col_names);
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
+            assert_eq!(
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(true)
+                }],
+                with_options,
+            );
+            assert_eq!(Format::Regex("(asdf)|(jkl)".into()), format.unwrap());
+            assert_eq!(Envelope::None, envelope);
+            assert!(if_not_exists);
+            assert!(!materialized);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn parse_create_source_csv() {
     let sql = "CREATE SOURCE foo \
                FROM FILE 'bar' WITH (tail = false) \
@@ -3102,6 +3141,7 @@ fn parse_create_source_csv() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3142,6 +3182,7 @@ fn parse_create_source_csv_wo_header() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3175,29 +3216,24 @@ fn parse_create_source_csv_wo_header() {
 }
 
 #[test]
-fn parse_create_source_csv_man_header() {
-    let sql = "CREATE SOURCE foo \
-               FROM FILE 'bar' WITH (col_names = 'one,two') \
+fn parse_create_source_csv_cols_names() {
+    let sql = "CREATE SOURCE foo (one, two) \
+               FROM FILE 'bar' \
                FORMAT CSV WITH HEADER";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names,
             connector,
-            with_options,
+            with_options: _,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
             assert_eq!("foo", name.to_string());
+            assert_eq!(vec![Ident::new("one"), Ident::new("two")], col_names);
             assert_eq!(Connector::File { path: "bar".into() }, connector);
-            assert_eq!(
-                vec![SqlOption {
-                    name: "col_names".into(),
-                    value: Value::SingleQuotedString("one,two".to_string())
-                }],
-                with_options
-            );
             assert_eq!(
                 Format::Csv {
                     header_row: true,
@@ -3222,6 +3258,7 @@ fn parse_create_source_csv_custom_delim() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3297,6 +3334,7 @@ fn parse_create_source_registry() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,

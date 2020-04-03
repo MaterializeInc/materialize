@@ -169,6 +169,7 @@ pub fn create_statement(
     match &mut stmt {
         Statement::CreateSource {
             name,
+            col_names,
             connector: _,
             with_options: _,
             format: _,
@@ -177,6 +178,9 @@ pub fn create_statement(
             materialized,
         } => {
             *name = allocate_name(name)?;
+            for c in col_names {
+                norm_ident(c);
+            }
             *if_not_exists = false;
             *materialized = false;
         }
