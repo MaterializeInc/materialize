@@ -61,13 +61,13 @@ $ kafka-verify format=avro sink=materialize.public.snk2
 {"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
 
 $ kafka-verify format=avro sink=materialize.public.snk3
-{"before": null, "after": {"c": "jackjill", "mz_line_no": 2}}
-{"before": null, "after": {"c": "goofusgallant", "mz_line_no": 3}}
+{"before": null, "after": {"c": "jackjill"}}
+{"before": null, "after": {"c": "goofusgallant"}}
 
 $ kafka-verify format=avro sink=materialize.public.snk4
-{"before": null, "after": {"c": "jackjill", "mz_line_no": 2}}
-{"before": null, "after": {"c": "goofusgallant", "mz_line_no": 3}}
+{"before": null, "after": {"c": "jackjill"}}
+{"before": null, "after": {"c": "goofusgallant"}}
 
 $ kafka-verify format=avro sink=materialize.public.snk5
-{"before": null, "after": {"c": "jackjill", "mz_line_no": 2}}
-{"before": null, "after": {"c": "goofusgallant", "mz_line_no": 3}}
+{"before": null, "after": {"c": "jackjill"}}
+{"before": null, "after": {"c": "goofusgallant"}}
