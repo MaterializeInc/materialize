@@ -267,15 +267,23 @@ where
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
                     for ((key, payload), aux_num) in data.iter() {
+                        if key.is_empty() {
+                            error!("{}", "Encountered empty key");
+                            continue;
+                        }
                         match key_decoder_state.decode_key(key) {
                             Ok(key) => {
-                                value_decoder_state.give_key_value(
-                                    key,
-                                    payload,
-                                    aux_num,
-                                    &mut session,
-                                    *cap.time(),
-                                );
+                                if payload.is_empty() {
+                                    session.give(((key, None), *cap.time(), 1));
+                                } else {
+                                    value_decoder_state.give_key_value(
+                                        key,
+                                        payload,
+                                        aux_num,
+                                        &mut session,
+                                        *cap.time(),
+                                    );
+                                }
                             }
                             Err(err) => {
                                 error!("{}", err);
@@ -304,6 +312,16 @@ where
         value_encoding.op_name()
     );
     match (key_encoding, value_encoding) {
+        (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_kafka_upsert_inner(
+            stream,
+            BytesDecoderState,
+            avro::AvroDecoderState::new(
+                &val_enc.value_schema,
+                val_enc.schema_registry_url,
+                interchange::avro::EnvelopeType::Upsert,
+            ),
+            &op_name,
+        ),
         (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_kafka_upsert_inner(
             stream,
             TextDecoderState,
@@ -328,6 +346,15 @@ where
             ),
             &op_name,
         ),
+        (DataEncoding::Text, DataEncoding::Bytes) => {
+            decode_kafka_upsert_inner(stream, TextDecoderState, BytesDecoderState, &op_name)
+        }
+        (DataEncoding::Bytes, DataEncoding::Bytes) => {
+            decode_kafka_upsert_inner(stream, BytesDecoderState, BytesDecoderState, &op_name)
+        }
+        (DataEncoding::Text, DataEncoding::Text) => {
+            decode_kafka_upsert_inner(stream, TextDecoderState, TextDecoderState, &op_name)
+        }
         _ => unreachable!(),
     }
 }
@@ -350,7 +377,14 @@ where
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
                     for ((_, payload), aux_num) in data.iter() {
-                        value_decoder_state.give_value(payload, aux_num, &mut session, *cap.time());
+                        if !payload.is_empty() {
+                            value_decoder_state.give_value(
+                                payload,
+                                aux_num,
+                                &mut session,
+                                *cap.time(),
+                            );
+                        }
                     }
                 });
                 value_decoder_state.log_error_count();
@@ -406,7 +440,14 @@ where
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
                     for (payload, aux_num) in data.iter() {
-                        value_decoder_state.give_value(payload, aux_num, &mut session, *cap.time());
+                        if !payload.is_empty() {
+                            value_decoder_state.give_value(
+                                payload,
+                                aux_num,
+                                &mut session,
+                                *cap.time(),
+                            );
+                        }
                     }
                 });
                 value_decoder_state.log_error_count();

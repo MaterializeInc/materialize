@@ -1248,10 +1248,6 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &mut encoding {
                     *key_schema = None;
                 }
-                // TODO: remove the bail once PR #2943 is in
-                // the bail is meant to prevent someone from accidentally trying
-                // the upsert envelope and then causing a panic.
-                bail!("Upsert envelope is not supported yet");
             }
 
             let mut desc = encoding.desc(&envelope)?;
