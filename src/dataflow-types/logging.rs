@@ -89,6 +89,7 @@ pub enum MaterializedLog {
     ForeignKeys,
     Catalog,
     KafkaSinks,
+    AvroOcfSinks,
 }
 
 impl LogVariant {
@@ -111,6 +112,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::ForeignKeys),
             LogVariant::Materialized(MaterializedLog::Catalog),
             LogVariant::Materialized(MaterializedLog::KafkaSinks),
+            LogVariant::Materialized(MaterializedLog::AvroOcfSinks),
         ]
     }
 
@@ -138,6 +140,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys",
             LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names",
             LogVariant::Materialized(MaterializedLog::KafkaSinks) => "mz_kafka_sinks",
+            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => "mz_avro_ocf_sinks",
         }
     }
 
@@ -161,6 +164,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(29),
             LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(31),
             LogVariant::Materialized(MaterializedLog::KafkaSinks) => GlobalId::system(55),
+            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => GlobalId::system(57),
         }
     }
 
@@ -184,6 +188,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(30),
             LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(32),
             LogVariant::Materialized(MaterializedLog::KafkaSinks) => GlobalId::system(56),
+            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => GlobalId::system(58),
         }
     }
 
@@ -306,6 +311,11 @@ impl LogVariant {
                 .add_column("global_id", ScalarType::String)
                 .add_column("topic", ScalarType::String)
                 .add_keys(vec![0]),
+
+            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => RelationDesc::empty()
+                .add_column("global_id", ScalarType::String)
+                .add_column("path", ScalarType::String)
+                .add_keys(vec![0]),
         }
     }
 
@@ -360,6 +370,7 @@ impl LogVariant {
             ],
             LogVariant::Materialized(MaterializedLog::Catalog) => vec![],
             LogVariant::Materialized(MaterializedLog::KafkaSinks) => vec![],
+            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => vec![],
         }
     }
 }

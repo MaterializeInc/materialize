@@ -36,7 +36,7 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen, SinkConnector,
+    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen, SinkConnector,
     TailSinkConnector, Timestamp, Update,
 };
 use expr::transform::Optimizer;
@@ -1411,7 +1411,6 @@ where
                             ..
                         }) => {
                             sinks_to_drop.push(entry.id());
-                            #[allow(clippy::single_match)]
                             match connector {
                                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
                                     broadcast(
@@ -1421,6 +1420,21 @@ where
                                             topic: topic.clone(),
                                             insert: false,
                                         }),
+                                    );
+                                }
+                                SinkConnector::AvroOcf(AvroOcfSinkConnector { path }) => {
+                                    broadcast(
+                                        &mut self.broadcast_tx,
+                                        SequencedCommand::AppendLog(
+                                            MaterializedEvent::AvroOcfSink {
+                                                id: entry.id(),
+                                                path: path
+                                                    .to_str()
+                                                    .unwrap_or("<invalid utf8>")
+                                                    .to_string(),
+                                                insert: false,
+                                            },
+                                        ),
                                     );
                                 }
                                 _ => (),
@@ -1649,6 +1663,16 @@ where
                     SequencedCommand::AppendLog(MaterializedEvent::KafkaSink {
                         id,
                         topic: topic.clone(),
+                        insert: true,
+                    }),
+                );
+            }
+            SinkConnector::AvroOcf(AvroOcfSinkConnector { path }) => {
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::AvroOcfSink {
+                        id,
+                        path: path.to_str().unwrap_or("<invalid utf8>").to_string(),
                         insert: true,
                     }),
                 );

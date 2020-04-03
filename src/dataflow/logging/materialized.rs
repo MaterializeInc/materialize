@@ -29,6 +29,12 @@ pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifi
     Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub enum MaterializedEvent {
+    /// Avro OCF sink.
+    AvroOcfSink {
+        id: GlobalId,
+        path: String,
+        insert: bool,
+    },
     /// Map from global identifiers to string name.
     Catalog(GlobalId, String, bool),
     /// Dataflow command, true for create and false for drop.
@@ -107,6 +113,7 @@ pub fn construct<A: Allocate>(
         let (mut foreign_out, foreign) = demux.new_output();
         let (mut catalog_out, catalog) = demux.new_output();
         let (mut kafka_sinks_out, kafka_sinks) = demux.new_output();
+        let (mut avro_ocf_sinks_out, avro_ocf_sinks) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -124,6 +131,7 @@ pub fn construct<A: Allocate>(
                 let mut foreign = foreign_out.activate();
                 let mut catalog = catalog_out.activate();
                 let mut kafka_sinks = kafka_sinks_out.activate();
+                let mut avro_ocf_sinks = avro_ocf_sinks_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -136,6 +144,7 @@ pub fn construct<A: Allocate>(
                     let mut foreign_session = foreign.session(&time);
                     let mut catalog_session = catalog.session(&time);
                     let mut kafka_sinks_session = kafka_sinks.session(&time);
+                    let mut avro_ocf_sinks_session = avro_ocf_sinks.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos() as Timestamp;
@@ -144,6 +153,16 @@ pub fn construct<A: Allocate>(
                         let time_ms = time_ms as Timestamp;
 
                         match datum {
+                            MaterializedEvent::AvroOcfSink { id, path, insert } => {
+                                avro_ocf_sinks_session.give((
+                                    Row::pack(&[
+                                        Datum::String(&id.to_string()),
+                                        Datum::String(&path),
+                                    ]),
+                                    time_ms,
+                                    if insert { 1 } else { -1 },
+                                ))
+                            }
                             MaterializedEvent::Catalog(id, name, insert) => {
                                 catalog_session.give((
                                     (id, name),
@@ -353,6 +372,7 @@ pub fn construct<A: Allocate>(
             move |(id, name)| Row::pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
         });
         let kafka_sinks = kafka_sinks.as_collection();
+        let avro_ocf_sinks = avro_ocf_sinks.as_collection();
 
         // Duration statistics derive from the non-rounded event times.
         use differential_dataflow::operators::reduce::Count;
@@ -451,6 +471,10 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Materialized(MaterializedLog::KafkaSinks),
                 kafka_sinks,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::AvroOcfSinks),
+                avro_ocf_sinks,
             ),
         ];
 
