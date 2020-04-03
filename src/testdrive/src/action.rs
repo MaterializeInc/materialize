@@ -20,7 +20,7 @@ use regex::{Captures, Regex};
 use rusoto_core::{HttpClient, Region};
 use rusoto_credential::{ChainProvider, ProvideAwsCredentials, StaticProvider};
 use rusoto_kinesis::KinesisClient;
-use rusoto_sts::{GetAccessKeyInfoRequest, Sts, StsClient};
+use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
 
 use repr::strconv;
 
@@ -400,11 +400,8 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
                     // Get the AWS account info for the Kinesis stream ARNs
                     let sts_client = StsClient::new(region.clone());
-                    let get_access_key = GetAccessKeyInfoRequest {
-                        access_key_id: credentials.aws_access_key_id().to_string(),
-                    };
                     let account = match tokio_runtime
-                        .block_on(sts_client.get_access_key_info(get_access_key))
+                        .block_on(sts_client.get_caller_identity(GetCallerIdentityRequest {}))
                     {
                         Ok(output) => match output.account {
                             Some(account) => account,
