@@ -119,7 +119,7 @@ $ set timestamp-schema={
     "type": "record",
     "fields": [
       {
-        "name": "date",
+        "name": "d",
         "type": {
           "type": "int",
           "logicalType": "date"
@@ -145,14 +145,14 @@ $ set timestamp-schema={
   }
 
 $ avro-ocf-write path=timestamp.ocf schema=${timestamp-schema}
-{"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}
-{"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}
+{"d": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}
+{"d": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}
 
 > CREATE MATERIALIZED SOURCE timestamp_source
   FROM AVRO OCF '${testdrive.temp-dir}/timestamp.ocf'
 
 > SELECT * FROM timestamp_source
-date  ts ts_tz  mz_obj_no
+d     ts ts_tz  mz_obj_no
 -------------------------
 "2000-02-01" "2000-02-01 10:10:10.000297" "2000-02-01 08:10:10.000232" 1
 "2000-01-01" "2000-01-01 10:10:10.000890" "2000-01-01 08:10:10.000857" 2
@@ -160,7 +160,24 @@ date  ts ts_tz  mz_obj_no
 > SHOW COLUMNS FROM timestamp_source
 Field      Nullable  Type
 -------------------------
-date          NO      date
+d             NO      date
 ts            NO      timestamp
 ts_tz         NO      timestamp
 mz_obj_no     NO      int8
+
+> CREATE SINK basic_sink_${testdrive.seed} FROM basic
+  INTO AVRO OCF '${testdrive.temp-dir}/basic-sink.ocf'
+
+$ avro-ocf-verify sink=materialize.public.basic_sink_${testdrive.seed}
+{"before": null, "after": {"a": 1, "b": 2, "mz_obj_no": 1}}
+{"before": null, "after": {"a": 3, "b": 4, "mz_obj_no": 2}}
+
+> CREATE VIEW dateish AS
+  SELECT d FROM timestamp_source
+
+> CREATE SINK date_sink_${testdrive.seed} FROM dateish
+  INTO AVRO OCF '${testdrive.temp-dir}/date-sink.ocf'
+
+$ avro-ocf-verify sink=materialize.public.date_sink_${testdrive.seed}
+{"before": null, "after": {"d": 10988}}
+{"before": null, "after": {"d": 10957}}

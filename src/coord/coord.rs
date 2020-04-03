@@ -36,8 +36,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen, SinkConnector,
-    TailSinkConnector, Timestamp, Update,
+    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
+    SinkConnector, TailSinkConnector, Timestamp, Update,
 };
 use expr::transform::Optimizer;
 use expr::{

@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use avro::types::Value as AvroValue;
 use byteorder::{BigEndian, ByteOrder};
 use futures::executor::block_on;
 use futures::stream::StreamExt;
@@ -128,10 +127,14 @@ impl Action for VerifyAction {
         // Additionally, we do this bummer of a comparison because
         // avro::types::Value does not implement Eq or Ord.
         // TODO@jldlaughlin: update this once we have Kafka ordering guarantees
-        let missing_values =
-            get_values_in_first_list_not_in_second(&converted_expected_messages, &actual_messages);
-        let additional_values =
-            get_values_in_first_list_not_in_second(&actual_messages, &converted_expected_messages);
+        let missing_values = crate::action::get_values_in_first_list_not_in_second(
+            &converted_expected_messages,
+            &actual_messages,
+        );
+        let additional_values = crate::action::get_values_in_first_list_not_in_second(
+            &actual_messages,
+            &converted_expected_messages,
+        );
 
         if !missing_values.is_empty() || !additional_values.is_empty() {
             return Err(format!(
@@ -142,23 +145,4 @@ impl Action for VerifyAction {
 
         Ok(())
     }
-}
-
-fn get_values_in_first_list_not_in_second(
-    first_list: &[AvroValue],
-    second_list: &[AvroValue],
-) -> Vec<AvroValue> {
-    let mut first_list_clone: Vec<AvroValue> = first_list.to_vec();
-    let mut missing_values = Vec::new();
-    for s in second_list {
-        let pos = first_list_clone.iter().position(|x| *x == *s);
-        match pos {
-            Some(index) => {
-                first_list_clone.remove(index);
-                continue;
-            }
-            None => missing_values.push(s.clone()),
-        }
-    }
-    missing_values
 }
