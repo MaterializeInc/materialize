@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use repr::{Datum, Row, RowArena};
 
@@ -102,11 +102,22 @@ impl FoldConstants {
                             let temp_storage = RowArena::new();
                             let row = Row::pack(key.into_iter().chain(
                                 aggregates.iter().enumerate().map(|(i, agg)| {
-                                    agg.func.eval(
-                                        vals.iter().map(|val| val[i].unpack_first()),
-                                        env,
-                                        &temp_storage,
-                                    )
+                                    if agg.distinct {
+                                        agg.func.eval(
+                                            vals.iter()
+                                                .map(|val| val[i].unpack_first())
+                                                .collect::<HashSet<_>>()
+                                                .into_iter(),
+                                            env,
+                                            &temp_storage,
+                                        )
+                                    } else {
+                                        agg.func.eval(
+                                            vals.iter().map(|val| val[i].unpack_first()),
+                                            env,
+                                            &temp_storage,
+                                        )
+                                    }
                                 }),
                             ));
                             (row, 1)
