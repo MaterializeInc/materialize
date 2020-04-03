@@ -833,6 +833,33 @@ SELECT '2007-02-01 15:04:05+06'::timestamptz;
 ----
 2007-02-01 09:04:05+00
 
+# Test datetime types to string
+
+query T
+SELECT (date '2007-02-01')::text
+----
+2007-02-01
+
+query T
+SELECT (interval '-1-2 3 -4:5:6.7')::text;
+----
+-1 year -2 months +2 days +19:54:53.3
+
+query T
+SELECT (time '01:23:45')::text;
+----
+01:23:45
+
+query T
+SELECT (timestamp '2007-02-01 15:04:05')::text;
+----
+2007-02-01 15:04:05
+
+query T
+SELECT (timestamptz '2007-02-01 15:04:05+06')::text;
+----
+2007-02-01 09:04:05+00
+
 # Test special date-timme inputs from Postgres
 
 query T
@@ -885,3 +912,20 @@ SELECT DATE '2007-02-01TT15:04:05'
 
 statement error Invalid DATE '2007-02-01  T  T  15:04:05': Cannot determine format of all parts
 SELECT DATE '2007-02-01  T  T  15:04:05'
+
+# Test casting time to interval & vice versa
+
+query T
+SELECT time '01:02:03.04'::interval;
+----
+01:02:03.04
+
+query T
+SELECT interval '01:02:03.04'::time;
+----
+01:02:03.04
+
+query T
+SELECT interval '-01:02:03.04'::time;
+----
+22:57:56.96
