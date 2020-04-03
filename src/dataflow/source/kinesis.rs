@@ -74,6 +74,7 @@ where
                 Ok(state) => state,
                 Err(e) => {
                     error!("failed to create Kinesis state: {}", e);
+                    println!("failed to create Kinesis state: {}", e);
                     return SourceStatus::Done;
                 }
             };
@@ -132,6 +133,7 @@ where
                 downgrade_capability(cap, &name);
 
                 if let Some(0) = get_records_output.millis_behind_latest {
+                    println!("caught up!");
                     // This activation does the following:
                     //      1. Ensures we poll Kinesis more often than the eviction timeout (5 minutes)
                     //      2. Proactively and frequently reactivates this source, since we don't have a
