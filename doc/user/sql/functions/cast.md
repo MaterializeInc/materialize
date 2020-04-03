@@ -32,18 +32,20 @@ Source type | Return type
 `int` | `bool`
 `int` | `float`
 `int` | `decimal`
-`int` | `string`
+`int` | `text`
 `float`| `int`
 `float`| `decimal`<sup>1</sup>
-`float`| `string`
+`float`| `text`
 `decimal` | `int`
 `decimal` | `float`
-`decimal` | `string`
+`decimal` | `text`
 `date` | `timestamp`
 `date` | `timestamptz`
-`date` | `string`
+`date` | `text`
 `time` | `interval`
-`time` | `string`
+`time` | `text`
+`interval` | `time`
+`interval` | `text`
 
 <sup>1</sup> Casting a `float` to a `decimal` can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 

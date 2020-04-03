@@ -56,10 +56,12 @@ Use relative links (../path/to/doc), not absolute links
   accepted as input, to select the special not-a-number and infinity states,
   respectively,  of floating-point numbers.
 
-- Allow [CSV-formatted sources](../sql/create-source/csv) to include a
+- Allow [CSV-formatted sources](../sql/create-source/csv-source/#csv-format-details) to include a
   header row (`CREATE SOURCE ... FORMAT CSV WITH HEADER`).
 
-- Support naming columns when creating CSV-formatted sources.
+- Provide users the option to name columns in sources (e.g. [`CREATE SOURCE foo
+  (col_foo,
+  col_bar)...`](../sql/create-source/csv-source/#creating-a-source-from-a-dynamic-csv))
 
 - Introduce the [`--listen-addr`](../overview/configuration#listen-address)
   command-line option to control the address and port that `materialized` binds
@@ -69,6 +71,8 @@ Use relative links (../path/to/doc), not absolute links
   a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro).
 
 - Add the [`jsonb_agg()`](../sql/functions/#aggregate-func) aggregate function.
+
+- Support [casts](../sql/functions/cast/) for `time`->`text`,`time`->`interval`, `interval`->`time`.
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
