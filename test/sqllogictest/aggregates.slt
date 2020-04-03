@@ -148,3 +148,20 @@ SELECT v, variance(k) FILTER (WHERE k > 5), stddev(k) FILTER (WHERE k > 5) FROM 
 2     0.500000000000  0.707106781186
 4     NULL            NULL
 NULL  NULL            NULL
+
+
+# Multiple tests related to distinctness of aggregates on constants (issue #2535)
+query I rowsort
+select count(distinct column1) from (values (1)) _;
+----
+1
+
+query I rowsort
+select count(distinct column1) from (values (1), (2), (1), (4)) _;
+----
+3
+
+query I rowsort
+select sum(distinct column1) from (values (1), (2), (1), (4)) _;
+----
+7
