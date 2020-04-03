@@ -359,8 +359,22 @@ impl FoldConstants {
         // will be consolidated. We have to make a separate check for constant
         // nodes here, since the match arm above might install new constant
         // nodes.
-        if let RelationExpr::Constant { rows, .. } = relation {
+        if let RelationExpr::Constant { rows, typ } = relation {
+            // Reduce down to canonical representation.
             differential_dataflow::consolidation::consolidate(rows);
+            rows.retain(|(_row, count)| count != &0);
+            // Re-establish nullability of each column.
+            for col_type in typ.column_types.iter_mut() {
+                col_type.nullable = false;
+            }
+            for (row, _) in rows.iter_mut() {
+                let datums = row.unpack();
+                for (index, datum) in datums.iter().enumerate() {
+                    if datum.is_null() {
+                        typ.column_types[index].nullable = true;
+                    }
+                }
+            }
         }
 
         Ok(())
