@@ -249,13 +249,12 @@ where
                             Some(_) => {
                                 last_processed_offsets
                                     .insert(PartitionId::Kafka(partition), offset);
-                                if let Some(payload) = payload {
-                                    let out = payload.to_vec();
-                                    bytes_read += out.len() as i64;
-                                    output
-                                        .session(&cap)
-                                        .give(((key, out), Some(message.offset())));
-                                }
+                                let out = payload.map(|p| p.to_vec()).unwrap_or_default();
+                                bytes_read += key.len() as i64;
+                                bytes_read += out.len() as i64;
+                                output
+                                    .session(&cap)
+                                    .give(((key, out), Some(message.offset())));
 
                                 downgrade_capability(
                                     &id,
@@ -308,12 +307,6 @@ where
                         match result {
                             Ok(message) => {
                                 let key = message.key().map(|k| k.to_vec()).unwrap_or_default();
-                                let payload = match message.payload() {
-                                    Some(p) => p,
-                                    // Null payloads are expected from Debezium.
-                                    // See https://github.com/MaterializeInc/materialize/issues/439#issuecomment-534236276
-                                    None => continue,
-                                };
 
                                 let ms = match message.timestamp() {
                                     KafkaTimestamp::NotAvailable => {
@@ -338,7 +331,8 @@ where
                                     );
                                 };
 
-                                let out = payload.to_vec();
+                                let out = message.payload().map(|p| p.to_vec()).unwrap_or_default();
+                                bytes_read += key.len() as i64;
                                 bytes_read += out.len() as i64;
                                 output
                                     .session(&cap)
