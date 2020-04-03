@@ -371,6 +371,23 @@ fn parse_select_count_wildcard() {
         &Expr::Function(Function {
             name: ObjectName(vec![Ident::new("COUNT")]),
             args: vec![Expr::Wildcard],
+            filter: None,
+            over: None,
+            distinct: false,
+        }),
+        expr_from_projection(only(&select.projection))
+    );
+}
+
+#[test]
+fn parse_select_count_filter() {
+    let sql = "SELECT COUNT(*) FILTER (WHERE foo) FROM customer";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Function(Function {
+            name: ObjectName(vec![Ident::new("COUNT")]),
+            args: vec![Expr::Wildcard],
+            filter: Some(Box::new(Expr::Identifier(Ident::new("foo")))),
             over: None,
             distinct: false,
         }),
@@ -389,6 +406,7 @@ fn parse_select_count_distinct() {
                 op: UnaryOperator::Plus,
                 expr: Box::new(Expr::Identifier(Ident::new("x")))
             }],
+            filter: None,
             over: None,
             distinct: true,
         }),
@@ -961,8 +979,9 @@ fn parse_select_having() {
             left: Box::new(Expr::Function(Function {
                 name: ObjectName(vec![Ident::new("COUNT")]),
                 args: vec![Expr::Wildcard],
+                filter: None,
                 over: None,
-                distinct: false
+                distinct: false,
             })),
             op: BinaryOperator::Gt,
             right: Box::new(Expr::Value(number("1")))
@@ -1294,6 +1313,7 @@ fn parse_scalar_function_in_projection() {
         &Expr::Function(Function {
             name: ObjectName(vec![Ident::new("sqrt")]),
             args: vec![Expr::Identifier(Ident::new("id"))],
+            filter: None,
             over: None,
             distinct: false,
         }),
@@ -1317,6 +1337,7 @@ fn parse_window_functions() {
         &Expr::Function(Function {
             name: ObjectName(vec![Ident::new("row_number")]),
             args: vec![],
+            filter: None,
             over: Some(WindowSpec {
                 partition_by: vec![],
                 order_by: vec![OrderByExpr {
@@ -1672,6 +1693,7 @@ fn parse_delimited_identifiers() {
         &Expr::Function(Function {
             name: ObjectName(vec![Ident::with_quote('"', "myfun")]),
             args: vec![],
+            filter: None,
             over: None,
             distinct: false,
         }),

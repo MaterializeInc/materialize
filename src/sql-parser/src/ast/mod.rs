@@ -1314,6 +1314,8 @@ impl fmt::Display for Assignment {
 pub struct Function {
     pub name: ObjectName,
     pub args: Vec<Expr>,
+    // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
+    pub filter: Option<Box<Expr>>,
     pub over: Option<WindowSpec>,
     // aggregate functions may specify eg `COUNT(DISTINCT x)`
     pub distinct: bool,
@@ -1328,6 +1330,9 @@ impl fmt::Display for Function {
             if self.distinct { "DISTINCT " } else { "" },
             display_comma_separated(&self.args),
         )?;
+        if let Some(filter) = &self.filter {
+            write!(f, " FILTER (WHERE {})", filter)?;
+        }
         if let Some(o) = &self.over {
             write!(f, " OVER ({})", o)?;
         }

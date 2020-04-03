@@ -1572,7 +1572,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     }
 
     let arg = &sql_func.args[0];
-    let (expr, func) = match (name.as_str(), arg) {
+    let (mut expr, mut func) = match (name.as_str(), arg) {
         // COUNT(*) is a special case that doesn't compose well
         ("count", Expr::Wildcard) => (
             // Ok to use `ScalarType::Unknown` here because this expression
@@ -1597,6 +1597,41 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
             }
         }
     };
+    if let Some(filter) = &sql_func.filter {
+        // If a filter is present, as in
+        //
+        //     <agg>(<expr>) FILTER (WHERE <cond>)
+        //
+        // we plan it by essentially rewriting the expression to
+        //
+        //     <agg>(CASE WHEN <cond> THEN <expr> ELSE NULL)
+        //
+        // as aggregate functions ignore NULL. The only exception is `count(*)`,
+        // which includes NULLs in its count; we handle that specially by
+        // rewriting to:
+        //
+        //     count(CASE WHEN <cond> THEN TRUE ELSE NULL)
+        //
+        // (Note the `TRUE` in in place of `<expr>`.)
+        let cond = plan_expr(&ecx.with_name("FILTER"), filter, Some(ScalarType::Bool))?;
+        let cond_typ = ecx.column_type(&cond);
+        if cond_typ.scalar_type != ScalarType::Bool && cond_typ.scalar_type != ScalarType::Unknown {
+            bail!(
+                "WHERE expression in FILTER must have boolean type, not {:?}",
+                cond_typ
+            );
+        }
+        let expr_typ = ecx.scalar_type(&expr);
+        if func == AggregateFunc::CountAll {
+            func = AggregateFunc::Count;
+            expr = ScalarExpr::literal_true();
+        }
+        expr = ScalarExpr::If {
+            cond: Box::new(cond),
+            then: Box::new(expr),
+            els: Box::new(ScalarExpr::literal_null(expr_typ)),
+        };
+    }
     Ok(AggregateExpr {
         func,
         expr: Box::new(expr),
@@ -1621,6 +1656,15 @@ fn plan_function<'a>(
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
     } else {
+        if sql_func.over.is_some() {
+            bail!("OVER specified but {}() is not a window function", ident);
+        }
+        if sql_func.filter.is_some() {
+            bail!(
+                "FILTER specified but {}() is not an aggregate function",
+                ident
+            );
+        }
         match ident {
             "abs" => {
                 if sql_func.args.len() != 1 {
@@ -2064,6 +2108,7 @@ fn plan_function<'a>(
                 let func = Function {
                     name: ObjectName(vec![Ident::new("substring")]),
                     args: sql_func.args.clone(),
+                    filter: sql_func.filter.clone(),
                     over: sql_func.over.clone(),
                     distinct: sql_func.distinct,
                 };
@@ -3542,7 +3587,7 @@ impl<'a> QueryContext<'a> {
 }
 
 /// A bundle of unrelated things that we need for planning `Expr`s.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ExprContext<'a> {
     qcx: &'a QueryContext<'a>,
     /// The name of this kind of expression eg "WHERE clause". Used only for error messages.
@@ -3560,6 +3605,12 @@ struct ExprContext<'a> {
 }
 
 impl<'a> ExprContext<'a> {
+    fn with_name(&self, name: &'static str) -> ExprContext<'a> {
+        let mut ecx = self.clone();
+        ecx.name = name;
+        ecx
+    }
+
     fn column_type(&self, expr: &ScalarExpr) -> ColumnType {
         expr.typ(
             &self.qcx.outer_relation_types,
