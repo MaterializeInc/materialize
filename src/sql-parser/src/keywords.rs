@@ -465,6 +465,7 @@ define_keywords!(
     UNKNOWN,
     UNNEST,
     UPDATE,
+    UPSERT,
     UPPER,
     USER,
     USING,

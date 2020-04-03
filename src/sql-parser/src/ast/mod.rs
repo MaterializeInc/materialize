@@ -586,10 +586,11 @@ pub enum Format {
     Text,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Envelope {
     None,
     Debezium,
+    Upsert(Option<Format>),
 }
 
 impl Default for Envelope {
@@ -600,14 +601,22 @@ impl Default for Envelope {
 
 impl fmt::Display for Envelope {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::None => "NONE", // this is unreachable as long as the default is None, but include it in case we ever change that
-                Self::Debezium => "DEBEZIUM",
+        match self {
+            Self::None => {
+                // this is unreachable as long as the default is None, but include it in case we ever change that
+                write!(f, "NONE")?;
             }
-        )
+            Self::Debezium => {
+                write!(f, "DEBEZIUM")?;
+            }
+            Self::Upsert(format) => {
+                write!(f, "UPSERT")?;
+                if let Some(format) = format {
+                    write!(f, " FORMAT {}", format)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -186,7 +186,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 read_style,
                                 ctor,
                             );
-                            (decode_avro_values(&source, envelope), capability)
+                            (decode_avro_values(&source, &envelope), capability)
                         } else {
                             let (source, capability) = match connector {
                                 ExternalSourceConnector::Kafka(c) => {
@@ -258,7 +258,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream = decode(&source, encoding, &dataflow.debug_name, envelope);
+                            let stream = decode(&source, encoding, &dataflow.debug_name, &envelope);
 
                             (stream, capability)
                         };
@@ -273,6 +273,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 Some((Row::pack(datums.into_iter()), diff))
                             })
                         }
+                        Envelope::Upsert(_) => unreachable!("Upsert is not supported yet"),
                     };
 
                     // Introduce the stream by name, as an unarranged collection.
