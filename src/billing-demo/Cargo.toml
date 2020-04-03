@@ -22,7 +22,7 @@ protobuf = "2.8.1"
 protoc = "2.8.1"
 rand = "0.7.3"
 rand_distr = "0.2.2"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
+rdkafka = { git = "https://github.com/benesch/rust-rdkafka.git", branch = "vendored-sasl2", features = ["cmake-build", "gssapi-vendored"] }
 structopt = "0.3.12"
 thiserror = "1.0.14"
 tokio = { version = "0.2.13", features = ["full"] }
