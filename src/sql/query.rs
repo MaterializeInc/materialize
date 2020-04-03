@@ -37,9 +37,8 @@ use sql_parser::ast::{
 };
 use uuid::Uuid;
 
-use ::expr::{DateTruncTo, Id};
+use ::expr::{DateTruncTo, Id, RowSetFinishing};
 use catalog::names::PartialName;
-use dataflow_types::RowSetFinishing;
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
 

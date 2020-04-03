@@ -1382,3 +1382,26 @@ impl AggregateExpr {
         self.func.output_type(self.expr.typ(outers, inner, params))
     }
 }
+
+impl RelationExpr {
+    pub fn finish(&mut self, finishing: dataflow_expr::RowSetFinishing) {
+        if !finishing.is_trivial() {
+            *self = RelationExpr::Project {
+                input: Box::new(RelationExpr::TopK {
+                    input: Box::new(std::mem::replace(
+                        self,
+                        RelationExpr::Constant {
+                            rows: vec![],
+                            typ: RelationType::new(Vec::new()),
+                        },
+                    )),
+                    group_key: vec![],
+                    order_key: finishing.order_by,
+                    limit: finishing.limit,
+                    offset: finishing.offset,
+                }),
+                outputs: finishing.project,
+            }
+        }
+    }
+}

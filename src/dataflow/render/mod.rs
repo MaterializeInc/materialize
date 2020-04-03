@@ -1070,7 +1070,7 @@ where
                                 if !order_clone.is_empty() {
                                     //todo: use arrangements or otherwise make the sort more performant?
                                     let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
-                                        compare_columns(
+                                        expr::compare_columns(
                                             &order_clone,
                                             &left.0.unpack(),
                                             &right.0.unpack(),

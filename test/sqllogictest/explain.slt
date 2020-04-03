@@ -336,3 +336,103 @@ EOF
 # ----
 #
 # EOF
+
+# Testing that ORDER/LIMIT that would be stripped into RowSetFinishing still show up in the EXPLAIN
+
+statement ok
+CREATE TABLE ordered (x int, y text)
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+----
+0 =
+| Constant ()
+
+1 =
+| Get materialize.public.ordered (u2)
+
+2 =
+| InnerJoin 0 1 on true
+| Map #0, #1
+| Project (#2, #3)
+| Map
+
+Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+----
+0 =
+| Constant ()
+
+1 =
+| Get %0
+
+2 =
+| Constant ()
+
+3 =
+| Join %1 %2
+| | implementation = Unimplemented
+
+4 =
+| Get %0
+
+5 =
+| Get materialize.public.ordered (u2)
+
+6 =
+| Join %4 %5
+| | implementation = Unimplemented
+
+7 =
+| Get %3
+
+8 =
+| Get %6
+
+9 =
+| Join %7 %8
+| | implementation = Unimplemented
+| Project (#0, #1)
+| Filter true
+
+10 =
+| Get %9
+| Map #0
+| Map #1
+| Project (#2, #3)
+
+Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN TYPED OPTIMIZED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+----
+0 =
+| Get materialize.public.ordered (u2)
+| | types = (i32?, string?)
+| | keys = ()
+
+Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+
+EOF
+
+statement ok
+CREATE VIEW ordered_view AS SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+
+query T multiline
+EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW ordered_view
+----
+0 =
+| Get materialize.public.ordered (u2)
+| | types = (i32?, string?)
+| | keys = ()
+| TopK group=() order=(#1 asc, #0 desc) limit=5 offset=0
+| | types = (i32?, string?)
+| | keys = ()
+
+EOF

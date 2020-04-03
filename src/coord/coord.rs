@@ -36,11 +36,13 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen, RowSetFinishing,
-    SinkConnector, TailSinkConnector, Timestamp, Update,
+    DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen, SinkConnector,
+    TailSinkConnector, Timestamp, Update,
 };
 use expr::transform::Optimizer;
-use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{
+    EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, RowSetFinishing, ScalarExpr, SourceInstanceId,
+};
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
@@ -645,10 +647,18 @@ where
                 sql,
                 raw_plan,
                 decorrelated_plan,
+                row_set_finishing,
                 stage,
                 options,
             } => tx.send(
-                self.sequence_explain_plan(sql, raw_plan, decorrelated_plan, stage, options),
+                self.sequence_explain_plan(
+                    sql,
+                    raw_plan,
+                    decorrelated_plan,
+                    row_set_finishing,
+                    stage,
+                    options,
+                ),
                 session,
             ),
 
@@ -1238,7 +1248,8 @@ where
         &mut self,
         sql: String,
         raw_plan: sql::RelationExpr,
-        decorrelated_plan: expr::RelationExpr,
+        decorrelated_plan: Result<expr::RelationExpr, failure::Error>,
+        row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
     ) -> Result<ExecuteResponse, failure::Error> {
@@ -1246,6 +1257,9 @@ where
             ExplainStage::Sql => sql,
             ExplainStage::RawPlan => {
                 let mut explanation = raw_plan.explain(&self.catalog);
+                if let Some(row_set_finishing) = row_set_finishing {
+                    explanation.explain_row_set_finishing(row_set_finishing);
+                }
                 if options.typed {
                     // TODO(jamii) does this fail?
                     explanation.explain_types(&BTreeMap::new());
@@ -1253,7 +1267,11 @@ where
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let mut explanation = decorrelated_plan.explain(&self.catalog);
+                let plan = decorrelated_plan?;
+                let mut explanation = plan.explain(&self.catalog);
+                if let Some(row_set_finishing) = row_set_finishing {
+                    explanation.explain_row_set_finishing(row_set_finishing);
+                }
                 if options.typed {
                     explanation.explain_types();
                 }
@@ -1266,9 +1284,12 @@ where
                 };
                 let optimized_plan = self
                     .optimizer
-                    .optimize(decorrelated_plan, self.catalog.indexes(), &eval_env)?
+                    .optimize(decorrelated_plan?, self.catalog.indexes(), &eval_env)?
                     .into_inner();
                 let mut explanation = optimized_plan.explain(&self.catalog);
+                if let Some(row_set_finishing) = row_set_finishing {
+                    explanation.explain_row_set_finishing(row_set_finishing);
+                }
                 if options.typed {
                     explanation.explain_types();
                 }
