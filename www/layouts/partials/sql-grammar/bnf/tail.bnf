@@ -1,0 +1,2 @@
+tail_stmt ::=
+    'TAIL' object_name
