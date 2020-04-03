@@ -80,9 +80,13 @@ files.
   to its [documented syntax](https://docs.rs/regex/latest/regex/#syntax).
 - To create a column in the source, create a capture group, i.e. a parenthesized
   expression, e.g. `([0-9a-f]{8})`.
-    - Name columns by creating named captured groups, e.g. `?P<offset>` in
-      `(?P<offset>[0-9a-f]{8})` creates a column named `offset`.
-    - Unnamed capture groups are named `column1`, `column2`, etc.
+    - Name columns by...
+      - Using the _col&lowbar;name_ option when creating the source. The number
+        of names provided must match the number of capture groups.
+      - Creating named captured groups, e.g. `?P<offset>` in
+        `(?P<offset>[0-9a-f]{8})` creates a column named `offset`.
+
+        Unnamed capture groups are named `column1`, `column2`, etc.
 - We discard all data not included in a capture group. You can create
   non-capturing groups using `?:` as the leading pattern in the group, e.g.
   `(?:[0-9a-f]{4} ){8}`.
@@ -94,11 +98,14 @@ Text-formatted sources reads lines from a file.
 - Data from text-formatted sources is treated as newline-delimited.
 - Data is assumed to be UTF-8 encoded, and discarded if it cannot be converted
   to UTF-8.
+- Text-formatted sources have one column, which, by default, is named `text`.
 
 ### Raw byte format details
 
 Raw byte-formatted sources provide Materialize the raw bytes received from the
 source without applying any formatting or decoding.
+
+Bext-formatted sources have one column, which, by default, is named `bytes`.
 
 ### Envelope details
 
