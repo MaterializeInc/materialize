@@ -28,6 +28,7 @@ Sources](../../../overview/api-components#sources).
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
+_col&lowbar;name_ | Override default column name with the provided [identifier](../../identifiers). If used, a _col&lowbar;name_ must be provided for each column in the created source.
 **KAFKA BROKER** _host_ | The Kafka broker's host name.
 _message&lowbar;name_ | The top-level Protobuf message name, in the format `<package>.<message name>`. For example, `billing.Batch`. For more detail, see [Top-level message](#top-level-message).
 _schema&lowbar;file&lowbar;path_ | The absolute path to a file containing the [`FileDescriptorSet`](#filedescriptorset).
@@ -52,7 +53,8 @@ Protobuf-formatted external sources require:
 
 #### `FileDescriptorSet`
 
-The `FileDescriptorSet` encodes the Protobuf messages' schema, which Materialize needs to decode incoming Protobuf data.
+The `FileDescriptorSet` encodes the Protobuf messages' schema, which Materialize
+needs to decode incoming Protobuf data.
 
 You can generate the `FileDescriptorSet` with `protoc`, e.g.
 
@@ -62,7 +64,9 @@ protoc --include_imports --descriptor_set_out=SCHEMA billing.proto
 
 #### Top-level message
 
-Materialize needs to know which message from your `FileDescriptorSet` is the top-level message to decode, along with its package name, in the following format:
+Materialize needs to know which message from your `FileDescriptorSet` is the
+top-level message to decode, along with its package name, in the following
+format:
 
 ```shell
 <package name>.<top-level message>
@@ -87,7 +91,8 @@ Materialize.
 
 ## Example
 
-Assuming you've already generated a [`FileDescriptorSet`](#filedescriptorset) named `SCHEMA`:
+Assuming you've already generated a [`FileDescriptorSet`](#filedescriptorset)
+named `SCHEMA`:
 
 ```sql
 CREATE SOURCE batches
