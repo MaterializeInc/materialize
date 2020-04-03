@@ -33,7 +33,7 @@ mod kafka;
 mod kinesis;
 mod sql;
 
-const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
+const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_secs(180);
 // Constants to use when hitting Kinesis locally (via localstack)
 const LOCALSTACK_ENDPOINT: &str = "http://localhost:4568";
 const DUMMY_AWS_ACCOUNT: &str = "000000000000";

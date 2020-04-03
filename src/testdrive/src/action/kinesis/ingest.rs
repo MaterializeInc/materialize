@@ -52,7 +52,6 @@ impl Action for IngestAction {
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("{}-{}", self.stream_prefix, state.seed);
-        println!("pushing to Kinesis stream {}", &stream_name);
 
         for row in &self.rows {
             let put_input = PutRecordInput {
