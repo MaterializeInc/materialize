@@ -40,28 +40,37 @@ impl ValidationError {
     }
 }
 
-/// Main interface for writing Avro formatted values.
+/// Main interface for writing Avro Object Container Files.
 pub struct Writer<W> {
     schema: Schema,
     writer: W,
     buffer: Vec<u8>,
     num_values: usize,
-    codec: Codec,
+    codec: Option<Codec>,
     marker: [u8; 16],
     has_header: bool,
 }
 
 impl<W: Write> Writer<W> {
-    /// Creates a `Writer` given a `Schema` and something implementing the `io::Write` trait to write
-    /// to.
-    /// No compression `Codec` will be used.
+    /// Creates a `Writer` for the `Schema` and something implementing the [`io::Write`]
+    /// trait to write to.
+    ///
+    /// This uses the no-compression [`Codec::Null`] when appending records.
     pub fn new(schema: Schema, writer: W) -> Writer<W> {
         Self::with_codec(schema, writer, Codec::Null)
     }
 
-    /// Creates a `Writer` with a specific `Codec` given a `Schema` and something implementing the
-    /// `io::Write` trait to write to.
+    /// Creates a `Writer` given a [`Schema`] and a specific compression [`Codec`]
     pub fn with_codec(schema: Schema, writer: W, codec: Codec) -> Writer<W> {
+        Writer::with_codec_opt(schema, writer, Some(codec))
+    }
+
+    /// Create a `Writer` with the given parameters.
+    ///
+    /// All parameters have the same meaning as `with_codec`, but if `codec` is `None`
+    /// then no compression will be used and the `avro.codec` field in the header will be
+    /// omitted.
+    pub fn with_codec_opt(schema: Schema, writer: W, codec: Option<Codec>) -> Writer<W> {
         let mut marker = [0; 16];
         for i in 0..16 {
             marker[i] = random::<u8>();
@@ -91,7 +100,7 @@ impl<W: Write> Writer<W> {
             writer: file,
             buffer: Vec::with_capacity(SYNC_INTERVAL),
             num_values: 0,
-            codec,
+            codec: Some(codec),
             marker,
             has_header: true,
         })
@@ -119,7 +128,6 @@ impl<W: Write> Writer<W> {
         } else {
             0
         };
-
         let avro = value.avro();
         write_value_ref(&self.schema, &avro, &mut self.buffer)?;
 
@@ -220,7 +228,8 @@ impl<W: Write> Writer<W> {
             return Ok(0);
         }
 
-        self.codec.compress(&mut self.buffer)?;
+        let compressor = self.codec.unwrap_or(Codec::Null);
+        compressor.compress(&mut self.buffer)?;
 
         let num_values = self.num_values;
         let stream_len = self.buffer.len();
@@ -273,7 +282,9 @@ impl<W: Write> Writer<W> {
 
         let mut metadata = HashMap::with_capacity(2);
         metadata.insert("avro.schema", Value::Bytes(schema_bytes));
-        metadata.insert("avro.codec", self.codec.avro());
+        if let Some(codec) = self.codec {
+            metadata.insert("avro.codec", codec.avro());
+        };
 
         let mut header = Vec::new();
         header.extend_from_slice(AVRO_OBJECT_HEADER);

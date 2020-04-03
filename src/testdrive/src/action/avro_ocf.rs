@@ -11,7 +11,7 @@ use std::fs::{self, File};
 use std::io::{Cursor, Write};
 use std::path;
 
-use avro::Writer;
+use avro::{Codec, Writer};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -20,11 +20,14 @@ pub struct WriteAction {
     path: String,
     schema: String,
     records: Vec<String>,
+    codec: Option<Codec>,
 }
 
 pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, String> {
     let path = cmd.args.string("path")?;
     let schema = cmd.args.string("schema")?;
+    let codec = cmd.args.opt_parse("codec")?;
+
     let records = cmd.input;
     cmd.args.done()?;
     if path.contains(path::MAIN_SEPARATOR) {
@@ -35,6 +38,7 @@ pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, String> {
         path,
         schema,
         records,
+        codec,
     })
 }
 
@@ -51,7 +55,7 @@ impl Action for WriteAction {
         let mut file = File::create(path).map_err(|e| e.to_string())?;
         let schema = interchange::avro::parse_schema(&self.schema)
             .map_err(|e| format!("parsing avro schema: {}", e))?;
-        let mut writer = Writer::new(schema, &mut file);
+        let mut writer = Writer::with_codec_opt(schema, &mut file, self.codec);
         write_records(&mut writer, &self.records)?;
         file.sync_all()
             .map_err(|e| format!("error syncing file: {}", e))?;

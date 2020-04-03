@@ -16,7 +16,7 @@ $ set writer-schema={
     ]
   }
 
-$ avro-ocf-write path=data.ocf schema=${writer-schema}
+$ avro-ocf-write path=data.ocf schema=${writer-schema} codec=null
 {"a": 1, "b": 2}
 {"a": 3, "b": 4}
 
@@ -30,6 +30,26 @@ a  b  mz_obj_no
 3  4  2
 
 > SHOW COLUMNS FROM basic
+Field      Nullable  Type
+-------------------------
+a          NO        int8
+b          NO        int4
+mz_obj_no  NO        int8
+
+$ avro-ocf-write path=data-no-codec.ocf schema=${writer-schema}
+{"a": 1, "b": 2}
+{"a": 3, "b": 4}
+
+> CREATE MATERIALIZED SOURCE basic_no_codec
+  FROM AVRO OCF '${testdrive.temp-dir}/data-no-codec.ocf'
+
+> SELECT * FROM basic_no_codec
+a  b  mz_obj_no
+---------------
+1  2  1
+3  4  2
+
+> SHOW COLUMNS FROM basic_no_codec
 Field      Nullable  Type
 -------------------------
 a          NO        int8
