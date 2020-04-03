@@ -28,6 +28,7 @@ Sources](../../../overview/api-components#sources).
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
+_col&lowbar;name_ | Override default column name with the provided [identifier](../../identifiers). If used, a _col&lowbar;name_ must be provided for each column in the created source.
 **KAFKA BROKER** _host_ | The Kafka broker's host name.
 **FORMAT ...** _url_ | The URL of the Confluent schema registry to get schema information from.
 **FORMAT ...** _schema&lowbar;file&lowbar;path_ | The absolute path to a file containing the schema.
@@ -69,7 +70,8 @@ records' old and new values; this is roughly equivalent to the notion of Change
 Data Capture, or CDC. Materialize can use the data in this diff envelope to
 process data as representing inserts, updates, or deletes.
 
-This envelope is called the Debezium envelope because it's been developed to explicitly work with [Debezium].
+This envelope is called the Debezium envelope because it's been developed to
+explicitly work with [Debezium].
 
 To use the Debezium envelope with Materialize, you must configure Debezium with
 your database.

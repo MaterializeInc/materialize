@@ -41,7 +41,8 @@ the **TEXT** formatting option.
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
-_path_ | The absolute path to the file you want to use as the source.
+_col&lowbar;name_ | Override default column name with the provided [identifier](../../identifiers). If used, a _col&lowbar;name_ must be provided for each column in the created source.
+**FILE** _path_ | The absolute path to the file you want to use as the source.
 **WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
 **REGEX** _regex_ | Format the source's data as a string, applying _regex_, whose capture groups define the columns of the relation. For more detail, see [Regex format details](#regex-format-details).
 **TEXT** | Format the source's data as ASCII-encoded text.
@@ -137,7 +138,8 @@ This creates a source that...
 - Discards the second group, i.e. `(?:[0-9a-f]{4} ){8}`.
 - Materialize dynamically checks for new entries.
 
-Using the above example, the source would generate data that looks similar to this:
+Using the above example, the source would generate data that looks similar to
+this:
 
 ```nofmt
  offset  |     decoded
