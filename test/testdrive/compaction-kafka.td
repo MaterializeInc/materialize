@@ -41,19 +41,19 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammalmore"} {"f1": "moose", "f2": 42}
 {"key": "mammal1"} null
 
-#> CREATE MATERIALIZED SOURCE avroavro
-#  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
-#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-#  ENVELOPE UPSERT
+> CREATE MATERIALIZED SOURCE avroavro
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT
 
-#> SELECT * from avroavro
-#key           f1       f2
-#-------------------------
-#bird1         goose    1
-#birdmore      geese    2
-#mammal1       moose    1
-#birdmore      geese    56
-#mammalmore    moose    42
+> SELECT * from avroavro
+key           f1       f2
+-------------------------
+bird1         goose    1
+birdmore      geese    2
+mammal1       moose    1
+birdmore      geese    56
+mammalmore    moose    42
 
 $ kafka-create-topic topic=textavro
 
@@ -66,16 +66,102 @@ birdmore: {"f1":"geese", "f2": 56}
 mammalmore: {"f1": "moose", "f2": 42}
 mammal1: null
 
-#> CREATE MATERIALIZED SOURCE textavro
-#  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
-#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-#  ENVELOPE UPSERT FORMAT TEXT
+> CREATE MATERIALIZED SOURCE textavro
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT FORMAT TEXT
 
-#> select * from textavro
-#key           f1       f2
-#-------------------------
-#bird1         goose    1
-#birdmore      geese    2
-#mammal1       moose    1
-#birdmore      geese    56
-#mammalmore    moose    42
+> select * from textavro
+key           f1       f2
+-------------------------
+bird1         goose    1
+birdmore      geese    2
+mammal1       moose    1
+birdmore      geese    56
+mammalmore    moose    42
+
+> CREATE MATERIALIZED SOURCE bytesavro
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT FORMAT BYTES
+
+> select * from bytesavro
+key           f1       f2
+-------------------------
+bird1         goose    1
+birdmore      geese    2
+mammal1       moose    1
+birdmore      geese    56
+mammalmore    moose    42
+
+$ kafka-create-topic topic=textbytes
+
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes publish=true timestamp=1
+"bìrd1" "goose"
+"birdmore" "geese"
+"mammal1" "moose"
+"bird1" null
+"birdmore" "géese"
+"mammalmore" "moose"
+"mammal1" null
+
+> CREATE MATERIALIZED SOURCE textbytes
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  FORMAT BYTES ENVELOPE UPSERT FORMAT TEXT
+
+> select * from textbytes
+key           data             mz_offset
+----------------------------------------
+bìrd1         "goose"          0
+birdmore      "geese"          1
+mammal1       "moose"          2
+birdmore      "g\\xc3\\xa9ese" 4
+mammalmore    "moose"          5
+
+> CREATE MATERIALIZED SOURCE texttext
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT
+
+> select * from texttext
+key           data  mz_offset
+-----------------------------
+bìrd1         goose 0
+birdmore      geese 1
+mammal1       moose 2
+birdmore      géese 4
+mammalmore    moose 5
+
+> CREATE MATERIALIZED SOURCE bytesbytes
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  FORMAT BYTES ENVELOPE UPSERT FORMAT BYTES
+
+> select * from bytesbytes
+key              data             mz_offset
+----------------------------------------
+"b\\xc3\\xacrd1" "goose"          0
+"birdmore"       "geese"          1
+"mammal1"        "moose"          2
+"birdmore"       "g\\xc3\\xa9ese" 4
+"mammalmore"     "moose"          5
+
+# A null key should result in an error decoding that row but not a panic
+$ kafka-ingest format=bytes topic=nullkey key-format=bytes publish=true timestamp=1
+"bird1" "goose"
+null "geese"
+"mammal1" "moose"
+"bird1" null
+"birdmore" "geese"
+"mammalmore" "moose"
+"mammal1" null
+
+> CREATE MATERIALIZED SOURCE nullkey
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nullkey-${testdrive.seed}'
+  FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT
+
+> select * from nullkey
+key           data  mz_offset
+-----------------------------
+bird1         goose 0
+mammal1       moose 2
+birdmore      geese 4
+mammalmore    moose 5
