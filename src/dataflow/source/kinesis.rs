@@ -73,7 +73,8 @@ where
             let (client, shard_iterator) = match &mut state {
                 Ok(state) => state,
                 Err(e) => {
-                    bail!("failed to create Kinesis state: {}", e);
+                    error!("failed to create Kinesis state: {}", e);
+                    println!("failed to create Kinesis state: {}", e);
                     return SourceStatus::Done;
                 }
             };
