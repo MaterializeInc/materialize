@@ -7,11 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Cursor, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::path;
 
 use avro::{Codec, Writer};
+use retry::delay::Fibonacci;
+use tokio::stream::StreamExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -118,4 +122,96 @@ where
         .flush()
         .map_err(|e| format!("flushing avro writer: {}", e))?;
     Ok(())
+}
+
+pub struct VerifyAction {
+    sink: String,
+    expected: Vec<String>,
+}
+
+pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
+    let sink = cmd.args.string("sink")?;
+    let expected = cmd.input;
+    cmd.args.done()?;
+    if sink.contains(path::MAIN_SEPARATOR) {
+        // The goal isn't security, but preventing mistakes.
+        return Err("separators in file sink names are forbidden".into());
+    }
+    Ok(VerifyAction { sink, expected })
+}
+
+impl Action for VerifyAction {
+    fn undo(&self, _state: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn redo(&self, state: &mut State) -> Result<(), String> {
+        let path: String = retry::retry(Fibonacci::from_millis(100).take(5), || {
+            let row = state
+                .pgclient
+                .query_one(
+                    "SELECT path FROM mz_catalog_names NATURAL JOIN mz_avro_ocf_sinks \
+                 WHERE name = $1",
+                    &[&self.sink],
+                )
+                .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
+            let bytes: Vec<u8> = row.get("path");
+            let os_string: OsString = OsStringExt::from_vec(bytes);
+            Ok::<_, String>(
+                os_string
+                    .into_string()
+                    .map_err(|_| "cannot convert path to string".to_string())?,
+            )
+        })
+        .map_err(|e| format!("retrieving path: {:?}", e))?;
+
+        println!("Verifying results in file {}", path);
+
+        // Get the rows from this file
+        let sink_file = state
+            .tokio_runtime
+            .block_on(tokio::fs::File::open(&path))
+            .map_err(|e| format!("reading sink file {}: {}", path, e))?;
+        let reader = state
+            .tokio_runtime
+            .block_on(avro::Reader::new(sink_file))
+            .map_err(|e| format!("parsing avro values from file: {}", e))?;
+        let schema = reader.writer_schema().clone();
+        let actual_messages: Vec<_> = state
+            .tokio_runtime
+            .block_on(reader.into_stream().collect::<Vec<_>>())
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("converting to rust objects: {}", e))?;
+
+        let mut converted_expected_messages = Vec::new();
+        for expected in &self.expected {
+            converted_expected_messages.push(
+                crate::format::avro::json_to_avro(
+                    &serde_json::from_str(expected)
+                        .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
+                    schema.top_node(),
+                )
+                .unwrap(),
+            );
+        }
+
+        let missing_values = crate::action::get_values_in_first_list_not_in_second(
+            &converted_expected_messages,
+            &actual_messages,
+        );
+        let additional_values = crate::action::get_values_in_first_list_not_in_second(
+            &actual_messages,
+            &converted_expected_messages,
+        );
+
+        if !missing_values.is_empty() || !additional_values.is_empty() {
+            return Err(format!(
+                "Mismatched Kafka sink rows. Missing: {:#?}, Unexpected: {:#?}",
+                missing_values, additional_values
+            ));
+        }
+
+        Ok(())
+    }
 }

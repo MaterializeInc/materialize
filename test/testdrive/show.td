@@ -203,6 +203,7 @@ VIEWS                             TYPE   MATERIALIZED
 -----------------------------------------------------
 mz_arrangement_sharing            SYSTEM true
 mz_arrangement_sizes              SYSTEM true
+mz_avro_ocf_sinks                 SYSTEM true
 mz_catalog_names                  SYSTEM true
 mz_dataflow_channels              SYSTEM true
 mz_dataflow_operator_addresses    SYSTEM true

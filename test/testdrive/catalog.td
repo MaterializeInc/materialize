@@ -153,6 +153,7 @@ unknown database 'noexist'
 > SHOW SOURCES FROM mz_catalog
 mz_arrangement_sharing
 mz_arrangement_sizes
+mz_avro_ocf_sinks
 mz_catalog_names
 mz_dataflow_channels
 mz_dataflow_operator_addresses
