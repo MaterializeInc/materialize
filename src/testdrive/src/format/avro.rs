@@ -20,10 +20,12 @@
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 
+use serde_json::Value as JsonValue;
+
 use avro::schema::{SchemaNode, SchemaPiece};
 use avro::types::{DecimalValue, ToAvro, Value as AvroValue};
 
-use serde_json::Value as JsonValue;
+pub use avro::{to_avro_datum, Schema};
 
 // This function is derived from code in the avro_rs project. Update the license
 // header on this file accordingly if you move it to a new home.
