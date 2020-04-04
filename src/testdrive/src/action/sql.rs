@@ -275,12 +275,11 @@ impl Action for FailSqlAction {
 }
 
 pub fn print_query(query: &str) {
-    println!("{}", &query);
-    //    if query.len() > 72 {
-    //        println!("> {}...", &query[..72]);
-    //    } else {
-    //        println!("> {}", &query);
-    //    }
+    if query.len() > 72 {
+        println!("> {}...", &query[..72]);
+    } else {
+        println!("> {}", &query);
+    }
 }
 
 fn decode_row(row: Row) -> Result<Vec<String>, String> {

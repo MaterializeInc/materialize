@@ -233,6 +233,17 @@ provide most of the coverage, but it's worth adding some (*very*) basic
 testdrive tests (e.g., `> SELECT DATE '1999-01-01'`) to ensure that our pgwire
 implementation is properly serializing dates.
 
+Like the [Unit Tests](#unitintegration-tests), in order to run testdrive,
+you will need to have Zookeeper, Kafka, and Confluent Schema Registry running.
+In addition to these, you will need to be running a [localstack](https://github.com/localstack/localstack)
+container locally. (This is required for any testdrive tests
+that interact with Kinesis).
+
+To run localstack locally, run the following command:
+```shell
+$ TMPDIR=/private$TMPDIR docker-compose -f src/testdrive/localstack.docker-compose.yml up -d
+```
+
 Like the [Unit Tests](#unitintegration-tests), in order to run testdrive, you should have Zookeeper, Kafka, and Confluent Schema Registry running. Testdrive is more flexible than the unit tests, though, in that you are allowed to run them at non-default locations.
 
 To run a testdrive script, you'll need two terminal windows open. In the
