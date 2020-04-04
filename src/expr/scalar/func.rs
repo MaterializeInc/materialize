@@ -452,18 +452,13 @@ fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datu
 }
 
 fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
-    let i = a.unwrap_interval();
-    let i = if i.is_positive_dur {
-        i
-    } else {
-        // Negative intervals are computed as times using their difference from
-        // 24 hours.
-        let j = repr::Interval {
+    let mut i = a.unwrap_interval();
+    if !i.is_positive_dur {
+        i = i + repr::Interval {
             duration: std::time::Duration::from_secs(86400),
             ..Default::default()
         };
-        j + i
-    };
+    }
 
     Datum::Time(NaiveTime::from_hms_nano(
         i.hours() as u32,
