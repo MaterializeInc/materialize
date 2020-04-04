@@ -525,6 +525,7 @@ pub struct KinesisSourceConnector {
     pub region: Region,
     pub access_key: String,
     pub secret_access_key: String,
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -33,7 +33,7 @@ mod kafka;
 mod kinesis;
 mod sql;
 
-const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_secs(60);
 // Constants to use when hitting Kinesis locally (via localstack)
 const LOCALSTACK_ENDPOINT: &str = "http://localhost:4568";
 const DUMMY_AWS_ACCOUNT: &str = "000000000000";
@@ -70,6 +70,7 @@ pub struct State {
     aws_account: String,
     aws_access_key: String,
     aws_secret_access_key: String,
+    token: Option<String>,
 }
 
 impl State {
@@ -156,6 +157,11 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         "testdrive.aws-secret-access-key".into(),
         state.aws_secret_access_key.clone(),
     );
+    let token = match &state.token {
+        Some(token) => token.clone(),
+        None => String::from(""),
+    };
+    vars.insert("testdrive.aws-token".into(), token);
     vars.insert(
         "testdrive.kinesis-endpoint".into(),
         LOCALSTACK_ENDPOINT.to_string(),
@@ -377,7 +383,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         (addr.to_owned(), admin, admin_opts, producer, topics)
     };
 
-    let (kinesis_client, aws_region, aws_account, aws_access_key, aws_secret_access_key) = {
+    let (kinesis_client, aws_region, aws_account, aws_access_key, aws_secret_access_key, token) = {
         match config.kinesis_region.clone() {
             Some(region_str) => match region_str.parse::<Region>() {
                 Ok(region) => {
@@ -385,10 +391,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
                     let mut chain_provider = ChainProvider::new();
                     chain_provider.set_timeout(Duration::from_secs(60));
                     let credentials = match tokio_runtime.block_on(chain_provider.credentials()) {
-                        Ok(credentials) => {
-                            dbg!(&credentials.token());
-                            credentials
-                        }
+                        Ok(credentials) => credentials,
                         Err(e) => {
                             return Err(Error::General {
                                 ctx: format!(
@@ -436,6 +439,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
                         account,
                         credentials.aws_access_key_id().to_string(),
                         credentials.aws_secret_access_key().to_string(),
+                        credentials.token().clone(),
                     )
                 }
                 Err(_e) => {
@@ -469,10 +473,18 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         aws_account,
         aws_access_key,
         aws_secret_access_key,
+        token,
     })
 }
 
-fn get_kinesis_details_for_localstack() -> (KinesisClient, String, String, String, String) {
+fn get_kinesis_details_for_localstack() -> (
+    KinesisClient,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+) {
     let region = Region::Custom {
         name: DUMMY_AWS_REGION.to_string(), // NB: This must match the region localstack is started up with!!
         endpoint: LOCALSTACK_ENDPOINT.to_string(),
@@ -491,5 +503,6 @@ fn get_kinesis_details_for_localstack() -> (KinesisClient, String, String, Strin
         DUMMY_AWS_ACCOUNT.to_string(),
         DUMMY_AWS_ACCESS_KEY.to_string(),
         DUMMY_AWS_SECRET_ACCESS_KEY.to_string(),
+        None, // default to no token
     )
 }

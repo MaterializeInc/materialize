@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/// The undo should do nothing.
-/// The redo should check expected output.
 use rusoto_kinesis::{GetRecordsInput, GetShardIteratorInput, Kinesis, ListShardsInput};
 
 use crate::action::{Action, State};
@@ -33,7 +31,6 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
 }
 
 impl Action for VerifyAction {
-    // Do nothing! :tada:
     fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }

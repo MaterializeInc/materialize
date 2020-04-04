@@ -19,6 +19,7 @@ here's a test string
   FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
   WITH (access_key = '${testdrive.aws-access-key}',
         secret_access_key = '${testdrive.aws-secret-access-key}',
+        token = '${testdrive.aws-token}',
         endpoint = '${testdrive.kinesis-endpoint}')
   FORMAT BYTES;
 
