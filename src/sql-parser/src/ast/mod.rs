@@ -476,19 +476,24 @@ impl fmt::Display for WindowFrameBound {
 
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Stage {
-    /// The dataflow graph after translation from SQL.
-    Dataflow,
-    /// The dataflow graph after optimization in the coordinator.
-    Plan,
-    // FIXME: Add introspection into dataflow execution.
+pub enum ExplainStage {
+    /// The original sql string
+    Sql,
+    /// The sql::RelationExpr after parsing
+    RawPlan,
+    /// The expr::RelationExpr after decorrelation
+    DecorrelatedPlan,
+    /// The expr::RelationExpr after optimization
+    OptimizedPlan,
 }
 
-impl fmt::Display for Stage {
+impl fmt::Display for ExplainStage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Stage::Dataflow => f.write_str("DATAFLOW"),
-            Stage::Plan => f.write_str("PLAN"),
+            ExplainStage::Sql => f.write_str("SQL"),
+            ExplainStage::RawPlan => f.write_str("RAW PLAN"),
+            ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
+            ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
         }
     }
 }
@@ -581,10 +586,11 @@ pub enum Format {
     Text,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Envelope {
     None,
     Debezium,
+    Upsert(Option<Format>),
 }
 
 impl Default for Envelope {
@@ -595,14 +601,22 @@ impl Default for Envelope {
 
 impl fmt::Display for Envelope {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::None => "NONE", // this is unreachable as long as the default is None, but include it in case we ever change that
-                Self::Debezium => "DEBEZIUM",
+        match self {
+            Self::None => {
+                // this is unreachable as long as the default is None, but include it in case we ever change that
+                write!(f, "NONE")?;
             }
-        )
+            Self::Debezium => {
+                write!(f, "DEBEZIUM")?;
+            }
+            Self::Upsert(format) => {
+                write!(f, "UPSERT")?;
+                if let Some(format) = format {
+                    write!(f, " FORMAT {}", format)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -750,6 +764,7 @@ pub enum Statement {
     /// `CREATE SOURCE`
     CreateSource {
         name: ObjectName,
+        col_names: Vec<Ident>,
         connector: Connector,
         with_options: Vec<SqlOption>,
         format: Option<Format>,
@@ -762,7 +777,7 @@ pub enum Statement {
         name: ObjectName,
         from: ObjectName,
         connector: Connector,
-        format: Format,
+        format: Option<Format>,
         if_not_exists: bool,
     },
     /// `CREATE VIEW`
@@ -904,7 +919,7 @@ pub enum Statement {
     },
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
     Explain {
-        stage: Stage,
+        stage: ExplainStage,
         explainee: Explainee,
         options: ExplainOptions,
     },
@@ -913,7 +928,7 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee {
     View(ObjectName),
-    Query(Box<Query>),
+    Query(Query),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1008,6 +1023,7 @@ impl fmt::Display for Statement {
             }
             Statement::CreateSource {
                 name,
+                col_names,
                 connector,
                 with_options,
                 format,
@@ -1023,7 +1039,11 @@ impl fmt::Display for Statement {
                 if *if_not_exists {
                     write!(f, "IF NOT EXISTS ")?;
                 }
-                write!(f, "{} FROM {}", name, connector,)?;
+                write!(f, "{} ", name)?;
+                if !col_names.is_empty() {
+                    write!(f, "({}) ", display_comma_separated(col_names))?;
+                }
+                write!(f, "FROM {}", connector,)?;
                 if !with_options.is_empty() {
                     write!(f, " WITH ({})", display_comma_separated(with_options))?;
                 }
@@ -1046,11 +1066,10 @@ impl fmt::Display for Statement {
                 if *if_not_exists {
                     write!(f, "IF NOT EXISTS ")?;
                 }
-                write!(
-                    f,
-                    "{} FROM {} INTO {} FORMAT {}",
-                    name, from, connector, format
-                )?;
+                write!(f, "{} FROM {} INTO {}", name, from, connector)?;
+                if let Some(format) = format {
+                    write!(f, " FORMAT {}", format)?;
+                }
                 Ok(())
             }
             Statement::CreateView {
@@ -1310,6 +1329,8 @@ impl fmt::Display for Assignment {
 pub struct Function {
     pub name: ObjectName,
     pub args: Vec<Expr>,
+    // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
+    pub filter: Option<Box<Expr>>,
     pub over: Option<WindowSpec>,
     // aggregate functions may specify eg `COUNT(DISTINCT x)`
     pub distinct: bool,
@@ -1324,6 +1345,9 @@ impl fmt::Display for Function {
             if self.distinct { "DISTINCT " } else { "" },
             display_comma_separated(&self.args),
         )?;
+        if let Some(filter) = &self.filter {
+            write!(f, " FILTER (WHERE {})", filter)?;
+        }
         if let Some(o) = &self.over {
             write!(f, " OVER ({})", o)?;
         }

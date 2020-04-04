@@ -27,6 +27,7 @@ Sources](../../../overview/api-components#sources).
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
+_col&lowbar;name_ | Override default column name with the provided [identifier](../../identifiers). If used, a _col&lowbar;name_ must be provided for each column in the created source.
 **FILE** _path_ | The absolute path to the file you want to use as the source.
 **WITH (** _option&lowbar;list_ **)** | Options affecting source creation. For more detail, see [`WITH` options](#with-options).
 **HEADER** | Treat the first line of the CSV file as a header. See [CSV format details](#csv-format-details).
@@ -40,11 +41,11 @@ The following options are valid within the `WITH` clause.
 Field | Value | Description
 ------|-------|------------
 `tail` | `bool` | Continually check the file for new content; as new content arrives, process it using other `WITH` options.
-`col_names` | `text` | Name the source's columns using `text`, which should delimit each column name by the same _char_ as the file (i.e. the same _char_ as **DELIMITED BY** _char_). For an example, see [Creating a source from a dynamic CSV](#creating-a-source-from-a-dynamic-csv).
 
 ## Details
 
-This document assumes you're using a locally available file to load CSV data into Materialize.
+This document assumes you're using a locally available file to load CSV data
+into Materialize.
 
 ### File source details
 
@@ -52,7 +53,8 @@ This document assumes you're using a locally available file to load CSV data int
     ```sql
     CREATE SOURCE server_source FROM FILE '/Users/sean/server.log'...
     ```
-- All data in file sources are treated as [`text`](../../types/text), but can be converted to other types using [views](../../create-materialized-view).
+- All data in file sources are treated as [`text`](../../types/text), but can be
+  converted to other types using [views](../../create-materialized-view).
 
 ### CSV format details
 
@@ -64,8 +66,8 @@ Method | Outcome
 **HEADER** | Materialize reads the first line of the file to determine:<br/><br/>&bull; The number of columns in the file<br/><br/>&bull; The name of each column<br/><br/>The first line of the file is not ingested as data.
 _n_ **COLUMNS** | &bull; Materialize treats the file as if it has _n_ columns.<br/><br/>&bull; Columns are named `column1`, `column2`...`columnN`.
 
-- You can override these naming conventions using the [`col_names`
-  option](#with-options).
+- You can override these naming conventions by explicitly naming columns using
+  the _col&lowbar;name_ option in `CREATE SOURCE`.
 - All rows without the number of columns determined by the format are dropped,
   and Materialize logs an error.
 
@@ -96,9 +98,9 @@ This creates a source that...
 ### Creating a source from a dynamic CSV
 
 ```sql
-CREATE SOURCE dynamic_wo_header
+CREATE SOURCE dynamic_wo_header (col_foo, col_bar, col_baz)
 FROM FILE '[path to .csv]'
-WITH (tail = true, col_names='col_foo,col_bar,col_baz')
+WITH (tail = true)
 FORMAT CSV WITH 3 COLUMNS;
 ```
 

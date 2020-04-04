@@ -81,7 +81,7 @@ where
 
 pub fn decode_avro_values<G>(
     stream: &Stream<G, (Value, Option<i64>)>,
-    envelope: Envelope,
+    envelope: &Envelope,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -90,6 +90,7 @@ where
     // refactor the avro `Reader` to separate reading from decoding,
     // so that we can spread the decoding among all the workers.
     // See #2133
+    let envelope = envelope.clone();
     pass_through(stream, "AvroValues", Pipeline).flat_map(move |((value, index), r, d)| {
         let diffs = match envelope {
             Envelope::None => extract_row(value, false, index.map(Datum::from)).map(|r| DiffPair {
@@ -97,6 +98,7 @@ where
                 after: r,
             }),
             Envelope::Debezium => extract_debezium_slow(value),
+            Envelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
         }
         .unwrap_or_else(|e| {
             // TODO(#489): Handle this in a better way,
@@ -120,12 +122,13 @@ pub fn decode<G>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     encoding: DataEncoding,
     name: &str,
-    envelope: Envelope,
+    envelope: &Envelope,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     match (encoding, envelope) {
+        (_, Envelope::Upsert(_)) => unreachable!("Upsert-envelope not implemented yet."),
         (DataEncoding::Csv(enc), Envelope::None) => {
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter)
         }
@@ -133,7 +136,7 @@ where
             stream,
             &enc.value_schema,
             enc.schema_registry_url,
-            envelope == Envelope::Debezium,
+            envelope.get_avro_envelope_type() == interchange::avro::EnvelopeType::Debezium,
         ),
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")

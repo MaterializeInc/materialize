@@ -490,6 +490,58 @@ impl RelationExpr {
         }
     }
 
+    pub fn visit<'a, F>(&'a self, f: &mut F)
+    where
+        F: FnMut(&'a Self),
+    {
+        self.visit1(|e: &RelationExpr| e.visit(f));
+        f(self);
+    }
+
+    pub fn visit1<'a, F>(&'a self, mut f: F)
+    where
+        F: FnMut(&'a Self),
+    {
+        match self {
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+            RelationExpr::Project { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Map { input, .. } => {
+                f(input);
+            }
+            RelationExpr::FlatMapUnary { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Filter { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Join { left, right, .. } => {
+                f(left);
+                f(right);
+            }
+            RelationExpr::Reduce { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Distinct { input } => {
+                f(input);
+            }
+            RelationExpr::TopK { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Negate { input } => {
+                f(input);
+            }
+            RelationExpr::Threshold { input } => {
+                f(input);
+            }
+            RelationExpr::Union { left, right } => {
+                f(left);
+                f(right);
+            }
+        }
+    }
+
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
@@ -1284,6 +1336,40 @@ impl ScalarExpr {
             expr2: Box::new(other),
         }
     }
+
+    pub fn visit<'a, F>(&'a self, f: &mut F)
+    where
+        F: FnMut(&'a Self),
+    {
+        self.visit1(|e: &ScalarExpr| e.visit(f));
+        f(self);
+    }
+
+    pub fn visit1<'a, F>(&'a self, mut f: F)
+    where
+        F: FnMut(&'a Self),
+    {
+        use ScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+            Exists(..) | Select(..) => (),
+        }
+    }
 }
 
 impl AggregateExpr {
@@ -1294,5 +1380,28 @@ impl AggregateExpr {
         params: &BTreeMap<usize, ScalarType>,
     ) -> ColumnType {
         self.func.output_type(self.expr.typ(outers, inner, params))
+    }
+}
+
+impl RelationExpr {
+    pub fn finish(&mut self, finishing: dataflow_expr::RowSetFinishing) {
+        if !finishing.is_trivial() {
+            *self = RelationExpr::Project {
+                input: Box::new(RelationExpr::TopK {
+                    input: Box::new(std::mem::replace(
+                        self,
+                        RelationExpr::Constant {
+                            rows: vec![],
+                            typ: RelationType::new(Vec::new()),
+                        },
+                    )),
+                    group_key: vec![],
+                    order_key: finishing.order_by,
+                    limit: finishing.limit,
+                    offset: finishing.offset,
+                }),
+                outputs: finishing.project,
+            }
+        }
     }
 }

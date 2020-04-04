@@ -309,7 +309,7 @@ SELECT age, ascii_num * 2 as result FROM (
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
 | | demand = (#1, #3)
-| Map replace(#1, "o", "i") substr(#4, 2, 1) ascii(#5) (#6 * 2)
+| Map replace(#1, "o", "i"), substr(#4, 2, 1), ascii(#5), (#6 * 2)
 | Project (#3, #7)
 
 EOF

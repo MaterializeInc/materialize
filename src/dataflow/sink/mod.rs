@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod avro_ocf;
 mod kafka;
 mod tail;
 
+pub use avro_ocf::avro_ocf;
 pub use kafka::kafka;
 pub use tail::tail;

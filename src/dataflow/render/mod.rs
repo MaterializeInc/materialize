@@ -186,7 +186,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 read_style,
                                 ctor,
                             );
-                            (decode_avro_values(&source, envelope), capability)
+                            (decode_avro_values(&source, &envelope), capability)
                         } else {
                             let (source, capability) = match connector {
                                 ExternalSourceConnector::Kafka(c) => {
@@ -258,7 +258,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream = decode(&source, encoding, &dataflow.debug_name, envelope);
+                            let stream = decode(&source, encoding, &dataflow.debug_name, &envelope);
 
                             (stream, capability)
                         };
@@ -273,6 +273,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 Some((Row::pack(datums.into_iter()), diff))
                             })
                         }
+                        Envelope::Upsert(_) => unreachable!("Upsert is not supported yet"),
                     };
 
                     // Introduce the stream by name, as an unarranged collection.
@@ -434,6 +435,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         sink::kafka(&collection.inner, sink_id, c, sink.from.1)
                     }
                     SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
+                    SinkConnector::AvroOcf(c) => {
+                        sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1)
+                    }
                 }
                 dataflow_drops.insert(sink_id, Box::new(tokens));
             }
@@ -1067,7 +1071,7 @@ where
                                 if !order_clone.is_empty() {
                                     //todo: use arrangements or otherwise make the sort more performant?
                                     let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
-                                        compare_columns(
+                                        expr::compare_columns(
                                             &order_clone,
                                             &left.0.unpack(),
                                             &right.0.unpack(),

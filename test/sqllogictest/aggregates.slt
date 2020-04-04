@@ -84,3 +84,84 @@ query RRRRRR
 SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_pop(a) FROM t2
 ----
 0.9166666666666666  0.9166666666666666  0.6875  0.9574271077563381  0.9574271077563381  0.82915619758885
+
+# TODO(benesch): these filter tests are copied from cockroach/aggregate.slt;
+# remove them from here when we can run that file in its entirely.
+
+statement ok
+CREATE TABLE filter_test (
+  k INT,
+  v INT,
+  mark BOOL
+)
+
+statement OK
+INSERT INTO filter_test VALUES
+(1, 2, false),
+(3, 4, true),
+(5, NULL, true),
+(6, 2, true),
+(7, 2, true),
+(8, 4, true),
+(NULL, 4, true)
+
+# FILTER should eliminate some results.
+query II rowsort
+SELECT v, count(*) FILTER (WHERE k > 5) FROM filter_test GROUP BY v
+----
+2 2
+4 1
+NULL 0
+
+# Test multiple filters
+query IBIII rowsort
+SELECT v, mark, count(*) FILTER (WHERE k > 5), count(*), max(k) FILTER (WHERE k < 8) FROM filter_test GROUP BY v, mark
+----
+2 false 0 1 1
+2 true 2 2 7
+4 true 1 3 3
+NULL true 0 1 5
+
+query error FILTER specified but abs\(\) is not an aggregate function
+SELECT abs(1) FILTER (WHERE false)
+
+query error syntax error at or near "filter"
+SELECT column1 FILTER (WHERE column1 = 1) FROM (VALUES (1))
+
+query error aggregate functions are not allowed in FILTER
+SELECT v, count(*) FILTER (WHERE count(*) > 5) FROM filter_test GROUP BY v
+
+# These filter tests are Materialize-specific.
+
+# Test avg, which needs to propgate the filter through its implementation.
+query IR rowsort
+SELECT v, avg(k) FILTER (WHERE k > 5) FROM filter_test GROUP BY v
+----
+2 6.500000
+4 8.000000
+NULL NULL
+
+# Similarly for variance and stddev.
+query IRR rowsort
+SELECT v, variance(k) FILTER (WHERE k > 5), stddev(k) FILTER (WHERE k > 5) FROM filter_test GROUP BY v
+----
+2     0.500000000000  0.707106781186
+4     NULL            NULL
+NULL  NULL            NULL
+
+
+# Multiple tests related to distinctness of aggregates on constants (issue #2535)
+query I rowsort
+select count(distinct column1) from (values (1)) _;
+----
+1
+
+query I rowsort
+select count(distinct column1) from (values (1), (2), (1), (4)) _;
+----
+3
+
+query I rowsort
+select sum(distinct column1) from (values (1), (2), (1), (4)) _;
+----
+7

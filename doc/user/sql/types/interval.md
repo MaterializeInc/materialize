@@ -73,14 +73,26 @@ stipulations:
 
 ### Valid casts
 
-`interval` does not support any casts.
+#### From `interval`
+
+You can [cast](../../functions/cast) `interval` to:
+
+- [`text`](../text)
+- [`time`](../time)
+
+#### To `time`
+
+You can [cast](../../functions/cast) the following types to `interval`:
+
+- [`text`](../text)
+- [`time`](../time)
 
 ### Valid operations
 
 `interval` data supports the following operations with other types.
 
 Operation | Computes
-----------|------------
+----------|---------
 [`date`](../date) `+` [`interval`](../interval) | [`timestamp`](../timestamp)
 [`date`](../date) `-` [`interval`](../interval) | [`timestamp`](../timestamp)
 [`date`](../date) `-` [`date`](../date) | [`interval`](../interval)

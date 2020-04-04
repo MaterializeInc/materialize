@@ -12,6 +12,7 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
 use aws_arn::{Resource, ARN};
@@ -23,18 +24,19 @@ use url::Url;
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
-    AvroEncoding, Consistency, CsvEncoding, DataEncoding, ExternalSourceConnector,
-    FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
-    PeekWhen, ProtobufEncoding, RowSetFinishing, SinkConnectorBuilder, SourceConnector,
+    AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding,
+    ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
+    KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
 };
-use expr::{like_pattern, GlobalId};
+use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::Encoder;
 use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, CsrSeed, ExplainOptions, Explainee, Format, Ident, IfExistsBehavior,
-    ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, Stage, Statement, Value,
+    AvroSchema, Connector, CsrSeed, ExplainOptions, ExplainStage, Explainee, Format, Ident,
+    IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
+    Statement, Value,
 };
 
 use crate::query::QueryLifetime;
@@ -66,8 +68,10 @@ pub fn describe_statement(
         Statement::Explain { stage, .. } => (
             Some(RelationDesc::empty().add_column(
                 match stage {
-                    Stage::Dataflow => "Dataflow",
-                    Stage::Plan => "Plan",
+                    ExplainStage::Sql => "Sql",
+                    ExplainStage::RawPlan => "Raw Plan",
+                    ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+                    ExplainStage::OptimizedPlan{..} => "Optimized Plan",
                 },
                 ScalarType::String,
             )),
@@ -621,28 +625,15 @@ fn handle_show_create_sink(
     ])]))
 }
 
-fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, from, connector, format, if_not_exists) = match stmt {
-        Statement::CreateSink {
-            name,
-            from,
-            connector,
-            format,
-            if_not_exists,
-        } => (name, from, connector, format, if_not_exists),
-        _ => unreachable!(),
-    };
-
-    let (mut broker, topic_prefix) = match connector {
-        Connector::File { .. } => bail!("file sinks are not yet supported"),
-        Connector::Kafka { broker, topic } => (broker, topic),
-        Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
-        Connector::AvroOcf { .. } => bail!("Avro object sinks are not yet supported"),
-    };
-
+fn kafka_sink_builder(
+    format: Option<Format>,
+    mut broker: String,
+    topic_prefix: String,
+    desc: RelationDesc,
+    topic_suffix: String,
+) -> Result<SinkConnectorBuilder, failure::Error> {
     let schema_registry_url = match format {
-        Format::Avro(AvroSchema::CsrUrl { url, seed }) => {
+        Some(Format::Avro(AvroSchema::CsrUrl { url, seed })) => {
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
@@ -656,14 +647,55 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     }
     let broker_url = broker.parse()?;
 
-    let name = scx.allocate_name(normalize::object_name(name)?);
-    let from = scx.resolve_name(from)?;
-    let catalog_entry = scx.catalog.get(&from)?;
-
-    let encoder = Encoder::new(catalog_entry.desc()?.clone());
+    let encoder = Encoder::new(desc);
     let value_schema = encoder.writer_schema().canonical_form();
 
-    let topic_suffix = format!(
+    Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
+        broker_url,
+        schema_registry_url,
+        value_schema,
+        topic_prefix,
+        topic_suffix,
+    }))
+}
+
+fn avro_ocf_sink_builder(
+    format: Option<Format>,
+    path: String,
+    file_name_suffix: String,
+) -> Result<SinkConnectorBuilder, failure::Error> {
+    if format.is_some() {
+        bail!("avro ocf sinks cannot specify a format");
+    }
+
+    let path = PathBuf::from(path);
+
+    if path.is_dir() {
+        bail!("avro ocf sink cannot write to a directory");
+    }
+
+    Ok(SinkConnectorBuilder::AvroOcf(AvroOcfSinkConnectorBuilder {
+        path,
+        file_name_suffix,
+    }))
+}
+
+fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+    let create_sql = normalize::create_statement(scx, stmt.clone())?;
+    let (name, from, connector, format, if_not_exists) = match stmt {
+        Statement::CreateSink {
+            name,
+            from,
+            connector,
+            format,
+            if_not_exists,
+        } => (name, from, connector, format, if_not_exists),
+        _ => unreachable!(),
+    };
+
+    let name = scx.allocate_name(normalize::object_name(name)?);
+    let from = scx.catalog.get(&scx.resolve_name(from)?)?;
+    let suffix = format!(
         "{}-{}",
         scx.catalog
             .creation_time()
@@ -672,21 +704,22 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         scx.catalog.nonce()
     );
 
-    let sink = Sink {
-        create_sql,
-        from: catalog_entry.id(),
-        connector_builder: SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
-            broker_url,
-            schema_registry_url,
-            value_schema,
-            topic_prefix,
-            topic_suffix,
-        }),
+    let connector_builder = match connector {
+        Connector::File { .. } => bail!("file sinks are not yet supported"),
+        Connector::Kafka { broker, topic } => {
+            kafka_sink_builder(format, broker, topic, from.desc()?.clone(), suffix)?
+        }
+        Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
+        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
     };
 
     Ok(Plan::CreateSink {
         name,
-        sink,
+        sink: Sink {
+            create_sql,
+            from: from.id(),
+            connector_builder,
+        },
         if_not_exists,
     })
 }
@@ -793,21 +826,13 @@ fn handle_create_view(
     } else {
         None
     };
-    let (mut relation_expr, mut desc, finishing) =
-        handle_query(scx, *query.clone(), params, QueryLifetime::Static)?;
-    if !finishing.is_trivial() {
-        //TODO: materialize#724 - persist finishing information with the view?
-        relation_expr = expr::RelationExpr::Project {
-            input: Box::new(expr::RelationExpr::TopK {
-                input: Box::new(relation_expr),
-                group_key: vec![],
-                order_key: finishing.order_by,
-                limit: finishing.limit,
-                offset: finishing.offset,
-            }),
-            outputs: finishing.project,
-        }
-    }
+    let (mut relation_expr, mut desc, finishing, _) =
+        query::plan_root_query(scx, *query.clone(), QueryLifetime::Static)?;
+    // TODO(jamii) can views even have parameters?
+    relation_expr.bind_parameters(&params);
+    //TODO: materialize#724 - persist finishing information with the view?
+    relation_expr.finish(finishing);
+    let relation_expr = relation_expr.decorrelate()?;
     let typ = desc.typ();
     if !columns.is_empty() {
         if columns.len() != typ.column_types.len() {
@@ -836,11 +861,83 @@ fn handle_create_view(
     })
 }
 
+async fn purify_format(
+    format: &mut Option<Format>,
+    connector: &mut Connector,
+    col_names: &mut Vec<Ident>,
+) -> Result<(), failure::Error> {
+    match format {
+        Some(Format::Avro(schema)) => match schema {
+            AvroSchema::CsrUrl { url, seed } => {
+                let topic = if let Connector::Kafka { topic, .. } = connector {
+                    topic
+                } else {
+                    bail!("Confluent Schema Registry is only supported with Kafka sources")
+                };
+                if seed.is_none() {
+                    let url = url.parse()?;
+                    let Schema {
+                        key_schema,
+                        value_schema,
+                        ..
+                    } = get_remote_avro_schema(url, topic.clone()).await?;
+                    *seed = Some(CsrSeed {
+                        key_schema,
+                        value_schema,
+                    });
+                }
+            }
+            AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
+                let value_schema = tokio::fs::read_to_string(path).await?;
+                *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
+            }
+            _ => {}
+        },
+        Some(Format::Protobuf { schema, .. }) => {
+            if let sql_parser::ast::Schema::File(path) = schema {
+                let descriptors = tokio::fs::read(path).await?;
+                let mut buf = String::new();
+                strconv::format_bytes(&mut buf, &descriptors);
+                *schema = sql_parser::ast::Schema::Inline(buf);
+            }
+        }
+        Some(Format::Csv {
+            header_row,
+            delimiter,
+            ..
+        }) => {
+            if *header_row && col_names.is_empty() {
+                match connector {
+                    Connector::File { path } => {
+                        let path = path.clone();
+                        let f = tokio::fs::File::open(path).await?;
+                        let f = tokio::io::BufReader::new(f);
+                        let csv_header = f.lines().next_line().await?;
+                        match csv_header {
+                            Some(csv_header) => {
+                                csv_header
+                                    .split(*delimiter as char)
+                                    .for_each(|v| col_names.push(Ident::from(v)));
+                            }
+                            None => bail!("CSV file expected header line, but is empty"),
+                        }
+                    }
+                    _ => bail!("CSV format with headers only works with file connectors"),
+                }
+            }
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
 pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Error> {
     if let Statement::CreateSource {
+        col_names,
         connector,
         format,
         with_options,
+        envelope,
         ..
     } = &mut stmt
     {
@@ -865,68 +962,9 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
             _ => (),
         }
 
-        match format {
-            Some(Format::Avro(schema)) => match schema {
-                AvroSchema::CsrUrl { url, seed } => {
-                    let topic = if let Connector::Kafka { topic, .. } = connector {
-                        topic
-                    } else {
-                        bail!("Confluent Schema Registry is only supported with Kafka sources")
-                    };
-                    if seed.is_none() {
-                        let url = url.parse()?;
-                        let Schema {
-                            key_schema,
-                            value_schema,
-                            ..
-                        } = get_remote_avro_schema(url, topic.clone()).await?;
-                        *seed = Some(CsrSeed {
-                            key_schema,
-                            value_schema,
-                        });
-                    }
-                }
-                AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
-                    let value_schema = tokio::fs::read_to_string(path).await?;
-                    *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
-                }
-                _ => {}
-            },
-            Some(Format::Protobuf { schema, .. }) => {
-                if let sql_parser::ast::Schema::File(path) = schema {
-                    let descriptors = tokio::fs::read(path).await?;
-                    let mut buf = String::new();
-                    strconv::format_bytes(&mut buf, &descriptors);
-                    *schema = sql_parser::ast::Schema::Inline(buf);
-                }
-            }
-            Some(Format::Csv { header_row, .. }) => {
-                if *header_row {
-                    match connector {
-                        Connector::File { path } => {
-                            if !with_options_map.contains_key("col_names") {
-                                let path = path.clone();
-                                let f = tokio::fs::File::open(path).await?;
-                                let f = tokio::io::BufReader::new(f);
-                                let csv_header = f.lines().next_line().await?;
-                                match csv_header {
-                                    Some(csv_header) => {
-                                        with_options.push(sql_parser::ast::SqlOption {
-                                            name: sql_parser::ast::Ident::new("col_names"),
-                                            value: sql_parser::ast::Value::SingleQuotedString(
-                                                csv_header,
-                                            ),
-                                        });
-                                    }
-                                    None => bail!("CSV file expected header line, but is empty"),
-                                }
-                            }
-                        }
-                        _ => bail!("CSV format with headers only works with file connectors"),
-                    }
-                }
-            }
-            _ => (),
+        purify_format(format, connector, col_names).await?;
+        if let sql_parser::ast::Envelope::Upsert(format) = envelope {
+            purify_format(format, connector, col_names).await?;
         }
     }
     Ok(stmt)
@@ -936,6 +974,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
     match &stmt {
         Statement::CreateSource {
             name,
+            col_names,
             connector,
             with_options,
             format,
@@ -943,12 +982,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             if_not_exists,
             materialized,
         } => {
-            let envelope = match envelope {
-                sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
-                sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
-            };
-
-            let get_encoding = |mut with_options: std::collections::HashMap<String, Value>| {
+            let get_encoding = |format: &Option<Format>| {
                 let format = format
                     .as_ref()
                     .ok_or_else(|| format_err!("Source format must be specified"))?;
@@ -1018,39 +1052,17 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         n_cols,
                         delimiter,
                     } => {
-                        let (col_names, n_cols) = match with_options.remove("col_names") {
-                            Some(Value::SingleQuotedString(s)) => {
-                                let col_names: Vec<String> =
-                                    s.split(*delimiter as char).map(|v| v.to_string()).collect();
-                                let n_cols_derived = col_names.len();
-                                // If user specified number of columns, ensure it matches the
-                                // number of names provided.
-                                if let Some(n_cols) = n_cols {
-                                    if *n_cols != n_cols_derived {
-                                        bail!(
-                                            "Provided names for {} columns, but specified {} columns \
-                                             when creating source",
-                                            n_cols_derived,
-                                            n_cols
-                                        )
-                                    }
-                                };
-                                (Some(col_names), n_cols_derived)
+                        let n_cols = if col_names.is_empty() {
+                            match n_cols {
+                                Some(n) => *n,
+                                None => bail!("Cannot determine number of columns in CSV source; specify using \
+                                CREATE SOURCE...FORMAT CSV WITH X COLUMNS")
                             }
-                            _ => {
-                                match n_cols {
-                                    Some(n_cols) => (None, *n_cols),
-                                    None => bail!(
-                                        "Cannot determine number of columns in CSV source; specify using \
-                                        CREATE SOURCE...FORMAT CSV WITH X COLUMNS"
-                                    )
-                                }
-                            },
+                        } else {
+                            col_names.len()
                         };
-
                         DataEncoding::Csv(CsvEncoding {
                             header_row: *header_row,
-                            col_names,
                             n_cols,
                             delimiter: match *delimiter as u32 {
                                 0..=127 => *delimiter as u8,
@@ -1066,7 +1078,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut with_options = normalize::with_options(with_options);
 
             let mut consistency = Consistency::RealTime;
-            let (external_connector, encoding) = match connector {
+            let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
                     let ssl_certificate_file = match with_options.remove("ssl_certificate_file") {
                         None => None,
@@ -1084,7 +1096,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         topic: topic.clone(),
                         ssl_certificate_file,
                     });
-                    let encoding = get_encoding(with_options)?;
+                    let encoding = get_encoding(format)?;
                     (connector, encoding)
                 }
                 Connector::Kinesis { arn, .. } => {
@@ -1149,7 +1161,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         secret_access_key,
                         token,
                     });
-                    let encoding = get_encoding(with_options)?;
+                    let encoding = get_encoding(format)?;
                     (connector, encoding)
                 }
                 Connector::File { path, .. } => {
@@ -1162,7 +1174,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         path: path.clone().into(),
                         tail,
                     });
-                    let encoding = get_encoding(with_options)?;
+                    let encoding = get_encoding(format)?;
                     (connector, encoding)
                 }
                 Connector::AvroOcf { path, .. } => {
@@ -1190,7 +1202,75 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 }
             };
 
-            let mut desc = encoding.desc(envelope)?;
+            // TODO (materialize#2537): cleanup format validation
+            // Avro format validation is different for the Debezium envelope
+            // vs the Upsert envelope.
+            //
+            // For the Debezium envelope, the key schema is not meant to be
+            // used to decode records; it is meant to be a subset of the
+            // value schema so we can identify what the primary key is.
+            //
+            // When using the Upsert envelope, we delete the key schema
+            // from the value encoding because the key schema is not
+            // necessarily a subset of the value schema. Also, we shift
+            // the key schema, if it exists, over to the value schema position
+            // in the Upsert envelope's key_format so it can be validated like
+            // a schema used to decode records.
+            let envelope = match &envelope {
+                sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
+                sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
+                sql_parser::ast::Envelope::Upsert(key_format) => match connector {
+                    Connector::Kafka { .. } => {
+                        let mut key_encoding = if key_format.is_some() {
+                            get_encoding(key_format)?
+                        } else {
+                            encoding.clone()
+                        };
+                        if let DataEncoding::Avro(AvroEncoding {
+                            key_schema,
+                            value_schema,
+                            ..
+                        }) = &mut key_encoding
+                        {
+                            if key_schema.is_some() {
+                                *value_schema = key_schema.take().unwrap();
+                            }
+                        }
+                        dataflow_types::Envelope::Upsert(key_encoding)
+                    }
+                    _ => bail!("Upsert envelope for non-Kafka sources not supported yet"),
+                },
+            };
+
+            if let dataflow_types::Envelope::Upsert(_) = envelope {
+                // delete the key schema because 1) the format in the upsert is already
+                // taking care of that 2) to prevent schema validation from looking for the
+                // key columns in the value record
+                if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &mut encoding {
+                    *key_schema = None;
+                }
+                // TODO: remove the bail once PR #2943 is in
+                // the bail is meant to prevent someone from accidentally trying
+                // the upsert envelope and then causing a panic.
+                bail!("Upsert envelope is not supported yet");
+            }
+
+            let mut desc = encoding.desc(&envelope)?;
+
+            let typ = desc.typ();
+            if !col_names.is_empty() {
+                if col_names.len() != typ.column_types.len() {
+                    bail!(
+                        "SOURCE definition has {} columns, but expected {} columns",
+                        col_names.len(),
+                        typ.column_types.len()
+                    )
+                }
+                for (i, name) in col_names.iter().enumerate() {
+                    desc.set_name(i, Some(normalize::column_name(name.clone())));
+                }
+            }
+
             // TODO(benesch): the available metadata columns should not depend
             // on the format.
             match encoding {
@@ -1400,39 +1480,60 @@ fn handle_select(
 
 fn handle_explain(
     scx: &StatementContext,
-    stage: Stage,
+    stage: ExplainStage,
     explainee: Explainee,
-    explain_options: ExplainOptions,
-    params: &Params,
+    options: ExplainOptions,
+    _params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let relation_expr = match explainee {
+    let is_view = if let Explainee::View(_) = explainee {
+        true
+    } else {
+        false
+    };
+    let (sql, query) = match explainee {
         Explainee::View(name) => {
             let full_name = scx.resolve_name(name.clone())?;
             let entry = scx.catalog.get(&full_name)?;
-            match entry.item() {
-                CatalogItem::View(view) => view.unoptimized_expr.clone(),
+            let view = match entry.item() {
+                CatalogItem::View(view) => view,
                 other => bail!(
                     "Expected {} to be a view, not a {}",
                     name,
                     other.type_string()
                 ),
-            }
+            };
+            let parsed = crate::parse(view.create_sql.clone())
+                .expect("Sql for existing view should be valid sql");
+            let query = match parsed.into_last() {
+                Statement::CreateView { query, .. } => query,
+                _ => panic!("Sql for existing view should parse as a view"),
+            };
+            (view.create_sql.clone(), *query)
         }
-        Explainee::Query(query) => handle_query(scx, *query, params, QueryLifetime::OneShot)?.0,
+        Explainee::Query(query) => (query.to_string(), query),
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    if stage == Stage::Dataflow {
-        let mut explanation = relation_expr.explain(scx.catalog);
-        if explain_options.typed {
-            explanation.explain_types();
-        }
-        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            &*explanation.to_string(),
-        )])]))
+    let (mut sql_expr, _desc, finishing, _param_types) =
+        query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+    let finishing = if is_view {
+        // views don't use a separate finishing
+        sql_expr.finish(finishing);
+        None
+    } else if finishing.is_trivial() {
+        None
     } else {
-        Ok(Plan::ExplainPlan(relation_expr, explain_options))
-    }
+        Some(finishing)
+    };
+    let expr = sql_expr.clone().decorrelate();
+    Ok(Plan::ExplainPlan {
+        sql,
+        raw_plan: sql_expr,
+        decorrelated_plan: expr,
+        row_set_finishing: finishing,
+        stage,
+        options,
+    })
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
@@ -1442,7 +1543,7 @@ fn handle_query(
     query: Query,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<(expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
     Ok((expr.decorrelate()?, desc, finishing))

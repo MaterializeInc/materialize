@@ -9,14 +9,14 @@
 
 //! Logic handling writing in Avro format at user level.
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{SeekFrom, Write};
 
 use failure::{Error, Fail};
 use rand::random;
-
-use serde_json;
+use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt};
 
 use crate::encode::{encode, encode_ref, encode_to_vec};
+use crate::reader::Block;
 use crate::schema::{Schema, SchemaPiece};
 use crate::types::{ToAvro, Value};
 use crate::Codec;
@@ -40,31 +40,40 @@ impl ValidationError {
     }
 }
 
-/// Main interface for writing Avro formatted values.
-pub struct Writer<'a, W> {
-    schema: &'a Schema,
+/// Main interface for writing Avro Object Container Files.
+pub struct Writer<W> {
+    schema: Schema,
     writer: W,
     buffer: Vec<u8>,
     num_values: usize,
-    codec: Codec,
-    marker: Vec<u8>,
+    codec: Option<Codec>,
+    marker: [u8; 16],
     has_header: bool,
 }
 
-impl<'a, W: Write> Writer<'a, W> {
-    /// Creates a `Writer` given a `Schema` and something implementing the `io::Write` trait to write
-    /// to.
-    /// No compression `Codec` will be used.
-    pub fn new(schema: &'a Schema, writer: W) -> Writer<'a, W> {
+impl<W: Write> Writer<W> {
+    /// Creates a `Writer` for the `Schema` and something implementing the [`io::Write`]
+    /// trait to write to.
+    ///
+    /// This uses the no-compression [`Codec::Null`] when appending records.
+    pub fn new(schema: Schema, writer: W) -> Writer<W> {
         Self::with_codec(schema, writer, Codec::Null)
     }
 
-    /// Creates a `Writer` with a specific `Codec` given a `Schema` and something implementing the
-    /// `io::Write` trait to write to.
-    pub fn with_codec(schema: &'a Schema, writer: W, codec: Codec) -> Writer<'a, W> {
-        let mut marker = Vec::with_capacity(16);
-        for _ in 0..16 {
-            marker.push(random::<u8>());
+    /// Creates a `Writer` given a [`Schema`] and a specific compression [`Codec`]
+    pub fn with_codec(schema: Schema, writer: W, codec: Codec) -> Writer<W> {
+        Writer::with_codec_opt(schema, writer, Some(codec))
+    }
+
+    /// Create a `Writer` with the given parameters.
+    ///
+    /// All parameters have the same meaning as `with_codec`, but if `codec` is `None`
+    /// then no compression will be used and the `avro.codec` field in the header will be
+    /// omitted.
+    pub fn with_codec_opt(schema: Schema, writer: W, codec: Option<Codec>) -> Writer<W> {
+        let mut marker = [0; 16];
+        for i in 0..16 {
+            marker[i] = random::<u8>();
         }
 
         Writer {
@@ -78,9 +87,28 @@ impl<'a, W: Write> Writer<'a, W> {
         }
     }
 
+    /// Creates a `Writer` that appends to an existing OCF file.
+    pub async fn append_to(file: W) -> Result<Writer<W>, Error>
+    where
+        W: AsyncRead + AsyncSeek + Unpin + Send,
+    {
+        let block = Block::new(file, None).await?;
+        let (mut file, schema, codec, marker) = block.into_parts();
+        file.seek(SeekFrom::End(0)).await?;
+        Ok(Writer {
+            schema,
+            writer: file,
+            buffer: Vec::with_capacity(SYNC_INTERVAL),
+            num_values: 0,
+            codec: Some(codec),
+            marker,
+            has_header: true,
+        })
+    }
+
     /// Get a reference to the `Schema` associated to a `Writer`.
-    pub fn schema(&self) -> &'a Schema {
-        self.schema
+    pub fn schema(&self) -> &Schema {
+        &self.schema
     }
 
     /// Append a compatible value (implementing the `ToAvro` trait) to a `Writer`, also performing
@@ -100,9 +128,8 @@ impl<'a, W: Write> Writer<'a, W> {
         } else {
             0
         };
-
         let avro = value.avro();
-        write_value_ref(self.schema, &avro, &mut self.buffer)?;
+        write_value_ref(&self.schema, &avro, &mut self.buffer)?;
 
         self.num_values += 1;
 
@@ -130,7 +157,7 @@ impl<'a, W: Write> Writer<'a, W> {
             0
         };
 
-        write_value_ref(self.schema, value, &mut self.buffer)?;
+        write_value_ref(&self.schema, value, &mut self.buffer)?;
 
         self.num_values += 1;
 
@@ -201,7 +228,8 @@ impl<'a, W: Write> Writer<'a, W> {
             return Ok(0);
         }
 
-        self.codec.compress(&mut self.buffer)?;
+        let compressor = self.codec.unwrap_or(Codec::Null);
+        compressor.compress(&mut self.buffer)?;
 
         let num_values = self.num_values;
         let stream_len = self.buffer.len();
@@ -250,11 +278,13 @@ impl<'a, W: Write> Writer<'a, W> {
 
     /// Create an Avro header based on schema, codec and sync marker.
     fn header(&self) -> Result<Vec<u8>, Error> {
-        let schema_bytes = serde_json::to_string(self.schema)?.into_bytes();
+        let schema_bytes = serde_json::to_string(&self.schema)?.into_bytes();
 
         let mut metadata = HashMap::with_capacity(2);
         metadata.insert("avro.schema", Value::Bytes(schema_bytes));
-        metadata.insert("avro.codec", self.codec.avro());
+        if let Some(codec) = self.codec {
+            metadata.insert("avro.codec", codec.avro());
+        };
 
         let mut header = Vec::new();
         header.extend_from_slice(AVRO_OBJECT_HEADER);
@@ -276,9 +306,9 @@ impl<'a, W: Write> Writer<'a, W> {
 /// Encode a compatible value (implementing the `ToAvro` trait) into Avro format, also performing
 /// schema validation.
 ///
-/// This is an internal function which gets the bytes buffer where to write as parameter instead of
+/// This is a function which gets the bytes buffer where to write as parameter instead of
 /// creating a new one like `to_avro_datum`.
-fn write_avro_datum<T: ToAvro>(
+pub fn write_avro_datum<T: ToAvro>(
     schema: &Schema,
     value: T,
     buffer: &mut Vec<u8>,
@@ -313,210 +343,264 @@ pub fn to_avro_datum<T: ToAvro>(schema: &Schema, value: T) -> Result<Vec<u8>, Er
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
-    // use crate::types::Record;
-    // use crate::util::zig_i64;
-    // use serde::{Deserialize, Serialize};
-    //
-    // static SCHEMA: &str = r#"
-    //         {
-    //             "type": "record",
-    //             "name": "test",
-    //             "fields": [
-    //                 {"name": "a", "type": "long", "default": 42},
-    //                 {"name": "b", "type": "string"}
-    //             ]
-    //         }
-    //     "#;
-    // static UNION_SCHEMA: &str = r#"
-    //         ["null", "long"]
-    //     "#;
-    //
-    // #[test]
-    // fn test_to_avro_datum() {
-    //     let schema = Schema::parse_str(SCHEMA).unwrap();
-    //     let mut record = Record::new(&schema).unwrap();
-    //     record.put("a", 27i64);
-    //     record.put("b", "foo");
-    //
-    //     let mut expected = Vec::new();
-    //     zig_i64(27, &mut expected);
-    //     zig_i64(3, &mut expected);
-    //     expected.extend(vec![b'f', b'o', b'o'].into_iter());
-    //
-    //     assert_eq!(to_avro_datum(&schema, record).unwrap(), expected);
-    // }
-    //
-    // #[test]
-    // fn test_union() {
-    //     let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
-    //     let union = Value::Union(1, Box::new(Value::Long(3)));
-    //
-    //     let mut expected = Vec::new();
-    //     zig_i64(1, &mut expected);
-    //     zig_i64(3, &mut expected);
-    //
-    //     assert_eq!(to_avro_datum(&schema, union).unwrap(), expected);
-    // }
-    //
-    // #[test]
-    // fn test_writer_append() {
-    //     let schema = Schema::parse_str(SCHEMA).unwrap();
-    //     let mut writer = Writer::new(&schema, Vec::new());
-    //
-    //     let mut record = Record::new(&schema).unwrap();
-    //     record.put("a", 27i64);
-    //     record.put("b", "foo");
-    //
-    //     let n1 = writer.append(record.clone()).unwrap();
-    //     let n2 = writer.append(record.clone()).unwrap();
-    //     let n3 = writer.flush().unwrap();
-    //     let result = writer.into_inner();
-    //
-    //     assert_eq!(n1 + n2 + n3, result.len());
-    //
-    //     let mut header = Vec::new();
-    //     header.extend(vec![b'O', b'b', b'j', b'\x01']);
-    //
-    //     let mut data = Vec::new();
-    //     zig_i64(27, &mut data);
-    //     zig_i64(3, &mut data);
-    //     data.extend(vec![b'f', b'o', b'o'].into_iter());
-    //     let data_copy = data.clone();
-    //     data.extend(data_copy);
-    //
-    //     // starts with magic
-    //     assert_eq!(
-    //         result
-    //             .iter()
-    //             .cloned()
-    //             .take(header.len())
-    //             .collect::<Vec<u8>>(),
-    //         header
-    //     );
-    //     // ends with data and sync marker
-    //     assert_eq!(
-    //         result
-    //             .iter()
-    //             .cloned()
-    //             .rev()
-    //             .skip(16)
-    //             .take(data.len())
-    //             .collect::<Vec<u8>>()
-    //             .into_iter()
-    //             .rev()
-    //             .collect::<Vec<u8>>(),
-    //         data
-    //     );
-    // }
-    //
-    // #[test]
-    // fn test_writer_extend() {
-    //     let schema = Schema::parse_str(SCHEMA).unwrap();
-    //     let mut writer = Writer::new(&schema, Vec::new());
-    //
-    //     let mut record = Record::new(&schema).unwrap();
-    //     record.put("a", 27i64);
-    //     record.put("b", "foo");
-    //     let record_copy = record.clone();
-    //     let records = vec![record, record_copy];
-    //
-    //     let n1 = writer.extend(records.into_iter()).unwrap();
-    //     let n2 = writer.flush().unwrap();
-    //     let result = writer.into_inner();
-    //
-    //     assert_eq!(n1 + n2, result.len());
-    //
-    //     let mut header = Vec::new();
-    //     header.extend(vec![b'O', b'b', b'j', b'\x01']);
-    //
-    //     let mut data = Vec::new();
-    //     zig_i64(27, &mut data);
-    //     zig_i64(3, &mut data);
-    //     data.extend(vec![b'f', b'o', b'o'].into_iter());
-    //     let data_copy = data.clone();
-    //     data.extend(data_copy);
-    //
-    //     // starts with magic
-    //     assert_eq!(
-    //         result
-    //             .iter()
-    //             .cloned()
-    //             .take(header.len())
-    //             .collect::<Vec<u8>>(),
-    //         header
-    //     );
-    //     // ends with data and sync marker
-    //     assert_eq!(
-    //         result
-    //             .iter()
-    //             .cloned()
-    //             .rev()
-    //             .skip(16)
-    //             .take(data.len())
-    //             .collect::<Vec<u8>>()
-    //             .into_iter()
-    //             .rev()
-    //             .collect::<Vec<u8>>(),
-    //         data
-    //     );
-    // }
-    //
-    // #[derive(Debug, Clone, Deserialize, Serialize)]
-    // struct TestSerdeSerialize {
-    //     a: i64,
-    //     b: String,
-    // }
-    //
-    // #[test]
-    // fn test_writer_with_codec() {
-    //     let schema = Schema::parse_str(SCHEMA).unwrap();
-    //     let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
-    //
-    //     let mut record = Record::new(&schema).unwrap();
-    //     record.put("a", 27i64);
-    //     record.put("b", "foo");
-    //
-    //     let n1 = writer.append(record.clone()).unwrap();
-    //     let n2 = writer.append(record.clone()).unwrap();
-    //     let n3 = writer.flush().unwrap();
-    //     let result = writer.into_inner();
-    //
-    //     assert_eq!(n1 + n2 + n3, result.len());
-    //
-    //     let mut header = Vec::new();
-    //     header.extend(vec![b'O', b'b', b'j', b'\x01']);
-    //
-    //     let mut data = Vec::new();
-    //     zig_i64(27, &mut data);
-    //     zig_i64(3, &mut data);
-    //     data.extend(vec![b'f', b'o', b'o'].into_iter());
-    //     let data_copy = data.clone();
-    //     data.extend(data_copy);
-    //     Codec::Deflate.compress(&mut data).unwrap();
-    //
-    //     // starts with magic
-    //     assert_eq!(
-    //         result
-    //             .iter()
-    //             .cloned()
-    //             .take(header.len())
-    //             .collect::<Vec<u8>>(),
-    //         header
-    //     );
-    //     // ends with data and sync marker
-    //     assert_eq!(
-    //         result
-    //             .iter()
-    //             .cloned()
-    //             .rev()
-    //             .skip(16)
-    //             .take(data.len())
-    //             .collect::<Vec<u8>>()
-    //             .into_iter()
-    //             .rev()
-    //             .collect::<Vec<u8>>(),
-    //         data
-    //     );
-    // }
+    use std::io::Cursor;
+
+    use futures::stream::TryStreamExt;
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+    use crate::types::Record;
+    use crate::util::zig_i64;
+    use crate::Reader;
+
+    static SCHEMA: &str = r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "a", "type": "long", "default": 42},
+                    {"name": "b", "type": "string"}
+                ]
+            }
+        "#;
+    static UNION_SCHEMA: &str = r#"
+            ["null", "long"]
+        "#;
+
+    #[test]
+    fn test_to_avro_datum() {
+        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let mut record = Record::new(schema.top_node()).unwrap();
+        record.put("a", 27i64);
+        record.put("b", "foo");
+
+        let mut expected = Vec::new();
+        zig_i64(27, &mut expected);
+        zig_i64(3, &mut expected);
+        expected.extend(vec![b'f', b'o', b'o'].into_iter());
+
+        assert_eq!(to_avro_datum(&schema, record).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_union() {
+        let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
+        let union = Value::Union(1, Box::new(Value::Long(3)));
+
+        let mut expected = Vec::new();
+        zig_i64(1, &mut expected);
+        zig_i64(3, &mut expected);
+
+        assert_eq!(to_avro_datum(&schema, union).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_writer_append() {
+        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let mut writer = Writer::new(schema.clone(), Vec::new());
+
+        let mut record = Record::new(schema.top_node()).unwrap();
+        record.put("a", 27i64);
+        record.put("b", "foo");
+
+        let n1 = writer.append(record.clone()).unwrap();
+        let n2 = writer.append(record.clone()).unwrap();
+        let n3 = writer.flush().unwrap();
+        let result = writer.into_inner();
+
+        assert_eq!(n1 + n2 + n3, result.len());
+
+        let mut header = Vec::new();
+        header.extend(vec![b'O', b'b', b'j', b'\x01']);
+
+        let mut data = Vec::new();
+        zig_i64(27, &mut data);
+        zig_i64(3, &mut data);
+        data.extend(vec![b'f', b'o', b'o'].into_iter());
+        let data_copy = data.clone();
+        data.extend(data_copy);
+
+        // starts with magic
+        assert_eq!(
+            result
+                .iter()
+                .cloned()
+                .take(header.len())
+                .collect::<Vec<u8>>(),
+            header
+        );
+        // ends with data and sync marker
+        assert_eq!(
+            result
+                .iter()
+                .cloned()
+                .rev()
+                .skip(16)
+                .take(data.len())
+                .collect::<Vec<u8>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<u8>>(),
+            data
+        );
+    }
+
+    #[test]
+    fn test_writer_extend() {
+        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let mut writer = Writer::new(schema.clone(), Vec::new());
+
+        let mut record = Record::new(schema.top_node()).unwrap();
+        record.put("a", 27i64);
+        record.put("b", "foo");
+        let record_copy = record.clone();
+        let records = vec![record, record_copy];
+
+        let n1 = writer.extend(records.into_iter()).unwrap();
+        let n2 = writer.flush().unwrap();
+        let result = writer.into_inner();
+
+        assert_eq!(n1 + n2, result.len());
+
+        let mut header = Vec::new();
+        header.extend(vec![b'O', b'b', b'j', b'\x01']);
+
+        let mut data = Vec::new();
+        zig_i64(27, &mut data);
+        zig_i64(3, &mut data);
+        data.extend(vec![b'f', b'o', b'o'].into_iter());
+        let data_copy = data.clone();
+        data.extend(data_copy);
+
+        // starts with magic
+        assert_eq!(
+            result
+                .iter()
+                .cloned()
+                .take(header.len())
+                .collect::<Vec<u8>>(),
+            header
+        );
+        // ends with data and sync marker
+        assert_eq!(
+            result
+                .iter()
+                .cloned()
+                .rev()
+                .skip(16)
+                .take(data.len())
+                .collect::<Vec<u8>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<u8>>(),
+            data
+        );
+    }
+
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    struct TestSerdeSerialize {
+        a: i64,
+        b: String,
+    }
+
+    #[test]
+    fn test_writer_with_codec() {
+        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let mut writer = Writer::with_codec(schema.clone(), Vec::new(), Codec::Deflate);
+
+        let mut record = Record::new(schema.top_node()).unwrap();
+        record.put("a", 27i64);
+        record.put("b", "foo");
+
+        let n1 = writer.append(record.clone()).unwrap();
+        let n2 = writer.append(record.clone()).unwrap();
+        let n3 = writer.flush().unwrap();
+        let result = writer.into_inner();
+
+        assert_eq!(n1 + n2 + n3, result.len());
+
+        let mut header = Vec::new();
+        header.extend(vec![b'O', b'b', b'j', b'\x01']);
+
+        let mut data = Vec::new();
+        zig_i64(27, &mut data);
+        zig_i64(3, &mut data);
+        data.extend(vec![b'f', b'o', b'o'].into_iter());
+        let data_copy = data.clone();
+        data.extend(data_copy);
+        Codec::Deflate.compress(&mut data).unwrap();
+
+        // starts with magic
+        assert_eq!(
+            result
+                .iter()
+                .cloned()
+                .take(header.len())
+                .collect::<Vec<u8>>(),
+            header
+        );
+        // ends with data and sync marker
+        assert_eq!(
+            result
+                .iter()
+                .cloned()
+                .rev()
+                .skip(16)
+                .take(data.len())
+                .collect::<Vec<u8>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<u8>>(),
+            data
+        );
+    }
+
+    #[tokio::test]
+    async fn test_writer_roundtrip() {
+        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let make_record = |a: i64, b| {
+            let mut record = Record::new(schema.top_node()).unwrap();
+            record.put("a", a);
+            record.put("b", b);
+            record.avro()
+        };
+
+        let mut buf = Vec::new();
+
+        // Write out a file with two blocks.
+        {
+            let mut writer = Writer::new(schema.clone(), &mut buf);
+            writer.append(make_record(27, "foo")).unwrap();
+            writer.flush().unwrap();
+            writer.append(make_record(54, "bar")).unwrap();
+            writer.flush().unwrap();
+        }
+
+        // Add another block from a new writer, part i.
+        {
+            let mut writer = Writer::append_to(Cursor::new(&mut buf)).await.unwrap();
+            writer.append(make_record(42, "baz")).unwrap();
+            writer.flush().unwrap();
+        }
+
+        // Add another block from a new writer, part ii.
+        {
+            let mut writer = Writer::append_to(Cursor::new(&mut buf)).await.unwrap();
+            writer.append(make_record(84, "zar")).unwrap();
+            writer.flush().unwrap();
+        }
+
+        // Ensure all four blocks appear in the file.
+        let reader = Reader::new(&buf[..]).await.unwrap().into_stream();
+        let actual: Vec<_> = reader.try_collect().await.unwrap();
+        assert_eq!(
+            vec![
+                make_record(27, "foo"),
+                make_record(54, "bar"),
+                make_record(42, "baz"),
+                make_record(84, "zar")
+            ],
+            actual
+        );
+    }
 }

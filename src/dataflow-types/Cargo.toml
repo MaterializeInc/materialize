@@ -13,7 +13,6 @@ interchange = { path = "../interchange" }
 comm = { path = "../comm" }
 expr = { path = "../expr" }
 failure = "0.1"
-pdqselect = "0.1.0"
 regex = "1.3.5"
 repr = { path = "../repr" }
 rusoto_core = "0.43.0-beta.1"

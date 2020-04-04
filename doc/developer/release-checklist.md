@@ -119,7 +119,7 @@ production readiness.
     must not include the `v` prefix.
 
     ```shell
-    bin/ci-builder run stable cargo-deb -p materialized --deb-version <VERSION-NO-V>
+    bin/ci-builder run stable cargo-deb --no-strip -p materialized --deb-version <VERSION-NO-V>
     ```
 
     Upload the resulting `.deb` file to [GemFury](https://fury.io) by dragging-

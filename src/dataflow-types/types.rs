@@ -13,7 +13,6 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use failure::ResultExt;
@@ -22,14 +21,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
-use expr::{
-    ColumnOrder, EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr,
-    SourceInstanceId,
-};
+use expr::{EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
 use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnType, RelationDesc, RelationType, Row, ScalarType};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -72,86 +68,6 @@ pub struct Update {
     pub row: Row,
     pub timestamp: u64,
     pub diff: isize,
-}
-
-/// Compare `left` and `right` using `order`. If that doesn't produce a strict ordering, call `tiebreaker`.
-pub fn compare_columns<F>(
-    order: &[ColumnOrder],
-    left: &[Datum],
-    right: &[Datum],
-    tiebreaker: F,
-) -> Ordering
-where
-    F: Fn() -> Ordering,
-{
-    for order in order {
-        let (lval, rval) = (&left[order.column], &right[order.column]);
-        let cmp = if order.desc {
-            rval.cmp(&lval)
-        } else {
-            lval.cmp(&rval)
-        };
-        if cmp != Ordering::Equal {
-            return cmp;
-        }
-    }
-    tiebreaker()
-}
-
-/// Instructions for finishing the result of a query.
-///
-/// The primary reason for the existence of this structure and attendant code
-/// is that SQL's ORDER BY requires sorting rows (as already implied by the
-/// keywords), whereas much of the rest of SQL is defined in terms of unordered
-/// multisets. But as it turns out, the same idea can be used to optimize
-/// trivial peeks.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RowSetFinishing {
-    /// Order rows by the given columns.
-    pub order_by: Vec<ColumnOrder>,
-    /// Include only as many rows (after offset).
-    pub limit: Option<usize>,
-    /// Omit as many rows.
-    pub offset: usize,
-    /// Include only given columns.
-    pub project: Vec<usize>,
-}
-
-impl RowSetFinishing {
-    /// True if the finishing does nothing to any result set.
-    pub fn is_trivial(&self) -> bool {
-        (self.limit == None) && self.order_by.is_empty() && self.offset == 0
-    }
-    /// Applies finishing actions to a row set.
-    pub fn finish(&self, rows: &mut Vec<Row>) {
-        let mut sort_by = |left: &Row, right: &Row| {
-            compare_columns(&self.order_by, &left.unpack(), &right.unpack(), || {
-                left.cmp(right)
-            })
-        };
-        let offset = self.offset;
-        if offset > rows.len() {
-            *rows = Vec::new();
-        } else {
-            if let Some(limit) = self.limit {
-                let offset_plus_limit = offset + limit;
-                if rows.len() > offset_plus_limit {
-                    pdqselect::select_by(rows, offset_plus_limit, &mut sort_by);
-                    rows.truncate(offset_plus_limit);
-                }
-            }
-            if offset > 0 {
-                pdqselect::select_by(rows, offset, &mut sort_by);
-                rows.drain(..offset);
-            }
-            rows.sort_by(&mut sort_by);
-            for row in rows {
-                let datums = row.unpack();
-                let new_row = Row::pack(self.project.iter().map(|i| &datums[*i]));
-                *row = new_row;
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -335,14 +251,37 @@ pub enum DataEncoding {
 }
 
 impl DataEncoding {
-    pub fn desc(&self, envelope: Envelope) -> Result<RelationDesc, failure::Error> {
+    pub fn desc(&self, envelope: &Envelope) -> Result<RelationDesc, failure::Error> {
+        let mut full_desc = if let Envelope::Upsert(key_encoding) = envelope {
+            let key_desc = key_encoding.desc(&Envelope::None)?;
+            //rename key columns to "key" something if the encoding is not Avro
+            let key_desc = match key_encoding {
+                DataEncoding::Avro(_) => key_desc,
+                _ => RelationDesc::new(
+                    key_desc.typ().clone(),
+                    key_desc
+                        .iter_names()
+                        .enumerate()
+                        .map(|(i, _)| Some(format!("key{}", i))),
+                ),
+            };
+            let keys = key_desc
+                .iter_names()
+                .enumerate()
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            key_desc.add_keys(keys)
+        } else {
+            RelationDesc::empty()
+        };
+
         let desc = match self {
             DataEncoding::Bytes => RelationDesc::from_cols(vec![(
                 ColumnType::new(ScalarType::Bytes),
                 Some("data".to_owned()),
             )]),
             DataEncoding::AvroOcf { reader_schema } => {
-                avro::validate_value_schema(&*reader_schema, envelope == Envelope::Debezium)
+                avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
                     .with_context(|e| format!("validating avro ocf reader schema: {}", e))?
             }
             DataEncoding::Avro(AvroEncoding {
@@ -351,7 +290,7 @@ impl DataEncoding {
                 ..
             }) => {
                 let mut desc =
-                    avro::validate_value_schema(value_schema, envelope == Envelope::Debezium)
+                    avro::validate_value_schema(value_schema, envelope.get_avro_envelope_type())
                         .with_context(|e| format!("validating avro value schema: {}", e))?;
                 if let Some(key_schema) = key_schema {
                     let keys = avro::validate_key_schema(key_schema, &desc)
@@ -389,32 +328,26 @@ impl DataEncoding {
                         .collect(),
                 )
             }
-            DataEncoding::Csv(CsvEncoding {
-                n_cols, col_names, ..
-            }) => {
-                let cols = match col_names {
-                    Some(col_names) => col_names
-                        .iter()
-                        .map(|v| (ColumnType::new(ScalarType::String), Some(v.to_string())))
-                        .collect(),
-                    None => (1..=*n_cols)
-                        .map(|i| {
-                            (
-                                ColumnType::new(ScalarType::String),
-                                Some(format!("column{}", i)),
-                            )
-                        })
-                        .collect(),
-                };
-
-                RelationDesc::from_cols(cols)
-            }
+            DataEncoding::Csv(CsvEncoding { n_cols, .. }) => RelationDesc::from_cols(
+                (1..=*n_cols)
+                    .map(|i| {
+                        (
+                            ColumnType::new(ScalarType::String),
+                            Some(format!("column{}", i)),
+                        )
+                    })
+                    .collect(),
+            ),
             DataEncoding::Text => RelationDesc::from_cols(vec![(
                 ColumnType::new(ScalarType::String),
                 Some("text".to_owned()),
             )]),
         };
-        Ok(desc)
+        full_desc.add_cols(
+            desc.iter()
+                .map(|(name, typ)| (name.to_owned(), typ.to_owned())),
+        );
+        Ok(full_desc)
     }
 }
 
@@ -432,7 +365,6 @@ pub struct AvroEncoding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
     pub header_row: bool,
-    pub col_names: Option<Vec<String>>,
     pub n_cols: usize,
     pub delimiter: u8,
 }
@@ -465,10 +397,21 @@ pub struct SinkDesc {
     pub connector: SinkConnector,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Envelope {
     None,
     Debezium,
+    Upsert(DataEncoding),
+}
+
+impl Envelope {
+    pub fn get_avro_envelope_type(&self) -> avro::EnvelopeType {
+        match self {
+            Envelope::None => avro::EnvelopeType::None,
+            Envelope::Debezium => avro::EnvelopeType::Debezium,
+            Envelope::Upsert(_) => avro::EnvelopeType::Upsert,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -491,16 +434,16 @@ pub enum ExternalSourceConnector {
 }
 
 impl ExternalSourceConnector {
-    pub fn metadata_columns(&self) -> Vec<(ColumnType, Option<String>)> {
+    pub fn metadata_columns(&self) -> Vec<(Option<String>, ColumnType)> {
         match self {
-            Self::Kafka(_) => vec![(ColumnType::new(ScalarType::Int64), Some("mz_offset".into()))],
+            Self::Kafka(_) => vec![(Some("mz_offset".into()), ColumnType::new(ScalarType::Int64))],
             Self::File(_) => vec![(
-                ColumnType::new(ScalarType::Int64),
                 Some("mz_line_no".into()),
+                ColumnType::new(ScalarType::Int64),
             )],
             Self::Kinesis(_) => vec![],
             Self::AvroOcf(_) => {
-                vec![(ColumnType::new(ScalarType::Int64), Some("mz_obj_no".into()))]
+                vec![(Some("mz_obj_no".into()), ColumnType::new(ScalarType::Int64))]
             }
         }
     }
@@ -538,6 +481,7 @@ pub struct FileSourceConnector {
 pub enum SinkConnector {
     Kafka(KafkaSinkConnector),
     Tail(TailSinkConnector),
+    AvroOcf(AvroOcfSinkConnector),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -545,6 +489,11 @@ pub struct KafkaSinkConnector {
     pub url: Url,
     pub topic: String,
     pub schema_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AvroOcfSinkConnector {
+    pub path: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -556,6 +505,13 @@ pub struct TailSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkConnectorBuilder {
     Kafka(KafkaSinkConnectorBuilder),
+    AvroOcf(AvroOcfSinkConnectorBuilder),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AvroOcfSinkConnectorBuilder {
+    pub path: PathBuf,
+    pub file_name_suffix: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -11,19 +11,21 @@
 
 #![deny(missing_debug_implementations)]
 
-use ::expr::GlobalId;
+use ::expr::{GlobalId, RowSetFinishing};
 use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::Catalog;
-use dataflow_types::{PeekWhen, RowSetFinishing, SinkConnectorBuilder, SourceConnector};
+use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
+pub use crate::expr::RelationExpr;
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
-pub use sql_parser::ast::{ExplainOptions, ObjectType, Statement};
+pub use sql_parser::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 pub use statement::StatementContext;
 
 pub mod normalize;
 
+mod explain;
 mod expr;
 mod query;
 mod scope;
@@ -105,7 +107,14 @@ pub enum Plan {
     },
     Tail(GlobalId),
     SendRows(Vec<Row>),
-    ExplainPlan(::expr::RelationExpr, ExplainOptions),
+    ExplainPlan {
+        sql: String,
+        raw_plan: crate::expr::RelationExpr,
+        decorrelated_plan: Result<::expr::RelationExpr, failure::Error>,
+        row_set_finishing: Option<RowSetFinishing>,
+        stage: ExplainStage,
+        options: ExplainOptions,
+    },
     SendDiffs {
         id: GlobalId,
         updates: Vec<(Row, isize)>,

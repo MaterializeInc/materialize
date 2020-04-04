@@ -371,6 +371,23 @@ fn parse_select_count_wildcard() {
         &Expr::Function(Function {
             name: ObjectName(vec![Ident::new("COUNT")]),
             args: vec![Expr::Wildcard],
+            filter: None,
+            over: None,
+            distinct: false,
+        }),
+        expr_from_projection(only(&select.projection))
+    );
+}
+
+#[test]
+fn parse_select_count_filter() {
+    let sql = "SELECT COUNT(*) FILTER (WHERE foo) FROM customer";
+    let select = verified_only_select(sql);
+    assert_eq!(
+        &Expr::Function(Function {
+            name: ObjectName(vec![Ident::new("COUNT")]),
+            args: vec![Expr::Wildcard],
+            filter: Some(Box::new(Expr::Identifier(Ident::new("foo")))),
             over: None,
             distinct: false,
         }),
@@ -389,6 +406,7 @@ fn parse_select_count_distinct() {
                 op: UnaryOperator::Plus,
                 expr: Box::new(Expr::Identifier(Ident::new("x")))
             }],
+            filter: None,
             over: None,
             distinct: true,
         }),
@@ -961,8 +979,9 @@ fn parse_select_having() {
             left: Box::new(Expr::Function(Function {
                 name: ObjectName(vec![Ident::new("COUNT")]),
                 args: vec![Expr::Wildcard],
+                filter: None,
                 over: None,
-                distinct: false
+                distinct: false,
             })),
             op: BinaryOperator::Gt,
             right: Box::new(Expr::Value(number("1")))
@@ -1294,6 +1313,7 @@ fn parse_scalar_function_in_projection() {
         &Expr::Function(Function {
             name: ObjectName(vec![Ident::new("sqrt")]),
             args: vec![Expr::Identifier(Ident::new("id"))],
+            filter: None,
             over: None,
             distinct: false,
         }),
@@ -1317,6 +1337,7 @@ fn parse_window_functions() {
         &Expr::Function(Function {
             name: ObjectName(vec![Ident::new("row_number")]),
             args: vec![],
+            filter: None,
             over: Some(WindowSpec {
                 partition_by: vec![],
                 order_by: vec![OrderByExpr {
@@ -1672,6 +1693,7 @@ fn parse_delimited_identifiers() {
         &Expr::Function(Function {
             name: ObjectName(vec![Ident::with_quote('"', "myfun")]),
             args: vec![],
+            filter: None,
             over: None,
             distinct: false,
         }),
@@ -2940,6 +2962,7 @@ fn parse_create_source_inline_schema() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -2970,6 +2993,7 @@ fn parse_create_source_kafka() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3014,6 +3038,7 @@ fn parse_create_source_file_schema_protobuf_multiple_args() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3047,6 +3072,7 @@ fn parse_create_source_regex() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3073,6 +3099,41 @@ fn parse_create_source_regex() {
 }
 
 #[test]
+fn parse_create_source_regex_col_names() {
+    let sql = "CREATE SOURCE IF NOT EXISTS foo (one, two) \
+               FROM FILE 'bar' WITH (tail = true) \
+               FORMAT REGEX '(asdf)|(jkl)'";
+    match verified_stmt(sql) {
+        Statement::CreateSource {
+            name,
+            col_names,
+            connector,
+            with_options,
+            format,
+            envelope,
+            if_not_exists,
+            materialized,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!(vec![Ident::new("one"), Ident::new("two")], col_names);
+            assert_eq!(Connector::File { path: "bar".into() }, connector);
+            assert_eq!(
+                vec![SqlOption {
+                    name: "tail".into(),
+                    value: Value::Boolean(true)
+                }],
+                with_options,
+            );
+            assert_eq!(Format::Regex("(asdf)|(jkl)".into()), format.unwrap());
+            assert_eq!(Envelope::None, envelope);
+            assert!(if_not_exists);
+            assert!(!materialized);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn parse_create_source_csv() {
     let sql = "CREATE SOURCE foo \
                FROM FILE 'bar' WITH (tail = false) \
@@ -3080,6 +3141,7 @@ fn parse_create_source_csv() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3120,6 +3182,7 @@ fn parse_create_source_csv_wo_header() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3153,29 +3216,24 @@ fn parse_create_source_csv_wo_header() {
 }
 
 #[test]
-fn parse_create_source_csv_man_header() {
-    let sql = "CREATE SOURCE foo \
-               FROM FILE 'bar' WITH (col_names = 'one,two') \
+fn parse_create_source_csv_cols_names() {
+    let sql = "CREATE SOURCE foo (one, two) \
+               FROM FILE 'bar' \
                FORMAT CSV WITH HEADER";
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names,
             connector,
-            with_options,
+            with_options: _,
             format,
             envelope,
             if_not_exists,
             materialized,
         } => {
             assert_eq!("foo", name.to_string());
+            assert_eq!(vec![Ident::new("one"), Ident::new("two")], col_names);
             assert_eq!(Connector::File { path: "bar".into() }, connector);
-            assert_eq!(
-                vec![SqlOption {
-                    name: "col_names".into(),
-                    value: Value::SingleQuotedString("one,two".to_string())
-                }],
-                with_options
-            );
             assert_eq!(
                 Format::Csv {
                     header_row: true,
@@ -3200,6 +3258,7 @@ fn parse_create_source_csv_custom_delim() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3275,6 +3334,7 @@ fn parse_create_source_registry() {
     match verified_stmt(sql) {
         Statement::CreateSource {
             name,
+            col_names: _,
             connector,
             with_options,
             format,
@@ -3351,6 +3411,50 @@ fn parse_create_source_default_envelope() {
 }
 
 #[test]
+fn parse_create_source_upsert_envelope() {
+    let sql = "CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' \
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' \
+    ENVELOPE UPSERT";
+    match verified_stmt(sql) {
+        Statement::CreateSource { envelope, .. } => {
+            assert_eq!(Envelope::Upsert(None), envelope);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_upsert_envelope_format_avro() {
+    let sql = "CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' \
+    FORMAT AVRO USING SCHEMA 'string' \
+    ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'";
+    match verified_stmt(sql) {
+        Statement::CreateSource { envelope, .. } => {
+            assert_eq!(
+                Envelope::Upsert(Some(Format::Avro(AvroSchema::Schema(Schema::Inline(
+                    "long".into()
+                ))))),
+                envelope
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_source_upsert_envelope_format_text() {
+    let sql = "CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' \
+    FORMAT AVRO USING SCHEMA FILE 'path' \
+    ENVELOPE UPSERT FORMAT TEXT";
+    match verified_stmt(sql) {
+        Statement::CreateSource { envelope, .. } => {
+            assert_eq!(Envelope::Upsert(Some(Format::Text)), envelope);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn parse_create_source_if_not_exists() {
     let sql = "CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES";
     match verified_stmt(sql) {
@@ -3381,7 +3485,28 @@ fn parse_create_sink() {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", from.to_string());
             assert_eq!(Connector::File { path: "baz".into() }, connector);
-            assert_eq!(Format::Bytes, format);
+            assert_eq!(Format::Bytes, format.unwrap());
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_sink_without_format() {
+    let sql = "CREATE SINK foo FROM bar INTO AVRO OCF 'baz'";
+    match verified_stmt(sql) {
+        Statement::CreateSink {
+            name,
+            from,
+            connector,
+            format,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", from.to_string());
+            assert_eq!(Connector::AvroOcf { path: "baz".into() }, connector);
+            assert!(format.is_none());
             assert!(!if_not_exists);
         }
         _ => unreachable!(),
@@ -4083,31 +4208,56 @@ fn parse_rollback() {
 
 #[test]
 fn parse_explain() {
-    let ast = verified_stmt("EXPLAIN DATAFLOW FOR SELECT 665");
+    let ast = verified_stmt("EXPLAIN SQL FOR SELECT 665");
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::Dataflow,
-            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            stage: ExplainStage::Sql,
+            explainee: Explainee::Query(verified_query("SELECT 665")),
             options: ExplainOptions { typed: false },
         }
     );
 
-    let ast = verified_stmt("EXPLAIN PLAN FOR SELECT 665");
+    let ast = verified_stmt("EXPLAIN RAW PLAN FOR SELECT 665");
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::Plan,
-            explainee: Explainee::Query(Box::new(verified_query("SELECT 665"))),
+            stage: ExplainStage::RawPlan,
+            explainee: Explainee::Query(verified_query("SELECT 665")),
             options: ExplainOptions { typed: false },
         }
     );
 
-    let ast = verified_stmt("EXPLAIN PLAN FOR VIEW FOO");
+    let ast = verified_stmt("EXPLAIN DECORRELATED PLAN FOR SELECT 665");
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::Plan,
+            stage: ExplainStage::DecorrelatedPlan,
+            explainee: Explainee::Query(verified_query("SELECT 665")),
+            options: ExplainOptions { typed: false },
+        }
+    );
+
+    let ast = verified_stmt("EXPLAIN OPTIMIZED PLAN FOR SELECT 665");
+    assert_eq!(
+        ast,
+        Statement::Explain {
+            stage: ExplainStage::OptimizedPlan,
+            explainee: Explainee::Query(verified_query("SELECT 665")),
+            options: ExplainOptions { typed: false },
+        }
+    );
+
+    one_statement_parses_to(
+        "EXPLAIN PLAN FOR SELECT 665",
+        "EXPLAIN OPTIMIZED PLAN FOR SELECT 665",
+    );
+
+    let ast = verified_stmt("EXPLAIN OPTIMIZED PLAN FOR VIEW FOO");
+    assert_eq!(
+        ast,
+        Statement::Explain {
+            stage: ExplainStage::OptimizedPlan,
             explainee: Explainee::View(ObjectName(vec![Ident {
                 value: "FOO".to_owned(),
                 quote_style: None
@@ -4116,11 +4266,11 @@ fn parse_explain() {
         }
     );
 
-    let ast = verified_stmt("EXPLAIN TYPED PLAN FOR VIEW FOO");
+    let ast = verified_stmt("EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW FOO");
     assert_eq!(
         ast,
         Statement::Explain {
-            stage: Stage::Plan,
+            stage: ExplainStage::OptimizedPlan,
             explainee: Explainee::View(ObjectName(vec![Ident {
                 value: "FOO".to_owned(),
                 quote_style: None

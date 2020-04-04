@@ -27,11 +27,12 @@ Detail | Info
 
 #### From `text`
 
-You cannot cast `text` to any other type.
+You can [cast](../../functions/cast) `text` to [all types](../). Casts from
+text will error if the string is not valid input for the destination type.
 
 #### To `text`
 
-You can cast [all types](../) to `text`.
+You can [cast](../../functions/cast) [all types](../) to `text`.
 
 ## Examples
 
