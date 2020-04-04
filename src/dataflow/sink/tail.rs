@@ -31,7 +31,7 @@ pub fn tail<G>(
         input.for_each(|_, rows| {
             let mut results: Vec<Update> = Vec::new();
             for (row, time, diff) in rows.iter() {
-                if connector.since.less_than(time) {
+                if connector.since.less_equal(time) {
                     results.push(Update {
                         row: row.clone(),
                         timestamp: *time,
