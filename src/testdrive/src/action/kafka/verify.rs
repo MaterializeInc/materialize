@@ -68,12 +68,12 @@ impl Action for VerifyAction {
         config.set("auto.offset.reset", "earliest");
         config.set("group.id", "materialize-testdrive");
 
-        let schema = interchange::avro::parse_schema(&schema)
-            .map_err(|e| format!("parsing avro schema: {}", e))?;
+        let schema =
+            avro::parse_schema(&schema).map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut converted_expected_messages = Vec::new();
         for expected in &self.expected_messages {
             converted_expected_messages.push(
-                crate::format::avro::json_to_avro(
+                avro::from_json(
                     &serde_json::from_str(expected)
                         .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
                     schema.top_node(),

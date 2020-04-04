@@ -64,7 +64,7 @@ impl Transcoder {
         match self {
             Transcoder::Avro { schema, schema_id } => {
                 let val = Self::decode_json(row)?;
-                let val = crate::format::avro::json_to_avro(&val, schema.top_node())?;
+                let val = avro::from_json(&val, schema.top_node())?;
                 // The first byte is a magic byte (0) that indicates the Confluent
                 // serialization format version, and the next four bytes are a
                 // 32-bit schema ID.
@@ -186,7 +186,7 @@ impl Action for IngestAction {
                 } else {
                     1
                 };
-                let schema = interchange::avro::parse_schema(&schema)
+                let schema = avro::parse_schema(&schema)
                     .map_err(|e| format!("parsing avro schema: {}", e))?;
                 Ok::<_, String>(Transcoder::Avro { schema, schema_id })
             }

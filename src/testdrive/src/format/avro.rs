@@ -22,54 +22,55 @@ use std::num::TryFromIntError;
 
 use serde_json::Value as JsonValue;
 
-use avro::schema::{SchemaNode, SchemaPiece};
-use avro::types::{DecimalValue, ToAvro, Value as AvroValue};
+// Re-export components from the various other Avro libraries, so that other
+// testdrive modules can import just this one.
 
-pub use avro::{to_avro_datum, Schema};
+pub use avro::schema::{Schema, SchemaNode, SchemaPiece};
+pub use avro::types::{DecimalValue, ToAvro, Value};
+pub use avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
+pub use interchange::avro::parse_schema;
 
 // This function is derived from code in the avro_rs project. Update the license
 // header on this file accordingly if you move it to a new home.
-pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, String> {
+pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> {
     match (json, schema.inner) {
-        (JsonValue::Null, SchemaPiece::Null) => Ok(AvroValue::Null),
-        (JsonValue::Bool(b), SchemaPiece::Boolean) => Ok(AvroValue::Boolean(*b)),
-        (JsonValue::Number(ref n), SchemaPiece::Int) => Ok(AvroValue::Int(
+        (JsonValue::Null, SchemaPiece::Null) => Ok(Value::Null),
+        (JsonValue::Bool(b), SchemaPiece::Boolean) => Ok(Value::Boolean(*b)),
+        (JsonValue::Number(ref n), SchemaPiece::Int) => Ok(Value::Int(
             n.as_i64()
                 .unwrap()
                 .try_into()
                 .map_err(|e: TryFromIntError| e.to_string())?,
         )),
-        (JsonValue::Number(ref n), SchemaPiece::Long) => Ok(AvroValue::Long(n.as_i64().unwrap())),
+        (JsonValue::Number(ref n), SchemaPiece::Long) => Ok(Value::Long(n.as_i64().unwrap())),
         (JsonValue::Number(ref n), SchemaPiece::Float) => {
-            Ok(AvroValue::Float(n.as_f64().unwrap() as f32))
+            Ok(Value::Float(n.as_f64().unwrap() as f32))
         }
-        (JsonValue::Number(ref n), SchemaPiece::Double) => {
-            Ok(AvroValue::Double(n.as_f64().unwrap()))
-        }
-        (JsonValue::Number(ref n), SchemaPiece::Date) => Ok(AvroValue::Date(
+        (JsonValue::Number(ref n), SchemaPiece::Double) => Ok(Value::Double(n.as_f64().unwrap())),
+        (JsonValue::Number(ref n), SchemaPiece::Date) => Ok(Value::Date(
             chrono::NaiveDate::from_ymd(1970, 1, 1) + chrono::Duration::days(n.as_i64().unwrap()),
         )),
         (JsonValue::Number(ref n), SchemaPiece::TimestampMilli) => {
             let ts = n.as_i64().unwrap();
-            Ok(AvroValue::Timestamp(chrono::NaiveDateTime::from_timestamp(
+            Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
                 ts / 1_000,
                 ts as u32 % 1_000,
             )))
         }
         (JsonValue::Number(ref n), SchemaPiece::TimestampMicro) => {
             let ts = n.as_i64().unwrap();
-            Ok(AvroValue::Timestamp(chrono::NaiveDateTime::from_timestamp(
+            Ok(Value::Timestamp(chrono::NaiveDateTime::from_timestamp(
                 ts / 1_000_000,
                 ts as u32 % 1_000_000,
             )))
         }
-        (JsonValue::Array(items), SchemaPiece::Array(inner)) => Ok(AvroValue::Array(
+        (JsonValue::Array(items), SchemaPiece::Array(inner)) => Ok(Value::Array(
             items
                 .iter()
-                .map(|x| json_to_avro(x, schema.step(&**inner)))
+                .map(|x| from_json(x, schema.step(&**inner)))
                 .collect::<Result<_, _>>()?,
         )),
-        (JsonValue::String(s), SchemaPiece::String) => Ok(AvroValue::String(s.clone())),
+        (JsonValue::String(s), SchemaPiece::String) => Ok(Value::String(s.clone())),
         (
             JsonValue::Array(items),
             SchemaPiece::Decimal {
@@ -84,7 +85,7 @@ pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, S
                 Some(bytes) => bytes,
                 None => return Err("decimal was not represented by byte array".into()),
             };
-            Ok(AvroValue::Decimal(DecimalValue {
+            Ok(Value::Decimal(DecimalValue {
                 unscaled: bytes,
                 precision: *precision,
                 scale: *scale,
@@ -92,7 +93,7 @@ pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, S
         }
         (JsonValue::String(s), SchemaPiece::Json) => {
             let j = serde_json::from_str(s).map_err(|e| e.to_string())?;
-            Ok(AvroValue::Json(j))
+            Ok(Value::Json(j))
         }
         (JsonValue::Object(items), SchemaPiece::Record { .. }) => {
             let mut builder = avro::types::Record::new(schema)
@@ -101,7 +102,7 @@ pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, S
                 let field = builder
                     .field_by_name(key)
                     .ok_or_else(|| format!("No such key in record: {}", key))?;
-                let val = json_to_avro(val, schema.step(&field.schema))?;
+                let val = from_json(val, schema.step(&field.schema))?;
                 builder.put(key, val);
             }
             Ok(builder.avro())
@@ -110,8 +111,8 @@ pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, S
             let variants = us.variants();
             let mut last_err = format!("Union schema {:?} did not match {:?}", variants, val);
             for (i, variant) in variants.iter().enumerate() {
-                match json_to_avro(val, schema.step(variant)) {
-                    Ok(avro) => return Ok(AvroValue::Union(i, Box::new(avro))),
+                match from_json(val, schema.step(variant)) {
+                    Ok(avro) => return Ok(Value::Union(i, Box::new(avro))),
                     Err(msg) => last_err = msg,
                 }
             }
@@ -124,12 +125,12 @@ pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, S
     }
 }
 
-/// Computes the multiset difference between two slices of [`AvroValue`]s, i.e.,
+/// Computes the multiset difference between two slices of [`Value`]s, i.e.,
 /// `lhs - rhs`.
 ///
-/// Required because `AvroValue` does not implement `Hash`, `Eq`, or `Ord`, and
-/// so using a standard multiset type to perform the difference is not possible.
-pub fn multiset_difference<'a>(lhs: &'a [AvroValue], rhs: &'a [AvroValue]) -> Vec<AvroValue> {
+/// Required because `Value` does not implement `Hash`, `Eq`, or `Ord`, and so
+/// using a standard multiset type to perform the difference is not possible.
+pub fn multiset_difference<'a>(lhs: &'a [Value], rhs: &'a [Value]) -> Vec<Value> {
     let mut diff = lhs.to_vec();
     for r in rhs {
         if let Some(i) = diff.iter().position(|l| l == r) {
@@ -145,8 +146,8 @@ mod tests {
 
     #[test]
     fn test_multiset_difference() {
-        const ONE: AvroValue = AvroValue::Int(1);
-        const TWO: AvroValue = AvroValue::Int(2);
+        const ONE: Value = Value::Int(1);
+        const TWO: Value = Value::Int(2);
         for (lhs, rhs, expected) in &[
             (&[][..], &[][..], &[][..]),
             (&[ONE], &[], &[ONE]),
