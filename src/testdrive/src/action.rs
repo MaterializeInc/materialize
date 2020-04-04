@@ -385,7 +385,10 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
                     let mut chain_provider = ChainProvider::new();
                     chain_provider.set_timeout(Duration::from_secs(60));
                     let credentials = match tokio_runtime.block_on(chain_provider.credentials()) {
-                        Ok(credentials) => credentials,
+                        Ok(credentials) => {
+                            dbg!(&credentials.token());
+                            credentials
+                        }
                         Err(e) => {
                             return Err(Error::General {
                                 ctx: format!(
