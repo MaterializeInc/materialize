@@ -32,7 +32,7 @@ pub enum MaterializedEvent {
     /// Avro OCF sink.
     AvroOcfSink {
         id: GlobalId,
-        path: String,
+        path: Vec<u8>,
         insert: bool,
     },
     /// Map from global identifiers to string name.
@@ -157,7 +157,7 @@ pub fn construct<A: Allocate>(
                                 avro_ocf_sinks_session.give((
                                     Row::pack(&[
                                         Datum::String(&id.to_string()),
-                                        Datum::String(&path),
+                                        Datum::Bytes(&path),
                                     ]),
                                     time_ms,
                                     if insert { 1 } else { -1 },

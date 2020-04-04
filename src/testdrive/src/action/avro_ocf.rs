@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Cursor, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::path;
 
 use avro::{Codec, Writer};
@@ -145,12 +147,21 @@ impl Action for VerifyAction {
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let path: String = retry::retry(Fibonacci::from_millis(100).take(5), || {
-            let row = state.pgclient.query_one(
-                "SELECT path FROM mz_catalog_names NATURAL JOIN mz_avro_ocf_sinks \
+            let row = state
+                .pgclient
+                .query_one(
+                    "SELECT path FROM mz_catalog_names NATURAL JOIN mz_avro_ocf_sinks \
                  WHERE name = $1",
-                &[&self.sink],
-            )?;
-            Ok::<_, postgres::Error>(row.get("path"))
+                    &[&self.sink],
+                )
+                .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
+            let bytes: Vec<u8> = row.get("path");
+            let os_string: OsString = OsStringExt::from_vec(bytes);
+            Ok::<_, String>(
+                os_string
+                    .into_string()
+                    .map_err(|_| "cannot convert path to string".to_string())?,
+            )
         })
         .map_err(|e| format!("retrieving path: {:?}", e))?;
 

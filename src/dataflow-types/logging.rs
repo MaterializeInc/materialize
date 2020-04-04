@@ -314,7 +314,7 @@ impl LogVariant {
 
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => RelationDesc::empty()
                 .add_column("global_id", ScalarType::String)
-                .add_column("path", ScalarType::String)
+                .add_column("path", ScalarType::Bytes)
                 .add_keys(vec![0]),
         }
     }

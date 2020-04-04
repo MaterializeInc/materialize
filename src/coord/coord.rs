@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::iter;
+use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -1428,10 +1429,7 @@ where
                                         SequencedCommand::AppendLog(
                                             MaterializedEvent::AvroOcfSink {
                                                 id: entry.id(),
-                                                path: path
-                                                    .to_str()
-                                                    .unwrap_or("<invalid utf8>")
-                                                    .to_string(),
+                                                path: path.clone().into_os_string().into_vec(),
                                                 insert: false,
                                             },
                                         ),
@@ -1672,7 +1670,7 @@ where
                     &mut self.broadcast_tx,
                     SequencedCommand::AppendLog(MaterializedEvent::AvroOcfSink {
                         id,
-                        path: path.to_str().unwrap_or("<invalid utf8>").to_string(),
+                        path: path.clone().into_os_string().into_vec(),
                         insert: true,
                     }),
                 );
