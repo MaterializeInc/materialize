@@ -12,9 +12,6 @@ skip = [
     #   - redox-users (https://gitlab.redox-os.org/redox-os/users/-/merge_requests/34)
     { name = "base64", version = "0.11.0" },
 
-    # Awaiting h2 0.2.4 (https://github.com/hyperium/h2/releases).
-    { name = "tokio-util", version = "0.2" },
-
     # Waiting on mio 0.7: https://github.com/tokio-rs/tokio/issues/1190.
     { name = "miow", version = "0.2.1" },
     { name = "winapi", version = "0.2.8" },
