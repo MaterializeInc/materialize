@@ -247,7 +247,6 @@ dependencies = [
  "postgres-types",
  "protobuf",
  "protoc",
- "protoc-rust",
  "rand",
  "rand_distr",
  "structopt",
@@ -1527,7 +1526,7 @@ dependencies = [
  "ordered-float",
  "ore",
  "protobuf",
- "protoc-rust",
+ "protoc",
  "repr",
  "serde",
  "serde-protobuf",
@@ -2780,9 +2779,8 @@ dependencies = [
 
 [[package]]
 name = "protobuf"
-version = "2.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d883f78645c21b7281d21305181aa1f4dd9e9363e7cf2566c93121552cff003e"
+version = "2.17.0-pre"
+source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#e028a194c349b95dabf8b98d2d8ccb507b424a87"
 dependencies = [
  "serde",
  "serde_derive",
@@ -2790,31 +2788,30 @@ dependencies = [
 
 [[package]]
 name = "protobuf-codegen"
-version = "2.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c3f99b1babb22152c6591b076d46f64e313c6e30f6f334a89e260e1b3569e6"
+version = "2.17.0-pre"
+source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#e028a194c349b95dabf8b98d2d8ccb507b424a87"
 dependencies = [
  "protobuf",
+]
+
+[[package]]
+name = "protobuf-codegen-pure"
+version = "2.17.0-pre"
+source = "git+https://github.com/stepancheg/rust-protobuf.git?branch=v2.17#e028a194c349b95dabf8b98d2d8ccb507b424a87"
+dependencies = [
+ "protobuf",
+ "protobuf-codegen",
 ]
 
 [[package]]
 name = "protoc"
-version = "2.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47637dcbffb967d1c0e603644abe29e6041f44b19262472a994b29417ffe20d0"
+version = "0.1.0"
 dependencies = [
- "log",
-]
-
-[[package]]
-name = "protoc-rust"
-version = "2.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b1e37791c6d4b9232a21151ef6329bf0887a02ce3593cf60703565db2e6c4df"
-dependencies = [
+ "anyhow",
+ "getopts",
  "protobuf",
  "protobuf-codegen",
- "protoc",
+ "protobuf-codegen-pure",
  "tempfile",
 ]
 
@@ -3321,7 +3318,7 @@ dependencies = [
 [[package]]
 name = "serde-protobuf"
 version = "0.8.2-alpha.0"
-source = "git+https://github.com/MaterializeInc/serde-protobuf.git?branch=add-iter-messages#fae1e0306be1d1473a895a64c630475948869518"
+source = "git+https://github.com/MaterializeInc/serde-protobuf.git?branch=v2.17#74342b0400114ca5c7bd15945d0f82e316d3e19a"
 dependencies = [
  "failure",
  "linked-hash-map",
@@ -3906,7 +3903,7 @@ dependencies = [
  "pgrepr",
  "predicates",
  "protobuf",
- "protoc-rust",
+ "protoc",
  "rand",
  "rdkafka",
  "regex",

@@ -7,19 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Module containing generated proto code
+//! Module containing generated protobuf code.
 
-use protobuf::descriptor::FileDescriptorSet;
-use protobuf::RepeatedField;
-
-pub mod billing;
-pub mod simple;
-
-pub fn descriptors() -> FileDescriptorSet {
-    let mut fds = FileDescriptorSet::new();
-    fds.set_file(RepeatedField::from_vec(vec![
-        simple::file_descriptor_proto().clone(),
-        billing::file_descriptor_proto().clone(),
-    ]));
-    fds
-}
+include!(concat!(env!("OUT_DIR"), "/protobuf/mod.rs"));

@@ -18,7 +18,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
-use protobuf::Message;
 use rand::Rng;
 use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
@@ -209,9 +208,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         state.temp_dir.path().display().to_string(),
     );
     {
-        let protobuf_descriptors = crate::format::protobuf::gen::descriptors()
-            .write_to_bytes()
-            .unwrap();
+        let protobuf_descriptors = crate::format::protobuf::gen::FILE_DESCRIPTOR_SET_DATA;
         vars.insert("testdrive.protobuf-descriptors".into(), {
             let mut out = String::new();
             strconv::format_bytes(&mut out, &protobuf_descriptors);
