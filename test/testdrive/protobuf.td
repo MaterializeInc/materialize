@@ -22,8 +22,8 @@
 $ kafka-create-topic topic=messages
 
 $ kafka-ingest format=protobuf topic=messages message=struct timestamp=1
-{"int": 1, "bad_int": 1, "bin": "One", "st": "my-string"}
-{"int": 2, "bad_int": 2, "bin": "One", "st": "something-valid"}
+{"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
+{"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
 
 # TODO: these should be fully json
 > SELECT * FROM pm

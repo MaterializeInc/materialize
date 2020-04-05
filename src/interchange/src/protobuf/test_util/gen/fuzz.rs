@@ -23,7 +23,7 @@
 /// of protobuf runtime.
 // const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_2_16_2;
 
-#[derive(PartialEq, Clone, Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct TestRecord {
     // message fields
     pub int_field: i32,
@@ -52,6 +52,7 @@ impl TestRecord {
 
     // int32 int_field = 1;
 
+
     pub fn get_int_field(&self) -> i32 {
         self.int_field
     }
@@ -65,6 +66,7 @@ impl TestRecord {
     }
 
     // string string_field = 2;
+
 
     pub fn get_string_field(&self) -> &str {
         &self.string_field
@@ -91,6 +93,7 @@ impl TestRecord {
 
     // int64 int64_field = 3;
 
+
     pub fn get_int64_field(&self) -> i64 {
         self.int64_field
     }
@@ -104,6 +107,7 @@ impl TestRecord {
     }
 
     // .Color color_field = 4;
+
 
     pub fn get_color_field(&self) -> Color {
         self.color_field
@@ -119,6 +123,7 @@ impl TestRecord {
 
     // uint32 uint_field = 5;
 
+
     pub fn get_uint_field(&self) -> u32 {
         self.uint_field
     }
@@ -132,6 +137,7 @@ impl TestRecord {
     }
 
     // uint64 uint64_field = 6;
+
 
     pub fn get_uint64_field(&self) -> u64 {
         self.uint64_field
@@ -147,6 +153,7 @@ impl TestRecord {
 
     // float float_field = 7;
 
+
     pub fn get_float_field(&self) -> f32 {
         self.float_field
     }
@@ -160,6 +167,7 @@ impl TestRecord {
     }
 
     // double double_field = 8;
+
 
     pub fn get_double_field(&self) -> f64 {
         self.double_field
@@ -179,89 +187,61 @@ impl ::protobuf::Message for TestRecord {
         true
     }
 
-    fn merge_from(
-        &mut self,
-        is: &mut ::protobuf::CodedInputStream<'_>,
-    ) -> ::protobuf::ProtobufResult<()> {
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
-                            wire_type,
-                        ));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_int32()?;
                     self.int_field = tmp;
-                }
+                },
                 2 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(
-                        wire_type,
-                        is,
-                        &mut self.string_field,
-                    )?;
-                }
+                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.string_field)?;
+                },
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
-                            wire_type,
-                        ));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_int64()?;
                     self.int64_field = tmp;
-                }
-                4 => ::protobuf::rt::read_proto3_enum_with_unknown_fields_into(
-                    wire_type,
-                    is,
-                    &mut self.color_field,
-                    4,
-                    &mut self.unknown_fields,
-                )?,
+                },
+                4 => {
+                    ::protobuf::rt::read_proto3_enum_with_unknown_fields_into(wire_type, is, &mut self.color_field, 4, &mut self.unknown_fields)?
+                },
                 5 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
-                            wire_type,
-                        ));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_uint32()?;
                     self.uint_field = tmp;
-                }
+                },
                 6 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
-                            wire_type,
-                        ));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_uint64()?;
                     self.uint64_field = tmp;
-                }
+                },
                 7 => {
                     if wire_type != ::protobuf::wire_format::WireTypeFixed32 {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
-                            wire_type,
-                        ));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_float()?;
                     self.float_field = tmp;
-                }
+                },
                 8 => {
                     if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
-                            wire_type,
-                        ));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
                     }
                     let tmp = is.read_double()?;
                     self.double_field = tmp;
-                }
+                },
                 _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(
-                        field_number,
-                        wire_type,
-                        is,
-                        self.mut_unknown_fields(),
-                    )?;
-                }
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
             };
         }
         ::std::result::Result::Ok(())
@@ -272,38 +252,22 @@ impl ::protobuf::Message for TestRecord {
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
         if self.int_field != 0 {
-            my_size += ::protobuf::rt::value_size(
-                1,
-                self.int_field,
-                ::protobuf::wire_format::WireTypeVarint,
-            );
+            my_size += ::protobuf::rt::value_size(1, self.int_field, ::protobuf::wire_format::WireTypeVarint);
         }
         if !self.string_field.is_empty() {
             my_size += ::protobuf::rt::string_size(2, &self.string_field);
         }
         if self.int64_field != 0 {
-            my_size += ::protobuf::rt::value_size(
-                3,
-                self.int64_field,
-                ::protobuf::wire_format::WireTypeVarint,
-            );
+            my_size += ::protobuf::rt::value_size(3, self.int64_field, ::protobuf::wire_format::WireTypeVarint);
         }
         if self.color_field != Color::RED {
             my_size += ::protobuf::rt::enum_size(4, self.color_field);
         }
         if self.uint_field != 0 {
-            my_size += ::protobuf::rt::value_size(
-                5,
-                self.uint_field,
-                ::protobuf::wire_format::WireTypeVarint,
-            );
+            my_size += ::protobuf::rt::value_size(5, self.uint_field, ::protobuf::wire_format::WireTypeVarint);
         }
         if self.uint64_field != 0 {
-            my_size += ::protobuf::rt::value_size(
-                6,
-                self.uint64_field,
-                ::protobuf::wire_format::WireTypeVarint,
-            );
+            my_size += ::protobuf::rt::value_size(6, self.uint64_field, ::protobuf::wire_format::WireTypeVarint);
         }
         if self.float_field != 0. {
             my_size += 5;
@@ -316,10 +280,7 @@ impl ::protobuf::Message for TestRecord {
         my_size
     }
 
-    fn write_to_with_cached_sizes(
-        &self,
-        os: &mut ::protobuf::CodedOutputStream<'_>,
-    ) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         if self.int_field != 0 {
             os.write_int32(1, self.int_field)?;
         }
@@ -379,78 +340,53 @@ impl ::protobuf::Message for TestRecord {
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
-        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> =
-            ::protobuf::rt::LazyV2::INIT;
+        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeInt32,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
                 "int_field",
-                |m: &TestRecord| &m.int_field,
-                |m: &mut TestRecord| &mut m.int_field,
+                |m: &TestRecord| { &m.int_field },
+                |m: &mut TestRecord| { &mut m.int_field },
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeString,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
                 "string_field",
-                |m: &TestRecord| &m.string_field,
-                |m: &mut TestRecord| &mut m.string_field,
+                |m: &TestRecord| { &m.string_field },
+                |m: &mut TestRecord| { &mut m.string_field },
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeInt64,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
                 "int64_field",
-                |m: &TestRecord| &m.int64_field,
-                |m: &mut TestRecord| &mut m.int64_field,
+                |m: &TestRecord| { &m.int64_field },
+                |m: &mut TestRecord| { &mut m.int64_field },
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeEnum<Color>,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeEnum<Color>>(
                 "color_field",
-                |m: &TestRecord| &m.color_field,
-                |m: &mut TestRecord| &mut m.color_field,
+                |m: &TestRecord| { &m.color_field },
+                |m: &mut TestRecord| { &mut m.color_field },
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeUint32,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
                 "uint_field",
-                |m: &TestRecord| &m.uint_field,
-                |m: &mut TestRecord| &mut m.uint_field,
+                |m: &TestRecord| { &m.uint_field },
+                |m: &mut TestRecord| { &mut m.uint_field },
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeUint64,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
                 "uint64_field",
-                |m: &TestRecord| &m.uint64_field,
-                |m: &mut TestRecord| &mut m.uint64_field,
+                |m: &TestRecord| { &m.uint64_field },
+                |m: &mut TestRecord| { &mut m.uint64_field },
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeFloat,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeFloat>(
                 "float_field",
-                |m: &TestRecord| &m.float_field,
-                |m: &mut TestRecord| &mut m.float_field,
+                |m: &TestRecord| { &m.float_field },
+                |m: &mut TestRecord| { &mut m.float_field },
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeDouble,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeDouble>(
                 "double_field",
-                |m: &TestRecord| &m.double_field,
-                |m: &mut TestRecord| &mut m.double_field,
+                |m: &TestRecord| { &m.double_field },
+                |m: &mut TestRecord| { &mut m.double_field },
             ));
             ::protobuf::reflect::MessageDescriptor::new_pb_name::<TestRecord>(
                 "TestRecord",
                 fields,
-                file_descriptor_proto(),
+                file_descriptor_proto()
             )
         })
     }
@@ -487,7 +423,7 @@ impl ::protobuf::reflect::ProtobufValue for TestRecord {
     }
 }
 
-#[derive(PartialEq, Clone, Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct TestRepeatedRecord {
     // message fields
     pub int_field: ::std::vec::Vec<i32>,
@@ -510,6 +446,7 @@ impl TestRepeatedRecord {
     }
 
     // repeated int32 int_field = 1;
+
 
     pub fn get_int_field(&self) -> &[i32] {
         &self.int_field
@@ -535,6 +472,7 @@ impl TestRepeatedRecord {
 
     // repeated double double_field = 2;
 
+
     pub fn get_double_field(&self) -> &[f64] {
         &self.double_field
     }
@@ -558,6 +496,7 @@ impl TestRepeatedRecord {
     }
 
     // repeated string string_field = 3;
+
 
     pub fn get_string_field(&self) -> &[::std::string::String] {
         &self.string_field
@@ -587,38 +526,22 @@ impl ::protobuf::Message for TestRepeatedRecord {
         true
     }
 
-    fn merge_from(
-        &mut self,
-        is: &mut ::protobuf::CodedInputStream<'_>,
-    ) -> ::protobuf::ProtobufResult<()> {
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
                     ::protobuf::rt::read_repeated_int32_into(wire_type, is, &mut self.int_field)?;
-                }
+                },
                 2 => {
-                    ::protobuf::rt::read_repeated_double_into(
-                        wire_type,
-                        is,
-                        &mut self.double_field,
-                    )?;
-                }
+                    ::protobuf::rt::read_repeated_double_into(wire_type, is, &mut self.double_field)?;
+                },
                 3 => {
-                    ::protobuf::rt::read_repeated_string_into(
-                        wire_type,
-                        is,
-                        &mut self.string_field,
-                    )?;
-                }
+                    ::protobuf::rt::read_repeated_string_into(wire_type, is, &mut self.string_field)?;
+                },
                 _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(
-                        field_number,
-                        wire_type,
-                        is,
-                        self.mut_unknown_fields(),
-                    )?;
-                }
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
             };
         }
         ::std::result::Result::Ok(())
@@ -629,31 +552,27 @@ impl ::protobuf::Message for TestRepeatedRecord {
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
         for value in &self.int_field {
-            my_size +=
-                ::protobuf::rt::value_size(1, *value, ::protobuf::wire_format::WireTypeVarint);
-        }
+            my_size += ::protobuf::rt::value_size(1, *value, ::protobuf::wire_format::WireTypeVarint);
+        };
         my_size += 9 * self.double_field.len() as u32;
         for value in &self.string_field {
             my_size += ::protobuf::rt::string_size(3, &value);
-        }
+        };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(
-        &self,
-        os: &mut ::protobuf::CodedOutputStream<'_>,
-    ) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         for v in &self.int_field {
             os.write_int32(1, *v)?;
-        }
+        };
         for v in &self.double_field {
             os.write_double(2, *v)?;
-        }
+        };
         for v in &self.string_field {
             os.write_string(3, &v)?;
-        }
+        };
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -689,40 +608,28 @@ impl ::protobuf::Message for TestRepeatedRecord {
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
-        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> =
-            ::protobuf::rt::LazyV2::INIT;
+        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(::protobuf::reflect::accessor::make_vec_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeInt32,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_vec_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
                 "int_field",
-                |m: &TestRepeatedRecord| &m.int_field,
-                |m: &mut TestRepeatedRecord| &mut m.int_field,
+                |m: &TestRepeatedRecord| { &m.int_field },
+                |m: &mut TestRepeatedRecord| { &mut m.int_field },
             ));
-            fields.push(::protobuf::reflect::accessor::make_vec_accessor::<
-                _,
-                ::protobuf::types::ProtobufTypeDouble,
-            >(
+            fields.push(::protobuf::reflect::accessor::make_vec_accessor::<_, ::protobuf::types::ProtobufTypeDouble>(
                 "double_field",
-                |m: &TestRepeatedRecord| &m.double_field,
-                |m: &mut TestRepeatedRecord| &mut m.double_field,
+                |m: &TestRepeatedRecord| { &m.double_field },
+                |m: &mut TestRepeatedRecord| { &mut m.double_field },
             ));
-            fields.push(
-                ::protobuf::reflect::accessor::make_repeated_field_accessor::<
-                    _,
-                    ::protobuf::types::ProtobufTypeString,
-                >(
-                    "string_field",
-                    |m: &TestRepeatedRecord| &m.string_field,
-                    |m: &mut TestRepeatedRecord| &mut m.string_field,
-                ),
-            );
+            fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+                "string_field",
+                |m: &TestRepeatedRecord| { &m.string_field },
+                |m: &mut TestRepeatedRecord| { &mut m.string_field },
+            ));
             ::protobuf::reflect::MessageDescriptor::new_pb_name::<TestRepeatedRecord>(
                 "TestRepeatedRecord",
                 fields,
-                file_descriptor_proto(),
+                file_descriptor_proto()
             )
         })
     }
@@ -754,7 +661,7 @@ impl ::protobuf::reflect::ProtobufValue for TestRepeatedRecord {
     }
 }
 
-#[derive(PartialEq, Clone, Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct TestNestedRecord {
     // message fields
     pub test_record: ::protobuf::SingularPtrField<TestRecord>,
@@ -777,10 +684,9 @@ impl TestNestedRecord {
 
     // .TestRecord test_record = 1;
 
+
     pub fn get_test_record(&self) -> &TestRecord {
-        self.test_record
-            .as_ref()
-            .unwrap_or_else(|| <TestRecord as ::protobuf::Message>::default_instance())
+        self.test_record.as_ref().unwrap_or_else(|| <TestRecord as ::protobuf::Message>::default_instance())
     }
     pub fn clear_test_record(&mut self) {
         self.test_record.clear();
@@ -811,10 +717,9 @@ impl TestNestedRecord {
 
     // .TestRepeatedRecord test_repeated_record = 2;
 
+
     pub fn get_test_repeated_record(&self) -> &TestRepeatedRecord {
-        self.test_repeated_record
-            .as_ref()
-            .unwrap_or_else(|| <TestRepeatedRecord as ::protobuf::Message>::default_instance())
+        self.test_repeated_record.as_ref().unwrap_or_else(|| <TestRepeatedRecord as ::protobuf::Message>::default_instance())
     }
     pub fn clear_test_repeated_record(&mut self) {
         self.test_repeated_record.clear();
@@ -840,9 +745,7 @@ impl TestNestedRecord {
 
     // Take field
     pub fn take_test_repeated_record(&mut self) -> TestRepeatedRecord {
-        self.test_repeated_record
-            .take()
-            .unwrap_or_else(|| TestRepeatedRecord::new())
+        self.test_repeated_record.take().unwrap_or_else(|| TestRepeatedRecord::new())
     }
 }
 
@@ -852,44 +755,28 @@ impl ::protobuf::Message for TestNestedRecord {
             if !v.is_initialized() {
                 return false;
             }
-        }
+        };
         for v in &self.test_repeated_record {
             if !v.is_initialized() {
                 return false;
             }
-        }
+        };
         true
     }
 
-    fn merge_from(
-        &mut self,
-        is: &mut ::protobuf::CodedInputStream<'_>,
-    ) -> ::protobuf::ProtobufResult<()> {
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_singular_message_into(
-                        wire_type,
-                        is,
-                        &mut self.test_record,
-                    )?;
-                }
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.test_record)?;
+                },
                 2 => {
-                    ::protobuf::rt::read_singular_message_into(
-                        wire_type,
-                        is,
-                        &mut self.test_repeated_record,
-                    )?;
-                }
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.test_repeated_record)?;
+                },
                 _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(
-                        field_number,
-                        wire_type,
-                        is,
-                        self.mut_unknown_fields(),
-                    )?;
-                }
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
             };
         }
         ::std::result::Result::Ok(())
@@ -912,10 +799,7 @@ impl ::protobuf::Message for TestNestedRecord {
         my_size
     }
 
-    fn write_to_with_cached_sizes(
-        &self,
-        os: &mut ::protobuf::CodedOutputStream<'_>,
-    ) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         if let Some(ref v) = self.test_record.as_ref() {
             os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
@@ -961,34 +845,23 @@ impl ::protobuf::Message for TestNestedRecord {
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
-        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> =
-            ::protobuf::rt::LazyV2::INIT;
+        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(
-                ::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<
-                    _,
-                    ::protobuf::types::ProtobufTypeMessage<TestRecord>,
-                >(
-                    "test_record",
-                    |m: &TestNestedRecord| &m.test_record,
-                    |m: &mut TestNestedRecord| &mut m.test_record,
-                ),
-            );
-            fields.push(
-                ::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<
-                    _,
-                    ::protobuf::types::ProtobufTypeMessage<TestRepeatedRecord>,
-                >(
-                    "test_repeated_record",
-                    |m: &TestNestedRecord| &m.test_repeated_record,
-                    |m: &mut TestNestedRecord| &mut m.test_repeated_record,
-                ),
-            );
+            fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TestRecord>>(
+                "test_record",
+                |m: &TestNestedRecord| { &m.test_record },
+                |m: &mut TestNestedRecord| { &mut m.test_record },
+            ));
+            fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TestRepeatedRecord>>(
+                "test_repeated_record",
+                |m: &TestNestedRecord| { &m.test_repeated_record },
+                |m: &mut TestNestedRecord| { &mut m.test_repeated_record },
+            ));
             ::protobuf::reflect::MessageDescriptor::new_pb_name::<TestNestedRecord>(
                 "TestNestedRecord",
                 fields,
-                file_descriptor_proto(),
+                file_descriptor_proto()
             )
         })
     }
@@ -1019,7 +892,7 @@ impl ::protobuf::reflect::ProtobufValue for TestNestedRecord {
     }
 }
 
-#[derive(PartialEq, Clone, Default)]
+#[derive(PartialEq,Clone,Default)]
 pub struct TestRepeatedNestedRecord {
     // message fields
     pub test_record: ::protobuf::RepeatedField<TestRecord>,
@@ -1042,6 +915,7 @@ impl TestRepeatedNestedRecord {
     }
 
     // repeated .TestRecord test_record = 1;
+
 
     pub fn get_test_record(&self) -> &[TestRecord] {
         &self.test_record
@@ -1067,6 +941,7 @@ impl TestRepeatedNestedRecord {
 
     // repeated .TestRepeatedRecord test_repeated_record = 2;
 
+
     pub fn get_test_repeated_record(&self) -> &[TestRepeatedRecord] {
         &self.test_repeated_record
     }
@@ -1080,21 +955,17 @@ impl TestRepeatedNestedRecord {
     }
 
     // Mutable pointer to the field.
-    pub fn mut_test_repeated_record(
-        &mut self,
-    ) -> &mut ::protobuf::RepeatedField<TestRepeatedRecord> {
+    pub fn mut_test_repeated_record(&mut self) -> &mut ::protobuf::RepeatedField<TestRepeatedRecord> {
         &mut self.test_repeated_record
     }
 
     // Take field
     pub fn take_test_repeated_record(&mut self) -> ::protobuf::RepeatedField<TestRepeatedRecord> {
-        ::std::mem::replace(
-            &mut self.test_repeated_record,
-            ::protobuf::RepeatedField::new(),
-        )
+        ::std::mem::replace(&mut self.test_repeated_record, ::protobuf::RepeatedField::new())
     }
 
     // repeated .TestNestedRecord test_nested_record = 3;
+
 
     pub fn get_test_nested_record(&self) -> &[TestNestedRecord] {
         &self.test_nested_record
@@ -1115,10 +986,7 @@ impl TestRepeatedNestedRecord {
 
     // Take field
     pub fn take_test_nested_record(&mut self) -> ::protobuf::RepeatedField<TestNestedRecord> {
-        ::std::mem::replace(
-            &mut self.test_nested_record,
-            ::protobuf::RepeatedField::new(),
-        )
+        ::std::mem::replace(&mut self.test_nested_record, ::protobuf::RepeatedField::new())
     }
 }
 
@@ -1128,56 +996,36 @@ impl ::protobuf::Message for TestRepeatedNestedRecord {
             if !v.is_initialized() {
                 return false;
             }
-        }
+        };
         for v in &self.test_repeated_record {
             if !v.is_initialized() {
                 return false;
             }
-        }
+        };
         for v in &self.test_nested_record {
             if !v.is_initialized() {
                 return false;
             }
-        }
+        };
         true
     }
 
-    fn merge_from(
-        &mut self,
-        is: &mut ::protobuf::CodedInputStream<'_>,
-    ) -> ::protobuf::ProtobufResult<()> {
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_repeated_message_into(
-                        wire_type,
-                        is,
-                        &mut self.test_record,
-                    )?;
-                }
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.test_record)?;
+                },
                 2 => {
-                    ::protobuf::rt::read_repeated_message_into(
-                        wire_type,
-                        is,
-                        &mut self.test_repeated_record,
-                    )?;
-                }
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.test_repeated_record)?;
+                },
                 3 => {
-                    ::protobuf::rt::read_repeated_message_into(
-                        wire_type,
-                        is,
-                        &mut self.test_nested_record,
-                    )?;
-                }
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.test_nested_record)?;
+                },
                 _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(
-                        field_number,
-                        wire_type,
-                        is,
-                        self.mut_unknown_fields(),
-                    )?;
-                }
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
             };
         }
         ::std::result::Result::Ok(())
@@ -1190,39 +1038,36 @@ impl ::protobuf::Message for TestRepeatedNestedRecord {
         for value in &self.test_record {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        }
+        };
         for value in &self.test_repeated_record {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        }
+        };
         for value in &self.test_nested_record {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        }
+        };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(
-        &self,
-        os: &mut ::protobuf::CodedOutputStream<'_>,
-    ) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         for v in &self.test_record {
             os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
-        }
+        };
         for v in &self.test_repeated_record {
             os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
-        }
+        };
         for v in &self.test_nested_record {
             os.write_tag(3, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
-        }
+        };
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1258,51 +1103,34 @@ impl ::protobuf::Message for TestRepeatedNestedRecord {
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
-        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> =
-            ::protobuf::rt::LazyV2::INIT;
+        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(
-                ::protobuf::reflect::accessor::make_repeated_field_accessor::<
-                    _,
-                    ::protobuf::types::ProtobufTypeMessage<TestRecord>,
-                >(
-                    "test_record",
-                    |m: &TestRepeatedNestedRecord| &m.test_record,
-                    |m: &mut TestRepeatedNestedRecord| &mut m.test_record,
-                ),
-            );
-            fields.push(
-                ::protobuf::reflect::accessor::make_repeated_field_accessor::<
-                    _,
-                    ::protobuf::types::ProtobufTypeMessage<TestRepeatedRecord>,
-                >(
-                    "test_repeated_record",
-                    |m: &TestRepeatedNestedRecord| &m.test_repeated_record,
-                    |m: &mut TestRepeatedNestedRecord| &mut m.test_repeated_record,
-                ),
-            );
-            fields.push(
-                ::protobuf::reflect::accessor::make_repeated_field_accessor::<
-                    _,
-                    ::protobuf::types::ProtobufTypeMessage<TestNestedRecord>,
-                >(
-                    "test_nested_record",
-                    |m: &TestRepeatedNestedRecord| &m.test_nested_record,
-                    |m: &mut TestRepeatedNestedRecord| &mut m.test_nested_record,
-                ),
-            );
+            fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TestRecord>>(
+                "test_record",
+                |m: &TestRepeatedNestedRecord| { &m.test_record },
+                |m: &mut TestRepeatedNestedRecord| { &mut m.test_record },
+            ));
+            fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TestRepeatedRecord>>(
+                "test_repeated_record",
+                |m: &TestRepeatedNestedRecord| { &m.test_repeated_record },
+                |m: &mut TestRepeatedNestedRecord| { &mut m.test_repeated_record },
+            ));
+            fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<TestNestedRecord>>(
+                "test_nested_record",
+                |m: &TestRepeatedNestedRecord| { &m.test_nested_record },
+                |m: &mut TestRepeatedNestedRecord| { &mut m.test_nested_record },
+            ));
             ::protobuf::reflect::MessageDescriptor::new_pb_name::<TestRepeatedNestedRecord>(
                 "TestRepeatedNestedRecord",
                 fields,
-                file_descriptor_proto(),
+                file_descriptor_proto()
             )
         })
     }
 
     fn default_instance() -> &'static TestRepeatedNestedRecord {
-        static instance: ::protobuf::rt::LazyV2<TestRepeatedNestedRecord> =
-            ::protobuf::rt::LazyV2::INIT;
+        static instance: ::protobuf::rt::LazyV2<TestRepeatedNestedRecord> = ::protobuf::rt::LazyV2::INIT;
         instance.get(TestRepeatedNestedRecord::new)
     }
 }
@@ -1328,7 +1156,7 @@ impl ::protobuf::reflect::ProtobufValue for TestRepeatedNestedRecord {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone,PartialEq,Eq,Debug,Hash)]
 pub enum Color {
     RED = 0,
     YELLOW = 1,
@@ -1345,28 +1173,29 @@ impl ::protobuf::ProtobufEnum for Color {
             0 => ::std::option::Option::Some(Color::RED),
             1 => ::std::option::Option::Some(Color::YELLOW),
             2 => ::std::option::Option::Some(Color::BLUE),
-            _ => ::std::option::Option::None,
+            _ => ::std::option::Option::None
         }
     }
 
     fn values() -> &'static [Self] {
-        static values: &'static [Color] = &[Color::RED, Color::YELLOW, Color::BLUE];
+        static values: &'static [Color] = &[
+            Color::RED,
+            Color::YELLOW,
+            Color::BLUE,
+        ];
         values
     }
 
     fn enum_descriptor_static() -> &'static ::protobuf::reflect::EnumDescriptor {
-        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::EnumDescriptor> =
-            ::protobuf::rt::LazyV2::INIT;
+        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
-            ::protobuf::reflect::EnumDescriptor::new_pb_name::<Color>(
-                "Color",
-                file_descriptor_proto(),
-            )
+            ::protobuf::reflect::EnumDescriptor::new_pb_name::<Color>("Color", file_descriptor_proto())
         })
     }
 }
 
-impl ::std::marker::Copy for Color {}
+impl ::std::marker::Copy for Color {
+}
 
 impl ::std::default::Default for Color {
     fn default() -> Self {
@@ -1402,14 +1231,14 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     LOW\x10\x01\x12\x08\n\x04BLUE\x10\x02b\x06proto3\
 ";
 
-static file_descriptor_proto_lazy: ::protobuf::rt::LazyV2<
-    ::protobuf::descriptor::FileDescriptorProto,
-> = ::protobuf::rt::LazyV2::INIT;
+static file_descriptor_proto_lazy: ::protobuf::rt::LazyV2<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::rt::LazyV2::INIT;
 
 fn parse_descriptor_proto() -> ::protobuf::descriptor::FileDescriptorProto {
     ::protobuf::parse_from_bytes(file_descriptor_proto_data).unwrap()
 }
 
 pub fn file_descriptor_proto() -> &'static ::protobuf::descriptor::FileDescriptorProto {
-    file_descriptor_proto_lazy.get(|| parse_descriptor_proto())
+    file_descriptor_proto_lazy.get(|| {
+        parse_descriptor_proto()
+    })
 }

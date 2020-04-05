@@ -18,7 +18,7 @@ use serde::de::DeserializeOwned;
 
 use crate::action::{Action, State};
 use crate::format::avro::{self, Schema};
-use crate::format::protobuf::{self, ToMessage};
+use crate::format::protobuf;
 use crate::parser::BuiltinCommand;
 
 pub struct IngestAction {
@@ -82,19 +82,19 @@ impl Transcoder {
                 }
             }
             Transcoder::Protobuf { message } => {
-                let val: protobuf::DynMessage = match message {
+                let val: Box<dyn protobuf::Message> = match message {
                     protobuf::MessageType::Batch => {
-                        let decoded = Self::decode_json::<_, protobuf::native::Batch>(row)?;
+                        let decoded = Self::decode_json::<_, protobuf::gen::billing::Batch>(row)?;
                         if let Some(decoded) = decoded {
-                            decoded.to_message()
+                            Box::new(decoded)
                         } else {
                             return Ok(None);
                         }
                     }
                     protobuf::MessageType::Struct => {
-                        let decoded = Self::decode_json::<_, protobuf::native::Struct>(row)?;
+                        let decoded = Self::decode_json::<_, protobuf::gen::simple::Struct>(row)?;
                         if let Some(decoded) = decoded {
-                            decoded.to_message()
+                            Box::new(decoded)
                         } else {
                             return Ok(None);
                         }

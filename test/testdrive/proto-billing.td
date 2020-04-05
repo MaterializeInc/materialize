@@ -17,7 +17,7 @@ $ kafka-create-topic topic=messages
 
 $ kafka-ingest format=protobuf topic=messages message=batch timestamp=1
 {"id": "1", "interval_start": "2020-01-01_00:00:00", "interval_end": "2020-01-01_00:00:09", "records": []}
-{"id": "2", "interval_start": "2020-01-01_00:00:10", "interval_end": "2020-01-01_00:00:19", "records": [{"interval_start": "2020-01-01_00:00:10", "interval_end": "2020-01-01_00:00:15", "meter": "user", "value": 25, "measurements": [{"resource": "Cpu", "measured_value": 5}, {"resource": "Mem", "measured_value": 128}]}, {"interval_start": "2020-01-01_00:00:16", "interval_end": "2020-01-01_00:00:19", "meter": "user", "value": 125, "measurements": [{"resource": "Cpu", "measured_value": 13}, {"resource": "Mem", "measured_value": 256}]}]}
+{"id": "2", "interval_start": "2020-01-01_00:00:10", "interval_end": "2020-01-01_00:00:19", "records": [{"interval_start": "2020-01-01_00:00:10", "interval_end": "2020-01-01_00:00:15", "meter": "user", "value": 25, "measurements": [{"resource": "CPU", "measured_value": 5}, {"resource": "MEM", "measured_value": 128}]}, {"interval_start": "2020-01-01_00:00:16", "interval_end": "2020-01-01_00:00:19", "meter": "user", "value": 125, "measurements": [{"resource": "CPU", "measured_value": 13}, {"resource": "MEM", "measured_value": 256}]}]}
 
 # TODO: default values for enums, strings, bytes do not work right now
 $ kafka-ingest format=protobuf topic=messages message=batch timestamp=10

@@ -11,9 +11,12 @@
 //! To run invoke `MZ_GENERATE_PROTO=1 cargo build`
 
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 
 fn main() {
+    println!("cargo:rustc-cfg=feature=\"with-serde\"");
+
     let out_dir = "src/format/protobuf/gen";
     let input = &[
         "src/format/protobuf/billing.proto",
@@ -44,6 +47,22 @@ fn main() {
     protoc_rust::Codegen::new()
         .out_dir(out_dir)
         .inputs(input)
+        .customize(protoc_rust::Customize {
+            serde_derive: Some(true),
+            ..Default::default()
+        })
         .run()
         .expect("protoc");
+
+    // TODO(benesch): this missing import is fixed in the unreleased v3.0 of
+    // rust-protobuf.
+    for entry in fs::read_dir(out_dir).unwrap() {
+        let entry = entry.unwrap();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open(entry.path())
+            .unwrap();
+        writeln!(file, "{}", "use serde::{Deserialize, Serialize};").unwrap();
+    }
 }
