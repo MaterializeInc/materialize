@@ -9,7 +9,9 @@
 
 FROM ubuntu:bionic
 
-RUN apt-get update && apt-get -qy install wait-for-it
+RUN apt-get update && apt-get -qy install \
+    ca-certificates \
+    wait-for-it
 
 COPY testdrive /usr/local/bin
 

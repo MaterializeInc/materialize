@@ -1149,11 +1149,17 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::SingleQuotedString(secret_access_key)) => secret_access_key,
                         _ => bail!("Kinesis sources require a `secret_access_key` option"),
                     };
+                    let token = match with_options.remove("token") {
+                        Some(Value::SingleQuotedString(token)) => Some(token),
+                        _ => None,
+                    };
+
                     let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                         stream_name,
                         region,
                         access_key,
                         secret_access_key,
+                        token,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)

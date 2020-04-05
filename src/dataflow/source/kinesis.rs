@@ -169,7 +169,7 @@ fn create_state(
     c: KinesisSourceConnector,
 ) -> Result<(KinesisClient, Option<String>), failure::Error> {
     let http_client = HttpClient::new()?;
-    let provider = StaticProvider::new(c.access_key, c.secret_access_key, None, None);
+    let provider = StaticProvider::new(c.access_key, c.secret_access_key, c.token, None);
     let client = KinesisClient::new_with(http_client, provider, c.region);
 
     let shards_output = block_on(get_shards_list(&client, &c.stream_name))

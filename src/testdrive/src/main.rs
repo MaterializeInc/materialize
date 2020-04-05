@@ -32,6 +32,12 @@ fn run() -> Result<(), Error> {
     opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
     opts.optopt(
         "",
+        "kinesis-region",
+        "optional custom kinesis region",
+        "custom",
+    );
+    opts.optopt(
+        "",
         "materialized-url",
         "materialized connection string",
         "URL",
@@ -62,6 +68,7 @@ fn run() -> Result<(), Error> {
     let config = Config {
         kafka_addr: opts.opt_str("kafka-addr"),
         schema_registry_url: opts.opt_str("schema-registry-url"),
+        kinesis_region: opts.opt_str("kinesis-region"),
         materialized_url: opts.opt_str("materialized-url"),
         materialized_catalog_path: opts.opt_str("validate-catalog"),
     };

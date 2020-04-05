@@ -9,6 +9,8 @@
 
 FROM ubuntu:bionic
 
+RUN apt-get update && apt-get -qy install ca-certificates
+
 COPY materialized /usr/local/bin
 
 ENTRYPOINT ["materialized", "--log-file=stderr"]
