@@ -121,3 +121,43 @@ pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, S
         )),
     }
 }
+
+/// Computes the multiset difference between two slices of [`AvroValue`]s, i.e.,
+/// `lhs - rhs`.
+///
+/// Required because `AvroValue` does not implement `Hash`, `Eq`, or `Ord`, and
+/// so using a standard multiset type to perform the difference is not possible.
+pub fn multiset_difference<'a>(lhs: &'a [AvroValue], rhs: &'a [AvroValue]) -> Vec<AvroValue> {
+    let mut diff = lhs.to_vec();
+    for r in rhs {
+        if let Some(i) = diff.iter().position(|l| l == r) {
+            diff.swap_remove(i);
+        }
+    }
+    diff
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_multiset_difference() {
+        const ONE: AvroValue = AvroValue::Int(1);
+        const TWO: AvroValue = AvroValue::Int(2);
+        for (lhs, rhs, expected) in &[
+            (&[][..], &[][..], &[][..]),
+            (&[ONE], &[], &[ONE]),
+            (&[ONE], &[ONE], &[]),
+            (&[], &[ONE], &[]),
+            (&[ONE, TWO], &[ONE], &[TWO]),
+            (&[ONE, ONE, ONE], &[ONE], &[ONE, ONE]),
+            (&[ONE, ONE, ONE], &[ONE, ONE], &[ONE]),
+            (&[ONE, TWO, ONE], &[ONE, ONE], &[TWO]),
+            (&[ONE, TWO, ONE], &[TWO, ONE, ONE], &[]),
+        ] {
+            println!("{:?} - {:?} = {:?}", lhs, rhs, expected);
+            assert_eq!(multiset_difference(lhs, rhs), *expected);
+        }
+    }
+}

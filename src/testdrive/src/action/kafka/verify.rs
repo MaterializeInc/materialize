@@ -16,6 +16,7 @@ use rdkafka::message::Message;
 use retry::delay::Fibonacci;
 
 use crate::action::{Action, State};
+use crate::format::avro;
 use crate::parser::BuiltinCommand;
 
 pub struct VerifyAction {
@@ -109,7 +110,7 @@ impl Action for VerifyAction {
                                 ));
                             }
                             actual_messages.push(
-                                block_on(avro::from_avro_datum(&schema, &mut bytes))
+                                block_on(::avro::from_avro_datum(&schema, &mut bytes))
                                     .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?,
                             );
                         }
@@ -124,17 +125,11 @@ impl Action for VerifyAction {
         }
         // NB: We can't compare messages as they come in because
         // Kafka sinks do not currently support ordering.
-        // Additionally, we do this bummer of a comparison because
-        // avro::types::Value does not implement Eq or Ord.
         // TODO@jldlaughlin: update this once we have Kafka ordering guarantees
-        let missing_values = crate::action::get_values_in_first_list_not_in_second(
-            &converted_expected_messages,
-            &actual_messages,
-        );
-        let additional_values = crate::action::get_values_in_first_list_not_in_second(
-            &actual_messages,
-            &converted_expected_messages,
-        );
+        let missing_values =
+            avro::multiset_difference(&converted_expected_messages, &actual_messages);
+        let additional_values =
+            avro::multiset_difference(&actual_messages, &converted_expected_messages);
 
         if !missing_values.is_empty() || !additional_values.is_empty() {
             return Err(format!(
