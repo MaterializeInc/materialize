@@ -967,6 +967,11 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
         if let sql_parser::ast::Envelope::Upsert(format) = envelope {
             purify_format(format, connector, col_names).await?;
         }
+
+        // Tests that with_options are valid for generating auth and, only in
+        // the case of creating SASL plaintext connections to Kerberized Kafka
+        // clusters, tests the configuration.
+        KafkaAuth::create_from_with_options(&mut with_options_map.clone(), true)?;
     }
     Ok(stmt)
 }
@@ -1081,35 +1086,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut consistency = Consistency::RealTime;
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
-                    let ssl_certificate_file = match with_options.remove("ssl_certificate_file") {
-                        None => None,
-                        Some(Value::SingleQuotedString(p)) => Some(p),
-                        Some(_) => bail!("ssl_certificate_file must be a string"),
-                    };
-
-                    let security_protocol = match with_options.remove("security_protocol") {
-                        None => None,
-                        Some(Value::SingleQuotedString(p)) => Some(p),
-                        Some(_) => bail!("ssl_certificate_file must be a string"),
-                    };
-
-                    let auth = match security_protocol.as_deref() {
-                        Some("ssl") => {
-                            match ssl_certificate_file {
-                                None => bail!("Must specify ssl_certificate_file option if security_protocol='ssl'"),
-                                Some(p) => Some(KafkaAuth::SSL(p.into()))
-                            }
-                        }
-                        Some("sasl_plaintext") => {
-                            Some(KafkaAuth::sasl_palintext_kerberos_settings(&mut with_options)?)
-                        }
-                        _ => {
-                            match ssl_certificate_file {
-                                None => None,
-                                Some(p) => Some(KafkaAuth::SSL(p.into()))
-                            }
-                        },
-                    };
+                    let auth = KafkaAuth::create_from_with_options(&mut with_options, false)?;
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,

@@ -13,7 +13,8 @@ interchange = { path = "../interchange" }
 comm = { path = "../comm" }
 expr = { path = "../expr" }
 failure = "0.1"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
+log = "0.4.8"
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored"] }
 regex = "1.3.6"
 repr = { path = "../repr" }
 rusoto_core = "0.43.0-beta.1"

@@ -29,7 +29,7 @@ ore = { path = "../ore" }
 pdqselect = "0.1.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored"] }
 regex = "1.3.6"
 repr = { path = "../repr" }
 rusoto_core = "0.43.0-beta.1"

@@ -14,6 +14,7 @@
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use failure::{bail, ResultExt};
 use rusoto_core::Region;
@@ -24,6 +25,7 @@ use url::Url;
 use expr::{EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
 use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
+use log::{debug, error, info, warn};
 use rdkafka::consumer::BaseConsumer;
 use rdkafka::ClientConfig;
 use regex::Regex;
@@ -475,84 +477,6 @@ pub enum KafkaAuth {
 }
 
 impl KafkaAuth {
-    /// Return a list of key-value pairs to authenaticate `rdkafka` to connect
-    /// to a Kerberized Kafka cluster.
-    ///
-    /// # Arguments
-    ///
-    /// - `with_options` should be the `with_options` field of
-    ///   `sql_parser::ast::Statement::CreateSource`, where the user has passed
-    ///   in their options to connect to the Kerberized Kafka cluster.
-    ///
-    /// # Errors
-    ///
-    /// - If the `rdkafka` does not have sufficient information to create a
-    ///   Kafka consumer. This case covers when the user doesn't have a local
-    ///   keytab cache configured and doesn't provide sufficient detail to
-    ///   `rdkafka` to establish a connection.
-    ///
-    pub fn sasl_palintext_kerberos_settings(
-        with_options: &mut std::collections::HashMap<String, Value>,
-    ) -> Result<Self, failure::Error> {
-        // Represents valid with_option keys to connect to Kerberized Kafka
-        // cluster through SASL based on
-        // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md.
-        // Currently all of these keys can be converted to their respective
-        // client config settings by replacing underscores with dots.
-        let allowed_configs = vec![
-            "sasl_kerberos_keytab",
-            "sasl_kerberos_kinit_cmd",
-            "sasl_kerberos_min_time_before_relogin",
-            "sasl_kerberos_principal",
-            "sasl_kerberos_service_name",
-            "sasl_mechanisms",
-        ];
-
-        let mut client_config: Vec<(String, String)> = vec![];
-        for config in allowed_configs {
-            match with_options.remove(&config.to_string()) {
-                Some(Value::SingleQuotedString(v)) => {
-                    client_config.push((config.replace("_", "."), v));
-                }
-                Some(_) => bail!("{} must be a string", config),
-                None => {}
-            };
-        }
-
-        // Perform a dry run to see if we have the necessary credentials to
-        // connect. Concretely, this is checking to see if the local keytab
-        // cache is present, and if not, notifying the user which additional
-        // paramters need to be set.
-        let mut config = ClientConfig::new();
-        config.set("security.protocol", "sasl_plaintext");
-        for s in client_config.clone() {
-            config.set(s.0.as_str(), s.1.as_str());
-        }
-
-        if let Err(e) = config.create::<BaseConsumer>() {
-            match e {
-                rdkafka::error::KafkaError::ClientCreation(s) => {
-                    println!("{}", s);
-                    // Catch the one error we know about.
-                    if s == "Invalid sasl.kerberos.kinit.cmd value: Property \
-                    not available: \"sasl.kerberos.keytab\""
-                    {
-                        bail!(
-                            "Invalid SASL Auth: Can't seem to find local keytab \
-                            cache. You must provide explicit sasl_kerberos_keytab \
-                            or sasl_kerberos_kinit_cmd option."
-                        )
-                    } else {
-                        // Pass existing error back up.
-                        bail!(rdkafka::error::KafkaError::ClientCreation(s))
-                    }
-                }
-                _ => bail!(e),
-            }
-        }
-
-        Ok(KafkaAuth::SASLPlaintext(client_config))
-    }
     /// Add the appropriate settings to the `rdkafka` client's config based on
     /// the authentication method detailed when creating the Kafka source.
     pub fn configure_client(&self, config: &mut ClientConfig) {
@@ -574,6 +498,203 @@ impl KafkaAuth {
                 }
             }
         }
+    }
+    /// Parse the `with_options` from a `CREATE SOURCE` statement to determine
+    /// Kafka auth strategy.
+    ///
+    /// # Arguments
+    ///
+    /// - `with_options` should be the `with_options` field of
+    ///   `sql_parser::ast::Statement::CreateSource`, where the user has passed
+    ///   in their options to connect to the Kerberized Kafka cluster.
+    ///
+    /// - `test_config` attempts to create a Kafka consumer using the specified
+    ///   configuration. Note that:
+    ///
+    ///     - This option only applies to SASL plaintext connections. We do not
+    ///       currently validate that using an SSL certificate actually connects
+    ///       to the cluster.
+    ///
+    ///     - `test_config` is only `true` in `purify_statement` as a
+    ///       means of testing Kerberos login using the supplied credentials
+    ///       upon creation. When sources are re-constructed upon reboot, we
+    ///       don't re-validate login.
+    ///
+    /// # Errors
+    ///
+    /// - If the `rdkafka` does not have sufficient information to create a
+    ///   Kafka consumer.
+    /// - If the supplied credentials cannot connect to the Kafka cluster.
+    pub fn create_from_with_options(
+        mut with_options: &mut std::collections::HashMap<String, Value>,
+        test_config: bool,
+    ) -> Result<Option<Self>, failure::Error> {
+        let ssl_certificate_file = match with_options.remove("ssl_certificate_file") {
+            None => None,
+            Some(Value::SingleQuotedString(p)) => Some(p),
+            Some(_) => bail!("ssl_certificate_file must be a string"),
+        };
+
+        let security_protocol = match with_options.remove("security_protocol") {
+            None => None,
+            Some(Value::SingleQuotedString(p)) => Some(p),
+            Some(_) => bail!("ssl_certificate_file must be a string"),
+        };
+
+        let auth = match security_protocol.as_deref() {
+            Some("ssl") => match ssl_certificate_file {
+                None => {
+                    bail!("Must specify ssl_certificate_file option if security_protocol='ssl'")
+                }
+                Some(p) => Some(Self::SSL(p.into())),
+            },
+            Some("sasl_plaintext") => {
+                match KafkaAuth::sasl_plaintext_kerberos_settings(&mut with_options, test_config) {
+                    Ok(auth) => Some(auth),
+                    Err(e) => bail!(e),
+                }
+            }
+            _ => match ssl_certificate_file {
+                None => None,
+                Some(p) => Some(KafkaAuth::SSL(p.into())),
+            },
+        };
+
+        Ok(auth)
+    }
+    /// Return a list of key-value pairs to authenaticate `rdkafka` to connect
+    /// to a Kerberized Kafka cluster.
+    ///
+    /// # Arguments
+    ///
+    /// - `with_options` should be the `with_options` field of
+    ///   `sql_parser::ast::Statement::CreateSource`, where the user has passed
+    ///   in their options to connect to the Kerberized Kafka cluster.
+    ///
+    /// # Errors
+    ///
+    /// - If the `rdkafka` does not have sufficient information to create a
+    ///   Kafka consumer. This case covers when the user doesn't have a local
+    ///   keytab cache configured and doesn't provide sufficient detail to
+    ///   `rdkafka` to establish a connection.
+    ///
+    fn sasl_plaintext_kerberos_settings(
+        with_options: &mut std::collections::HashMap<String, Value>,
+        test_config: bool,
+    ) -> Result<Self, failure::Error> {
+        // Represents valid with_option keys to connect to Kerberized Kafka
+        // cluster through SASL based on
+        // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md.
+        // Currently all of these keys can be converted to their respective
+        // client config settings by replacing underscores with dots.
+        //
+        // Each option's default value are determined by `librdkafka`, and any
+        // missing-but-necessary options are surfaced by `librdkafka` either
+        // erroring or logging an error.
+        let allowed_configs = vec![
+            "sasl_kerberos_keytab",
+            "sasl_kerberos_kinit_cmd",
+            "sasl_kerberos_min_time_before_relogin",
+            "sasl_kerberos_principal",
+            "sasl_kerberos_service_name",
+            "sasl_mechanisms",
+        ];
+
+        let mut client_config: Vec<(String, String)> = vec![];
+        for config in allowed_configs {
+            match with_options.remove(&config.to_string()) {
+                Some(Value::SingleQuotedString(v)) => {
+                    client_config.push((config.replace("_", "."), v));
+                }
+                Some(_) => bail!("{} must be a string", config),
+                None => {}
+            };
+        }
+
+        let auth = Self::SASLPlaintext(client_config);
+
+        if test_config {
+            // Perform a dry run to see if we have the necessary credentials to
+            // connect.
+            let mut config = ClientConfig::new();
+            auth.configure_client(&mut config);
+
+            match config.create_with_context(RDKafkaErrCheckContext::default()) {
+                Ok(consumer) => {
+                    let consumer: BaseConsumer<RDKafkaErrCheckContext> = consumer;
+                    if let Ok(err_string) = consumer.context().error.lock() {
+                        if !(*err_string).is_empty() {
+                            bail!("librdkafka: {}", *err_string)
+                        }
+                    };
+                }
+                Err(e) => {
+                    match e {
+                        rdkafka::error::KafkaError::ClientCreation(s) => {
+                            // Rewrite error message to provide Materialize-specific guidance.
+                            if s == "Invalid sasl.kerberos.kinit.cmd value: Property \
+                        not available: \"sasl.kerberos.keytab\""
+                            {
+                                bail!(
+                                    "Can't seem to find local keytab cache. You must \
+                                provide explicit sasl_kerberos_keytab or \
+                                sasl_kerberos_kinit_cmd option."
+                                )
+                            } else {
+                                // Pass existing error back up.
+                                bail!(rdkafka::error::KafkaError::ClientCreation(s))
+                            }
+                        }
+                        _ => bail!(e),
+                    }
+                }
+            }
+        }
+
+        Ok(auth)
+    }
+}
+
+#[derive(Clone, Default)]
+/// Gets error strings from `rdkafka` when creating test consumer.
+struct RDKafkaErrCheckContext {
+    pub error: Arc<Mutex<String>>,
+}
+
+impl rdkafka::consumer::ConsumerContext for RDKafkaErrCheckContext {}
+
+impl rdkafka::client::ClientContext for RDKafkaErrCheckContext {
+    // `librdkafka` doesn't seem to propagate all Kerberos errors up the stack,
+    // but does log them, so we are currently relying on the `log` callback for
+    // error handling in situations we're aware of, e.g. cannot log into
+    // Kerberos.
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        use rdkafka::config::RDKafkaLogLevel::*;
+        match level {
+            Emerg | Alert | Critical | Error => {
+                if let Ok(mut err_string) = self.error.lock() {
+                    // Do not allow logging to overwrite other values if
+                    // present.
+                    if (*err_string).is_empty() {
+                        *err_string = log_message.to_string();
+                    }
+                }
+                error!(target: "librdkafka", "librdkafka: {} {}", fac, log_message)
+            }
+            Warning => warn!(target: "librdkafka", "librdkafka: {} {}", fac, log_message),
+            Notice => info!(target: "librdkafka", "librdkafka: {} {}", fac, log_message),
+            Info => info!(target: "librdkafka", "librdkafka: {} {}", fac, log_message),
+            Debug => debug!(target: "librdkafka", "librdkafka: {} {}", fac, log_message),
+        }
+    }
+    // Refer to the comment on the `log` callback.
+    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+        if let Ok(mut err_string) = self.error.lock() {
+            // Allow error to overwrite value irrespective of other conditions
+            // (i.e. logging).
+            *err_string = reason.to_string();
+        }
+        error!("librdkafka: {}: {}", error, reason);
     }
 }
 

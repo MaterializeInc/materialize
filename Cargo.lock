@@ -685,6 +685,7 @@ dependencies = [
  "expr",
  "failure",
  "interchange",
+ "log",
  "rdkafka",
  "regex",
  "repr",
@@ -2838,9 +2839,9 @@ dependencies = [
 
 [[package]]
 name = "sasl2-sys"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0af9b9a58f17f85f7fdd98302b6086f3ad46ec4bbcb9f065453f3cae855426e"
+checksum = "499fb6d600f2afd0941d9342997beb19d1580c4dd5d28251758db6a162e7091e"
 dependencies = [
  "cc",
  "duct",
