@@ -7,11 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::str;
+
 use rusoto_kinesis::{GetRecordsInput, GetShardIteratorInput, Kinesis, ListShardsInput};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-use failure::_core::str::from_utf8;
 
 pub struct VerifyAction {
     stream_prefix: String,
@@ -38,9 +39,7 @@ impl Action for VerifyAction {
     // Consume messages from the stream, assert they match the expected.
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
-        // Right now, we only support reading from a single
-        // Kinesis stream&shard.
-        // todo@jldlaughin: Update this when we support multiple shards.
+
         let mut records = Vec::new();
         while records.is_empty() {
             let list_shards_input = ListShardsInput {
@@ -50,81 +49,58 @@ impl Action for VerifyAction {
                 stream_creation_timestamp: None,
                 stream_name: Some(stream_name.clone()),
             };
-            let shard_iterator = match state
+
+            // Right now, we only support reading from a single
+            // Kinesis stream&shard.
+            // todo@jldlaughin: Update this when we support multiple shards.
+            let shard = match state
                 .tokio_runtime
                 .block_on(state.kinesis_client.list_shards(list_shards_input))
+                .map_err(|e| format!("listing Kinesis shards: {}", e))?
+                .shards
+                .as_deref()
             {
-                Ok(output) => match output.shards.as_deref() {
-                    Some([shard]) => {
-                        let shard_iterator_input = GetShardIteratorInput {
-                            shard_id: shard.shard_id.clone(),
-                            shard_iterator_type: String::from("TRIM_HORIZON"),
-                            starting_sequence_number: None,
-                            stream_name: stream_name.clone(),
-                            timestamp: None,
-                        };
-                        match state.tokio_runtime.block_on(
-                            state
-                                .kinesis_client
-                                .get_shard_iterator(shard_iterator_input),
-                        ) {
-                            Ok(output) => match output.shard_iterator {
-                                Some(iterator) => iterator,
-                                None => {
-                                    return Err(format!(
-                                        "unable to find a shard iterator for Kinesis stream {}",
-                                        &stream_name
-                                    ))
-                                }
-                            },
-                            Err(e) => {
-                                return Err(format!(
-                                    "hit error trying to get Kinesis shard iterator: {}",
-                                    e.to_string()
-                                ))
-                            }
-                        }
-                    }
-                    None | Some(_) => {
-                        return Err(String::from("Kinesis stream must have exactly one shard."))
-                    }
-                },
-                Err(e) => {
-                    return Err(format!(
-                        "hit error trying to get Kinesis shards: {}",
-                        e.to_string()
-                    ))
+                Some([shard]) => shard.clone(),
+                None | Some(_) => {
+                    return Err(String::from("Kinesis stream must have exactly one shard"))
                 }
+            };
+
+            let shard_iterator_input = GetShardIteratorInput {
+                shard_id: shard.shard_id.clone(),
+                shard_iterator_type: String::from("TRIM_HORIZON"),
+                starting_sequence_number: None,
+                stream_name: stream_name.clone(),
+                timestamp: None,
+            };
+            let shard_iterator = match state
+                .tokio_runtime
+                .block_on(
+                    state
+                        .kinesis_client
+                        .get_shard_iterator(shard_iterator_input),
+                )
+                .map_err(|e| format!("getting Kinesis shard iterator: {}", e))?
+                .shard_iterator
+            {
+                Some(iterator) => iterator,
+                None => return Err(String::from("No shard iterator")),
             };
 
             let get_records_input = GetRecordsInput {
                 limit: None,
                 shard_iterator,
             };
-            records = match state
+            records = state
                 .tokio_runtime
                 .block_on(state.kinesis_client.get_records(get_records_input))
-            {
-                Ok(output) => output.records,
-                Err(e) => {
-                    return Err(format!(
-                        "hit error getting Kinesis records: {}",
-                        e.to_string()
-                    ))
-                }
-            };
+                .map_err(|e| format!("getting Kinesis records: {}", e))?
+                .records;
         }
 
         for (expected, actual) in self.expected_messages.iter().zip(records.iter_mut()) {
-            let record_string = match from_utf8(actual.data.as_ref()) {
-                Ok(str) => str,
-                Err(e) => {
-                    return Err(format!(
-                        "hit error converting record bytes to utf8: {}",
-                        e.to_string()
-                    ))
-                }
-            };
+            let record_string = str::from_utf8(actual.data.as_ref())
+                .map_err(|e| format!("converting Kinesis record bytes to utf8: {}", e))?;
             assert_eq!(expected, record_string);
         }
 
