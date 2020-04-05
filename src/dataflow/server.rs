@@ -45,10 +45,10 @@ use crate::arrangement::{
 };
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Consistency, DataflowDesc, Diff, ExternalSourceConnector, IndexDesc,
-    PeekResponse, RowSetFinishing, Timestamp, Update,
+    Consistency, DataflowDesc, Diff, ExternalSourceConnector, IndexDesc, PeekResponse, Timestamp,
+    Update,
 };
-use expr::{EvalEnv, GlobalId, SourceInstanceId};
+use expr::{EvalEnv, GlobalId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
@@ -867,7 +867,7 @@ impl PendingPeek {
                 // need to re-order `results` when there is a non-empty order_by.
                 if !self.finishing.order_by.is_empty() {
                     pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
-                        compare_columns(
+                        expr::compare_columns(
                             &self.finishing.order_by,
                             &left.unpack(),
                             &right.unpack(),

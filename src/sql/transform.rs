@@ -32,22 +32,25 @@ pub fn transform(query: &mut Query) {
 struct AggFuncRewriter;
 
 impl AggFuncRewriter {
-    fn plan_avg(expr: Expr, distinct: bool) -> Expr {
+    fn plan_avg(expr: Expr, filter: Option<&Expr>, distinct: bool) -> Expr {
         let sum = Expr::Function(Function {
             name: ObjectName(vec!["sum".into()]),
             args: vec![expr.clone()],
+            filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
         });
         let sum = Expr::Function(Function {
             name: ObjectName(vec!["internal_avg_promotion".into()]),
             args: vec![sum],
+            filter: None,
             over: None,
             distinct: false,
         });
         let count = Expr::Function(Function {
             name: ObjectName(vec!["count".into()]),
             args: vec![expr],
+            filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
         });
@@ -58,7 +61,7 @@ impl AggFuncRewriter {
         }
     }
 
-    fn plan_variance(expr: Expr, distinct: bool, sample: bool) -> Expr {
+    fn plan_variance(expr: Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {
         // N.B. this variance calculation uses the "textbook" algorithm, which
         // is known to accumulate problematic amounts of error. The numerically
         // stable variants, the most well-known of which is Welford's, are
@@ -76,6 +79,7 @@ impl AggFuncRewriter {
         let expr = Expr::Function(Function {
             name: ObjectName(vec!["internal_avg_promotion".into()]),
             args: vec![expr],
+            filter: None,
             over: None,
             distinct: false,
         });
@@ -86,12 +90,14 @@ impl AggFuncRewriter {
                 op: BinaryOperator::Multiply,
                 right: Box::new(expr.clone()),
             }],
+            filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
         });
         let sum = Expr::Function(Function {
             name: ObjectName(vec!["sum".into()]),
             args: vec![expr.clone()],
+            filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
         });
@@ -103,6 +109,7 @@ impl AggFuncRewriter {
         let count = Expr::Function(Function {
             name: ObjectName(vec!["count".into()]),
             args: vec![expr],
+            filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
         });
@@ -129,10 +136,11 @@ impl AggFuncRewriter {
         }
     }
 
-    fn plan_stddev(expr: Expr, distinct: bool, sample: bool) -> Expr {
+    fn plan_stddev(expr: Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {
         Expr::Function(Function {
             name: ObjectName(vec!["sqrt".into()]),
-            args: vec![Self::plan_variance(expr, distinct, sample)],
+            args: vec![Self::plan_variance(expr, filter, distinct, sample)],
+            filter: None,
             over: None,
             distinct: false,
         })
@@ -148,12 +156,13 @@ impl AggFuncRewriter {
             return None;
         }
         let arg = func.args[0].clone();
+        let filter = func.filter.as_deref();
         let expr = match name.as_str() {
-            "avg" => Some(Self::plan_avg(arg, func.distinct)),
-            "variance" | "var_samp" => Some(Self::plan_variance(arg, func.distinct, true)),
-            "var_pop" => Some(Self::plan_variance(arg, func.distinct, false)),
-            "stddev" | "stddev_samp" => Some(Self::plan_stddev(arg, func.distinct, true)),
-            "stddev_pop" => Some(Self::plan_stddev(arg, func.distinct, false)),
+            "avg" => Some(Self::plan_avg(arg, filter, func.distinct)),
+            "variance" | "var_samp" => Some(Self::plan_variance(arg, filter, func.distinct, true)),
+            "var_pop" => Some(Self::plan_variance(arg, filter, func.distinct, false)),
+            "stddev" | "stddev_samp" => Some(Self::plan_stddev(arg, filter, func.distinct, true)),
+            "stddev_pop" => Some(Self::plan_stddev(arg, filter, func.distinct, false)),
             _ => None,
         };
         expr.map(|expr| (func.name.0[0].clone(), expr))
@@ -193,6 +202,7 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
                 *expr = Expr::Function(Function {
                     name: ObjectName(vec!["current_timestamp".into()]),
                     args: vec![],
+                    filter: None,
                     over: None,
                     distinct: false,
                 })

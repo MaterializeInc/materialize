@@ -223,9 +223,17 @@ fn split_line(pos: usize, line: &str) -> Result<Vec<String>, InputError> {
             }
         } else if c == '\\' && !escaping && in_quotes.is_some() {
             escaping = true;
+        } else if escaping {
+            field.push(match c {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                '0' => '\0',
+                c => c,
+            });
+            escaping = false;
         } else {
             field.push(c);
-            escaping = false;
         }
     }
     if let Some(i) = in_quotes {
@@ -318,7 +326,12 @@ impl<'a> Iterator for LineReader<'a> {
         while let Some((i, c)) = chars.next() {
             if c == '\n' {
                 self.src_line += 1;
-                if fold_newlines && i + 3 < self.inner.len() && &self.inner[i + 1..i + 3] == "  " {
+                if fold_newlines
+                    && i + 3 < self.inner.len()
+                    && self.inner.is_char_boundary(i + 1)
+                    && self.inner.is_char_boundary(i + 3)
+                    && &self.inner[i + 1..i + 3] == "  "
+                {
                     // Chomp the newline and one space. This ensures a SQL query
                     // that is split over two lines does not become invalid.
                     chars.next();

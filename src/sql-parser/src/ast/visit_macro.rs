@@ -359,6 +359,7 @@ macro_rules! make_visitor {
             fn visit_create_source(
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
+                col_names: &'ast $($mut)* [Ident],
                 connector: &'ast $($mut)* Connector,
                 with_options: &'ast $($mut)* [SqlOption],
                 format: Option<&'ast $($mut)* Format>,
@@ -366,7 +367,7 @@ macro_rules! make_visitor {
                 if_not_exists: bool,
                 materialized: bool,
             ) {
-                visit_create_source(self, name, connector, with_options, format, envelope, if_not_exists, materialized)
+                visit_create_source(self, name, col_names, connector, with_options, format, envelope, if_not_exists, materialized)
             }
 
             fn visit_connector(
@@ -385,8 +386,10 @@ macro_rules! make_visitor {
 
             fn visit_source_envelope(
                 &mut self,
-                _envelope: &'ast $($mut)* Envelope,
-            ) { }
+                envelope: &'ast $($mut)* Envelope,
+            ) {
+                visit_source_envelope(self, envelope)
+            }
 
             fn visit_avro_schema(
                 &mut self,
@@ -414,7 +417,7 @@ macro_rules! make_visitor {
                 name: &'ast $($mut)* ObjectName,
                 from: &'ast $($mut)* ObjectName,
                 connector: &'ast $($mut)* Connector,
-                format: &'ast $($mut)* Format,
+                format: Option<&'ast $($mut)* Format>,
                 if_not_exists: bool,
             ) {
                 visit_create_sink(self, name, from, connector, format, if_not_exists)
@@ -640,7 +643,7 @@ macro_rules! make_visitor {
                 visit_tail(self, name)
             }
 
-            fn visit_explain(&mut self, stage: &'ast $($mut)* Stage, explainee: &'ast $($mut)* Explainee, options: &'ast $($mut)* ExplainOptions) {
+            fn visit_explain(&mut self, stage: &'ast $($mut)* ExplainStage, explainee: &'ast $($mut)* Explainee, options: &'ast $($mut)* ExplainOptions) {
                 visit_explain(self, stage, explainee, options)
             }
         }
@@ -675,20 +678,21 @@ macro_rules! make_visitor {
                 }
                 Statement::CreateSource {
                     name,
+                    col_names,
                     connector,
                     with_options,
                     format,
                     envelope,
                     if_not_exists,
                     materialized,
-                } => visitor.visit_create_source(name, connector, with_options, format.as_auto_ref(), envelope, *if_not_exists, *materialized),
+                } => visitor.visit_create_source(name, col_names, connector, with_options, format.as_auto_ref(), envelope, *if_not_exists, *materialized),
                 Statement::CreateSink {
                     name,
                     from,
                     connector,
                     format,
                     if_not_exists,
-                } => visitor.visit_create_sink(name, from, connector, format, *if_not_exists),
+                } => visitor.visit_create_sink(name, from, connector, format.as_auto_ref(), *if_not_exists),
                 Statement::CreateView {
                     name,
                     columns,
@@ -1332,6 +1336,7 @@ macro_rules! make_visitor {
         pub fn visit_create_source<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             name: &'ast $($mut)* ObjectName,
+            col_names: &'ast $($mut)* [Ident],
             connector: &'ast $($mut)* Connector,
             with_options: &'ast $($mut)* [SqlOption],
             format: Option<&'ast $($mut)* Format>,
@@ -1340,6 +1345,9 @@ macro_rules! make_visitor {
             _materialized: bool,
         ) {
             visitor.visit_object_name(name);
+            for column in col_names {
+                visitor.visit_ident(column);
+            }
             visitor.visit_connector(connector);
             for option in with_options {
                 visitor.visit_option(option);
@@ -1384,6 +1392,16 @@ macro_rules! make_visitor {
             }
         }
 
+        fn visit_source_envelope<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            envelope: &'ast $($mut)* Envelope,
+        ) {
+            use Envelope::*;
+            if let Upsert(Some(format)) = envelope {
+                visitor.visit_format(format);
+            }
+        }
+
         pub fn visit_avro_schema<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             avro_schema: &'ast $($mut)* AvroSchema,
@@ -1424,13 +1442,15 @@ macro_rules! make_visitor {
             name: &'ast $($mut)* ObjectName,
             from: &'ast $($mut)* ObjectName,
             connector: &'ast $($mut)* Connector,
-            format: &'ast $($mut)* Format,
+            format: Option<&'ast $($mut)* Format>,
             _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_object_name(from);
             visitor.visit_connector(connector);
-            visitor.visit_format(format);
+            if let Some(format) = format {
+                visitor.visit_format(format);
+            }
         }
 
         pub fn visit_drop_database<'ast, V: $name<'ast> + ?Sized>(
@@ -1801,7 +1821,7 @@ macro_rules! make_visitor {
             visitor.visit_object_name(name);
         }
 
-        pub fn visit_explain<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, _stage: &'ast $($mut)* Stage, explainee: &'ast $($mut)* Explainee, _options: &'ast $($mut)* ExplainOptions) {
+        pub fn visit_explain<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, _stage: &'ast $($mut)* ExplainStage, explainee: &'ast $($mut)* Explainee, _options: &'ast $($mut)* ExplainOptions) {
             match explainee {
                 Explainee::View(name) => visitor.visit_object_name(name),
                 Explainee::Query(query) => visitor.visit_query(query),

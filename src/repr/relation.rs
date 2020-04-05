@@ -184,10 +184,10 @@ impl RelationDesc {
 
     pub fn add_cols<I, N>(&mut self, cols: I)
     where
-        I: IntoIterator<Item = (ColumnType, Option<N>)>,
+        I: IntoIterator<Item = (Option<N>, ColumnType)>,
         N: Into<ColumnName>,
     {
-        for (typ, name) in cols.into_iter() {
+        for (name, typ) in cols.into_iter() {
             self.typ.column_types.push(typ);
             self.names.push(name.map(Into::into));
         }

@@ -16,7 +16,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use failure::Fail;
 use serde_json::Value as JsonValue;
 
-use crate::schema::{SchemaNode, SchemaPiece};
+use crate::schema::{RecordField, SchemaNode, SchemaPiece};
 
 /// Describes errors happened while performing schema resolution on Avro data.
 #[derive(Fail, Debug)]
@@ -201,12 +201,13 @@ pub struct Record<'a> {
     /// `Record` object. Any unset field defaults to `Value::Null`.
     pub fields: Vec<(String, Value)>,
     schema_lookup: &'a HashMap<String, usize>,
+    schema_fields: &'a Vec<RecordField>,
 }
 
 impl<'a> Record<'a> {
-    /// Create a `Record` given a `Schema`.
+    /// Create a `Record` given a `SchemaNode`.
     ///
-    /// If the `Schema` is not a `Schema::Record` variant, `None` will be returned.
+    /// If the `SchemaNode` is not a `SchemaPiece::Record` variant, `None` will be returned.
     pub fn new(schema: SchemaNode<'a>) -> Option<Record<'a>> {
         let ret = match schema.inner {
             SchemaPiece::Record {
@@ -222,6 +223,7 @@ impl<'a> Record<'a> {
                 Some(Record {
                     fields,
                     schema_lookup,
+                    schema_fields,
                 })
             }
             _ => None,
@@ -232,7 +234,7 @@ impl<'a> Record<'a> {
     /// Put a compatible value (implementing the `ToAvro` trait) in the
     /// `Record` for a given `field` name.
     ///
-    /// **NOTE** Only ensure that the field name is present in the `Schema` given when creating
+    /// **NOTE** Only ensure that the field name is present in the `SchemaNode` given when creating
     /// this `Record`. Does not perform any schema validation.
     pub fn put<V>(&mut self, field: &str, value: V)
     where
@@ -241,6 +243,13 @@ impl<'a> Record<'a> {
         if let Some(&position) = self.schema_lookup.get(field) {
             self.fields[position].1 = value.avro()
         }
+    }
+
+    /// Get the field description corresponding to the given name.
+    pub fn field_by_name(&self, name: &str) -> Option<&'a RecordField> {
+        self.schema_lookup
+            .get(name)
+            .map(|idx| &self.schema_fields[*idx])
     }
 }
 

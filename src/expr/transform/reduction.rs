@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use repr::{Datum, Row, RowArena};
 
@@ -102,11 +102,22 @@ impl FoldConstants {
                             let temp_storage = RowArena::new();
                             let row = Row::pack(key.into_iter().chain(
                                 aggregates.iter().enumerate().map(|(i, agg)| {
-                                    agg.func.eval(
-                                        vals.iter().map(|val| val[i].unpack_first()),
-                                        env,
-                                        &temp_storage,
-                                    )
+                                    if agg.distinct {
+                                        agg.func.eval(
+                                            vals.iter()
+                                                .map(|val| val[i].unpack_first())
+                                                .collect::<HashSet<_>>()
+                                                .into_iter(),
+                                            env,
+                                            &temp_storage,
+                                        )
+                                    } else {
+                                        agg.func.eval(
+                                            vals.iter().map(|val| val[i].unpack_first()),
+                                            env,
+                                            &temp_storage,
+                                        )
+                                    }
                                 }),
                             ));
                             (row, 1)
@@ -359,8 +370,22 @@ impl FoldConstants {
         // will be consolidated. We have to make a separate check for constant
         // nodes here, since the match arm above might install new constant
         // nodes.
-        if let RelationExpr::Constant { rows, .. } = relation {
+        if let RelationExpr::Constant { rows, typ } = relation {
+            // Reduce down to canonical representation.
             differential_dataflow::consolidation::consolidate(rows);
+            rows.retain(|(_row, count)| count != &0);
+            // Re-establish nullability of each column.
+            for col_type in typ.column_types.iter_mut() {
+                col_type.nullable = false;
+            }
+            for (row, _) in rows.iter_mut() {
+                let datums = row.unpack();
+                for (index, datum) in datums.iter().enumerate() {
+                    if datum.is_null() {
+                        typ.column_types[index].nullable = true;
+                    }
+                }
+            }
         }
 
         Ok(())

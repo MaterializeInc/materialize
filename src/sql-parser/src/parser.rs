@@ -354,6 +354,15 @@ impl Parser {
             );
         }
         let args = self.parse_optional_args()?;
+        let filter = if self.parse_keyword("FILTER") {
+            self.expect_token(&Token::LParen)?;
+            self.expect_keyword("WHERE")?;
+            let expr = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+            Some(Box::new(expr))
+        } else {
+            None
+        };
         let over = if self.parse_keyword("OVER") {
             // TBD: support window names (`OVER mywin`) in place of inline specification
             self.expect_token(&Token::LParen)?;
@@ -388,6 +397,7 @@ impl Parser {
         Ok(Expr::Function(Function {
             name,
             args,
+            filter,
             over,
             distinct,
         }))
@@ -1247,8 +1257,19 @@ impl Parser {
             Envelope::None
         } else if self.parse_keyword("DEBEZIUM") {
             Envelope::Debezium
+        } else if self.parse_keyword("UPSERT") {
+            let format = if self.parse_keyword("FORMAT") {
+                Some(self.parse_format()?)
+            } else {
+                None
+            };
+            Envelope::Upsert(format)
         } else {
-            return self.expected(self.peek_range(), "NONE or DEBEZIUM", self.peek_token());
+            return self.expected(
+                self.peek_range(),
+                "NONE, DEBEZIUM, or UPSERT",
+                self.peek_token(),
+            );
         };
         Ok(envelope)
     }
@@ -1258,6 +1279,7 @@ impl Parser {
         self.expect_keyword("SOURCE")?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
+        let col_names = self.parse_parenthesized_column_list(Optional)?;
         self.expect_keyword("FROM")?;
         let connector = self.parse_connector()?;
         let with_options = self.parse_with_options()?;
@@ -1274,6 +1296,7 @@ impl Parser {
 
         Ok(Statement::CreateSource {
             name,
+            col_names,
             connector,
             with_options,
             format,
@@ -1290,8 +1313,11 @@ impl Parser {
         let from = self.parse_object_name()?;
         self.expect_keyword("INTO")?;
         let connector = self.parse_connector()?;
-        self.expect_keyword("FORMAT")?;
-        let format = self.parse_format()?;
+        let format = if self.parse_keyword("FORMAT") {
+            Some(self.parse_format()?)
+        } else {
+            None
+        };
         Ok(Statement::CreateSink {
             name,
             from,
@@ -2770,28 +2796,43 @@ impl Parser {
         }
     }
 
-    /// Parse an `EXPLAIN (TYPED?) [DATAFLOW | PLAN] FOR` statement, assuming that the `EXPLAIN` token
+    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
+        // (TYPED)?
         let mut options = ExplainOptions { typed: false };
         if self.parse_keyword("TYPED") {
             options.typed = true;
         }
 
-        let stage = if self.parse_keyword("DATAFLOW") {
-            Stage::Dataflow
+        // SQL | (RAW | DECORRELATED | OPTIMIZED)? PLAN
+        let stage = if self.parse_keyword("SQL") {
+            ExplainStage::Sql
+        } else if self.parse_keyword("RAW") {
+            self.expect_keyword("PLAN")?;
+            ExplainStage::RawPlan
+        } else if self.parse_keyword("DECORRELATED") {
+            self.expect_keyword("PLAN")?;
+            ExplainStage::DecorrelatedPlan
+        } else if self.parse_keyword("OPTIMIZED") {
+            self.expect_keyword("PLAN")?;
+            ExplainStage::OptimizedPlan
         } else if self.parse_keyword("PLAN") {
-            Stage::Plan
+            // default stage
+            ExplainStage::OptimizedPlan
         } else {
-            self.expected(self.peek_range(), "DATAFLOW or PLAN", self.peek_token())?
+            return Err(self
+                .expect_one_of_keywords(&["SQL", "RAW", "DECORRELATED", "OPTIMIZED", "PLAN"])
+                .unwrap_err());
         };
 
         self.expect_keyword("FOR")?;
 
+        // VIEW view_name | query
         let explainee = if self.parse_keyword("VIEW") {
             Explainee::View(self.parse_object_name()?)
         } else {
-            Explainee::Query(Box::new(self.parse_query()?))
+            Explainee::Query(self.parse_query()?)
         };
 
         Ok(Statement::Explain {

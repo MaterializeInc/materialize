@@ -21,7 +21,7 @@ use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 
 use avro::schema::{SchemaNode, SchemaPiece};
-use avro::types::{DecimalValue, Value as AvroValue};
+use avro::types::{DecimalValue, ToAvro, Value as AvroValue};
 
 use serde_json::Value as JsonValue;
 
@@ -92,18 +92,18 @@ pub fn json_to_avro(json: &JsonValue, schema: SchemaNode) -> Result<AvroValue, S
             let j = serde_json::from_str(s).map_err(|e| e.to_string())?;
             Ok(AvroValue::Json(j))
         }
-        (JsonValue::Object(items), SchemaPiece::Record { fields, .. }) => Ok(AvroValue::Record(
-            items
-                .iter()
-                .zip(fields)
-                .map(|((key, value), field)| {
-                    Ok((
-                        key.clone(),
-                        json_to_avro(value, schema.step(&field.schema))?,
-                    ))
-                })
-                .collect::<Result<_, String>>()?,
-        )),
+        (JsonValue::Object(items), SchemaPiece::Record { .. }) => {
+            let mut builder = avro::types::Record::new(schema)
+                .expect("`Record::new` should never fail if schema piece is a record!");
+            for (key, val) in items {
+                let field = builder
+                    .field_by_name(key)
+                    .ok_or_else(|| format!("No such key in record: {}", key))?;
+                let val = json_to_avro(val, schema.step(&field.schema))?;
+                builder.put(key, val);
+            }
+            Ok(builder.avro())
+        }
         (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();
             let mut last_err = format!("Union schema {:?} did not match {:?}", variants, val);

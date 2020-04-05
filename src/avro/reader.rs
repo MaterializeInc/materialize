@@ -33,7 +33,7 @@ use std::collections::HashMap;
 
 // Internal Block reader.
 #[derive(Debug, Clone)]
-struct Block<R> {
+pub(crate) struct Block<R> {
     reader: R,
     // Internal buffering to reduce allocation.
     buf: Vec<u8>,
@@ -47,7 +47,7 @@ struct Block<R> {
 }
 
 impl<R: AsyncRead + Unpin + Send> Block<R> {
-    async fn new(reader: R, reader_schema: Option<&Schema>) -> Result<Block<R>, Error> {
+    pub(crate) async fn new(reader: R, reader_schema: Option<&Schema>) -> Result<Block<R>, Error> {
         let mut block = Block {
             reader,
             codec: Codec::Null,
@@ -121,22 +121,20 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
 
             self.codec = meta
                 .get("avro.codec")
-                .ok_or_else(|| DecodeError::new("unable to parse codec: 'avro.codec' missing"))
-                .and_then(|codec| {
-                    if let Value::Bytes(ref bytes) = *codec {
-                        from_utf8(bytes.as_ref())
-                            .map_err(|e| DecodeError::new(format!("unable to decode codec: {}", e)))
-                    } else {
-                        Err(DecodeError::new(format!(
-                            "unable to parse codec: expected bytes, got: {:?}",
-                            codec
-                        )))
-                    }
+                .map(|val| match val {
+                    Value::Bytes(ref bytes) => from_utf8(bytes.as_ref())
+                        .map_err(|e| DecodeError::new(format!("unable to decode codec: {}", e)))
+                        .and_then(|codec| {
+                            Codec::from_str(codec).map_err(|_| {
+                                DecodeError::new(format!("unrecognized codec '{}'", codec))
+                            })
+                        }),
+                    codec => Err(DecodeError::new(format!(
+                        "unable to parse codec: expected bytes, got: {:?}",
+                        codec
+                    ))),
                 })
-                .and_then(|codec| {
-                    Codec::from_str(codec)
-                        .map_err(|_| DecodeError::new(format!("unrecognized codec '{}'", codec)))
-                })?;
+                .unwrap_or(Ok(Codec::Null))?;
         } else {
             return Err(DecodeError::new("no metadata in header").into());
         }
@@ -228,6 +226,10 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
         self.buf_idx += b_original - block_bytes.len();
         self.message_count -= 1;
         Ok(Some(item))
+    }
+
+    pub(crate) fn into_parts(self) -> (R, Schema, Codec, [u8; 16]) {
+        (self.reader, self.writer_schema, self.codec, self.marker)
     }
 }
 

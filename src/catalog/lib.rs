@@ -20,7 +20,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, RelationExpr, ScalarExpr};
+use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
 
 use crate::error::{Error, ErrorKind};
@@ -127,7 +127,6 @@ pub enum SinkConnectorState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct View {
     pub create_sql: String,
-    pub unoptimized_expr: RelationExpr,
     pub optimized_expr: OptimizedRelationExpr,
     pub eval_env: EvalEnv,
     pub desc: RelationDesc,
@@ -291,7 +290,7 @@ impl Catalog {
                 }
                 Err(e) => {
                     return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!("failed to deserialize item: {}", e),
+                        detail: format!("failed to deserialize item {} ({}): {}", id, name, e),
                     }))
                 }
             };

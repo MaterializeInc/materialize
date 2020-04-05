@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fs::OpenOptions;
 use std::time::Duration;
 
 use failure::{bail, format_err, ResultExt};
@@ -14,7 +15,8 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::config::ClientConfig;
 
 use dataflow_types::{
-    KafkaSinkConnector, KafkaSinkConnectorBuilder, SinkConnector, SinkConnectorBuilder,
+    AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
+    KafkaSinkConnectorBuilder, SinkConnector, SinkConnectorBuilder,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -25,6 +27,7 @@ pub async fn build(
 ) -> Result<SinkConnector, failure::Error> {
     match builder {
         SinkConnectorBuilder::Kafka(k) => build_kafka(k, id).await,
+        SinkConnectorBuilder::AvroOcf(a) => build_avro_ocf(a, id),
     }
 }
 
@@ -71,4 +74,41 @@ async fn build_kafka(
         topic,
         url: builder.broker_url,
     }))
+}
+
+fn build_avro_ocf(
+    builder: AvroOcfSinkConnectorBuilder,
+    id: GlobalId,
+) -> Result<SinkConnector, failure::Error> {
+    let mut name = match builder.path.file_stem() {
+        None => bail!(
+            "unable to read file name from path {}",
+            builder.path.display()
+        ),
+        Some(stem) => stem.to_owned(),
+    };
+    name.push("-");
+    name.push(id.to_string());
+    name.push("-");
+    name.push(builder.file_name_suffix);
+    if let Some(extension) = builder.path.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+
+    let path = builder.path.with_file_name(name);
+
+    // Try to create a new sink file
+    let _ = OpenOptions::new()
+        .append(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| {
+            format_err!(
+                "unable to create avro ocf sink file {} : {}",
+                path.display(),
+                e
+            )
+        })?;
+    Ok(SinkConnector::AvroOcf(AvroOcfSinkConnector { path }))
 }

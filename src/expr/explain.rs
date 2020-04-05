@@ -7,20 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/// This is the implementation for the EXPLAIN command.
-///
-/// Conventions:
-/// * RelationExprs are printed in post-order, left to right
-/// * RelationExprs which only have a single input are grouped together
-/// * Each group of RelationExprs is referred by id eg %4
-/// * RelationExprs may be followed by additional annotations on lines starting with | |
-/// * Columns are referred to by position eg #4
-/// * Collections of columns are written as ranges where possible eg "#2..#5"
-///
-/// It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
+//! This is the implementation for the EXPLAIN (DECORRELATED | OPTIMIZED) PLAN command.
+//!
+//! Conventions:
+//! * RelationExprs are printed in post-order, left to right
+//! * RelationExprs which only have a single input are grouped together
+//! * Each group of RelationExprs is referred by id eg %4
+//! * RelationExprs may be followed by additional annotations on lines starting with | |
+//! * Columns are referred to by position eg #4
+//! * Collections of columns are written as ranges where possible eg "#2..#5"
+//!
+//! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
 use super::{
     AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
-    ScalarExpr,
+    RowSetFinishing, ScalarExpr,
 };
 use repr::RelationType;
 use std::collections::HashMap;
@@ -29,6 +29,8 @@ use std::collections::HashMap;
 pub struct Explanation<'a> {
     /// One ExplanationNode for each RelationExpr in the plan, in left-to-right post-order
     pub nodes: Vec<ExplanationNode<'a>>,
+    /// Anything else we want to mention at the end
+    pub appendix: String,
 }
 
 #[derive(Debug)]
@@ -62,11 +64,15 @@ impl<'a> std::fmt::Display for Explanation<'a> {
                 continue;
             }
 
-            // explain output shows up in SLT where the linter will not allow trailing whitespace, so trim stuff
+            // explain output shows up in SLT where the linter will not allow trailing whitespace, so need to trim stuff
             writeln!(f, "| {}", node.pretty.trim())?;
             for annotation in &node.annotations {
                 writeln!(f, "| | {}", annotation.trim())?;
             }
+        }
+
+        if !self.appendix.is_empty() {
+            writeln!(f, "\n{}", self.appendix.trim())?;
         }
 
         Ok(())
@@ -87,7 +93,7 @@ impl RelationExpr {
                 parent_expr,
                 pretty: String::new(),
                 annotations: vec![],
-                chain: 0, // will fix this up later
+                chain: 0, // will set this later
             });
             expr.visit1(&mut |child_expr| {
                 stack.push((Some(expr), child_expr));
@@ -189,7 +195,7 @@ impl RelationExpr {
                     write!(pretty, "Project {}", Bracketed("(", ")", Indices(outputs))).unwrap()
                 }
                 Map { scalars, .. } => {
-                    write!(pretty, "Map {}", Separated(" ", scalars.clone())).unwrap();
+                    write!(pretty, "Map {}", Separated(", ", scalars.clone())).unwrap();
                 }
                 FlatMapUnary {
                     func, expr, demand, ..
@@ -201,7 +207,7 @@ impl RelationExpr {
                     }
                 }
                 Filter { predicates, .. } => {
-                    write!(pretty, "Filter {}", Separated(" ", predicates.clone())).unwrap();
+                    write!(pretty, "Filter {}", Separated(", ", predicates.clone())).unwrap();
                 }
                 Join {
                     inputs,
@@ -308,7 +314,10 @@ impl RelationExpr {
             }
         }
 
-        Explanation { nodes }
+        Explanation {
+            nodes,
+            appendix: String::new(),
+        }
     }
 }
 
@@ -324,6 +333,23 @@ impl<'a> Explanation<'a> {
                 Separated(", ", keys.iter().map(|key| Indices(key)).collect())
             ));
         }
+    }
+
+    pub fn explain_row_set_finishing(&mut self, row_set_finishing: RowSetFinishing) {
+        self.appendix.push_str(&format!(
+            "Finish order_by={} limit={} offset={} project={}",
+            Bracketed(
+                "(",
+                ")",
+                Separated(", ", row_set_finishing.order_by.clone())
+            ),
+            match row_set_finishing.limit {
+                Some(limit) => limit.to_string(),
+                None => "none".to_owned(),
+            },
+            row_set_finishing.offset,
+            Bracketed("(", ")", Indices(&row_set_finishing.project))
+        ))
     }
 }
 
@@ -445,7 +471,7 @@ impl JoinImplementation {
 }
 
 #[derive(Debug)]
-pub struct Separated<'a, T>(&'a str, Vec<T>);
+pub struct Separated<'a, T>(pub &'a str, pub Vec<T>);
 
 impl<'a, T> std::fmt::Display for Separated<'a, T>
 where
@@ -463,7 +489,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct Bracketed<'a, T>(&'a str, &'a str, T);
+pub struct Bracketed<'a, T>(pub &'a str, pub &'a str, pub T);
 
 impl<'a, T> std::fmt::Display for Bracketed<'a, T>
 where
@@ -475,7 +501,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct Indices<'a>(&'a [usize]);
+pub struct Indices<'a>(pub &'a [usize]);
 
 impl<'a> std::fmt::Display for Indices<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {

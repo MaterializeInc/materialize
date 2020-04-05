@@ -9,16 +9,14 @@
 
 #![deny(missing_docs)]
 
-use crate::id::DummyHumanizer;
-use std::fmt;
-
-use failure::ResultExt;
-use serde::{Deserialize, Serialize};
-
-use repr::{ColumnType, Datum, RelationType, Row};
-
 use self::func::{AggregateFunc, UnaryTableFunc};
+use crate::id::DummyHumanizer;
 use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
+use failure::ResultExt;
+use repr::{ColumnType, Datum, RelationType, Row};
+use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::fmt;
 
 pub mod func;
 
@@ -1038,4 +1036,84 @@ pub enum JoinImplementation {
     DeltaQuery(Vec<Vec<(usize, Vec<ScalarExpr>)>>),
     /// No implementation yet selected.
     Unimplemented,
+}
+
+/// Instructions for finishing the result of a query.
+///
+/// The primary reason for the existence of this structure and attendant code
+/// is that SQL's ORDER BY requires sorting rows (as already implied by the
+/// keywords), whereas much of the rest of SQL is defined in terms of unordered
+/// multisets. But as it turns out, the same idea can be used to optimize
+/// trivial peeks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RowSetFinishing {
+    /// Order rows by the given columns.
+    pub order_by: Vec<ColumnOrder>,
+    /// Include only as many rows (after offset).
+    pub limit: Option<usize>,
+    /// Omit as many rows.
+    pub offset: usize,
+    /// Include only given columns.
+    pub project: Vec<usize>,
+}
+
+impl RowSetFinishing {
+    /// True if the finishing does nothing to any result set.
+    pub fn is_trivial(&self) -> bool {
+        (self.limit == None) && self.order_by.is_empty() && self.offset == 0
+    }
+    /// Applies finishing actions to a row set.
+    pub fn finish(&self, rows: &mut Vec<Row>) {
+        let mut sort_by = |left: &Row, right: &Row| {
+            compare_columns(&self.order_by, &left.unpack(), &right.unpack(), || {
+                left.cmp(right)
+            })
+        };
+        let offset = self.offset;
+        if offset > rows.len() {
+            *rows = Vec::new();
+        } else {
+            if let Some(limit) = self.limit {
+                let offset_plus_limit = offset + limit;
+                if rows.len() > offset_plus_limit {
+                    pdqselect::select_by(rows, offset_plus_limit, &mut sort_by);
+                    rows.truncate(offset_plus_limit);
+                }
+            }
+            if offset > 0 {
+                pdqselect::select_by(rows, offset, &mut sort_by);
+                rows.drain(..offset);
+            }
+            rows.sort_by(&mut sort_by);
+            for row in rows {
+                let datums = row.unpack();
+                let new_row = Row::pack(self.project.iter().map(|i| &datums[*i]));
+                *row = new_row;
+            }
+        }
+    }
+}
+
+/// Compare `left` and `right` using `order`. If that doesn't produce a strict ordering, call `tiebreaker`.
+pub fn compare_columns<F>(
+    order: &[ColumnOrder],
+    left: &[Datum],
+    right: &[Datum],
+    tiebreaker: F,
+) -> Ordering
+where
+    F: Fn() -> Ordering,
+{
+    for order in order {
+        let (lval, rval) = (&left[order.column], &right[order.column]);
+        let cmp = if order.desc {
+            rval.cmp(&lval)
+        } else {
+            lval.cmp(&rval)
+        };
+        if cmp != Ordering::Equal {
+            return cmp;
+        }
+    }
+    tiebreaker()
 }

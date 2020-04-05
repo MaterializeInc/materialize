@@ -686,7 +686,6 @@ dependencies = [
  "expr",
  "failure",
  "interchange",
- "pdqselect",
  "regex",
  "repr",
  "rusoto_core",
@@ -924,6 +923,7 @@ dependencies = [
  "num_enum",
  "ordered-float",
  "ore",
+ "pdqselect",
  "regex",
  "regex-syntax",
  "repr",
@@ -2170,8 +2170,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.17.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18741b59a558e4dfdb9c968e8126dccbefd6a16bf54e3bc5668d420b4c4ed71b"
+source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -2184,8 +2183,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f611afe4d1407ebe7f3ced1ffc66f730fac1b1c13085e230a8cdcb921e97710"
+source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
 dependencies = [
  "base64 0.12.0",
  "byteorder",
@@ -2202,8 +2200,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e634590e8812c500088d88db721195979223dabb05149f43cb50931d0ff5865d"
+source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
 dependencies = [
  "bytes",
  "chrono",
@@ -3462,8 +3459,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524da2f17264514c854ac770177bdb810f0db7e706ae69f143d6e6828e3c4fe3"
+source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
 dependencies = [
  "async-trait",
  "byteorder",
