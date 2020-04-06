@@ -10,7 +10,7 @@
 use log::error;
 
 use super::{DecoderState, PushSession, EVENTS_COUNTER};
-use dataflow_types::Timestamp;
+use dataflow_types::{Diff, Timestamp};
 use interchange::avro::{Decoder, EnvelopeType};
 use repr::Row;
 
@@ -64,15 +64,15 @@ impl DecoderState for AvroDecoderState {
         &mut self,
         key: Row,
         bytes: &[u8],
-        _: &Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>)>,
+        _: Option<i64>,
+        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
         let result = self.decoder.decode(bytes);
         match result {
             Ok(diff_pair) => {
                 self.events_success += 1;
-                session.give(((key, diff_pair.after), time, 1));
+                session.give((key, diff_pair.after, time));
             }
             Err(err) => {
                 self.events_error += 1;
@@ -85,8 +85,8 @@ impl DecoderState for AvroDecoderState {
     fn give_value<'a>(
         &mut self,
         bytes: &[u8],
-        _: &Option<i64>,
-        session: &mut PushSession<'a, Row>,
+        _: Option<i64>,
+        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
         match self.decoder.decode(bytes) {

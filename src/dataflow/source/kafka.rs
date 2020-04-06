@@ -331,6 +331,11 @@ where
                                     );
                                 };
 
+                                // Null payloads are expected from Debezium and
+                                // Upsert formats.
+                                // See https://github.com/MaterializeInc/materialize/issues/439#issuecomment-534236276
+                                // Upsert treats null payloads as requests to
+                                // delete the record with the corresponding key.
                                 let out = message.payload().map(|p| p.to_vec()).unwrap_or_default();
                                 bytes_read += key.len() as i64;
                                 bytes_read += out.len() as i64;
