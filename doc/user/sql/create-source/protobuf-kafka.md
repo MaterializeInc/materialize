@@ -7,6 +7,7 @@ menu:
 aliases:
     - /docs/sql/create-source/proto
     - /docs/sql/create-source/protobuf
+    - /docs/sql/create-source/protobuf-source
 ---
 
 `CREATE SOURCE` connects Materialize to some data source, and lets you interact

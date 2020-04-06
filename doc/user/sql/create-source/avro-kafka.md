@@ -7,6 +7,7 @@ menu:
 aliases:
     - /docs/sql/create-source/kafka
     - /docs/sql/create-source/avro
+    - /docs/sql/create-source/avro-source
 ---
 
 `CREATE SOURCE` connects Materialize to some data source, and lets you interact
@@ -102,7 +103,7 @@ your database.
 - [MySQL](https://debezium.io/documentation/reference/0.10/connectors/mysql.html)
 - [PostgreSQL](https://debezium.io/documentation/reference/0.10/connectors/postgresql.html)
 
-The Debezium envelope is only supported by sources published to Kafka by
+The Debezium envelope is most easily supported by sources published to Kafka by
 Debezium.
 
 #### Format implications
