@@ -6,6 +6,7 @@ menu:
     parent: 'create-source'
 aliases:
     - /docs/sql/create-source/text
+    - /docs/sql/create-source/text-source
     - /docs/sql/create-source/byte
     - /docs/sql/create-source/bytes
     - /docs/sql/create-source/file

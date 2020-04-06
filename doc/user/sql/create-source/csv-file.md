@@ -6,6 +6,7 @@ menu:
     parent: 'create-source'
 aliases:
     - /docs/sql/create-source/csv
+    - /docs/sql/create-source/csv-source
 ---
 
 `CREATE SOURCE` connects Materialize to some data source, and lets you interact

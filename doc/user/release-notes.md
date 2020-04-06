@@ -67,7 +67,7 @@ Use relative links (../path/to/doc), not absolute links
   control the address and port that `materialized` binds to.
 
 - Improve conformance of the Avro parser, enabling support for
-  a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro).
+  a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro-kafka).
 
 - Add the [`jsonb_agg()`](../sql/functions/#aggregate-func) aggregate function.
 

@@ -7,6 +7,7 @@ menu:
 aliases:
     - /docs/sql/create-source/kafka
     - /docs/sql/create-source/avro
+    - /docs/sql/create-source/avro-source
 ---
 
 `CREATE SOURCE` connects Materialize to some data source, and lets you interact

@@ -77,7 +77,7 @@ What Materialize actually does with the data it receives depends on the
 Envelope | Action
 ---------|-------
 **Append-only** | Inserts all received data; does not support updates or deletes.
-**Debezium** | Treats data as wrapped in a "diff envelope" which indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Debezium envelope details](../../sql/create-source/avro-source/#debezium-envelope-details).
+**Debezium** | Treats data as wrapped in a "diff envelope" which indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Debezium envelope details](../../sql/create-source/avro-kafka/#debezium-envelope-details).
 
 ## Views
 
