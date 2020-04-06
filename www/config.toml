@@ -22,14 +22,14 @@ disableKinds = ["home"]
     weight = 5
 
     [[menu.main]]
-    identifier = "connections"
-    name = "Connect"
-    weight = 20
-
-    [[menu.main]]
     identifier = "cli"
     name = "CLI"
     url = "/docs/cli/"
+    weight = 20
+
+    [[menu.main]]
+    identifier = "connections"
+    name = "Connect"
     weight = 40
 
     [[menu.main]]

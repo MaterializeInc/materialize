@@ -14,7 +14,7 @@ Flag | Default | Modifies
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
-[`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes _([details)_
+[`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--threads`](#worker-threads) | 1 | Dataflow worker threads
 [`--w`](#worker-threads) | 1|  Dataflow worker threads
 
@@ -61,9 +61,13 @@ recommended worker setting on this VM is `7`.
 
 ### Horizontally scaled clusters
 
-{{< warning >}} Note that multi-node Materialize clusters are **not** supported
-by Materialize, and are not permitted under the free usage BSL license without a
-separate commercial agreement with Materialize. {{< /warning >}}
+{{< warning >}}
+
+Note that multi-node Materialize clusters are **not** supported by Materialize,
+and are not permitted in production under the free usage BSL license without a
+separate commercial agreement with Materialize.
+
+{{< /warning >}}
 
 `--processes` controls the total number of nodes in a horizontally-scaled
 Materialize cluster. The IP addresses of each node should be specified in a
