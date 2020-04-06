@@ -42,7 +42,8 @@ use dataflow_types::{
 };
 use expr::transform::Optimizer;
 use expr::{
-    EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, RowSetFinishing, ScalarExpr, SourceInstanceId,
+    EvalEnv, GlobalId, Id, IdHumanizer, PartitionId, RelationExpr, RowSetFinishing, ScalarExpr,
+    SourceInstanceId,
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
@@ -61,7 +62,7 @@ pub enum Message {
     AdvanceSourceTimestamp {
         id: SourceInstanceId,
         partition_count: i32,
-        pid: i32,
+        pid: PartitionId,
         timestamp: u64,
         offset: i64,
     },

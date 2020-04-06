@@ -117,6 +117,38 @@ impl fmt::Display for SourceInstanceId {
     }
 }
 
+/// Unique identifier for each part of a whole source.
+///     Kafka -> partition
+///     Kinesis -> shard
+#[derive(Clone, Debug, Eq, Serialize, Deserialize)]
+pub enum PartitionId {
+    Kafka(i32),
+    Kinesis(String),
+}
+
+impl std::cmp::PartialEq for PartitionId {
+    fn eq(&self, other: &Self) -> bool {
+        use PartitionId::*;
+
+        match (&self, &other) {
+            (&Kafka(a), &Kafka(b)) => a == b,
+            (&Kinesis(a), &Kinesis(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl std::hash::Hash for PartitionId {
+    fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        use PartitionId::*;
+
+        match &self {
+            Kafka(pid) => pid.hash(hasher),
+            Kinesis(pid) => pid.clone().hash(hasher),
+        }
+    }
+}
+
 /// Humanizer that provides no additional information.
 #[derive(Debug)]
 pub struct DummyHumanizer;
