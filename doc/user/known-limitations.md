@@ -2,7 +2,7 @@
 title: "Known Limitations"
 description: "Materialize's known limitations"
 menu: "main"
-weight: 100
+weight: 400
 ---
 
 This document applies to Materialize {{< version >}}.

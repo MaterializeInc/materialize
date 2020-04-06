@@ -23,13 +23,15 @@ We also highly recommend checking out [What is Materialize?](../overview/what-is
 ## Install, run, connect
 
 1. Install the `materialized` binary using [these instructions](../install).
+
 1. Run the `materialized` binary. For example, if you installed it in your `$PATH`:
 
     ```shell
-    materialized
+    materialized --w=1
     ```
 
-    This starts the daemon listening on port 6875.
+    This starts the daemon listening on port 6875 using 1 worker.
+
 1. Connect to `materialized` through your PostgreSQL CLI, e.g.:
 
     ```shell
