@@ -28,7 +28,7 @@ repr = { path = "../repr" }
 rusoto_core = "0.43.0-beta.1"
 serde_json = "1"
 sql-parser = { path = "../sql-parser" }
-tokio = { version = "0.2.13", features = ["fs"] }
+tokio = { version = "0.2.16", features = ["fs"] }
 unicase = "2.6.0"
 url = "2.1.1"
 uuid = { version = "0.8", features = ["serde", "v4"] }
