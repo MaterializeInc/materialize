@@ -20,7 +20,7 @@ log = "0.4.8"
 ore = { path = "../ore" }
 postgres = "0.17"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
-regex = "1.3.5"
+regex = "1.3.6"
 serde = { version = "1.0.105", features = ["derive"] }
 tokio = { version = "0.2.13", features = ["rt-threaded"] }
 toml = "0.5.6"
