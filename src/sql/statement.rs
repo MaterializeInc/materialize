@@ -24,7 +24,7 @@ use url::Url;
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use catalog::{Catalog, CatalogItem, SchemaType};
 use dataflow_types::{
-    AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding,
+    AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding, Envelope,
     ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
     KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
 };
@@ -1273,8 +1273,13 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
             // TODO(benesch): the available metadata columns should not depend
             // on the format.
-            match encoding {
-                DataEncoding::Avro { .. } | DataEncoding::Protobuf { .. } => (),
+            //
+            // TODO(brennan): They should not depend on the envelope either. Figure out a way to
+            // make all of this more tasteful.
+            match (&encoding, &envelope) {
+                (DataEncoding::Avro { .. }, _)
+                | (DataEncoding::Protobuf { .. }, _)
+                | (_, Envelope::Debezium) => (),
                 _ => desc.add_cols(external_connector.metadata_columns()),
             }
 
