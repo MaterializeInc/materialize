@@ -13,7 +13,6 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use avro::types::Value as AvroValue;
 use lazy_static::lazy_static;
 use protobuf::Message;
 use rand::Rng;
@@ -512,24 +511,4 @@ fn get_kinesis_details_for_localstack() -> (
         DUMMY_AWS_SECRET_ACCESS_KEY.to_string(),
         None, // default to no token
     )
-}
-
-/// Helper function used to compare two arrays of Avro values
-pub fn get_values_in_first_list_not_in_second(
-    first_list: &[AvroValue],
-    second_list: &[AvroValue],
-) -> Vec<AvroValue> {
-    let mut first_list_clone: Vec<AvroValue> = first_list.to_vec();
-    let mut missing_values = Vec::new();
-    for s in second_list {
-        let pos = first_list_clone.iter().position(|x| *x == *s);
-        match pos {
-            Some(index) => {
-                first_list_clone.remove(index);
-                continue;
-            }
-            None => missing_values.push(s.clone()),
-        }
-    }
-    missing_values
 }

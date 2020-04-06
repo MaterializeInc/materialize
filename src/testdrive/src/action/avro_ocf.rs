@@ -13,11 +13,12 @@ use std::io::{Cursor, Write};
 use std::os::unix::ffi::OsStringExt;
 use std::path;
 
-use avro::{Codec, Writer};
+use ::avro::{Codec, Reader, Writer};
 use retry::delay::Fibonacci;
 use tokio::stream::StreamExt;
 
 use crate::action::{Action, State};
+use crate::format::avro;
 use crate::parser::BuiltinCommand;
 
 pub struct WriteAction {
@@ -174,7 +175,7 @@ impl Action for VerifyAction {
             .map_err(|e| format!("reading sink file {}: {}", path, e))?;
         let reader = state
             .tokio_runtime
-            .block_on(avro::Reader::new(sink_file))
+            .block_on(Reader::new(sink_file))
             .map_err(|e| format!("parsing avro values from file: {}", e))?;
         let schema = reader.writer_schema().clone();
         let actual_messages: Vec<_> = state
@@ -196,15 +197,10 @@ impl Action for VerifyAction {
             );
         }
 
-        let missing_values = crate::action::get_values_in_first_list_not_in_second(
-            &converted_expected_messages,
-            &actual_messages,
-        );
-        let additional_values = crate::action::get_values_in_first_list_not_in_second(
-            &actual_messages,
-            &converted_expected_messages,
-        );
-
+        let missing_values =
+            avro::multiset_difference(&converted_expected_messages, &actual_messages);
+        let additional_values =
+            avro::multiset_difference(&actual_messages, &converted_expected_messages);
         if !missing_values.is_empty() || !additional_values.is_empty() {
             return Err(format!(
                 "Mismatched Kafka sink rows. Missing: {:#?}, Unexpected: {:#?}",
