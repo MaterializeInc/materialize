@@ -1,13 +1,16 @@
 ---
 title: "TAIL"
-description: "`TAIL` streams updates that occur to a materialized view."
+description: "`TAIL` continually reports updates that occur to a source or view."
 menu:
     main:
         parent: "sql"
 ---
 
-`TAIL` streams updates that occur to a materialized view. This data only
-represents updates that occur after running the `TAIL` command.
+`TAIL` continually reports updates that occur to a source or view.
+For materialized sources or views this data only represents updates that occur after running the `TAIL` command.
+For non-materialized sources or views, all updates are presented.
+
+Tail will continue to run until cancelled, or until all updates the tailed item could undergo have been presented. The latter case may happen with static views (e.g. `SELECT true`), files without the `tail = true` modifier, or other settings in which a collection can cease to experience updates.
 
 ## Syntax
 
@@ -15,7 +18,7 @@ represents updates that occur after running the `TAIL` command.
 
 Field | Use
 ------|-----
-_object&lowbar;name_ | The item you want to tail; the item must be materialized (i.e. [materialized view](../create-materialized-view) or [materialized source](../create-source))
+_object&lowbar;name_ | The item you want to tail
 
 ## Details
 
