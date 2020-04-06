@@ -9,7 +9,7 @@
 
 use log::error;
 
-use dataflow_types::Timestamp;
+use dataflow_types::{Diff, Timestamp};
 use interchange::protobuf::{self, Decoder};
 use repr::Row;
 
@@ -63,14 +63,14 @@ impl DecoderState for ProtobufDecoderState {
         &mut self,
         key: Row,
         bytes: &[u8],
-        _: &Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>)>,
+        _: Option<i64>,
+        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
         match self.decoder.decode(bytes) {
             Ok(row) => {
                 self.events_success += 1;
-                session.give(((key, row), time, 1));
+                session.give((key, row, time));
             }
             Err(err) => {
                 self.events_error += 1;
@@ -83,8 +83,8 @@ impl DecoderState for ProtobufDecoderState {
     fn give_value<'a>(
         &mut self,
         bytes: &[u8],
-        _: &Option<i64>,
-        session: &mut PushSession<'a, Row>,
+        _: Option<i64>,
+        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
         match self.decoder.decode(bytes) {
