@@ -1,14 +1,14 @@
 ---
 title: "Integer Data Types"
 description: "Express signed integers"
-aliases:
-- /docs/sql/types/bigint
-- /docs/sql/types/int
-- /docs/sql/types/int4
-- /docs/sql/types/int8
 menu:
   main:
     parent: 'sql-types'
+aliases:
+  - /docs/sql/types/bigint
+  - /docs/sql/types/int
+  - /docs/sql/types/int4
+  - /docs/sql/types/int8
 ---
 
 `integer` and `bigint` data express signed integers.
@@ -34,16 +34,16 @@ all other integer types.
 You can [cast](../../functions/cast) `integer` or `bigint` to:
 
 - [`bool`](../boolean)
-- [`decimal`](../decimal)
-- [`float`](../float)
-- [`string`](../string)
+- [`numeric`](../numeric)
+- [`real`/`double`](../float)
+- [`text`](../text)
 
 #### To `int`
 
 You can [cast](../../functions/cast) the following types to `integer` or `bigint`:
 
-- [`decimal`](../decimal)
-- [`float`](../float)
+- [`numeric`](../numeric)
+- [`real`/`double`](../float)
 
 ## Examples
 

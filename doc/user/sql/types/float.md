@@ -4,6 +4,11 @@ description: "Express signed, inexact numbers"
 menu:
   main:
     parent: 'sql-types'
+aliases:
+    - /docs/sql/types/real
+    - /docs/sql/types/double
+    - /docs/sql/types/double-precision
+    - /docs/sql/types/float64
 ---
 
 `real` and `double precision` data express a variable-precision, inexact number
@@ -12,7 +17,7 @@ with a floating decimal point.
 Type               | Aliases           | Size    | Range
 -------------------|-------------------|---------|------
 `real`             | `float4`          | 4 bytes | Approx. 1E-37 to 1E+37 with 6 decimal digits of precision
-`double precision` | `float`, `float8` | 8 bytes | Approx. 1E-307 to 1E+307 with 15 decimal digits of precision
+`double precision` | `float`, `float8`, `double` | 8 bytes | Approx. 1E-307 to 1E+307 with 15 decimal digits of precision
 
 ## Syntax
 
@@ -56,8 +61,8 @@ can be cast to and from one another.
 You can [cast](../../functions/cast) `real` or `double precision` to:
 
 - [`int`](../int)
-- [`decimal`](../float)
-- [`string`](../string)
+- [`numeric`](../numeric)
+- [`text`](../text)
 
 #### To `real` or `double precision`
 
@@ -65,7 +70,8 @@ You can [cast](../../functions/cast) the following types to `real` or `double
 precision`:
 
 - [`int`](../int)
-- [`decimal`](../float)
+- [`numeric`](../numeric)
+- [`text`](../text)
 
 ## Examples
 

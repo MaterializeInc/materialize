@@ -14,6 +14,7 @@ Detail | Info
 -------|------
 **Quick Syntax** | `TRUE` or `FALSE`
 **Size** | 1 byte
+**Aliases** | `bool`
 
 ## Syntax
 
@@ -25,11 +26,16 @@ Detail | Info
 
 #### From `boolean`
 
-You cannot cast `boolean` to any other type.
+You can [cast](../../functions/cast) `boolean` to:
+
+- [`text`](../text)
 
 #### To `boolean`
 
-You can cast [`int`](../int) to `boolean`.
+You can [cast](../../functions/cast) the following types to `boolean`:
+
+- [`int`](../int)
+- [`text`](../text)
 
 ## Examples
 
