@@ -1,11 +1,11 @@
 ---
 title: "Timestamp Data Types"
 description: "Expresses a date and time"
-aliases:
-    - /docs/sql/types/timestamptz
 menu:
   main:
     parent: 'sql-types'
+aliases:
+    - /docs/sql/types/timestamptz
 ---
 
 `timestamp` and `timestamp with time zone` data expresses a date and time in UTC.
@@ -45,8 +45,8 @@ _tz&lowbar;offset_ | The timezone's distance, in hours, from UTC.
 
 You can [cast](../../functions/cast) `timestamp` or `timestamptz` to:
 
-- [`text`](../text)
 - [`date`](../date)
+- [`text`](../text)
 - `timestamp`
 - `timestamptz`
 
@@ -54,8 +54,8 @@ You can [cast](../../functions/cast) `timestamp` or `timestamptz` to:
 
 You can [cast](../../functions/cast) the following types to `timestamp` or `timestamptz`:
 
-- [`text`](../text)
 - [`date`](../date)
+- [`text`](../text)
 - `timestamp`
 - `timestamptz`
 

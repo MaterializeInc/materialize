@@ -16,8 +16,7 @@ Detail | Info
 **Max precision** | 38
 **Max scale** | 38
 **Default** | 38 precision, 0 scale
-
-Materialize also accepts `decimal` as an alias for `numeric`.
+**Aliases** | `decimal`
 
 ## Syntax
 
@@ -51,15 +50,16 @@ _scale_ | The total number of fractional decimal digits to track, e.g. `.321` ha
 You can [cast](../../functions/cast) `numeric` to:
 
 - [`int`](../int)
-- [`float`](../float)
-- [`string`](../string)
+- [`real`/`double`](../float)
+- [`text`](../text)
 
 #### To `numeric`
 
 You can [cast](../../functions/cast) the following types to `numeric`:
 
 - [`int`](../int)
-- [`float`](../float)
+- [`real`/`double`](../float)
+- [`text`](../text)
 
 ## Examples
 
