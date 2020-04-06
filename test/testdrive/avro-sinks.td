@@ -17,9 +17,9 @@
 
 $ kafka-verify format=avro sink=materialize.public.data_sink
 {"before": null, "after": {"a": 1, "b": 1}}
+{"before": null, "after": {"a": 1, "b": 2}}
 {"before": null, "after": {"a": 2, "b": 1}}
 {"before": null, "after": {"a": 3, "b": 1}}
-{"before": null, "after": {"a": 1, "b": 2}}
 
 > CREATE VIEW datetime_data (date, ts, ts_tz) AS VALUES
   (DATE '2000-01-01', TIMESTAMP '2000-01-01 10:10:10.111', TIMESTAMPTZ '2000-01-01 10:10:10.111+02'),
