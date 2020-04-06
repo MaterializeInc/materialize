@@ -35,7 +35,7 @@ disableKinds = ["home"]
     [[menu.main]]
     identifier = "sql"
     name = "SQL"
-    weight = 80
+    weight = 60
 
     [[menu.main]]
     identifier = "sql-types"
@@ -61,7 +61,7 @@ disableKinds = ["home"]
     identifier = "monitoring"
     name = "Monitoring"
     url = "/docs/monitoring"
-    weight = 35
+    weight = 80
 
     [[menu.main]]
     identifier = "demos"
