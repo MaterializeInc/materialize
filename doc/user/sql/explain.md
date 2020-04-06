@@ -126,7 +126,7 @@ Each operator can also be annotated with additional metadata. The most common ex
 | Project (#0, #3, #1, #2)
 ```
 
-Finally, a plan can optionally have some finishing action which can sort, limit and project the data. This is executed outside of the dataflow engine, allowing many simple queries to just hit an existing index instead of installing a temporary dataflow.
+Finally, a plan can optionally have a finishing action which can sort, limit and project the data. This is executed outside of the dataflow engine, allowing many simple queries to just hit an existing index instead of installing a temporary dataflow.
 
 ```
 Finish order_by=(#1 desc, #2 asc) limit=none offset=0 project=(#0..#3)
