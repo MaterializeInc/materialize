@@ -18,18 +18,18 @@ EOF
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM (SELECT 1)
 ----
-0 =
+%0 =
 | Constant ()
 
-1 =
+%1 =
 | Constant ()
 | Map 1
 | Project (#0)
 | Map
 | Project (#0)
 
-2 =
-| InnerJoin 0 1 on true
+%2 =
+| InnerJoin %0 %1 on true
 | Map #0
 | Project (#1)
 | Map
@@ -39,15 +39,15 @@ EOF
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT (SELECT (SELECT 1))
 ----
-0 =
+%0 =
 | Constant ()
 | Map select(%1)
 | |
-| | 1 =
+| | %1 =
 | | | Constant ()
 | | | Map select(%2)
 | | | |
-| | | | 2 =
+| | | | %2 =
 | | | | | Constant ()
 | | | | | Map 1
 | | | | | Project (#0)
@@ -66,12 +66,12 @@ EOF
 query T multiline
 EXPLAIN TYPED RAW PLAN FOR SELECT * FROM (SELECT 1)
 ----
-0 =
+%0 =
 | Constant ()
 | | types = ()
 | | keys = ()
 
-1 =
+%1 =
 | Constant ()
 | | types = ()
 | | keys = ()
@@ -88,8 +88,8 @@ EXPLAIN TYPED RAW PLAN FOR SELECT * FROM (SELECT 1)
 | | types = (i32)
 | | keys = ()
 
-2 =
-| InnerJoin 0 1 on true
+%2 =
+| InnerJoin %0 %1 on true
 | | types = (i32)
 | | keys = ()
 | Map #0
@@ -107,45 +107,45 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN FOR SELECT * FROM (SELECT 1)
 ----
-0 =
+%0 =
 | Constant ()
 
-1 =
+%1 =
 | Get %0
 
-2 =
+%2 =
 | Constant ()
 
-3 =
+%3 =
 | Join %1 %2
 | | implementation = Unimplemented
 
-4 =
+%4 =
 | Get %0
 
-5 =
+%5 =
 | Constant ()
 
-6 =
+%6 =
 | Join %4 %5
 | | implementation = Unimplemented
 | Map 1
 | Project (#0)
 | Project (#0)
 
-7 =
+%7 =
 | Get %3
 
-8 =
+%8 =
 | Get %6
 
-9 =
+%9 =
 | Join %7 %8
 | | implementation = Unimplemented
 | Project (#0)
 | Filter true
 
-10 =
+%10 =
 | Get %9
 | Map #0
 | Project (#1)
@@ -155,7 +155,7 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM (SELECT 1)
 ----
-0 =
+%0 =
 | Constant (1)
 
 EOF
@@ -163,7 +163,7 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM (SELECT 1)
 ----
-0 =
+%0 =
 | Constant (1)
 
 EOF
@@ -180,45 +180,45 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN FOR VIEW foo
 ----
-0 =
+%0 =
 | Constant ()
 
-1 =
+%1 =
 | Get %0
 
-2 =
+%2 =
 | Constant ()
 
-3 =
+%3 =
 | Join %1 %2
 | | implementation = Unimplemented
 
-4 =
+%4 =
 | Get %0
 
-5 =
+%5 =
 | Constant ()
 
-6 =
+%6 =
 | Join %4 %5
 | | implementation = Unimplemented
 | Map 1
 | Project (#0)
 | Project (#0)
 
-7 =
+%7 =
 | Get %3
 
-8 =
+%8 =
 | Get %6
 
-9 =
+%9 =
 | Join %7 %8
 | | implementation = Unimplemented
 | Project (#0)
 | Filter true
 
-10 =
+%10 =
 | Get %9
 | Map #0
 | Project (#1)
@@ -228,7 +228,7 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR VIEW foo
 ----
-0 =
+%0 =
 | Constant (1)
 
 EOF
@@ -236,38 +236,38 @@ EOF
 query T multiline
 EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 ----
-0 =
+%0 =
 | Constant ()
 | | types = ()
 | | keys = ()
 
-1 =
+%1 =
 | Get %0
 | | types = ()
 | | keys = ()
 
-2 =
+%2 =
 | Constant ()
 | | types = ()
 | | keys = ()
 
-3 =
+%3 =
 | Join %1 %2
 | | implementation = Unimplemented
 | | types = ()
 | | keys = ()
 
-4 =
+%4 =
 | Get %0
 | | types = ()
 | | keys = ()
 
-5 =
+%5 =
 | Constant ()
 | | types = ()
 | | keys = ()
 
-6 =
+%6 =
 | Join %4 %5
 | | implementation = Unimplemented
 | | types = ()
@@ -282,17 +282,17 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 | | types = (i32)
 | | keys = ()
 
-7 =
+%7 =
 | Get %3
 | | types = ()
 | | keys = ()
 
-8 =
+%8 =
 | Get %6
 | | types = (i32)
 | | keys = ()
 
-9 =
+%9 =
 | Join %7 %8
 | | implementation = Unimplemented
 | | types = (i32)
@@ -304,7 +304,7 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 | | types = (i32)
 | | keys = ()
 
-10 =
+%10 =
 | Get %9
 | | types = (i32)
 | | keys = ()
@@ -345,14 +345,14 @@ CREATE TABLE ordered (x int, y text)
 query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
-0 =
+%0 =
 | Constant ()
 
-1 =
+%1 =
 | Get materialize.public.ordered (u2)
 
-2 =
-| InnerJoin 0 1 on true
+%2 =
+| InnerJoin %0 %1 on true
 | Map #0, #1
 | Project (#2, #3)
 | Map
@@ -364,42 +364,42 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
-0 =
+%0 =
 | Constant ()
 
-1 =
+%1 =
 | Get %0
 
-2 =
+%2 =
 | Constant ()
 
-3 =
+%3 =
 | Join %1 %2
 | | implementation = Unimplemented
 
-4 =
+%4 =
 | Get %0
 
-5 =
+%5 =
 | Get materialize.public.ordered (u2)
 
-6 =
+%6 =
 | Join %4 %5
 | | implementation = Unimplemented
 
-7 =
+%7 =
 | Get %3
 
-8 =
+%8 =
 | Get %6
 
-9 =
+%9 =
 | Join %7 %8
 | | implementation = Unimplemented
 | Project (#0, #1)
 | Filter true
 
-10 =
+%10 =
 | Get %9
 | Map #0
 | Map #1
@@ -412,7 +412,7 @@ EOF
 query T multiline
 EXPLAIN TYPED OPTIMIZED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 ----
-0 =
+%0 =
 | Get materialize.public.ordered (u2)
 | | types = (i32?, string?)
 | | keys = ()
@@ -427,7 +427,7 @@ CREATE VIEW ordered_view AS SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 query T multiline
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW ordered_view
 ----
-0 =
+%0 =
 | Get materialize.public.ordered (u2)
 | | types = (i32?, string?)
 | | keys = ()
