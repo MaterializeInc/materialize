@@ -64,7 +64,7 @@
             },
             {
                 "signature": "jsonb_agg(expression) -> jsonb",
-                "description": "Aggregate values (including nulls) as a jsonb array. NOTE: Using this function in a materialized view is an antipattern, but it can be useful to query views."
+                "description": "Aggregate values (including nulls) as a jsonb array. NOTE: It is an antipattern to create a view that uses jsonb_agg(expression). This function conceals fine-grained input updates, by translating individual input updates to entire record changes in the output. Any downstream computation on the results (for example, filtering, transformation, projection) may be more efficient if lifted before this method.",
             }
         ]
     },
