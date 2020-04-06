@@ -118,12 +118,8 @@ where
     })
 }
 
-pub type PushSession<'a, R> = Session<
-    'a,
-    Timestamp,
-    (R, Timestamp, Diff),
-    PushCounter<Timestamp, (R, Timestamp, Diff), Tee<Timestamp, (R, Timestamp, Diff)>>,
->;
+pub type PushSession<'a, R> =
+    Session<'a, Timestamp, R, PushCounter<Timestamp, R, Tee<Timestamp, R>>>;
 
 pub trait DecoderState {
     /// Reset number of success and failures with decoding
@@ -135,7 +131,7 @@ pub trait DecoderState {
         key: Row,
         bytes: &[u8],
         aux_num: &Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>)>,
+        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     );
     /// give a session a plain value
@@ -143,7 +139,7 @@ pub trait DecoderState {
         &mut self,
         bytes: &[u8],
         aux_num: &Option<i64>,
-        session: &mut PushSession<'a, Row>,
+        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     );
     /// Register number of success and failures with decoding
@@ -154,56 +150,24 @@ fn pack_with_line_no(datum: Datum, line_no: &Option<i64>) -> Row {
     Row::pack(iter::once(datum).chain(line_no.map(Datum::from)))
 }
 
-pub struct BytesDecoderState;
-
-impl DecoderState for BytesDecoderState {
-    fn reset_event_count(&mut self) {}
-
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
-        let mut result = RowPacker::new();
-        result.push(Datum::from(bytes));
-        Ok(result.finish())
-    }
-
-    /// give a session a key-value pair
-    fn give_key_value<'a>(
-        &mut self,
-        key: Row,
-        bytes: &[u8],
-        line_no: &Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>)>,
-        time: Timestamp,
-    ) {
-        session.give((
-            (key, Some(pack_with_line_no(Datum::from(bytes), line_no))),
-            time,
-            1,
-        ));
-    }
-
-    /// give a session a plain value
-    fn give_value<'a>(
-        &mut self,
-        bytes: &[u8],
-        line_no: &Option<i64>,
-        session: &mut PushSession<'a, Row>,
-        time: Timestamp,
-    ) {
-        session.give((pack_with_line_no(Datum::from(bytes), line_no), time, 1));
-    }
-
-    /// Register number of success and failures with decoding
-    fn log_error_count(&self) {}
+fn bytes_to_datum(bytes: &[u8]) -> Datum {
+    Datum::from(bytes)
 }
 
-pub struct TextDecoderState;
+fn text_to_datum(bytes: &[u8]) -> Datum {
+    Datum::from(std::str::from_utf8(bytes).ok())
+}
 
-impl DecoderState for TextDecoderState {
+struct OffsetDecoderState<F: Fn(&[u8]) -> Datum> {
+    datum_func: F,
+}
+
+impl<F: Fn(&[u8]) -> Datum> DecoderState for OffsetDecoderState<F> {
     fn reset_event_count(&mut self) {}
 
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
         let mut result = RowPacker::new();
-        result.push(Datum::from(std::str::from_utf8(&bytes).ok()));
+        result.push((self.datum_func)(bytes));
         Ok(result.finish())
     }
 
@@ -213,19 +177,13 @@ impl DecoderState for TextDecoderState {
         key: Row,
         bytes: &[u8],
         line_no: &Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>)>,
+        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
         session.give((
-            (
-                key,
-                Some(pack_with_line_no(
-                    Datum::from(std::str::from_utf8(bytes).ok()),
-                    line_no,
-                )),
-            ),
+            key,
+            Some(pack_with_line_no((self.datum_func)(bytes), line_no)),
             time,
-            1,
         ));
     }
 
@@ -234,11 +192,11 @@ impl DecoderState for TextDecoderState {
         &mut self,
         bytes: &[u8],
         line_no: &Option<i64>,
-        session: &mut PushSession<'a, Row>,
+        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
         session.give((
-            pack_with_line_no(Datum::from(std::str::from_utf8(bytes).ok()), line_no),
+            pack_with_line_no((self.datum_func)(bytes), line_no),
             time,
             1,
         ));
@@ -253,7 +211,7 @@ fn decode_kafka_upsert_inner<G, K: 'static, V: 'static>(
     mut key_decoder_state: K,
     mut value_decoder_state: V,
     op_name: &str,
-) -> Stream<G, ((Row, Option<Row>), Timestamp, Diff)>
+) -> Stream<G, (Row, Option<Row>, Timestamp)>
 where
     G: Scope<Timestamp = Timestamp>,
     K: DecoderState,
@@ -274,7 +232,7 @@ where
                         match key_decoder_state.decode_key(key) {
                             Ok(key) => {
                                 if payload.is_empty() {
-                                    session.give(((key, None), *cap.time(), 1));
+                                    session.give((key, None, *cap.time()));
                                 } else {
                                     value_decoder_state.give_key_value(
                                         key,
@@ -301,8 +259,9 @@ where
 pub fn decode_kafka_upsert<G>(
     stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
     value_encoding: DataEncoding,
+    name: &str,
     key_encoding: DataEncoding,
-) -> Stream<G, ((Row, Option<Row>), Timestamp, Diff)>
+) -> Stream<G, (Row, Option<Row>, Timestamp)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -311,10 +270,12 @@ where
         key_encoding.op_name(),
         value_encoding.op_name()
     );
-    match (key_encoding, value_encoding) {
+    let decoded_stream = match (key_encoding, value_encoding) {
         (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_kafka_upsert_inner(
             stream,
-            BytesDecoderState,
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_url,
@@ -324,7 +285,9 @@ where
         ),
         (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_kafka_upsert_inner(
             stream,
-            TextDecoderState,
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_url,
@@ -346,80 +309,79 @@ where
             ),
             &op_name,
         ),
-        (DataEncoding::Text, DataEncoding::Bytes) => {
-            decode_kafka_upsert_inner(stream, TextDecoderState, BytesDecoderState, &op_name)
-        }
-        (DataEncoding::Bytes, DataEncoding::Bytes) => {
-            decode_kafka_upsert_inner(stream, BytesDecoderState, BytesDecoderState, &op_name)
-        }
-        (DataEncoding::Text, DataEncoding::Text) => {
-            decode_kafka_upsert_inner(stream, TextDecoderState, TextDecoderState, &op_name)
-        }
+        (DataEncoding::Text, DataEncoding::Bytes) => decode_kafka_upsert_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            &op_name,
+        ),
+        (DataEncoding::Bytes, DataEncoding::Bytes) => decode_kafka_upsert_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            &op_name,
+        ),
+        (DataEncoding::Text, DataEncoding::Text) => decode_kafka_upsert_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            &op_name,
+        ),
         _ => unreachable!(),
-    }
-}
-
-fn decode_kafka_inner<G, V: 'static>(
-    stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
-    mut value_decoder_state: V,
-    op_name: &str,
-) -> Stream<G, (Row, Timestamp, Diff)>
-where
-    G: Scope<Timestamp = Timestamp>,
-    V: DecoderState,
-{
-    stream.unary(
-        Exchange::new(|x: &((_, Vec<u8>), _)| (x.0).1.hashed()),
-        &op_name,
-        move |_, _| {
-            move |input, output| {
-                value_decoder_state.reset_event_count();
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for ((_, payload), aux_num) in data.iter() {
-                        if !payload.is_empty() {
-                            value_decoder_state.give_value(
-                                payload,
-                                aux_num,
-                                &mut session,
-                                *cap.time(),
-                            );
-                        }
+    };
+    decoded_stream.unary(Pipeline, name, move |_, _| {
+        move |input, output| {
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                let mut v = Vec::new();
+                data.swap(&mut v);
+                session.give_iterator(v.into_iter().map(|(key, value, timestamp)| {
+                    if let Some(value) = value {
+                        let mut value_with_key = RowPacker::new();
+                        value_with_key.extend_by_row(&key);
+                        value_with_key.extend_by_row(&value);
+                        (key, Some(value_with_key.finish()), timestamp)
+                    } else {
+                        (key, None, timestamp)
                     }
-                });
-                value_decoder_state.log_error_count();
-            }
-        },
-    )
+                }));
+            });
+        }
+    })
 }
 
-pub fn decode_kafka<G>(
+pub fn kafka_value_source<G>(
     stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
-    encoding: DataEncoding,
-    envelope: &Envelope,
-) -> Stream<G, (Row, Timestamp, Diff)>
+    name: &str,
+) -> Stream<G, (Vec<u8>, Option<i64>)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let op_name = format!("{}Decode", encoding.op_name());
-    match encoding {
-        DataEncoding::Avro(enc) => decode_kafka_inner(
-            stream,
-            avro::AvroDecoderState::new(
-                &enc.value_schema,
-                enc.schema_registry_url,
-                envelope.get_avro_envelope_type(),
-            ),
-            &op_name,
-        ),
-        DataEncoding::Protobuf(enc) => decode_kafka_inner(
-            stream,
-            protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
-            &op_name,
-        ),
-        DataEncoding::Bytes => decode_kafka_inner(stream, BytesDecoderState, &op_name),
-        _ => unreachable!(),
-    }
+    stream.unary(Pipeline, name, move |_, _| {
+        move |input, output| {
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                let mut v = Vec::new();
+                data.swap(&mut v);
+                session.give_iterator(
+                    v.into_iter()
+                        .map(|((_, payload), aux_num)| (payload, aux_num)),
+                );
+            });
+        }
+    })
 }
 
 fn decode_inner<G, V: 'static>(
@@ -495,7 +457,19 @@ where
             protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
             &op_name,
         ),
-        (DataEncoding::Bytes, Envelope::None) => decode_inner(stream, BytesDecoderState, &op_name),
-        (DataEncoding::Text, Envelope::None) => decode_inner(stream, TextDecoderState, &op_name),
+        (DataEncoding::Bytes, Envelope::None) => decode_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            &op_name,
+        ),
+        (DataEncoding::Text, Envelope::None) => decode_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            &op_name,
+        ),
     }
 }
