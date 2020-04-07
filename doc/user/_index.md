@@ -1,5 +1,6 @@
 ---
 title: "Materialize Docs"
+htmltitle: "Home"
 disable_toc: true
 disable_list: true
 weight: 1
