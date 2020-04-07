@@ -65,7 +65,7 @@
             {
                 "signature": "jsonb_agg(expression) -> jsonb",
                 "description": "Aggregate values (including nulls) as a jsonb array.",
-                "url": "/docs/sql/functions/jsonb_agg"
+                "url": "jsonb_agg"
             }
         ]
     },
