@@ -64,7 +64,8 @@
             },
             {
                 "signature": "jsonb_agg(expression) -> jsonb",
-                "description": "Aggregate values (including nulls) as a jsonb array"
+                "description": "Aggregate values (including nulls) as a jsonb array.",
+                "url": "jsonb_agg"
             }
         ]
     },
