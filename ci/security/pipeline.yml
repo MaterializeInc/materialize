@@ -1,0 +1,23 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Checks for security advisories in the Rust crate dependency graph.
+
+steps:
+  - command: cargo deny check advisories
+    timeout_in_minutes: 5
+    plugins:
+      - docker#v3.1.0:
+          image: materialize/ci-builder:1.42.0-20200327-102717
+          propagate-uid-gid: true
+          mount-ssh-agent: true
+          volumes:
+          - "$HOME/.cargo:/cargo"
+          environment:
+          - CARGO_HOME=/cargo
