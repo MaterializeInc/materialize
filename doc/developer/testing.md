@@ -244,6 +244,8 @@ $ pip install localstack
 $ START_WEB=false SERVICES=kinesis localstack start
 ```
 
+You will need localstack v0.11 or later.
+
 Like the [Unit Tests](#unitintegration-tests), in order to run testdrive, you should have Zookeeper, Kafka, and Confluent Schema Registry running. Testdrive is more flexible than the unit tests, though, in that you are allowed to run them at non-default locations.
 
 To run a testdrive script, you'll need two terminal windows open. In the

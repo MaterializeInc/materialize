@@ -18,9 +18,9 @@ use self::parser::LineReader;
 mod action;
 mod format;
 mod parser;
-mod util;
 
 pub mod error;
+pub mod util;
 
 pub use self::action::Config;
 

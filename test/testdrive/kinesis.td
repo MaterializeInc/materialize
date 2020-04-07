@@ -20,7 +20,7 @@ here's a test string
   WITH (access_key = '${testdrive.aws-access-key}',
         secret_access_key = '${testdrive.aws-secret-access-key}',
         token = '${testdrive.aws-token}',
-        endpoint = '${testdrive.kinesis-endpoint}')
+        endpoint = '${testdrive.aws-endpoint}')
   FORMAT BYTES;
 
 > CREATE MATERIALIZED VIEW f_view
