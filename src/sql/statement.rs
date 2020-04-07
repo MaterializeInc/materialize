@@ -71,7 +71,7 @@ pub fn describe_statement(
                     ExplainStage::Sql => "Sql",
                     ExplainStage::RawPlan => "Raw Plan",
                     ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-                    ExplainStage::OptimizedPlan{..} => "Optimized Plan",
+                    ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
                 },
                 ScalarType::String,
             )),
@@ -160,8 +160,8 @@ pub fn describe_statement(
                     if ObjectType::View == object_type {
                         relation_desc = relation_desc.add_column("QUERYABLE", ScalarType::Bool);
                     }
-                    if !materialized &&
-                        (ObjectType::View == object_type || ObjectType::Source == object_type)
+                    if !materialized
+                        && (ObjectType::View == object_type || ObjectType::Source == object_type)
                     {
                         relation_desc = relation_desc.add_column("MATERIALIZED", ScalarType::Bool);
                     }
@@ -206,7 +206,10 @@ pub fn describe_statement(
                 query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             (Some(desc), param_types)
         }
-        Statement::CreateTable { .. } => bail!("CREATE TABLE statements are not supported. Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."),
+        Statement::CreateTable { .. } => bail!(
+            "CREATE TABLE statements are not supported. \
+             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
+        ),
         _ => bail!("unsupported SQL statement: {:?}", stmt),
     })
 }
