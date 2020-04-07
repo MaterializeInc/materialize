@@ -26,7 +26,7 @@ Field | Use
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
-**FILE** _path-prefix_ | The absolute path and file name prefix of file to create and write to.
+**AVRO OCF** _path&lowbar;prefix_ | The absolute path and file name prefix of the Avro Object Container file (OCF) to create and write to.
 
 ### Kafka connector
 
@@ -35,23 +35,29 @@ _item&lowbar;name_ | The name of the source or view you want to send to the sink
 Field | Use
 ------|-----
 **KAFKA BROKER** _host_ | The Kafka broker's host name.
-**TOPIC** _topic-prefix_ | The prefix used to generate the Kafka topic name to create and write to.
+**TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
 **CONFLUENT SCHEMA REGISTRY** _url_ | The URL of the Confluent schema registry to get schema information from.
 
 ## Detail
 
 - Materialize currently only supports Avro formatted sinks that write to either a single partition topic or a Avro object container file.
-- On each restart, Materialize creates new, distinct topics and files for each sinks. Topic and file names are suffixed with {topic-name}-{sink global-id}-{startup-time}-{nonce}, and file names preserve the given extension.
-- Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources.
-- Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a Debezium style diff envelope to capture changes in the input view or source.
+- On each restart, Materialize creates new, distinct topics and files for each sink. Topic and file prefixes are suffixed with `{sink global-id}-{startup-time}-{nonce}` to get the actual name, and file names preserve the extension in the `path_prefix` argument.
+- Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
+- Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a [Debezium-style diff envelope](../../overview/api-components/#envelopes) to capture changes in the input view or source.
 
 ### Kafka sinks
 
 When creating Kafka sinks, Materialize uses the Kafka Admin API to create a new topic, and registers its Avro schema in the Confluent Schema Registry.
 
+### Avro OCF sinks
+
+When creating Avro Object Container File (OCF) sinks, Materialize creates a new sink file using the naming scheme defined above and appends the Avro schema data in its header.
+
 ## Examples
 
-### From sources
+### Kafka sinks
+
+#### From sources
 
 ```sql
 CREATE SOURCE quotes
@@ -67,7 +73,7 @@ FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
-### From materialized views
+#### From materialized views
 
 ```sql
 CREATE SOURCE quotes
@@ -88,7 +94,7 @@ FORMAT AVRO USING
     CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
-### Get actual topic names
+#### Get actual Kafka topic names
 
 ```sql
 SELECT * FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks;
@@ -103,9 +109,7 @@ SELECT * FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks;
 
 ### Avro OCF sinks
 
-When creating Avro Object Container File (OCF) sinks, Materialize creates a new sink file using the naming scheme defined above and appends the Avro schema data in its header.
-
-## Examples
+#### From sources
 
 ```sql
 CREATE SOURCE quotes
@@ -119,7 +123,7 @@ FROM quotes
 INTO AVRO OCF '/path/to/sink-file.ocf;'
 ```
 
-### From materialized views
+#### From materialized views
 
 ```sql
 CREATE SOURCE quotes
@@ -138,7 +142,7 @@ FROM frank_quotes
 INTO AVRO OCF '/path/to/frank-sink-file.ocf;'
 ```
 
-### Get actual file names
+#### Get actual file names
 
 Materialize stores the actual path as a byte array so we need to use the `convert_from` function to convert it to a UTF-8 string.
 

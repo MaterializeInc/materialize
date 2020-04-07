@@ -79,7 +79,7 @@ Use relative links (../path/to/doc), not absolute links
 
 - Support `EXPLAIN stage_name PLAN FOR ...` to display the plan at various stages of the planning process.
 
-- Support Avro Object Container File (OCF) [sinks](../sql/create-sink/#avro-ocf-sinks)
+- Support Avro Object Container File (OCF) [sinks](../sql/create-sink/#avro-ocf-sinks).
 
 - Makes [sink](../sql/create-sink/) output more correct and consistent by writing to a new sink topic or file on every restart.
 
