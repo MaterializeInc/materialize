@@ -65,7 +65,9 @@ pub fn describe_statement(
         | Statement::Rollback { .. }
         | Statement::Commit { .. } => (None, vec![]),
 
-        Statement::Explain { stage, .. } => (
+        Statement::Explain {
+            stage, explainee, ..
+        } => (
             Some(RelationDesc::empty().add_column(
                 match stage {
                     ExplainStage::Sql => "Sql",
@@ -75,7 +77,12 @@ pub fn describe_statement(
                 },
                 ScalarType::String,
             )),
-            vec![],
+            match explainee {
+                Explainee::Query(q) => {
+                    describe_statement(catalog, session, Statement::Query(Box::new(q)))?.1
+                }
+                _ => vec![],
+            },
         ),
 
         Statement::ShowCreateView { .. } => (
@@ -1491,7 +1498,7 @@ fn handle_explain(
     stage: ExplainStage,
     explainee: Explainee,
     options: ExplainOptions,
-    _params: &Params,
+    params: &Params,
 ) -> Result<Plan, failure::Error> {
     let is_view = if let Explainee::View(_) = explainee {
         true
@@ -1533,6 +1540,7 @@ fn handle_explain(
     } else {
         Some(finishing)
     };
+    sql_expr.bind_parameters(&params);
     let expr = sql_expr.clone().decorrelate();
     Ok(Plan::ExplainPlan {
         sql,
