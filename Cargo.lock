@@ -3268,6 +3268,7 @@ dependencies = [
  "tempfile",
  "termcolor",
  "tokio",
+ "url",
 ]
 
 [[package]]
