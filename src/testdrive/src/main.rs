@@ -65,13 +65,30 @@ fn run() -> Result<(), Error> {
         });
     }
 
-    let config = Config {
-        kafka_addr: opts.opt_str("kafka-addr"),
-        schema_registry_url: opts.opt_str("schema-registry-url"),
-        kinesis_region: opts.opt_str("kinesis-region"),
-        materialized_url: opts.opt_str("materialized-url"),
-        materialized_catalog_path: opts.opt_str("validate-catalog"),
-    };
+    let mut config = Config::default();
+    if let Some(addr) = opts.opt_str("kafka-addr") {
+        config.kafka_addr = addr;
+    }
+    if let Some(url) = opts.opt_str("schema-registry-url") {
+        config.schema_registry_url = url.parse().map_err(|e| Error::General {
+            ctx: "parsing schema registry url".into(),
+            cause: Some(Box::new(e)),
+            hints: vec![],
+        })?;
+    }
+    if let Some(region) = opts.opt_str("kinesis-region") {
+        config.kinesis_region = region;
+    }
+    if let Some(url) = opts.opt_str("materialized-url") {
+        config.materialized_pgconfig = url.parse().map_err(|e| Error::General {
+            ctx: "parsing materialized url".into(),
+            cause: Some(Box::new(e)),
+            hints: vec![],
+        })?;
+    }
+    if let Some(path) = opts.opt_str("validate-catalog") {
+        config.materialized_catalog_path = Some(path.into());
+    }
 
     if opts.free.is_empty() {
         testdrive::run_stdin(&config)
