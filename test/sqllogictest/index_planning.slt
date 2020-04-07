@@ -30,7 +30,7 @@ INSERT INTO bar (a, d, e) VALUES (-45, 'our', 3.14), (5, 'still', -0.0), (-3, 'i
 query T multiline
 explain plan for select b, c from foo where a = 5
 ----
-0 =
+%0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5)
 | Project (#1, #2)

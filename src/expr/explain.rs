@@ -55,7 +55,7 @@ impl<'a> std::fmt::Display for Explanation<'a> {
                 if node.chain != 0 {
                     writeln!(f)?;
                 }
-                writeln!(f, "{} =", node.chain)?;
+                writeln!(f, "%{} =", node.chain)?;
             }
             prev_chain = node.chain;
 

@@ -58,7 +58,7 @@ impl<'a> std::fmt::Display for Explanation<'a> {
                 if node.chain != 0 {
                     writeln!(f)?;
                 }
-                writeln!(f, "{} =", node.chain)?;
+                writeln!(f, "%{} =", node.chain)?;
             }
             prev_chain = node.chain;
 
@@ -270,7 +270,7 @@ impl RelationExpr {
                 } => {
                     write!(
                         pretty,
-                        "{}Join {} {} on {}",
+                        "{}Join %{} %{} on {}",
                         kind,
                         expr_chain(left),
                         expr_chain(right),
