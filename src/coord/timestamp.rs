@@ -655,13 +655,22 @@ impl Timestamper {
     /// Recovers any existing timestamp updates for that (SourceId,ViewId) pair from the underlying
     /// SQL database. Notifies the coordinator of these updates
     fn rt_recover_source(&mut self, id: SourceInstanceId) -> i64 {
-        let _ts_updates: Vec<_> = self
+        let ts_updates: Vec<_> = self
             .storage()
             .prepare("SELECT pcount, pid, timestamp, offset FROM timestamps WHERE sid = ? AND vid = ? ORDER BY timestamp")
             .expect("Failed to execute select statement")
             .query_and_then(params![SqlVal(&id.sid), SqlVal(&id.vid)], |row| -> Result<_, failure::Error> {
                 let pcount: SqlVal<i32> = row.get(0)?;
-                let pid: SqlVal<i32> = row.get(1)?;
+                let pid: SqlVal<PartitionId> = match row.get(1) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        error!("Reading from timestamps and expected type PartitionId, found other: {}", err);
+                        // Historically, pid was an i32 value. If the found value is not of type
+                        // PartitionId, try to read an i32.
+                        let pid: SqlVal<i32> = row.get(1)?;
+                        SqlVal(PartitionId::Kafka(pid.0))
+                    },
+                };
                 let timestamp: SqlVal<u64> = row.get(2)?;
                 let offset: SqlVal<i64> = row.get(3)?;
                 Ok((pcount.0, pid.0, timestamp.0, offset.0))
@@ -669,29 +678,26 @@ impl Timestamper {
             .expect("Failed to parse SQL result")
             .collect();
 
-        // todo: Would need to update the underlying `timestamp` table to
-        // contain a s_type column that indicates which source type the partition
-        // id is for to move forward.
-        //        let mut max_offset = 0;
-        //        for row in ts_updates {
-        //            let (partition_count, pid, timestamp, offset) =
-        //                row.expect("Failed to parse SQL result");
-        //            max_offset = if offset > max_offset {
-        //                offset
-        //            } else {
-        //                max_offset
-        //            };
-        //            self.tx
-        //                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-        //                    id,
-        //                    partition_count,
-        //                    pid,
-        //                    timestamp,
-        //                    offset,
-        //                })
-        //                .expect("Failed to send timestamp update to coordinator");
-        //        }
-        0
+        let mut max_offset = 0;
+        for row in ts_updates {
+            let (partition_count, pid, timestamp, offset) =
+                row.expect("Failed to parse SQL result");
+            max_offset = if offset > max_offset {
+                offset
+            } else {
+                max_offset
+            };
+            self.tx
+                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                    id,
+                    partition_count,
+                    pid,
+                    timestamp,
+                    offset,
+                })
+                .expect("Failed to send timestamp update to coordinator");
+        }
+        max_offset
     }
 
     /// Query real-time sources for the current max offset that has been generated for that source
@@ -757,41 +763,20 @@ impl Timestamper {
                     "Failed to prepare insert statement into persistent store. \
                      Hint: increase the system file descriptor limit.",
                 );
-            match &pid {
-                PartitionId::Kafka(pid) => {
-                    while let Err(e) = stmt.execute(params![
-                        SqlVal(&id.sid),
-                        SqlVal(&id.vid),
-                        SqlVal(&pcount),
-                        SqlVal(&pid),
-                        SqlVal(&self.current_timestamp),
-                        SqlVal(&offset)
-                    ]) {
-                        error!(
-                            "Failed to insert statement into persistent store: {}. \
+            while let Err(e) = stmt.execute(params![
+                SqlVal(&id.sid),
+                SqlVal(&id.vid),
+                SqlVal(&pcount),
+                SqlVal(&pid),
+                SqlVal(&self.current_timestamp),
+                SqlVal(&offset)
+            ]) {
+                error!(
+                    "Failed to insert statement into persistent store: {}. \
                      Hint: increase the system file descriptor limit.",
-                            e
-                        );
-                        std::thread::sleep(Duration::from_secs(1));
-                    }
-                }
-                PartitionId::Kinesis(pid) => {
-                    while let Err(e) = stmt.execute(params![
-                        SqlVal(&id.sid),
-                        SqlVal(&id.vid),
-                        SqlVal(&pcount),
-                        SqlVal(&pid.clone()),
-                        SqlVal(&self.current_timestamp),
-                        SqlVal(&offset)
-                    ]) {
-                        error!(
-                            "Failed to insert statement into persistent store: {}. \
-                     Hint: increase the system file descriptor limit.",
-                            e
-                        );
-                        std::thread::sleep(Duration::from_secs(1));
-                    }
-                }
+                    e
+                );
+                std::thread::sleep(Duration::from_secs(1));
             }
         }
     }
