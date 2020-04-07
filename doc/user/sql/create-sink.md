@@ -26,10 +26,17 @@ Field | Use
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
+**FILE** _path-prefix_ | The absolute path and file name prefix of file to create and write to.
+
+### Kafka connector
+
+{{< diagram "kafka-connector.html" >}}
+
+Field | Use
+------|-----
 **KAFKA BROKER** _host_ | The Kafka broker's host name.
 **TOPIC** _topic-prefix_ | The prefix used to generate the Kafka topic name to create and write to.
 **CONFLUENT SCHEMA REGISTRY** _url_ | The URL of the Confluent schema registry to get schema information from.
-**FILE** _path-prefix_ | The absolute path and file name prefix of file to create and write to.
 
 ## Detail
 
