@@ -637,6 +637,7 @@ dependencies = [
  "avro",
  "bincode",
  "ccsr",
+ "chrono",
  "comm",
  "csv-core",
  "dataflow-types",
@@ -663,6 +664,7 @@ dependencies = [
  "serde",
  "serde_json",
  "timely",
+ "timer",
  "tokio",
  "tokio-util",
  "url",
@@ -3397,6 +3399,15 @@ name = "timely_sort"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6e4b497ab85f6e09ea309d696342d198e444e93a4a55500bf3b0c3c53bdd4b3"
+
+[[package]]
+name = "timer"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31d42176308937165701f50638db1c31586f183f1aab416268216577aec7306b"
+dependencies = [
+ "chrono",
+]
 
 [[package]]
 name = "tinytemplate"

@@ -26,9 +26,7 @@ use timely::worker::Worker as TimelyWorker;
 use dataflow_types::Timestamp;
 use dataflow_types::*;
 use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
-use futures::stream::StreamExt;
 use repr::{Datum, RelationType, Row, RowArena};
-use tokio_util::codec::{FramedRead, LinesCodec};
 
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
@@ -41,6 +39,7 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
 use avro::Schema;
+use std::io::BufRead;
 
 mod context;
 mod delta_join;
@@ -102,7 +101,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
     timestamp_histories: TimestampHistories,
     timestamp_channel: TimestampChanges,
     logger: &mut Option<Logger>,
-    executor: &tokio::runtime::Handle,
 ) {
     let worker_index = worker.index();
     let worker_peers = worker.peers();
@@ -172,17 +170,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 ),
                             };
                             let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                            let ctor = |file| async move {
-                                avro::Reader::with_schema(&reader_schema, file)
-                                    .await
-                                    .map(|r| r.into_stream())
-                            };
+                            let ctor = move |file| avro::Reader::with_schema(&reader_schema, file);
                             let (source, capability) = source::file(
                                 src_id,
                                 region,
                                 format!("ocf-{}", src_id),
                                 c.path,
-                                executor,
                                 read_style,
                                 ctor,
                             );
@@ -239,17 +232,17 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     };
 
                                     let ctor = |file| {
-                                        futures::future::ok(
-                                            FramedRead::new(file, LinesCodec::new())
-                                                .map(|res| res.map(String::into_bytes)),
-                                        )
+                                        Ok(std::io::BufReader::new(file).split(b'\n'))
+                                        // futures::future::ok(
+                                        //     FramedRead::new(file, LinesCodec::new())
+                                        //         .map(|res| res.map(String::into_bytes)),
+                                        // )
                                     };
                                     source::file(
                                         src_id,
                                         region,
                                         format!("csv-{}", src_id),
                                         c.path,
-                                        executor,
                                         read_style,
                                         ctor,
                                     )

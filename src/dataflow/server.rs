@@ -225,7 +225,6 @@ where
                 sink_tokens: HashMap::new(),
                 local_inputs: HashMap::new(),
                 reported_frontiers: HashMap::new(),
-                executor: executor.clone(),
                 metrics: Metrics::for_worker_id(worker_idx),
                 advance_timestamp,
                 ts_histories: Default::default(),
@@ -267,7 +266,6 @@ where
     ts_histories: TimestampHistories,
     ts_source_drops: TimestampChanges,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    executor: tokio::runtime::Handle,
     metrics: Metrics,
 }
 
@@ -519,7 +517,6 @@ where
                         self.ts_histories.clone(),
                         self.ts_source_drops.clone(),
                         &mut self.materialized_logger,
-                        &self.executor,
                     );
                 }
             }

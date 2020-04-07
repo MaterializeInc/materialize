@@ -13,8 +13,6 @@ use std::io::{Cursor, Write};
 use std::os::unix::ffi::OsStringExt;
 use std::path::{self, PathBuf};
 
-use futures::future::TryFutureExt;
-use futures::stream::TryStreamExt;
 use retry::delay::Fibonacci;
 
 use crate::action::{Action, State};
@@ -95,10 +93,7 @@ impl Action for AppendAction {
         let mut buf = fs::read(&path).map_err(|e| e.to_string())?;
         // TODO(benesch): we'll be able to open the writer on the file directly
         // once the Avro reader is no longer asynchronous.
-        let mut writer = state
-            .tokio_runtime
-            .block_on(Writer::append_to(Cursor::new(&mut buf)))
-            .map_err(|e| e.to_string())?;
+        let mut writer = Writer::append_to(Cursor::new(&mut buf)).map_err(|e| e.to_string())?;
         write_records(&mut writer, &self.records)?;
         fs::write(path, buf).map_err(|e| format!("error syncing file: {}", e))?;
         Ok(())
@@ -165,18 +160,12 @@ impl Action for VerifyAction {
 
         // Get the rows from this file.
         let (schema, actual) = state.tokio_runtime.block_on(async {
-            let file = tokio::fs::File::open(&path)
-                .map_err(|e| format!("reading sink file {}: {}", path.display(), e))
-                .await?;
-            let reader = Reader::new(file)
-                .map_err(|e| format!("creating avro reader: {}", e))
-                .await?;
+            let file = std::fs::File::open(&path)
+                .map_err(|e| format!("reading sink file {}: {}", path.display(), e))?;
+            let reader = Reader::new(file).map_err(|e| format!("creating avro reader: {}", e))?;
             let schema = reader.writer_schema().clone();
-            let messages: Vec<_> = reader
-                .into_stream()
-                .try_collect()
-                .map_err(|e| format!("reading avro values from file: {}", e))
-                .await?;
+            let messages: Result<Vec<_>, _> = reader.into_iter().collect();
+            let messages = messages.map_err(|e| format!("reading avro values from file: {}", e))?;
             Ok::<_, String>((schema, messages))
         })?;
 

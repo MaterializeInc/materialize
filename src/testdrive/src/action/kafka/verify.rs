@@ -10,7 +10,6 @@
 use std::time::Duration;
 
 use byteorder::{BigEndian, ByteOrder};
-use futures::future::TryFutureExt;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
@@ -119,8 +118,7 @@ impl Action for VerifyAction {
                 }
 
                 let datum = avro::from_avro_datum(schema, &mut bytes)
-                    .map_err(|e| format!("from_avro_datum: {}", e.to_string()))
-                    .await?;
+                    .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?;
                 out.push(datum);
             }
 
