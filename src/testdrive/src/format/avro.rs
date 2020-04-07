@@ -125,42 +125,36 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
     }
 }
 
-/// Computes the multiset difference between two slices of [`Value`]s, i.e.,
-/// `lhs - rhs`.
-///
-/// Required because `Value` does not implement `Hash`, `Eq`, or `Ord`, and so
-/// using a standard multiset type to perform the difference is not possible.
-pub fn multiset_difference<'a>(lhs: &'a [Value], rhs: &'a [Value]) -> Vec<Value> {
-    let mut diff = lhs.to_vec();
-    for r in rhs {
-        if let Some(i) = diff.iter().position(|l| l == r) {
-            diff.swap_remove(i);
+pub fn validate_sink<I>(schema: &Schema, expected: I, actual: &[Value]) -> Result<(), String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    let expected = expected
+        .into_iter()
+        .map(|v| {
+            let json = &serde_json::from_str(v.as_ref())
+                .map_err(|e| format!("parsing expected avro datum as json: {}", e.to_string()))?;
+            Ok(from_json(json, schema.top_node())?)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut expected = expected.iter();
+    let mut actual = actual.iter();
+    for (i, (e, a)) in (&mut expected).zip(&mut actual).enumerate() {
+        if e != a {
+            return Err(format!(
+                "record {} did not match\nexpected:\n{:#?}\n\nactual:\n{:#?}",
+                i, e, a
+            ));
         }
     }
-    diff
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_multiset_difference() {
-        const ONE: Value = Value::Int(1);
-        const TWO: Value = Value::Int(2);
-        for (lhs, rhs, expected) in &[
-            (&[][..], &[][..], &[][..]),
-            (&[ONE], &[], &[ONE]),
-            (&[ONE], &[ONE], &[]),
-            (&[], &[ONE], &[]),
-            (&[ONE, TWO], &[ONE], &[TWO]),
-            (&[ONE, ONE, ONE], &[ONE], &[ONE, ONE]),
-            (&[ONE, ONE, ONE], &[ONE, ONE], &[ONE]),
-            (&[ONE, TWO, ONE], &[ONE, ONE], &[TWO]),
-            (&[ONE, TWO, ONE], &[TWO, ONE, ONE], &[]),
-        ] {
-            println!("{:?} - {:?} = {:?}", lhs, rhs, expected);
-            assert_eq!(multiset_difference(lhs, rhs), *expected);
-        }
+    let expected: Vec<_> = expected.map(|e| format!("{:#?}", e)).collect();
+    let actual: Vec<_> = actual.map(|a| format!("{:#?}", a)).collect();
+    if !expected.is_empty() {
+        Err(format!("missing records:\n{}", expected.join("\n")))
+    } else if !actual.is_empty() {
+        Err(format!("extra records:\n{}", actual.join("\n")))
+    } else {
+        Ok(())
     }
 }
