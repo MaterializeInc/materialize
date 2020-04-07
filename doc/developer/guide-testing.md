@@ -1,7 +1,5 @@
 # Developer guide: testing
 
-*Last updated August 21, 2019.*
-
 This guide details our testing philosophy, as well as how to run the test
 suites.
 
@@ -86,29 +84,24 @@ As mentioned above, the Rust unit/integration tests follow the standard
 convention, and live in a `mod tests { ... }` block alongside the code
 they test, or in a `tests/` subdirectory of the crate they test, respectively.
 
-The expected output of tests written with
-[datadriven](https://github.com/justinj/datadriven) can be updated by running
-them with the `REWRITE` env var set:
+### Datadriven
 
-```shell
+[Datadriven](ttps://github.com/justinj/datadriven) is a tool for writing
+[table-driven tests](https://github.com/golang/go/wiki/TableDrivenTests) in
+Rust, with rewrite support. datadriven tests plug into `cargo test` as unit
+or integration tests, but store test data in separate files from the Rust code.
+
+Datadriven is particularly useful when the output to be tested is too large to
+be mantained by hand efficiently. The expected output of tests written with
+datadriven can be updated by running them with the `REWRITE` environment
+variable set:
+
+ ```shell
 $ REWRITE=1 cargo test
 ```
 
 When using `REWRITE` it's important to inspect the diff carefully to ensure
-nothing changed unexpectedly.
-
-### Clippy, formatting, and linting
-
-CI also performs the lawful evil task of ensuring "good code style" with the following tools:
-
-Tool | Use | Run locally with
------|-----|-------------------
-[Clippy] | Rust semantic nits | `./bin/check`
-[rustfmt] | Rust code formatter | `cargo fmt`
-Linter | General formatting nits | `./bin/lint`
-
-[Clippy]: https://github.com/rust-lang/rust-clippy
-[rustfmt]: https://github.com/rust-lang/rustfmt
+that nothing changed unexpectedly.
 
 ## System tests
 
@@ -135,7 +128,12 @@ This snippet will verify that the query `SELECT - col2 + col1 + col2 FROM tab2`
 outputs a table with one integer column (that's the `query I` bit) with the
 specified results without verifying order (that's the `rowsort` bit).
 
-For more information on how sqllogictest works, check out the official [SQLite sqllogictest docs](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). Note that our version of sqllogictest has a bunch of modifications from CockroachDB and from ourselves. The SQLite docs document what is known "mode standard". Look in the [Materialize sqllogictest extended guide](/doc/developer/sqllogictest.md) for additional documentation, with an emphasis on the extensions beyond what is in the SQLite's base sqllogictest.
+For more information on how sqllogictest works, check out the official [SQLite
+sqllogictest docs][sqllogictest-docs]. Note that our version of sqllogictest has
+a bunch of modifications from CockroachDB and from ourselves. The SQLite docs
+document what is known "mode standard". Look in the [Materialize sqllogictest
+extended guide](sqllogictest.md) for additional documentation, with an emphasis
+on the extensions beyond what is in the SQLite's base sqllogictest.
 
 sqllogictest ships with a *huge* corpus of test data—something like 6+ million
 queries. This takes hours to run in full, so in CI we only run a small subset
@@ -143,8 +141,8 @@ on each PR, but can schedule the full run on demand. For many features, you may
 not need to write many tests yourself, if you can find an existing sqllogictest
 file that has coverage of that feature! (Grep is your friend.)
 
-Note that we certainly don't pass every upstream sqllogictest test at the
-moment. You can see the latest status at https://mtrlz.dev/civiz.
+We pass every SQLite test, with only a few modifications to the upstream test
+data.
 
 To run a sqllogictest against Materialize, you'll need to have PostgreSQL
 running on the default port, 5432, and have created a database named after
@@ -181,20 +179,35 @@ $ cargo run --bin sqllogictest --release -- test/TESTFILE.slt -vv
 ```
 
 There are currently three classes of sqllogictest files:
-  1. The offical SQLite test files are in [test/sqllogictest/sqlite](/test/sqllogictest/sqlite). Note that the directory is a git submodule, so the folder will start off as empty if you did not clone this repository with the `--recurse-submodules` argument. To populate it, call:
+
+  1. The offical SQLite test files are in
+     [test/sqllogictest/sqlite](/test/sqllogictest/sqlite). Note that the
+     directory is a git submodule, so the folder will start off as empty if you
+     did not clone this repository with `--recurse-submodules`. To populate it,
+     run:
 
      ```shell
      $ git submodule update --init
      ```
 
-  2. Additional test files from CockroachDB are in [test/sqllogictest/cockroach](/test/sqllogictest/cockroach).
-  3. Additional Materialize-specific sqllogictest files live in [test/sqllogictest](/test/sqllogictest).
+  2. Additional test files from CockroachDB are in
+     [test/sqllogictest/cockroach](/test/sqllogictest/cockroach). Note that we
+     certainly don't pass every Cockroach sqllogictest test at the moment. You
+     can see the latest status at https://mtrlz.dev/civiz.
 
-Feel free to add more Materialize-specific sqllogictests! Because it is more lightweight, sqllogictest is the preferred system test framework when testing:
-* the correctness of queries.
+  3. Additional Materialize-specific sqllogictest files live in
+     [test/sqllogictest](/test/sqllogictest).
+
+Feel free to add more Materialize-specific sqllogictests! Because it is more
+lightweight, sqllogictest is the preferred system test framework when testing:
+
+* the correctness of queries,
 * what query plans are being generated.
 
-In general, do not add or modify SQLite and/or CockroachDB test files because that would inhibit sync-ing with upstream.
+In general, do not add or modify SQLite and/or CockroachDB test files because
+that inhibits syncing with upstream.
+
+[sqllogictest-docs]: https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
 ### testdrive
 
@@ -244,23 +257,23 @@ provide most of the coverage, but it's worth adding some (*very*) basic
 testdrive tests (e.g., `> SELECT DATE '1999-01-01'`) to ensure that our pgwire
 implementation is properly serializing dates.
 
-Like the [Unit Tests](#unitintegration-tests), in order to run testdrive,
-you will need to have Zookeeper, Kafka, and Confluent Schema Registry running.
-In addition, you will need to be running [localstack](https://github.com/localstack/localstack)
-to run any testdrive test that interacts with Amazon Kinesis.
+Like the [Unit Tests](#unitintegration-tests), many testdrive tests require
+Zookeeper, Kafka, and the Confluent Schema Registry.
 
-To run localstack locally, run the following commands:
+For testdrive tests that interacts with Amazon Kinesis, you will need to be
+running [LocalStack](https://github.com/localstack/localstack). To install and
+run LocalStack:
+
 ```shell
 $ pip install localstack
 $ START_WEB=false SERVICES=kinesis localstack start
 ```
 
-You will need localstack v0.11 or later.
+If you've previously installed LocalStack, be sure it is v0.11 or later.
 
-Like the [Unit Tests](#unitintegration-tests), in order to run testdrive, you should have Zookeeper, Kafka, and Confluent Schema Registry running. Testdrive is more flexible than the unit tests, though, in that you are allowed to run them at non-default locations.
-
-To run a testdrive script, you'll need two terminal windows open. In the
-first terminal, run Materialize:
+Most testdrive scripts live in [test/testdrive](/test/testdrive). To run a
+testdrive script, you'll need two terminal windows open. In the first terminal,
+run Materialize:
 
 ```shell
 $ cargo run --bin materialized --release
@@ -272,21 +285,19 @@ In the second terminal, run testdrive:
 $ cargo run --bin testdrive --release -- test/testdrive/TESTFILE.td
 ```
 
-The default URLs where testdrive will look for:
-* Kafka is `localhost:9092`
-* Schema Registry is `http://localhost:8081`
-* Materialize is `postgres://ignored@localhost:6875`
-
-If your URLs for the components above differ from the default, run the following to get the command-line arguments used to pass alternate URLs to testdrive:
+If you are running services (Kafka, LocalStack, etc.) on nonstandard ports,
+you can configure the correct URLs with command-line options. Ask testdrive
+to tell you about these options with the `--help` flag:
 
 ```
 cargo run --bin testdrive -- --help
 ```
 
-Testdrive scripts live in [test/testdrive](/test/testdrive) with a `.td` suffix. Again, please add more! Testdrive is the preferred system test framework when testing:
-* Sources, sinks, and interactions with external systems in general.
-* Interactions between objects in the catalog.
-* Testing that input and outputs are serialized properly.
+Testdrive is the preferred system test framework when testing:
+
+* sources, sinks, and interactions with external systems in general,
+* interactions between objects in the catalog,
+* serialization of data types over the PostgreSQL wire protocol.
 
 ## Long-running tests
 

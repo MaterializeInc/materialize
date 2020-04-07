@@ -7,18 +7,19 @@ version.
 
 Materialize can be connected to many different types of event sources:
 
-* Local files with line-by-line textual events, where structured data can be extracted
-  via regular expressions or CSV parsing.
-* Custom Kafka topics, where events are encoded with Protobuf or Avro, with support for
-  additional encoding formats coming soon.
-* Kafka topics managed by a CDC tool like Debezium, where events adhere to a particular
-  "envelope" format that distinguishes updates from insertions and deletions.
-* Streaming HTTP sources? Apache Pulsar sources? With a bit of elbow grease, support for
-  any message bus can be added to Materialize!
+* Local files with line-by-line textual events, where structured data can be
+  extracted via regular expressions or CSV parsing.
+* Custom Kafka topics, where events are encoded with Protobuf or Avro, with
+  support for additional encoding formats coming soon.
+* Kafka topics managed by a CDC tool like Debezium, where events adhere to a
+  particular "envelope" format that distinguishes updates from insertions and
+  deletions.
+* Streaming HTTP sources? Apache Pulsar sources? With a bit of elbow grease,
+  support for any message bus can be added to Materialize!
 
-Note that local file sources are intended only for ad-hoc experimentation and analysis.
-Production use cases are expected to use Kafka sources, which have a better availability
-and durability story.
+Note that local file sources are intended only for ad-hoc experimentation and
+analysis. Production use cases are expected to use Kafka sources, which have a
+better availability and durability story.
 
 [Rust]: https://www.rust-lang.org
 
@@ -39,9 +40,10 @@ Rustup will automatically select the correct toolchain version specified in
 
 ### Confluent Platform
 
-The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with several
-non-free Confluent tools, like the [Confluent Schema Registry] and [Control Center]. For
-local development, the [Confluent CLI] allows easy management of these services
+The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
+several non-free Confluent tools, like the [Confluent Schema Registry] and
+[Control Center]. For local development, the [Confluent CLI] allows easy
+management of these services
 
 On macOS, the easiest installation method is to use [Homebrew]:
 
@@ -170,50 +172,26 @@ more details.
 ## Testing
 
 Materialize's testing philosophy is sufficiently complex that it warrants its
-own document. See [Developer guide: testing](testing.md).
+own document. See [Developer guide: testing](guide-testing.md).
 
-## Git workflow
+## Style
 
-### Submitting changes
+CI performs the lawful evil task of ensuring "good code style" with the
+following tools:
 
-We require that every change is first opened as a GitHub pull request and
-subjected to a CI run. GitHub will prevent you from pushing directly to main
-or merging a PR that does not have a green CI run.
+Tool      | Use                     | Run locally with
+----------|-------------------------|-------------------
+[Clippy]  | Rust semantic nits      | `./bin/check`
+[rustfmt] | Rust code formatter     | `cargo fmt`
+Linter    | General formatting nits | `./bin/lint`
 
-Our CI provider is Buildkite (https://buildkite.com). It's like Travis CI or
-Circle CI, if you're familiar with either of those, except that it lets you
-bring your own infrastructure. Details about the setup are in
-[ci/README.md](/ci/README.md), but the day-to-day interaction with Buildkite
-should be straightforward.
+See also the [style guide](style.md) for some additional soft
+recommendations.
 
-If you want more confidence that your PR will succeed in CI, you can run
-`bin/pre-push` before pushing your changes. You can configure Git to do this
-automatically by following the instructions in
-[misc/githooks/pre-push](/misc/githooks/pre-push). The `pre-push` checks don't
-run the full battery of tests, but a small subset that experience shows are
-the most frustrating when they fail in CI, like linters.
+[Clippy]: https://github.com/rust-lang/rust-clippy
+[rustfmt]: https://github.com/rust-lang/rustfmt
 
-While the team is small, we leave it up to you to decide whether your PR needs a
-review. Your first several PRs at Materialize should go through review no matter
-what, but once you learn the ropes you should feel free to land small,
-uncontroversial changes without review. It's not always possible to perfectly
-predict controversiality ahead of time, of course, but reverts are cheap and
-easy, so err on the side of merging for now.
-
-### Git details
-
-Nikhil highly recommends that you configure `git pull` to use rebase instead
-of merge:
-
-```shell
-git config pull.rebase true
-git config rebase.autoStash true
-```
-
-This keeps the Git history tidy, since it avoids creating merge commits when you
-`git pull` with unpushed changes. The `rebase.autoStash` option makes this
-workflow particularly ergonomic by stashing any uncommitted changes you have
-when you run `git pull`, then unstashing them after the rebase is complete.
+## Code review
 
 ## Other repositories
 
@@ -226,13 +204,15 @@ Some notable repositories include:
 
   * **[mtrlz-setup]**, containing automatic development environment setup
     scripts;
-  * **[rust-rdkafka]**, a fork of the Rust Kafka library;
-  * **[sqlparser]**, a heavily-customized fork of a general SQL parsing package.
+  * **[rust-sasl]**, Cyrus SASL bindings for Rust
+  * **[rust-krb5-src]**, Rust build system integration for libkrb5, MIT's
+    Kerberos implementation.
 
 As mentioned before, because the MaterializeInc organization requires two-factor
 authentication (2FA), to clone these repositories you'll need to use either SSH
 or [configure a personal access token for use with HTTPS][github-https].
 
 [mtrlz-setup]: https://github.com/MaterializeInc/mtrlz-setup
-[rust-rdkafka]: https://github.com/MaterializeInc/rust-rdkafka
+[rust-sasl]: https://github.com/MaterializeInc/rust-sasl
+[rust-krb5-src]: https://github.com/MaterializeInc/rust-krb5-src
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
