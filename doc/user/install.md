@@ -65,7 +65,7 @@ release.
 git clone https://github.com/MaterializeInc/materialize.git
 cd materialize
 git checkout {{< version >}}
-cargo build
+cargo build --release
 ```
 
 ## Run the binary
