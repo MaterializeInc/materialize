@@ -32,7 +32,7 @@ $ set schema={
 $ kafka-create-topic topic=data-consistency
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"dummy,1,0,0,0"
+dummy,1,0,0,0
 
 $ kafka-create-topic topic=data partitions=2
 
@@ -76,13 +76,13 @@ At least one input has no complete timestamps yet.
 At least one input has no complete timestamps yet.
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data2-${testdrive.seed},2,0,1,0"
+testdrive-data2-${testdrive.seed},2,0,1,0
 
 ! SELECT * FROM view_empty;
 At least one input has no complete timestamps yet.
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data2-${testdrive.seed},2,1,1,0"
+testdrive-data2-${testdrive.seed},2,1,1,0
 
 > SELECT * FROM view_empty;
 b sum
@@ -91,13 +91,13 @@ b sum
 
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},2,0,1,1"
+testdrive-data-${testdrive.seed},2,0,1,1
 
 ! SELECT * FROM view_byo;
 At least one input has no complete timestamps yet.
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},2,1,1,1"
+testdrive-data-${testdrive.seed},2,1,1,1
 
 > SELECT * FROM view_byo
 b  sum
@@ -105,7 +105,7 @@ b  sum
 1  4
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},2,0,2,2"
+testdrive-data-${testdrive.seed},2,0,2,2
 
 $ kafka-ingest partition=0 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 2, "b": 1}}
@@ -119,7 +119,7 @@ b  sum
 1  4
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},2,1,2,2"
+testdrive-data-${testdrive.seed},2,1,2,2
 
 > SELECT * FROM view_byo
 b  sum
@@ -128,7 +128,7 @@ b  sum
 2  1
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},2,1,3,5"
+testdrive-data-${testdrive.seed},2,1,3,5
 
 $ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 3}}
@@ -143,8 +143,8 @@ b  sum
 
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},2,1,4,5"
-"testdrive-data-${testdrive.seed},2,0,4,2"
+testdrive-data-${testdrive.seed},2,1,4,5
+testdrive-data-${testdrive.seed},2,0,4,2
 
 > SELECT * FROM view_byo
 b  sum
@@ -161,8 +161,8 @@ b  sum
 3  3
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},3,1,5,6"
-"testdrive-data-${testdrive.seed},3,0,5,3"
+testdrive-data-${testdrive.seed},3,1,5,6
+testdrive-data-${testdrive.seed},3,0,5,3
 
 $ kafka-add-partitions topic=data total-partitions=3
 
@@ -198,7 +198,7 @@ b  sum
 3  3
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},3,2,5,1"
+testdrive-data-${testdrive.seed},3,2,5,1
 
 > SELECT * FROM view_byo
 b  sum
@@ -225,9 +225,9 @@ $ kafka-ingest partition=3 format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 11}}
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},3,1,6,7"
-"testdrive-data-${testdrive.seed},3,0,6,4"
-"testdrive-data-${testdrive.seed},3,2,6,2"
+testdrive-data-${testdrive.seed},3,1,6,7
+testdrive-data-${testdrive.seed},3,0,6,4
+testdrive-data-${testdrive.seed},3,2,6,2
 
 > SELECT * FROM view_byo
 b  sum
@@ -240,7 +240,7 @@ b  sum
 7  1
 
 $ kafka-ingest format=bytes topic=data-consistency timestamp=1
-"testdrive-data-${testdrive.seed},4,3,7,1"
+testdrive-data-${testdrive.seed},4,3,7,1
 
 > SELECT * FROM view_byo
 b  sum

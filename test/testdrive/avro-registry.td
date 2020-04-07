@@ -122,7 +122,7 @@ $ set valid-key-schema={
 
 $ kafka-create-topic topic=missing-data
 
-$ kafka-ingest format=avro topic=missing-data schema=${schema-v1} key-schema=${key-schema-missing}
+$ kafka-ingest format=avro key-format=avro topic=missing-data schema=${schema-v1} key-schema=${key-schema-missing}
   publish=true timestamp=1
 {"b": 42} {"before": null, "after": {"a": 1}}
 
@@ -134,8 +134,8 @@ Value schema missing primary key column: b
 
 $ kafka-create-topic topic=mismatched-data
 
-$ kafka-ingest format=avro topic=mismatched-data schema=${schema-v1} key-schema=${key-schema-wrong-type}
-  publish=true timestamp=3
+$ kafka-ingest topic=mismatched-data publish=true timestamp=3
+  format=avro schema=${schema-v1} key-format=avro key-schema=${key-schema-wrong-type}
 {"a": 1} {"before": null, "after": {"a": 1}}
 
 ! CREATE SOURCE data_v3
@@ -144,8 +144,8 @@ $ kafka-ingest format=avro topic=mismatched-data schema=${schema-v1} key-schema=
   ENVELOPE DEBEZIUM
 key and value column types do not match
 
-$ kafka-ingest format=avro topic=data schema=${schema-v1} key-schema=${valid-key-schema}
-  publish=true timestamp=5
+$ kafka-ingest topic=data publish=true timestamp=5
+  format=avro schema=${schema-v1} key-format=avro key-schema=${valid-key-schema}
 {"a": 1} {"before": null, "after": {"a": 1}}
 
 > CREATE MATERIALIZED SOURCE data_v3

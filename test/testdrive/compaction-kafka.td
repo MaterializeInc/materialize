@@ -58,13 +58,13 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 $ kafka-create-topic topic=textavro
 
 $ kafka-ingest format=avro topic=textavro key-format=bytes schema=${schema} publish=true timestamp=1
-"bird1" {"f1":"goose", "f2": 1}
-"birdmore" {"f1":"geese", "f2": 2}
-"mammal1" {"f1": "moose", "f2": 1}
-"bird1" null
-"birdmore" {"f1":"geese", "f2": 56}
-"mammalmore" {"f1": "moose", "f2": 42}
-"mammal1" null
+bird1: {"f1":"goose", "f2": 1}
+birdmore: {"f1":"geese", "f2": 2}
+mammal1: {"f1": "moose", "f2": 1}
+bird1: null
+birdmore: {"f1":"geese", "f2": 56}
+mammalmore: {"f1": "moose", "f2": 42}
+mammal1: null
 
 #> CREATE MATERIALIZED SOURCE textavro
 #  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'

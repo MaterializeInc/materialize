@@ -13,12 +13,11 @@ use std::io::{Cursor, Write};
 use std::os::unix::ffi::OsStringExt;
 use std::path;
 
-use ::avro::{Codec, Reader, Writer};
 use retry::delay::Fibonacci;
 use tokio::stream::StreamExt;
 
 use crate::action::{Action, State};
-use crate::format::avro;
+use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
 
 pub struct WriteAction {
@@ -58,8 +57,8 @@ impl Action for WriteAction {
         let path = state.temp_dir.path().join(&self.path);
         println!("Writing to {}", path.display());
         let mut file = File::create(path).map_err(|e| e.to_string())?;
-        let schema = interchange::avro::parse_schema(&self.schema)
-            .map_err(|e| format!("parsing avro schema: {}", e))?;
+        let schema =
+            avro::parse_schema(&self.schema).map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut writer = Writer::with_codec_opt(schema, &mut file, self.codec);
         write_records(&mut writer, &self.records)?;
         file.sync_all()
@@ -111,7 +110,7 @@ where
 {
     let schema = writer.schema().clone();
     for record in records {
-        let record = crate::format::avro::json_to_avro(
+        let record = avro::from_json(
             &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {}", e))?,
             schema.top_node(),
         )?;
@@ -188,7 +187,7 @@ impl Action for VerifyAction {
         let mut converted_expected_messages = Vec::new();
         for expected in &self.expected {
             converted_expected_messages.push(
-                crate::format::avro::json_to_avro(
+                avro::from_json(
                     &serde_json::from_str(expected)
                         .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
                     schema.top_node(),
