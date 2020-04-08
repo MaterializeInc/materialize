@@ -21,7 +21,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
-use expr::{EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{
+    EvalEnv, GlobalId, Id, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId,
+};
 use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
@@ -390,7 +392,7 @@ pub struct ProtobufEncoding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceDesc {
     pub connector: SourceConnector,
-    /// Optionally, filtering and projection to apply.
+    /// Optionally, filtering and projection to optionally apply.
     pub operators: Option<LinearOperator>,
     pub desc: RelationDesc,
 }
@@ -537,20 +539,112 @@ pub struct IndexDesc {
     pub keys: Vec<ScalarExpr>,
 }
 
-/// In-place restrictions to make to streams of rows.
+/// In-place restrictions that can be made to rows.
 ///
-/// The intended behavior is to first restrict all rows by
-/// the predicates in `self.predicates` and the retain the
-/// columns identified by `self.projection`. This allows the
-/// predicates to reference columns that may then be dropped,
-/// but requires each implementation to reason about which
-/// columns must be extracted.
+/// These fields indicate *optional* information that may applied to
+/// streams of rows. Any row that does not satisfy all predicates may
+/// be discarded, and any column not listed in the projection may be
+/// replaced by a default value.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct LinearOperator {
-    /// Tests all of which must evaluate to `Datum::True` for the row to pass.
+    /// Rows that do not pass all predicates may be discarded.
     pub predicates: Vec<ScalarExpr>,
-    /// The sequence of source columns to extract.
+    /// Columns not present in `projection` may be replaced with
+    /// default values.
     pub projection: Vec<usize>,
     /// The environment required for `predicates`.
     pub eval_env: EvalEnv,
+}
+
+impl DataflowDesc {
+    /// Optimizes the implementation of each dataflow.
+    pub fn optimize(&mut self) {
+        // We are currently not clever enough to optimize around multiple evaluation environments.
+        // We may eventually be able to instantiate the bindings in the environment, but this is
+        // not yet possible to guarantee.
+        let mut environments = self
+            .objects_to_build
+            .iter()
+            .map(|o| o.eval_env.clone())
+            .collect::<Vec<_>>();
+        environments.dedup();
+        if environments.len() != 1 {
+            return;
+        }
+        let eval_env = environments.pop().unwrap();
+
+        // This method is currently limited in scope to propagating filtering and
+        // projection information, though it could certainly generalize beyond.
+
+        // 1. Propagate demand information from outputs back to sources.
+        let mut demand = HashMap::new();
+
+        // Demand all columns of inputs to sinks.
+        for (_id, sink) in self.sink_exports.iter() {
+            let input_id = sink.from.0;
+            demand
+                .entry(Id::Global(input_id))
+                .or_insert(HashSet::new())
+                .extend(0..self.arity_of(&input_id));
+        }
+
+        // Demand all columns of inputs to exported indexes.
+        for (_id, desc, _typ) in self.index_exports.iter() {
+            let input_id = desc.on_id;
+            demand
+                .entry(Id::Global(input_id))
+                .or_insert(HashSet::new())
+                .extend(0..self.arity_of(&input_id));
+        }
+
+        // Propagate demand information from outputs to inputs.
+        for build_desc in self.objects_to_build.iter_mut().rev() {
+            let transform = expr::transform::demand::Demand;
+            if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
+                transform.action(
+                    build_desc.relation_expr.as_mut(),
+                    columns.clone(),
+                    &mut demand,
+                );
+            }
+        }
+
+        // Push demand information into the SourceDesc.
+        for (source_id, source_desc) in self.source_imports.iter_mut() {
+            if let Some(columns) = demand.get(&Id::Global(source_id.sid)).clone() {
+                // Install no-op demand information if none exists.
+                if source_desc.operators.is_none() {
+                    source_desc.operators = Some(LinearOperator {
+                        predicates: Vec::new(),
+                        projection: (0..source_desc.desc.typ().arity()).collect(),
+                        eval_env: eval_env.clone(),
+                    })
+                }
+                // Restrict required columns by those identified as demanded.
+                if let Some(operator) = &mut source_desc.operators {
+                    operator.projection.retain(|col| columns.contains(col));
+                }
+            }
+        }
+    }
+
+    /// The number of columns associated with an identifier in the dataflow.
+    fn arity_of(&self, id: &GlobalId) -> usize {
+        for (source, desc) in self.source_imports.iter() {
+            if &source.sid == id {
+                return desc.desc.typ().arity();
+            }
+        }
+        for (index_id, (_desc, typ)) in self.index_imports.iter() {
+            if index_id == id {
+                return typ.arity();
+            }
+        }
+        for desc in self.objects_to_build.iter() {
+            if &desc.id == id {
+                return desc.relation_expr.as_ref().arity();
+            }
+        }
+        panic!("GlobalId {} not found in DataflowDesc", id);
+    }
 }

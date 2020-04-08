@@ -47,7 +47,11 @@ impl Demand {
         );
     }
 
-    /// Columns be produced.
+    /// Propagates information about demanded columns.
+    ///
+    /// The input `columns` are indicated as demanded, and the input `gets`
+    /// should be populated with demand information for identifiers outside
+    /// the scope of `relation`.
     pub fn action(
         &self,
         relation: &mut RelationExpr,

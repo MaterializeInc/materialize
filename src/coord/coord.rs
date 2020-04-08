@@ -1603,6 +1603,12 @@ where
         dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
         // TODO: should we still support creating multiple dataflows with a single command,
         // Or should it all be compacted into a single DataflowDesc with multiple exports?
+
+        // Optimize the dataflow. This performs inter-view optimizations,
+        // for example demand analysis that can allow sources to restrict
+        // the values they need to decode.
+        dataflow.optimize();
+
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),

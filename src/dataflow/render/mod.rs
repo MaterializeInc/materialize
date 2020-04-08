@@ -265,9 +265,27 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     };
 
                     // Implement source filtering and projection.
-                    // Ideally this would be lifted in to each source, but if it has not
-                    // been, we need to do it here for correctness.
+                    // At the moment this is strictly optional, but we perform it anyhow
+                    // to demonstrate the intended use.
                     if let Some(operators) = src.operators.clone() {
+                        let source_type = src.desc.typ();
+                        let position_or = (0..source_type.arity())
+                            .map(|col| {
+                                if operators.projection.contains(&col) {
+                                    Ok(col)
+                                } else {
+                                    Err({
+                                        let typ = &source_type.column_types[col];
+                                        if typ.nullable {
+                                            Datum::Null
+                                        } else {
+                                            typ.scalar_type.dummy_datum()
+                                        }
+                                    })
+                                }
+                            })
+                            .collect::<Vec<_>>();
+
                         collection = collection.flat_map(move |input_row| {
                             let temp_storage = RowArena::new();
                             let datums = input_row.unpack();
@@ -281,7 +299,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     _ => unreachable!(),
                                 }
                             }) {
-                                Some(Row::pack(operators.projection.iter().map(|i| datums[*i])))
+                                Some(Row::pack(position_or.iter().map(|pos_or| match pos_or {
+                                    Result::Ok(index) => datums[*index],
+                                    Result::Err(datum) => *datum,
+                                })))
                             } else {
                                 None
                             }

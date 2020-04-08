@@ -100,13 +100,18 @@ impl RelationType {
         }
     }
 
-    /// Adds a set of indices as keys for the colleciton.
+    /// Adds a set of indices as keys for the collection.
     pub fn add_keys(mut self, mut indices: Vec<usize>) -> Self {
         indices.sort();
         if !self.keys.contains(&indices) {
             self.keys.push(indices);
         }
         self
+    }
+
+    /// The number of columns in the relation type.
+    pub fn arity(&self) -> usize {
+        self.column_types.len()
     }
 }
 
