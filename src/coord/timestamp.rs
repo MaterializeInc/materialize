@@ -409,7 +409,7 @@ fn identify_consistency_format(msgs: &[Vec<u8>]) -> ConsistencyFormatting {
         || block_on(Reader::with_schema(&DEBEZIUM_TRX_SCHEMA_VALUE, &msg[..])).is_ok()
     {
         ConsistencyFormatting::DebeziumOcf
-    } else if msg.iter().filter(|b| **b == b',').count() == 5 {
+    } else if msg.iter().filter(|b| **b == b',').count() == 4 {
         ConsistencyFormatting::Raw
     } else {
         ConsistencyFormatting::Unknown
