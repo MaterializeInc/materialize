@@ -12,7 +12,6 @@
 #![allow(clippy::comparison_chain, clippy::filter_next)]
 use std::collections::HashMap;
 
-use crate::scalar::EvalEnv;
 use crate::{GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
@@ -23,15 +22,14 @@ impl super::Transform for RedundantJoin {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        env: &EvalEnv,
     ) -> Result<(), super::TransformError> {
-        self.transform(relation, env);
+        self.transform(relation);
         Ok(())
     }
 }
 
 impl RedundantJoin {
-    pub fn transform(&self, relation: &mut RelationExpr, _env: &EvalEnv) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
             self.action(e);
         });

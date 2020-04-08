@@ -13,7 +13,7 @@
 
 use ::expr::{GlobalId, RowSetFinishing};
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::Catalog;
+use catalog::{Catalog, PlanContext};
 use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
@@ -192,12 +192,13 @@ pub async fn purify(stmt: Statement) -> Result<Statement, failure::Error> {
 /// `stmt` does does not depend on any external state. To purify a statement,
 /// use [`purify`].
 pub fn plan(
+    pcx: &PlanContext,
     catalog: &Catalog,
     session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    statement::handle_statement(catalog, session, stmt, params)
+    statement::handle_statement(pcx, catalog, session, stmt, params)
 }
 
 /// Determines the type of the rows that will be returned by `stmt` and the type

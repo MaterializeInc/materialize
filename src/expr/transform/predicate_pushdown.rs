@@ -51,7 +51,7 @@ use std::collections::HashMap;
 
 use repr::{ColumnType, Datum, ScalarType};
 
-use crate::{AggregateFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{AggregateFunc, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct PredicatePushdown;
@@ -61,7 +61,6 @@ impl super::Transform for PredicatePushdown {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

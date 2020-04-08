@@ -16,7 +16,7 @@ use differential_dataflow::lattice::Lattice;
 use dogsdogsdogs::altneu::AltNeu;
 
 use dataflow_types::Timestamp;
-use expr::{EvalEnv, RelationExpr, ScalarExpr};
+use expr::{RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena};
 
 use super::context::{ArrangementFlavor, Context};
@@ -30,7 +30,6 @@ where
         &mut self,
         relation_expr: &RelationExpr,
         predicates: &[ScalarExpr],
-        env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
         subtract: F,
@@ -46,7 +45,7 @@ where
         } = relation_expr
         {
             for input in inputs.iter() {
-                self.ensure_rendered(input, env, scope, worker_index);
+                self.ensure_rendered(input, scope, worker_index);
             }
 
             // We'll need a new scope, to hold `AltNeu` wrappers, and we'll want
@@ -106,7 +105,6 @@ where
                                     &source_columns,
                                     &mut predicates,
                                     &mut equivalences,
-                                    env,
                                 );
 
                                 // We use the order specified by the implementation.
@@ -186,7 +184,7 @@ where
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, local, prev_key, env)
+                                                build_lookup(update_stream, local, prev_key)
                                             } else {
                                                 let local = local
                                                     .enter_at(
@@ -195,7 +193,7 @@ where
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, local, prev_key, env)
+                                                build_lookup(update_stream, local, prev_key)
                                             }
                                         }
                                         ArrangementFlavor::Trace(_gid, trace) => {
@@ -207,7 +205,7 @@ where
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, trace, prev_key, env)
+                                                build_lookup(update_stream, trace, prev_key)
                                             } else {
                                                 let trace = trace
                                                     .enter_at(
@@ -216,7 +214,7 @@ where
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, trace, prev_key, env)
+                                                build_lookup(update_stream, trace, prev_key)
                                             }
                                         }
                                     };
@@ -230,7 +228,6 @@ where
                                         &source_columns,
                                         &mut predicates,
                                         &mut equivalences,
-                                        env,
                                     );
                                 }
 
@@ -273,7 +270,6 @@ fn build_lookup<G, Tr>(
     updates: Collection<G, Row>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<ScalarExpr>,
-    env: &EvalEnv,
 ) -> Collection<G, Row>
 where
     G: Scope,
@@ -282,7 +278,6 @@ where
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
-    let env = env.clone();
     dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
@@ -294,7 +289,7 @@ where
             *key = Row::pack(
                 prev_key
                     .iter()
-                    .map(|e| e.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)),
+                    .map(|e| e.eval(&datums, &temp_storage).unwrap_or(Datum::Null)),
             );
         },
         |prev_row, diff1, next_row, diff2| {
@@ -323,7 +318,6 @@ pub fn build_filter<G>(
     source_columns: &[usize],
     predicates: &mut Vec<ScalarExpr>,
     equivalences: &mut Vec<Vec<ScalarExpr>>,
-    env: &EvalEnv,
 ) -> Collection<G, Row>
 where
     G: Scope,
@@ -382,13 +376,12 @@ where
     if ready_to_go.is_empty() {
         updates
     } else {
-        let env = env.clone();
         let temp_storage = repr::RowArena::new();
         updates.filter(move |input_row| {
             let datums = input_row.unpack();
             ready_to_go.iter().all(|predicate| {
                 match predicate
-                    .eval(&datums, &env, &temp_storage)
+                    .eval(&datums, &temp_storage)
                     .unwrap_or(Datum::Null)
                 {
                     Datum::True => true,

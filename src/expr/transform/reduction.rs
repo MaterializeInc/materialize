@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use repr::{Datum, Row, RowArena};
 
 use crate::transform::TransformError;
-use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, RelationExpr, ScalarExpr};
 
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
@@ -25,22 +25,17 @@ impl super::Transform for FoldConstants {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        env: &EvalEnv,
     ) -> Result<(), TransformError> {
-        self.transform(relation, env)
+        self.transform(relation)
     }
 }
 
 impl FoldConstants {
-    pub fn transform(
-        &self,
-        relation: &mut RelationExpr,
-        env: &EvalEnv,
-    ) -> Result<(), TransformError> {
-        relation.try_visit_mut(&mut |e| self.action(e, env))
+    pub fn transform(&self, relation: &mut RelationExpr) -> Result<(), TransformError> {
+        relation.try_visit_mut(&mut |e| self.action(e))
     }
 
-    pub fn action(&self, relation: &mut RelationExpr, env: &EvalEnv) -> Result<(), TransformError> {
+    pub fn action(&self, relation: &mut RelationExpr) -> Result<(), TransformError> {
         let relation_type = relation.typ();
         match relation {
             RelationExpr::Constant { .. } => { /* handled after match */ }
@@ -52,7 +47,7 @@ impl FoldConstants {
                 aggregates,
             } => {
                 for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce(&input.typ(), env);
+                    aggregate.expr.reduce(&input.typ());
                 }
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
@@ -73,16 +68,14 @@ impl FoldConstants {
                         let temp_storage = RowArena::new();
                         let key = group_key
                             .iter()
-                            .map(|e| e.eval(&datums, env, &temp_storage2))
+                            .map(|e| e.eval(&datums, &temp_storage2))
                             .collect::<Result<Vec<_>, _>>()?;
                         let val = aggregates
                             .iter()
                             .map(|agg| {
-                                Ok::<_, TransformError>(Row::pack(&[agg.expr.eval(
-                                    &datums,
-                                    env,
-                                    &temp_storage,
-                                )?]))
+                                Ok::<_, TransformError>(Row::pack(&[agg
+                                    .expr
+                                    .eval(&datums, &temp_storage)?]))
                             })
                             .collect::<Result<Vec<_>, _>>()?;
                         let entry = groups.entry(key).or_insert_with(|| Vec::new());
@@ -108,13 +101,11 @@ impl FoldConstants {
                                                 .map(|val| val[i].unpack_first())
                                                 .collect::<HashSet<_>>()
                                                 .into_iter(),
-                                            env,
                                             &temp_storage,
                                         )
                                     } else {
                                         agg.func.eval(
                                             vals.iter().map(|val| val[i].unpack_first()),
-                                            env,
                                             &temp_storage,
                                         )
                                     }
@@ -161,7 +152,7 @@ impl FoldConstants {
                             current_type = current_type.add_keys(key.clone());
                         }
                     }
-                    scalar.reduce(&current_type, env);
+                    scalar.reduce(&current_type);
                 }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
@@ -172,7 +163,7 @@ impl FoldConstants {
                             let mut unpacked = input_row.unpack();
                             let temp_storage = RowArena::new();
                             for scalar in scalars.iter() {
-                                unpacked.push(scalar.eval(&unpacked, env, &temp_storage)?)
+                                unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
                             }
                             Ok::<_, TransformError>((Row::pack(unpacked), diff))
                         })
@@ -189,7 +180,7 @@ impl FoldConstants {
                 expr,
                 demand: _,
             } => {
-                expr.reduce(&input.typ(), env);
+                expr.reduce(&input.typ());
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     let mut new_rows = Vec::new();
@@ -197,7 +188,7 @@ impl FoldConstants {
                         let datums = input_row.unpack();
                         let temp_storage = RowArena::new();
                         let output_rows =
-                            func.eval(expr.eval(&datums, env, &temp_storage)?, env, &temp_storage);
+                            func.eval(expr.eval(&datums, &temp_storage)?, &temp_storage);
                         for output_row in output_rows {
                             let row = Row::pack(
                                 input_row.clone().into_iter().chain(output_row.into_iter()),
@@ -213,7 +204,7 @@ impl FoldConstants {
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates.iter_mut() {
-                    predicate.reduce(&input.typ(), env);
+                    predicate.reduce(&input.typ());
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
@@ -229,7 +220,7 @@ impl FoldConstants {
                         let datums = row.unpack();
                         let temp_storage = RowArena::new();
                         for p in &*predicates {
-                            if p.eval(&datums, env, &temp_storage)? != Datum::True {
+                            if p.eval(&datums, &temp_storage)? != Datum::True {
                                 continue 'outer;
                             }
                         }
@@ -295,9 +286,8 @@ impl FoldConstants {
                         let datums = row.unpack();
                         let temp_storage = RowArena::new();
                         equivalences.iter().all(|equivalence| {
-                            let mut values = equivalence
-                                .iter()
-                                .map(|e| e.eval(&datums, env, &temp_storage));
+                            let mut values =
+                                equivalence.iter().map(|e| e.eval(&datums, &temp_storage));
                             if let Some(value) = values.next() {
                                 values.all(|v| v == value)
                             } else {
@@ -396,7 +386,7 @@ pub mod demorgans {
     use std::collections::HashMap;
 
     use crate::transform::TransformError;
-    use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
+    use crate::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 
     #[derive(Debug)]
     pub struct DeMorgans;
@@ -405,7 +395,6 @@ pub mod demorgans {
             &self,
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-            _: &EvalEnv,
         ) -> Result<(), TransformError> {
             self.transform(relation);
             Ok(())
@@ -483,7 +472,7 @@ pub mod undistribute_and {
     use repr::{ColumnType, Datum, ScalarType};
 
     use crate::transform::TransformError;
-    use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+    use crate::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr};
 
     #[derive(Debug)]
     pub struct UndistributeAnd;
@@ -493,7 +482,6 @@ pub mod undistribute_and {
             &self,
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-            _: &EvalEnv,
         ) -> Result<(), TransformError> {
             self.transform(relation);
             Ok(())

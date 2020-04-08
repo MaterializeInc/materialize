@@ -20,7 +20,7 @@ use crate::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use dataflow_expr::{
-    AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, UnaryFunc, UnaryTableFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, ColumnOrder, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +105,6 @@ pub enum ScalarExpr {
     Column(ColumnRef),
     Parameter(usize),
     Literal(Row, ColumnType),
-    CallNullary(NullaryFunc),
     CallUnary {
         func: UnaryFunc,
         expr: Box<ScalarExpr>,
@@ -692,7 +691,6 @@ impl ScalarExpr {
             Column(col_ref) => SS::Column(col_map.get(&col_ref)),
             Literal(row, typ) => SS::Literal(Ok(row), typ),
             Parameter(_) => panic!("cannot decorrelate expression with unbound parameters"),
-            CallNullary(func) => SS::CallNullary(func),
             CallUnary { func, expr } => SS::CallUnary {
                 func,
                 expr: Box::new(expr.applied_to(id_gen, col_map, inner)?),
@@ -783,10 +781,7 @@ impl ScalarExpr {
     /// contained within this scalar expression.
     fn split_subquery_predicates(&mut self) {
         match self {
-            ScalarExpr::Column(_)
-            | ScalarExpr::Literal(_, _)
-            | ScalarExpr::Parameter(_)
-            | ScalarExpr::CallNullary(_) => (),
+            ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) | ScalarExpr::Parameter(_) => (),
             ScalarExpr::Exists(input) | ScalarExpr::Select(input) => {
                 input.split_subquery_predicates()
             }
@@ -827,10 +822,9 @@ impl ScalarExpr {
     fn extract_conjucted_subqueries(&mut self, out: &mut Vec<ScalarExpr>) {
         fn contains_subquery(expr: &ScalarExpr) -> bool {
             match expr {
-                ScalarExpr::Column(_)
-                | ScalarExpr::Literal(_, _)
-                | ScalarExpr::Parameter(_)
-                | ScalarExpr::CallNullary(_) => false,
+                ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) | ScalarExpr::Parameter(_) => {
+                    false
+                }
                 ScalarExpr::Exists(_) | ScalarExpr::Select(_) => true,
                 ScalarExpr::CallUnary { expr, .. } => contains_subquery(expr),
                 ScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -866,7 +860,7 @@ impl ScalarExpr {
         F: FnMut(usize, &mut ColumnRef),
     {
         match self {
-            ScalarExpr::Literal(_, _) | ScalarExpr::Parameter(_) | ScalarExpr::CallNullary(_) => (),
+            ScalarExpr::Literal(_, _) | ScalarExpr::Parameter(_) => (),
             ScalarExpr::Column(col_ref) => f(depth, col_ref),
             ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
             ScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -893,7 +887,7 @@ impl ScalarExpr {
     /// corresponding datum in `parameters`.
     pub fn bind_parameters(&mut self, parameters: &Params) {
         match self {
-            ScalarExpr::Literal(_, _) | ScalarExpr::Column(_) | ScalarExpr::CallNullary(_) => (),
+            ScalarExpr::Literal(_, _) | ScalarExpr::Column(_) => (),
             ScalarExpr::Parameter(n) => {
                 let datum = parameters.datums.iter().nth(*n - 1).unwrap();
                 let scalar_type = &parameters.types[*n - 1];
@@ -956,7 +950,6 @@ impl ScalarExpr {
         match self {
             Column(ColumnRef { level: 0, column }) => SS::Column(column),
             Literal(datum, typ) => SS::Literal(Ok(datum), typ),
-            CallNullary(func) => SS::CallNullary(func),
             CallUnary { func, expr } => SS::CallUnary {
                 func,
                 expr: Box::new(expr.lower_uncorrelated()),
@@ -1294,7 +1287,6 @@ impl ScalarExpr {
             }
             ScalarExpr::Parameter(n) => ColumnType::new(params[&n].clone()).nullable(true),
             ScalarExpr::Literal(_, typ) => typ.clone(),
-            ScalarExpr::CallNullary(func) => func.output_type(),
             ScalarExpr::CallUnary { expr, func } => {
                 func.output_type(expr.typ(outers, inner, params))
             }
@@ -1351,7 +1343,7 @@ impl ScalarExpr {
     {
         use ScalarExpr::*;
         match self {
-            Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
+            Column(..) | Parameter(..) | Literal(..) => (),
             CallUnary { expr, .. } => f(expr),
             CallBinary { expr1, expr2, .. } => {
                 f(expr1);

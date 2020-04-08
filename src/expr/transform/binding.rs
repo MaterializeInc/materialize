@@ -66,7 +66,7 @@ use indexmap::IndexMap;
 
 use repr::RelationType;
 
-use crate::{EvalEnv, GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
 
 // -----------------------------------------------------------------------------
 
@@ -223,7 +223,6 @@ impl super::Transform for Hoist {
         &self,
         expr: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         Hoist::hoist(expr);
         Ok(())
@@ -291,7 +290,6 @@ impl super::Transform for Unbind {
         &self,
         expr: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         Unbind::unbind(expr);
         Ok(())
@@ -472,7 +470,6 @@ impl super::Transform for Deduplicate {
         &self,
         expr: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         Deduplicate::deduplicate(expr);
         Ok(())

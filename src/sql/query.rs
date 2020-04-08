@@ -43,8 +43,8 @@ use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
 
 use super::expr::{
-    AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
-    RelationExpr, ScalarExpr, UnaryFunc, UnaryTableFunc, VariadicFunc,
+    AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
+    ScalarExpr, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };
 use super::normalize;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
@@ -1758,7 +1758,10 @@ fn plan_function<'a>(
                     bail!("{} does not take any arguments", ident);
                 }
                 match ecx.qcx.lifetime {
-                    QueryLifetime::OneShot => Ok(ScalarExpr::CallNullary(NullaryFunc::Now)),
+                    QueryLifetime::OneShot => Ok(ScalarExpr::literal(
+                        Datum::from(ecx.qcx.scx.pcx.wall_time),
+                        ColumnType::new(ScalarType::TimestampTz),
+                    )),
                     QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
                 }
             }
@@ -2046,9 +2049,13 @@ fn plan_function<'a>(
                     bail!("mz_logical_timestamp does not take any arguments");
                 }
                 match ecx.qcx.lifetime {
-                    QueryLifetime::OneShot => {
-                        Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
-                    }
+                    // HACK(benesch): the logical time gets filled in later
+                    // by looking for a decimal with precision 255. (Users
+                    // can't create a decimal with that precision.)
+                    QueryLifetime::OneShot => Ok(ScalarExpr::literal(
+                        Datum::from(0i128),
+                        ColumnType::new(ScalarType::Decimal(255, 0)),
+                    )),
                     QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
                 }
             }

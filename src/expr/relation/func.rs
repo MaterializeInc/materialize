@@ -18,8 +18,6 @@ use serde::{Deserialize, Serialize};
 use repr::decimal::Significand;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::EvalEnv;
-
 use std::iter;
 
 // TODO(jamii) be careful about overflow in sum/avg
@@ -447,7 +445,7 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    pub fn eval<'a, I>(&self, datums: I, _env: &'a EvalEnv, temp_storage: &'a RowArena) -> Datum<'a>
+    pub fn eval<'a, I>(&self, datums: I, temp_storage: &'a RowArena) -> Datum<'a>
     where
         I: IntoIterator<Item = Datum<'a>>,
     {
@@ -676,12 +674,7 @@ pub enum UnaryTableFunc {
 }
 
 impl UnaryTableFunc {
-    pub fn eval<'a>(
-        &'a self,
-        datum: Datum<'a>,
-        _env: &'a EvalEnv,
-        _temp_storage: &'a RowArena,
-    ) -> Vec<Row> {
+    pub fn eval<'a>(&'a self, datum: Datum<'a>, _temp_storage: &'a RowArena) -> Vec<Row> {
         match self {
             UnaryTableFunc::JsonbEach => jsonb_each(datum),
             UnaryTableFunc::JsonbObjectKeys => jsonb_object_keys(datum),

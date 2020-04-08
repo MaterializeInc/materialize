@@ -25,6 +25,6 @@ pub use relation::{
     compare_columns, AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr,
     RowSetFinishing,
 };
-pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
-pub use scalar::{like_pattern, EvalEnv, EvalError, ScalarExpr};
+pub use scalar::func::{BinaryFunc, DateTruncTo, UnaryFunc, VariadicFunc};
+pub use scalar::{like_pattern, EvalError, ScalarExpr};
 pub use transform::OptimizedRelationExpr;

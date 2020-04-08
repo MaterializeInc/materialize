@@ -174,7 +174,6 @@ impl RelationExpr {
                         Column(..)
                         | Parameter(..)
                         | Literal(..)
-                        | CallNullary(..)
                         | CallUnary { .. }
                         | CallBinary { .. }
                         | CallVariadic { .. }
@@ -381,7 +380,6 @@ impl ScalarExpr {
             ),
             Parameter(i) => format!("${}", i),
             Literal(row, _) => format!("{}", row.unpack_first()),
-            CallNullary(func) => format!("{}()", func),
             CallUnary { func, expr } => format!("{}({})", func, expr.fmt_with(subqueries)),
             CallBinary { func, expr1, expr2 } => {
                 if func.is_infix_op() {

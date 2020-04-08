@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct ReductionPushdown;
@@ -19,21 +19,20 @@ impl super::Transform for ReductionPushdown {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        env: &EvalEnv,
     ) -> Result<(), super::TransformError> {
-        self.transform(relation, env);
+        self.transform(relation);
         Ok(())
     }
 }
 
 impl ReductionPushdown {
-    pub fn transform(&self, relation: &mut RelationExpr, env: &EvalEnv) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
-            self.action(e, env);
+            self.action(e);
         });
     }
 
-    pub fn action(&self, relation: &mut RelationExpr, _env: &EvalEnv) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Reduce {
             input,
             group_key,

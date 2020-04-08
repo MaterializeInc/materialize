@@ -48,7 +48,7 @@ use dataflow_types::{
     Consistency, DataflowDesc, Diff, ExternalSourceConnector, IndexDesc, PeekResponse, Timestamp,
     Update,
 };
-use expr::{EvalEnv, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
@@ -109,7 +109,6 @@ pub enum SequencedCommand {
         finishing: RowSetFinishing,
         project: Option<Vec<usize>>,
         filter: Vec<expr::ScalarExpr>,
-        eval_env: EvalEnv,
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek { conn_id: u32 },
@@ -551,7 +550,6 @@ where
                 finishing,
                 project,
                 filter,
-                eval_env,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace = self.traces.get(&id).unwrap().clone();
@@ -567,7 +565,6 @@ where
                     trace,
                     project,
                     filter,
-                    eval_env,
                 };
                 // Log the receipt of the peek.
                 if let Some(logger) = self.materialized_logger.as_mut() {
@@ -755,7 +752,6 @@ struct PendingPeek {
     finishing: RowSetFinishing,
     project: Option<Vec<usize>>,
     filter: Vec<expr::ScalarExpr>,
-    eval_env: EvalEnv,
     /// The data from which the trace derives.
     trace: WithDrop<KeysValsHandle>,
 }
@@ -817,7 +813,7 @@ impl PendingPeek {
                 if self.filter.iter().all(|predicate| {
                     let temp_storage = RowArena::new();
                     predicate
-                        .eval(&datums, &self.eval_env, &temp_storage)
+                        .eval(&datums, &temp_storage)
                         .unwrap_or(Datum::Null)
                         == Datum::True
                 }) {

@@ -360,7 +360,6 @@ impl std::fmt::Display for ScalarExpr {
             Column(i) => write!(f, "#{}", i)?,
             Literal(Ok(row), _) => write!(f, "{}", row.unpack_first())?,
             Literal(Err(e), _) => write!(f, "(err: {})", e)?,
-            CallNullary(func) => write!(f, "{}()", func)?,
             CallUnary { func, expr } => {
                 write!(f, "{}({})", func, expr)?;
             }

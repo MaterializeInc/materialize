@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::{BinaryFunc, EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct SplitPredicates;
@@ -19,7 +19,6 @@ impl super::Transform for SplitPredicates {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         relation.visit_mut(&mut |expr| {
             if let RelationExpr::Filter { predicates, .. } = expr {

@@ -9,14 +9,17 @@
 
 #![deny(missing_docs)]
 
-use self::func::{AggregateFunc, UnaryTableFunc};
-use crate::id::DummyHumanizer;
-use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
-use failure::ResultExt;
-use repr::{ColumnType, Datum, RelationType, Row};
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
+
+use failure::ResultExt;
+use serde::{Deserialize, Serialize};
+
+use repr::{ColumnType, Datum, RelationType, Row};
+
+use self::func::{AggregateFunc, UnaryTableFunc};
+use crate::id::DummyHumanizer;
+use crate::{EvalError, GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
 
 pub mod func;
 
@@ -840,6 +843,84 @@ impl RelationExpr {
     {
         f(self);
         self.visit1_mut(|e| e.visit_mut_pre(f))
+    }
+
+    /// Mutably visit all `[ScalarExpr::Literal]`s in the relation expression.
+    pub fn visit_literals_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Result<Row, EvalError>, &mut ColumnType),
+    {
+        let mut visit_scalar = |scalar: &mut ScalarExpr| {
+            scalar.visit_mut(&mut |e| {
+                if let ScalarExpr::Literal(v, t) = e {
+                    f(v, t);
+                }
+            });
+        };
+
+        self.visit_mut(&mut |e| match e {
+            RelationExpr::Map { scalars, input: _ }
+            | RelationExpr::Filter {
+                predicates: scalars,
+                input: _,
+            } => {
+                for s in scalars {
+                    visit_scalar(s);
+                }
+            }
+            RelationExpr::FlatMapUnary {
+                expr,
+                input: _,
+                func: _,
+                demand: _,
+            } => visit_scalar(expr),
+            RelationExpr::Join {
+                equivalences: keys,
+                inputs: _,
+                demand: _,
+                implementation: _,
+            }
+            | RelationExpr::ArrangeBy { input: _, keys } => {
+                for key in keys {
+                    for s in key {
+                        visit_scalar(s);
+                    }
+                }
+            }
+            RelationExpr::Reduce {
+                group_key,
+                aggregates,
+                input: _,
+            } => {
+                for s in group_key {
+                    visit_scalar(s);
+                }
+                for agg in aggregates {
+                    visit_scalar(&mut agg.expr);
+                }
+            }
+            RelationExpr::Constant { rows: _, typ: _ }
+            | RelationExpr::Get { id: _, typ: _ }
+            | RelationExpr::Let {
+                id: _,
+                value: _,
+                body: _,
+            }
+            | RelationExpr::Project {
+                input: _,
+                outputs: _,
+            }
+            | RelationExpr::TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+                offset: _,
+            }
+            | RelationExpr::Negate { input: _ }
+            | RelationExpr::Threshold { input: _ }
+            | RelationExpr::Union { left: _, right: _ } => (),
+        })
     }
 
     /// Pretty-print this RelationExpr to a string.

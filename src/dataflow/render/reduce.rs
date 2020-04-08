@@ -19,7 +19,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 
 use dataflow_types::Timestamp;
-use expr::{AggregateExpr, AggregateFunc, EvalEnv, RelationExpr, ScalarExpr};
+use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
@@ -34,7 +34,6 @@ where
     pub fn render_reduce(
         &mut self,
         relation_expr: &RelationExpr,
-        env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
     ) {
@@ -65,7 +64,7 @@ where
 
             let keys_clone = group_key.clone();
 
-            self.ensure_rendered(input, env, scope, worker_index);
+            self.ensure_rendered(input, scope, worker_index);
             let input = self.collection(input).unwrap();
 
             // Distinct is a special case, as there are no aggregates to aggregate.
@@ -74,14 +73,13 @@ where
             let arrangement = if aggregates.is_empty() {
                 input
                     .map({
-                        let env = env.clone();
                         let group_key = group_key.clone();
                         move |row| {
                             let temp_storage = RowArena::new();
                             let datums = row.unpack();
                             (
                                 Row::pack(group_key.iter().map(|i| {
-                                    i.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)
+                                    i.eval(&datums, &temp_storage).unwrap_or(Datum::Null)
                                 })),
                                 (),
                             )
@@ -94,7 +92,7 @@ where
                     })
             } else if aggregates.len() == 1 {
                 // If we have a single aggregate, we need not stage aggregations separately.
-                build_aggregate_stage(input, group_key, &aggregates[0], env, true)
+                build_aggregate_stage(input, group_key, &aggregates[0], true)
             } else {
                 // We'll accumulate partial aggregates here, where each contains updates
                 // of the form `(key, (index, value))`. This is eventually concatenated,
@@ -108,7 +106,7 @@ where
                     for (index, aggr) in aggregates.iter().enumerate() {
                         // Collect the now-aggregated partial result, annotated with its position.
                         partials.push(
-                            build_aggregate_stage(input.enter(region), group_key, aggr, env, false)
+                            build_aggregate_stage(input.enter(region), group_key, aggr, false)
                                 .as_collection(move |key, val| (key.clone(), (index, val.clone())))
                                 .leave(),
                         );
@@ -154,7 +152,6 @@ fn build_aggregate_stage<G>(
     input: Collection<G, Row>,
     group_key: &[ScalarExpr],
     aggr: &AggregateExpr,
-    env: &EvalEnv,
     prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
@@ -169,7 +166,6 @@ where
 
     // The `partial` collection contains `(key, val)` pairs.
     let mut partial = input.map({
-        let env = env.clone();
         let group_key = group_key.to_vec();
         move |row| {
             let temp_storage = RowArena::new();
@@ -178,11 +174,10 @@ where
                 Row::pack(
                     group_key
                         .iter()
-                        .map(|i| i.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)),
+                        .map(|i| i.eval(&datums, &temp_storage).unwrap_or(Datum::Null)),
                 ),
                 Row::pack(Some(
-                    expr.eval(&datums, &env, &temp_storage)
-                        .unwrap_or(Datum::Null),
+                    expr.eval(&datums, &temp_storage).unwrap_or(Datum::Null),
                 )),
             )
         }
@@ -204,13 +199,12 @@ where
         // If hierarchical, we can repeatedly digest the groups, to minimize the incremental
         // update costs on relatively small updates.
         if hierarchical {
-            partial = build_hierarchical(partial, &func, env.clone())
+            partial = build_hierarchical(partial, &func)
         }
 
         // Perform a final aggregation, on potentially hierarchically reduced data.
         // The same code should work on data that can not be hierarchically reduced.
         partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
-            let env = env.clone();
             move |key, source, target| {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
                 // because we don't know that the aggregation method is not sensitive
@@ -222,7 +216,7 @@ where
                 if prepend_key {
                     packer.extend(key.iter());
                 }
-                packer.push(func.eval(iter, &env, &RowArena::new()));
+                packer.push(func.eval(iter, &RowArena::new()));
                 target.push((packer.finish(), 1));
             }
         })
@@ -367,7 +361,6 @@ where
 fn build_hierarchical<G>(
     collection: Collection<G, (Row, Row)>,
     aggr: &AggregateFunc,
-    env: EvalEnv,
 ) -> Collection<G, (Row, Row)>
 where
     G: Scope,
@@ -376,7 +369,7 @@ where
     // Repeatedly apply hierarchical reduction with a progressively coarser key.
     let mut stage = collection.map({ move |(key, row)| ((key, row.hashed()), row) });
     for log_modulus in [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter() {
-        stage = build_hierarchical_stage(stage, aggr.clone(), env.clone(), 1u64 << log_modulus);
+        stage = build_hierarchical_stage(stage, aggr.clone(), 1u64 << log_modulus);
     }
 
     // Discard the hash from the key and return to the format of the input data.
@@ -386,7 +379,6 @@ where
 fn build_hierarchical_stage<G>(
     collection: Collection<G, ((Row, u64), Row)>,
     aggr: AggregateFunc,
-    env: EvalEnv,
     modulus: u64,
 ) -> Collection<G, ((Row, u64), Row)>
 where
@@ -401,7 +393,7 @@ where
                 // hierarchical aggregations; should that belief be incorrect, we
                 // should certainly revise this implementation.
                 let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
-                target.push((Row::pack(Some(aggr.eval(iter, &env, &RowArena::new()))), 1));
+                target.push((Row::pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
             }
         })
 }
