@@ -71,14 +71,14 @@ impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
 }
 
 fn send_records<I, Out, Err>(
-    mut iter: I,
+    iter: I,
     tx: std::sync::mpsc::SyncSender<Out>,
     activator: Arc<Mutex<SyncActivator>>,
 ) where
-    I: Iterator<Item = Result<Out, Err>>,
+    I: IntoIterator<Item = Result<Out, Err>>,
     Err: Display,
 {
-    while let Some(record) = iter.next() {
+    for record in iter {
         let record = match record {
             Ok(record) => record,
             Err(err) => {
@@ -105,7 +105,7 @@ fn read_file_task<Ctor, I, Out, Err>(
     read_style: FileReadStyle,
     iter_ctor: Ctor,
 ) where
-    I: Iterator<Item = Result<Out, Err>> + Send + 'static,
+    I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err>,
     Err: Display,
 {
@@ -205,7 +205,7 @@ pub fn file<G, Ctor, S, Out, Err>(
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: Iterator<Item = Result<Out, Err>> + Send + 'static,
+    S: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn Read + Send>) -> Result<S, Err> + Send + 'static,
     Err: Display + Send + 'static,
     Out: Send + Clone + 'static,
