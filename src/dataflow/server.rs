@@ -48,7 +48,7 @@ use dataflow_types::{
     Consistency, DataflowDesc, Diff, ExternalSourceConnector, IndexDesc, PeekResponse, Timestamp,
     Update,
 };
-use expr::{EvalEnv, GlobalId, RowSetFinishing, SourceInstanceId};
+use expr::{EvalEnv, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
@@ -139,7 +139,7 @@ pub enum SequencedCommand {
     AdvanceSourceTimestamp {
         id: SourceInstanceId,
         partition_count: i32,
-        pid: i32,
+        pid: PartitionId,
         timestamp: Timestamp,
         offset: i64,
     },
@@ -237,8 +237,9 @@ where
     })
 }
 
+/// Todo: write what this is.
 pub type TimestampHistories =
-    Rc<RefCell<HashMap<SourceInstanceId, HashMap<i32, Vec<(i32, Timestamp, i64)>>>>>;
+    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<(i32, Timestamp, i64)>>>>>;
 pub type TimestampChanges = Rc<
     RefCell<
         Vec<(
@@ -686,7 +687,7 @@ where
                     let ts = match entries.get_mut(&pid) {
                         Some(ts) => ts,
                         None => {
-                            entries.insert(pid, vec![]);
+                            entries.insert(pid.clone(), vec![]);
                             entries.get_mut(&pid).unwrap()
                         }
                     };

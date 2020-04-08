@@ -29,7 +29,7 @@ use timely::scheduling::activate::SyncActivator;
 
 use super::util::source;
 use super::{SourceStatus, SourceToken};
-use expr::SourceInstanceId;
+use expr::{PartitionId, SourceInstanceId};
 use itertools::Itertools;
 use rdkafka::message::OwnedMessage;
 
@@ -118,10 +118,10 @@ where
         // Buffer place older for buffering messages for which we did not have a timestamp
         let mut buffer: Option<OwnedMessage> = None;
         // Index of the last offset that we have already processed for each partition
-        let mut last_processed_offsets: HashMap<i32, i64> = HashMap::new();
+        let mut last_processed_offsets: HashMap<PartitionId, i64> = HashMap::new();
         // Records closed timestamps for each partition. It corresponds to smallest timestamp
         // that is still open for this partition
-        let mut next_partition_ts: HashMap<i32, u64> = HashMap::new();
+        let mut next_partition_ts: HashMap<PartitionId, u64> = HashMap::new();
         // The list of partitions for this topic
         let mut partitions: HashSet<i32> = HashSet::new();
         // The current number of partitions that we expect for this topic initially 1)
@@ -206,10 +206,11 @@ where
                         }
 
                         // Determine what the last processed message for this stream partition
-                        let last_processed_offset = match last_processed_offsets.get(&partition) {
-                            Some(offset) => *offset,
-                            None => 0,
-                        };
+                        let last_processed_offset =
+                            match last_processed_offsets.get(&PartitionId::Kafka(partition)) {
+                                Some(offset) => *offset,
+                                None => 0,
+                            };
 
                         if offset <= last_processed_offset {
                             warn!("duplicate Kakfa message: souce {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
@@ -242,7 +243,8 @@ where
                                 return SourceStatus::Alive;
                             }
                             Some(_) => {
-                                last_processed_offsets.insert(partition, offset);
+                                last_processed_offsets
+                                    .insert(PartitionId::Kafka(partition), offset);
                                 if let Some(payload) = payload {
                                     let out = payload.to_vec();
                                     bytes_read += out.len() as i64;
@@ -379,7 +381,7 @@ fn find_matching_timestamp(
 ) -> Option<Timestamp> {
     match timestamp_histories.borrow().get(id) {
         None => None,
-        Some(entries) => match entries.get(&partition) {
+        Some(entries) => match entries.get(&PartitionId::Kafka(partition)) {
             Some(entries) => {
                 for (_, ts, max_offset) in entries {
                     if offset <= *max_offset {
@@ -399,8 +401,8 @@ fn update_partition_list(
     consumer: &BaseConsumer<GlueConsumerContext>,
     topic: &str,
     expected_partition_count: i32,
-    last_processed_offsets: &mut HashMap<i32, i64>,
-    next_partition_ts: &mut HashMap<i32, u64>,
+    last_processed_offsets: &mut HashMap<PartitionId, i64>,
+    next_partition_ts: &mut HashMap<PartitionId, u64>,
     closed_ts: u64,
 ) -> HashSet<i32> {
     let mut partitions = HashSet::new();
@@ -424,12 +426,13 @@ fn update_partition_list(
     for p in &partitions {
         // When a new timestamp is added, it will necessarily have a timestamp that is
         // greater than the last closed timestamp. We therefore set the
-        if next_partition_ts.get(p).is_none() {
-            next_partition_ts.insert(*p, closed_ts);
+        let partition_id = PartitionId::Kafka(*p);
+        if next_partition_ts.get(&partition_id).is_none() {
+            next_partition_ts.insert(partition_id.clone(), closed_ts);
         }
         // The last processed offset is always 0
-        if last_processed_offsets.get(p).is_none() {
-            last_processed_offsets.insert(*p, 0);
+        if last_processed_offsets.get(&partition_id).is_none() {
+            last_processed_offsets.insert(partition_id.clone(), 0);
         }
     }
     partitions
@@ -453,8 +456,8 @@ fn update_partition_list(
 fn downgrade_capability(
     id: &SourceInstanceId,
     cap: &mut Capability<Timestamp>,
-    last_processed_offset: &mut HashMap<i32, i64>,
-    next_partition_ts: &mut HashMap<i32, u64>,
+    last_processed_offset: &mut HashMap<PartitionId, i64>,
+    next_partition_ts: &mut HashMap<PartitionId, u64>,
     timestamp_histories: &TimestampHistories,
     current_partition_count: &mut i32,
     consumer: &BaseConsumer<GlueConsumerContext>,
@@ -499,7 +502,7 @@ fn downgrade_capability(
                         // We have now seen all messages corresponding to this timestamp for this
                         // partition. We
                         // can close the timestamp (on this partition) and remove the associated metadata
-                        next_partition_ts.insert(*pid, *ts);
+                        next_partition_ts.insert(pid.clone(), *ts);
                         entries.remove(0);
                         changed = true;
                     } else {

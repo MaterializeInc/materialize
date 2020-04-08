@@ -28,7 +28,7 @@ use dataflow_types::{
     Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
     KinesisSourceConnector,
 };
-use expr::SourceInstanceId;
+use expr::{PartitionId, SourceInstanceId};
 
 use crate::coord;
 
@@ -404,37 +404,45 @@ impl Timestamper {
                         If a new partition is added, a new timestamp should be:\n  \
                         - strictly greater than the last timestamp\n");
                 } else {
-                    if byo_consumer.current_partition_count < partition_count {
-                        // A new partition has been added. Partitions always gets added with
-                        // newPartitionId = previousLastPartitionId + 1 and start from 0.
-                        // So this new partition will have ID "partition_count - 1"
-                        // We ensure that the first messages in this partition will always have
-                        // timestamps > the last closed timestamp. We need to explicitly close
-                        // out all prior timestamps. To achieve this, we send an additional
-                        // timestamp message to the coord/worker
-                        self.tx
-                            .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                id: *id,
-                                partition_count,          // The new partition count
-                                pid: partition_count - 1, // the ID of the new partition
-                                timestamp: byo_consumer.last_ts,
-                                offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
-                                           // the empty interval
-                            })
-                            .expect("Failed to send update to coordinator");
+                    match byo_consumer.connector {
+                        ByoTimestampConnector::Kafka(_) => {
+                            if byo_consumer.current_partition_count < partition_count {
+                                // A new partition has been added. Partitions always gets added with
+                                // newPartitionId = previousLastPartitionId + 1 and start from 0.
+                                // So this new partition will have ID "partition_count - 1"
+                                // We ensure that the first messages in this partition will always have
+                                // timestamps > the last closed timestamp. We need to explicitly close
+                                // out all prior timestamps. To achieve this, we send an additional
+                                // timestamp message to the coord/worker
+                                self.tx
+                                    .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                                        id: *id,
+                                        partition_count, // The new partition count
+                                        pid: PartitionId::Kafka(partition_count - 1), // the ID of the new partition
+                                        timestamp: byo_consumer.last_ts,
+                                        offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
+                                                   // the empty interval
+                                    })
+                                    .expect("Failed to send update to coordinator");
+                            }
+                            byo_consumer.current_partition_count = partition_count;
+                            byo_consumer.last_ts = timestamp;
+                            byo_consumer.last_partition_ts.insert(partition, timestamp);
+                            self.tx
+                                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                                    id: *id,
+                                    partition_count,
+                                    pid: PartitionId::Kafka(partition),
+                                    timestamp,
+                                    offset,
+                                })
+                                .expect("Failed to send update to coordinator");
+                        }
+                        _ => {
+                            error!("BYO consistency is not supported for this source type.");
+                            return;
+                        }
                     }
-                    byo_consumer.current_partition_count = partition_count;
-                    byo_consumer.last_ts = timestamp;
-                    byo_consumer.last_partition_ts.insert(partition, timestamp);
-                    self.tx
-                        .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                            id: *id,
-                            partition_count,
-                            pid: partition,
-                            timestamp,
-                            offset,
-                        })
-                        .expect("Failed to send update to coordinator");
                 }
             }
         }
@@ -653,7 +661,15 @@ impl Timestamper {
             .expect("Failed to execute select statement")
             .query_and_then(params![SqlVal(&id.sid), SqlVal(&id.vid)], |row| -> Result<_, failure::Error> {
                 let pcount: SqlVal<i32> = row.get(0)?;
-                let pid: SqlVal<i32> = row.get(1)?;
+                let pid: SqlVal<PartitionId> = match row.get(1) {
+                    Ok(val) => val,
+                    Err(_err) => {
+                        // Historically, pid was an i32 value. If the found value is not of type
+                        // PartitionId, try to read an i32.
+                        let pid: SqlVal<i32> = row.get(1)?;
+                        SqlVal(PartitionId::Kafka(pid.0))
+                    },
+                };
                 let timestamp: SqlVal<u64> = row.get(2)?;
                 let offset: SqlVal<i64> = row.get(3)?;
                 Ok((pcount.0, pid.0, timestamp.0, offset.0))
@@ -687,7 +703,7 @@ impl Timestamper {
     /// Set the new timestamped offset to min(max_offset, last_offset + increment_size): this ensures
     /// that we never create an overly large batch of messages for the same timestamp (which would
     /// prevent views from becoming visible in a timely fashion)
-    fn rt_query_sources(&mut self) -> Vec<(SourceInstanceId, i32, i32, i64)> {
+    fn rt_query_sources(&mut self) -> Vec<(SourceInstanceId, i32, PartitionId, i64)> {
         let mut result = vec![];
         for (id, cons) in self.rt_sources.iter_mut() {
             match &cons.connector {
@@ -709,7 +725,7 @@ impl Timestamper {
                                     high
                                 };
                                 cons.last_offset = next_ts;
-                                result.push((*id, partition_count, p, next_ts))
+                                result.push((*id, partition_count, PartitionId::Kafka(p), next_ts))
                             }
                             Err(e) => {
                                 error!(
@@ -726,7 +742,7 @@ impl Timestamper {
                 RtTimestampConnector::Kinesis(_kc) => {
                     // For now, always just push the current system timestamp.
                     // todo: Github issue #2219
-                    result.push((*id, 0, 0, self.current_timestamp as i64));
+                    result.push((*id, 0, PartitionId::Kafka(0), self.current_timestamp as i64));
                 }
             }
         }
@@ -735,7 +751,7 @@ impl Timestamper {
 
     /// Persist timestamp updates to the underlying storage when using the
     /// real-time timestamping logic.
-    fn rt_persist_timestamp(&self, ts_updates: &[(SourceInstanceId, i32, i32, i64)]) {
+    fn rt_persist_timestamp(&self, ts_updates: &[(SourceInstanceId, i32, PartitionId, i64)]) {
         let storage = self.storage();
         for (id, pcount, pid, offset) in ts_updates {
             let mut stmt = storage
