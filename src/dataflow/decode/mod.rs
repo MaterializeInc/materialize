@@ -18,6 +18,7 @@ use timely::dataflow::{
     Scope, Stream,
 };
 
+use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, Diff, Envelope, Timestamp};
 use repr::Datum;
 use repr::Row;
@@ -123,6 +124,10 @@ pub fn decode<G>(
     encoding: DataEncoding,
     name: &str,
     envelope: &Envelope,
+    // Information about option transformations that can be eagerly done.
+    // If the decoding elects to perform them, it should replace this with
+    // `None`.
+    operators: &mut Option<LinearOperator>,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -130,7 +135,7 @@ where
     match (encoding, envelope) {
         (_, Envelope::Upsert(_)) => unreachable!("Upsert-envelope not implemented yet."),
         (DataEncoding::Csv(enc), Envelope::None) => {
-            csv(stream, enc.header_row, enc.n_cols, enc.delimiter)
+            csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators)
         }
         (DataEncoding::Avro(enc), envelope) => avro(
             stream,
