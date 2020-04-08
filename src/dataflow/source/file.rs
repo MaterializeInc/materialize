@@ -281,16 +281,6 @@ where
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return SourceStatus::Done,
                 }
-                // if let Ok(record) = rx.try_next() {
-                //     records_read += 1;
-                //     total_records_read += 1;
-                //     match record {
-                //         Some(record) => session.give((record, Some(total_records_read))),
-                //         None => return SourceStatus::Done,
-                //     }
-                // } else {
-                //     break;
-                // }
             }
             if records_read == MAX_RECORDS_PER_INVOCATION {
                 next_activation_duration = Default::default();
