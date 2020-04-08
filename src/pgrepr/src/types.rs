@@ -100,8 +100,8 @@ impl Type {
     }
 }
 
-impl From<ScalarType> for Type {
-    fn from(typ: ScalarType) -> Type {
+impl From<&ScalarType> for Type {
+    fn from(typ: &ScalarType) -> Type {
         match typ {
             ScalarType::Unknown => Type::Unknown,
             ScalarType::Bool => Type::Bool,
@@ -118,6 +118,7 @@ impl From<ScalarType> for Type {
             ScalarType::Bytes => Type::Bytea,
             ScalarType::String => Type::Text,
             ScalarType::Jsonb => Type::Jsonb,
+            ScalarType::Array(_t) => unimplemented!("jamii/array"),
         }
     }
 }

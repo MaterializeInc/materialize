@@ -211,6 +211,6 @@ pub fn describe(
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {
     let (desc, types) = statement::describe_statement(catalog, session, stmt)?;
-    let types = types.into_iter().map(pgrepr::Type::from).collect();
+    let types = types.into_iter().map(|t| pgrepr::Type::from(&t)).collect();
     Ok((desc, types))
 }

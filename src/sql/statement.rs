@@ -569,7 +569,7 @@ fn handle_show_columns(
             Row::pack(&[
                 Datum::String(name.as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
-                Datum::String(pgrepr::Type::from(typ.scalar_type).name()),
+                Datum::String(pgrepr::Type::from(&typ.scalar_type).name()),
             ])
         })
         .collect();
