@@ -131,8 +131,12 @@ impl DataflowDesc {
         connector: SourceConnector,
         desc: RelationDesc,
     ) {
-        self.source_imports
-            .insert(id, SourceDesc { connector, desc });
+        let source_description = SourceDesc {
+            connector,
+            operators: None,
+            desc,
+        };
+        self.source_imports.insert(id, source_description);
     }
 
     pub fn add_view_to_build(
@@ -386,6 +390,8 @@ pub struct ProtobufEncoding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceDesc {
     pub connector: SourceConnector,
+    /// Optionally, filtering and projection to apply.
+    pub operators: Option<LinearOperator>,
     pub desc: RelationDesc,
 }
 
@@ -529,4 +535,22 @@ pub struct IndexDesc {
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
     pub keys: Vec<ScalarExpr>,
+}
+
+/// In-place restrictions to make to streams of rows.
+///
+/// The intended behavior is to first restrict all rows by
+/// the predicates in `self.predicates` and the retain the
+/// columns identified by `self.projection`. This allows the
+/// predicates to reference columns that may then be dropped,
+/// but requires each implementation to reason about which
+/// columns must be extracted.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct LinearOperator {
+    /// Tests all of which must evaluate to `Datum::True` for the row to pass.
+    pub predicates: Vec<ScalarExpr>,
+    /// The sequence of source columns to extract.
+    pub projection: Vec<usize>,
+    /// The environment required for `predicates`.
+    pub eval_env: EvalEnv,
 }

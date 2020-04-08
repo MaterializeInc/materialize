@@ -251,7 +251,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         (stream, capability)
                     };
 
-                    let collection = match envelope {
+                    let mut collection = match envelope {
                         Envelope::None => stream.as_collection(),
                         Envelope::Debezium => {
                             // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
@@ -263,6 +263,30 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         }
                         Envelope::Upsert(_) => unreachable!("Upsert is not supported yet"),
                     };
+
+                    // Implement source filtering and projection.
+                    // Ideally this would be lifted in to each source, but if it has not
+                    // been, we need to do it here for correctness.
+                    if let Some(operators) = src.operators.clone() {
+                        collection = collection.flat_map(move |input_row| {
+                            let temp_storage = RowArena::new();
+                            let datums = input_row.unpack();
+                            if operators.predicates.iter().all(|predicate| {
+                                match predicate
+                                    .eval(&datums, &operators.eval_env, &temp_storage)
+                                    .unwrap_or(Datum::Null)
+                                {
+                                    Datum::True => true,
+                                    Datum::False | Datum::Null => false,
+                                    _ => unreachable!(),
+                                }
+                            }) {
+                                Some(Row::pack(operators.projection.iter().map(|i| datums[*i])))
+                            } else {
+                                None
+                            }
+                        })
+                    }
 
                     // Introduce the stream by name, as an unarranged collection.
                     context.collections.insert(
@@ -622,9 +646,9 @@ where
                     } else {
                         self.ensure_rendered(input, env, scope, worker_index);
                         let env = env.clone();
-                        let temp_storage = RowArena::new();
                         let predicates = predicates.clone();
                         self.collection(input).unwrap().filter(move |input_row| {
+                            let temp_storage = RowArena::new();
                             let datums = input_row.unpack();
                             predicates.iter().all(|predicate| {
                                 match predicate
