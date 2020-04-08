@@ -177,6 +177,10 @@ disabled_lints=(
     # implementation is too strict -- it disallows anything containing an `Arc` or `Rc`,
     # for example.
     clippy::mutable_key_type
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#naive_bytecount
+    # Clippy unnecessarily forces use of the bytecount crates for counting bytes
+    clippy::naive-bytecount
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word

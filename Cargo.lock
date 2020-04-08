@@ -450,6 +450,7 @@ checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
 name = "coord"
 version = "0.1.0"
 dependencies = [
+ "avro",
  "catalog",
  "ccsr",
  "chrono",
@@ -461,7 +462,9 @@ dependencies = [
  "expr",
  "failure",
  "futures",
+ "interchange",
  "itertools 0.9.0",
+ "lazy_static",
  "log",
  "ore",
  "pgrepr",
