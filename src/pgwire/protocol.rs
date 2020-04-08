@@ -19,6 +19,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::{debug, trace};
+use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_int_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
@@ -168,7 +169,10 @@ where
                 self.encryption_request(session).await
             }
             None => Ok(State::Done),
-            _ => self.fatal("08P01", "invalid startup message flow").await,
+            _ => {
+                self.fatal(SqlState::PROTOCOL_VIOLATION, "invalid startup message flow")
+                    .await
+            }
         }
     }
 
@@ -220,7 +224,10 @@ where
             Some(FrontendMessage::Sync) => self.sync(session).await?,
             Some(FrontendMessage::Terminate) => State::Done,
             None => State::Done,
-            _ => self.fatal("08P01", "invalid ready message flow").await?,
+            _ => {
+                self.fatal(SqlState::PROTOCOL_VIOLATION, "invalid ready message flow")
+                    .await?
+            }
         };
 
         if self.gather_metrics {
@@ -254,7 +261,7 @@ where
         if version != VERSION_3 {
             return self
                 .fatal(
-                    "08004",
+                    SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "server does not support the client's requested protocol version",
                 )
                 .await;
@@ -278,7 +285,7 @@ where
                     .map(|m| match m {
                         StartupMessage::UnknownSessionDatabase => BackendMessage::NoticeResponse {
                             severity: NoticeSeverity::Notice,
-                            code: "00000",
+                            code: SqlState::SUCCESSFUL_COMPLETION,
                             message: format!(
                                 "session database '{}' does not exist",
                                 session.database()
@@ -299,7 +306,9 @@ where
                 result: Err(err),
                 session,
             } => {
-                return self.error(session, "99999", err.to_string()).await;
+                return self
+                    .error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .await;
             }
         };
 
@@ -365,14 +374,20 @@ where
                     result: Err(err),
                     session,
                 } => {
-                    return self.error(session, "99999", err.to_string()).await;
+                    return self
+                        .error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                        .await;
                 }
             };
 
             let stmt = session.get_prepared_statement(&stmt_name).unwrap();
             if !stmt.param_types().is_empty() {
                 return self
-                    .error(session, "42P02", "there is no parameter $1")
+                    .error(
+                        session,
+                        SqlState::UNDEFINED_PARAMETER,
+                        "there is no parameter $1",
+                    )
                     .await;
             }
             let row_desc = stmt.desc().cloned();
@@ -419,7 +434,10 @@ where
                 coord::Response {
                     result: Err(err),
                     session,
-                } => self.error(session, "99999", err.to_string()).await,
+                } => {
+                    self.error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                        .await
+                }
             }
         };
         match run.await? {
@@ -456,7 +474,10 @@ where
             coord::Response {
                 result: Err(err),
                 session,
-            } => self.error(session, "99999", err.to_string()).await,
+            } => {
+                self.error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .await
+            }
         }
     }
 
@@ -473,7 +494,11 @@ where
             Some(stmt) => stmt,
             None => {
                 return self
-                    .error(session, "26000", "prepared statement does not exist")
+                    .error(
+                        session,
+                        SqlState::INVALID_SQL_STATEMENT_NAME,
+                        "prepared statement does not exist",
+                    )
                     .await;
             }
         };
@@ -481,7 +506,7 @@ where
         let param_types = stmt.param_types();
         let param_formats = match pad_formats(param_formats, raw_params.len()) {
             Ok(param_formats) => param_formats,
-            Err(msg) => return self.error(session, "08P01", msg).await,
+            Err(msg) => return self.error(session, SqlState::PROTOCOL_VIOLATION, msg).await,
         };
         let buf = RowArena::new();
         let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
@@ -492,7 +517,9 @@ where
                     Ok(param) => params.push(param.into_datum(&buf)),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
-                        return self.error(session, "22023", msg).await;
+                        return self
+                            .error(session, SqlState::INVALID_PARAMETER_VALUE, msg)
+                            .await;
                     }
                 },
             }
@@ -505,7 +532,7 @@ where
                 .unwrap_or(0),
         ) {
             Ok(result_formats) => result_formats,
-            Err(msg) => return self.error(session, "08P01", msg).await,
+            Err(msg) => return self.error(session, SqlState::PROTOCOL_VIOLATION, msg).await,
         };
 
         session
@@ -528,7 +555,13 @@ where
         let portal = match session.get_portal_mut(&portal_name) {
             Some(portal) => portal,
             None => {
-                return self.error(session, "26000", "portal does not exist").await;
+                return self
+                    .error(
+                        session,
+                        SqlState::INVALID_SQL_STATEMENT_NAME,
+                        "portal does not exist",
+                    )
+                    .await;
             }
         };
         if portal.remaining_rows.is_some() {
@@ -564,7 +597,10 @@ where
             coord::Response {
                 result: Err(err),
                 session,
-            } => self.error(session, "99999", err.to_string()).await,
+            } => {
+                self.error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .await
+            }
         }
     }
 
@@ -583,7 +619,11 @@ where
             }
             None => {
                 return self
-                    .error(session, "26000", "prepared statement does not exist")
+                    .error(
+                        session,
+                        SqlState::INVALID_SQL_STATEMENT_NAME,
+                        "prepared statement does not exist",
+                    )
                     .await
             }
         }
@@ -597,7 +637,15 @@ where
     ) -> Result<State, comm::Error> {
         let portal = match session.get_portal(&name) {
             Some(portal) => portal,
-            None => return self.error(session, "26000", "portal does not exist").await,
+            None => {
+                return self
+                    .error(
+                        session,
+                        SqlState::INVALID_SQL_STATEMENT_NAME,
+                        "portal does not exist",
+                    )
+                    .await
+            }
         };
         let stmt_name = portal.statement_name.clone();
         self.send_describe_rows(session, stmt_name).await
@@ -692,13 +740,27 @@ where
         }
 
         match response {
-            ExecuteResponse::CreatedDatabase { existed } => created!(existed, "42P04", "database"),
-            ExecuteResponse::CreatedSchema { existed } => created!(existed, "42P06", "schema"),
-            ExecuteResponse::CreatedTable { existed } => created!(existed, "42P07", "table"),
-            ExecuteResponse::CreatedIndex { existed } => created!(existed, "42710", "index"),
-            ExecuteResponse::CreatedSource { existed } => created!(existed, "42710", "source"),
-            ExecuteResponse::CreatedSink { existed } => created!(existed, "42710", "sink"),
-            ExecuteResponse::CreatedView { existed } => created!(existed, "42710", "view"),
+            ExecuteResponse::CreatedDatabase { existed } => {
+                created!(existed, SqlState::DUPLICATE_DATABASE, "database")
+            }
+            ExecuteResponse::CreatedSchema { existed } => {
+                created!(existed, SqlState::DUPLICATE_SCHEMA, "schema")
+            }
+            ExecuteResponse::CreatedTable { existed } => {
+                created!(existed, SqlState::DUPLICATE_TABLE, "table")
+            }
+            ExecuteResponse::CreatedIndex { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "index")
+            }
+            ExecuteResponse::CreatedSource { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "source")
+            }
+            ExecuteResponse::CreatedSink { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "sink")
+            }
+            ExecuteResponse::CreatedView { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "view")
+            }
             ExecuteResponse::Deleted(n) => command_complete!("DELETE {}", n),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
@@ -726,10 +788,16 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
                 match rx.await? {
                     PeekResponse::Canceled => {
-                        self.error(session, "57014", "canceling statement due to user request")
-                            .await
+                        self.error(
+                            session,
+                            SqlState::QUERY_CANCELED,
+                            "canceling statement due to user request",
+                        )
+                        .await
                     }
-                    PeekResponse::Error(text) => self.error(session, "99999", text).await,
+                    PeekResponse::Error(text) => {
+                        self.error(session, SqlState::INTERNAL_ERROR, text).await
+                    }
                     PeekResponse::Rows(rows) => {
                         self.send_rows(session, row_desc, portal_name, rows, max_rows)
                             .await
@@ -782,7 +850,7 @@ where
                 return self
                     .error(
                         session,
-                        "99999",
+                        SqlState::INTERNAL_ERROR,
                         format!(
                             "internal error: row descriptor has {} columns but row has {} columns",
                             col_types.len(),
@@ -796,7 +864,7 @@ where
                     return self
                         .error(
                             session,
-                            "99999",
+                            SqlState::INTERNAL_ERROR,
                             format!(
                                 "internal error: column {} is not of expected type {}: {}",
                                 i, t, d
@@ -931,13 +999,15 @@ where
     async fn error(
         &mut self,
         mut session: Session,
-        code: &'static str,
+        code: SqlState,
         message: impl Into<String>,
     ) -> Result<State, comm::Error> {
         let message = message.into();
         debug!(
             "cid={} error code={} message={}",
-            self.conn_id, code, message
+            self.conn_id,
+            code.code(),
+            message
         );
         self.conn
             .send(BackendMessage::ErrorResponse {
@@ -953,13 +1023,15 @@ where
 
     async fn fatal(
         &mut self,
-        code: &'static str,
+        code: SqlState,
         message: impl Into<String>,
     ) -> Result<State, comm::Error> {
         let message = message.into();
         debug!(
             "cid={} fatal code={} message={}",
-            self.conn_id, code, message
+            self.conn_id,
+            code.code(),
+            message
         );
         self.conn
             .send(BackendMessage::ErrorResponse {

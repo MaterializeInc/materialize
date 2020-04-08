@@ -2081,6 +2081,7 @@ dependencies = [
  "ordered-float",
  "ore",
  "pgrepr",
+ "postgres",
  "prometheus",
  "rand",
  "repr",

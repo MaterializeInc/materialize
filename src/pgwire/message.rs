@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use bytes::BytesMut;
+use postgres::error::SqlState;
 
 use dataflow_types::Update;
 use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
@@ -265,14 +266,14 @@ pub enum BackendMessage {
     CloseComplete,
     NoticeResponse {
         severity: NoticeSeverity,
-        code: &'static str,
+        code: SqlState,
         message: String,
         detail: Option<String>,
         hint: Option<String>,
     },
     ErrorResponse {
         severity: ErrorSeverity,
-        code: &'static str,
+        code: SqlState,
         message: String,
         detail: Option<String>,
     },
