@@ -271,7 +271,7 @@ impl<R: Read> Iterator for Reader<R> {
     type Item = Result<Value, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // to prevent keep on reading after the first error occurs
+        // to prevent continuing to read after the first error occurs
         if self.errored {
             return None;
         };
