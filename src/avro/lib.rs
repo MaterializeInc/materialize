@@ -344,8 +344,6 @@ mod tests {
     use crate::schema::Schema;
     use crate::types::{Record, Value};
 
-    use futures::stream::StreamExt;
-
     //TODO: move where it fits better
     #[test]
     fn test_enum_default() {

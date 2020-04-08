@@ -164,7 +164,7 @@ impl Action for VerifyAction {
                 .map_err(|e| format!("reading sink file {}: {}", path.display(), e))?;
             let reader = Reader::new(file).map_err(|e| format!("creating avro reader: {}", e))?;
             let schema = reader.writer_schema().clone();
-            let messages: Result<Vec<_>, _> = reader.into_iter().collect();
+            let messages: Result<Vec<_>, _> = reader.collect();
             let messages = messages.map_err(|e| format!("reading avro values from file: {}", e))?;
             Ok::<_, String>((schema, messages))
         })?;

@@ -15,8 +15,6 @@ use avro::{
     Reader, Writer,
 };
 
-use futures::stream::StreamExt;
-
 fn nanos(duration: Duration) -> u64 {
     duration.as_secs() * 1_000_000_000 + duration.subsec_nanos() as u64
 }

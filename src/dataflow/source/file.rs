@@ -54,7 +54,7 @@ impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
             for _ in self.rx.try_iter() {}
             match self.inner.read(buf)? {
                 0 => {
-                    if let Ok(_) = self.rx.recv() {
+                    if self.rx.recv().is_ok() {
                         // Notify thinks there might be new data. Go around
                         // the loop again to check.
                     } else {

@@ -747,7 +747,6 @@ mod tests {
     use crate::types::{Record, ToAvro};
     use crate::Reader;
 
-    use futures::stream::StreamExt;
     use std::io::Cursor;
 
     static SCHEMA: &str = r#"
