@@ -289,7 +289,7 @@ impl<'a> Datum<'a> {
     }
 
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
-        fn is_instance_of_scalar(datum: Datum, scalar_type: ScalarType) -> bool {
+        fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
             if let ScalarType::Jsonb = scalar_type {
                 // json type checking
                 match datum {
@@ -350,7 +350,7 @@ impl<'a> Datum<'a> {
                 return true;
             }
         }
-        is_instance_of_scalar(self, column_type.scalar_type)
+        is_instance_of_scalar(self, &column_type.scalar_type)
     }
 }
 
@@ -551,7 +551,7 @@ impl fmt::Display for Datum<'_> {
 /// an optional default value and nullability, that must also be considered part
 /// of a datum's type.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Copy, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum ScalarType {
     /// The type of an unknown datum. Whenever possible, this variant should be
     /// avoided, as clients are typically unable to handle it.
@@ -584,17 +584,20 @@ pub enum ScalarType {
     /// Json behaves like postgres' jsonb type but is stored as Datum::JsonNull/True/False/String/Float64/List/Dict.
     /// The sql type system is responsible for preventing these being used as normal sql datums without casting.
     Jsonb,
+    /// Postgres-style arrays (but we only support 1d arrays)
+    /// Backed by a DatumList
+    Array(Box<ScalarType>),
 }
 
 impl<'a> ScalarType {
-    pub fn unwrap_decimal_parts(self) -> (u8, u8) {
+    pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
         match self {
-            ScalarType::Decimal(p, s) => (p, s),
+            ScalarType::Decimal(p, s) => (*p, *s),
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
         }
     }
 
-    pub fn dummy_datum(self) -> Datum<'a> {
+    pub fn dummy_datum(&self) -> Datum<'a> {
         match self {
             ScalarType::Unknown => Datum::Null,
             ScalarType::Bool => Datum::False,
@@ -613,6 +616,7 @@ impl<'a> ScalarType {
             ScalarType::Bytes => Datum::Bytes(&[]),
             ScalarType::String => Datum::String(""),
             ScalarType::Jsonb => Datum::JsonNull,
+            ScalarType::Array(_) => Datum::List(DatumList::empty()),
         }
     }
 }
@@ -641,6 +645,8 @@ impl PartialEq for ScalarType {
             | (String, String)
             | (Jsonb, Jsonb) => true,
 
+            (Array(a), Array(b)) => a.eq(b),
+
             (Unknown, _)
             | (Bool, _)
             | (Int32, _)
@@ -655,7 +661,8 @@ impl PartialEq for ScalarType {
             | (Interval, _)
             | (Bytes, _)
             | (String, _)
-            | (Jsonb, _) => false,
+            | (Jsonb, _)
+            | (Array(_), _) => false,
         }
     }
 }
@@ -684,6 +691,10 @@ impl Hash for ScalarType {
             Bytes => state.write_u8(12),
             String => state.write_u8(13),
             Jsonb => state.write_u8(14),
+            Array(t) => {
+                state.write_u8(15);
+                t.hash(state);
+            }
         }
     }
 }
@@ -712,6 +723,7 @@ impl fmt::Display for ScalarType {
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
             Jsonb => f.write_str("jsonb"),
+            Array(t) => write!(f, "{}[]", t),
         }
     }
 }

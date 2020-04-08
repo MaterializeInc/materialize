@@ -354,7 +354,7 @@ pub fn encode_update(update: Update, typ: &RelationType) -> Vec<u8> {
 pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
     desc.iter()
         .map(|(name, typ)| {
-            let pg_type: pgrepr::Type = typ.scalar_type.clone().into();
+            let pg_type = pgrepr::Type::from(&typ.scalar_type);
             FieldDescription {
                 name: name.cloned().unwrap_or_else(|| "?column?".into()),
                 table_id: 0,
