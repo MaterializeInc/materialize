@@ -192,7 +192,7 @@ fn read_file_task<Ctor, I, Out, Err>(
     }
 }
 
-pub fn file<G, Ctor, S, Out, Err>(
+pub fn file<G, Ctor, I, Out, Err>(
     id: SourceInstanceId,
     region: &G,
     name: String,
@@ -205,8 +205,8 @@ pub fn file<G, Ctor, S, Out, Err>(
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
-    Ctor: FnOnce(Box<dyn Read + Send>) -> Result<S, Err> + Send + 'static,
+    I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
+    Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err> + Send + 'static,
     Err: Display + Send + 'static,
     Out: Send + Clone + 'static,
 {
