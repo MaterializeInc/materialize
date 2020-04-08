@@ -20,9 +20,9 @@ use lazy_static::lazy_static;
 use log::{error, info, warn};
 use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::Message;
 use rdkafka::Offset::Offset;
 use rdkafka::{ClientConfig, ClientContext, Statistics};
+use rdkafka::Message;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
@@ -196,6 +196,7 @@ where
                     }
                 };
 
+
                 while let Some(message) = next_message {
                     let partition = message.partition;
                     let offset = message.offset + 1;
@@ -259,7 +260,9 @@ where
                             last_processed_offsets.insert(PartitionId::Kafka(partition), offset);
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
-                            output.session(&cap).give(((key, out), Some(offset - 1)));
+                            output
+                                .session(&cap)
+                                .give(((key, out), Some(offset)));
 
                             downgrade_capability(
                                 &id,
@@ -272,8 +275,10 @@ where
                                 &topic,
                                 &mut last_closed_ts,
                             );
+
                         }
                     }
+
 
                     if timer.elapsed().as_millis() > 10 {
                         // We didn't drain the entire queue, so indicate that we

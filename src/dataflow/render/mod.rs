@@ -186,7 +186,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
-    advance_timestamp: bool,
     global_source_mappings: &mut HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
     timestamp_histories: TimestampHistories,
     timestamp_channel: TimestampChanges,
@@ -254,7 +253,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     format!("kafka-{}-{}", first_export_id, source_number),
                                     c,
                                     uid,
-                                    advance_timestamp,
                                     timestamp_histories.clone(),
                                     timestamp_channel.clone(),
                                     consistency,
@@ -307,12 +305,15 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             let reader_schema = Schema::parse_str(reader_schema).unwrap();
                             let ctor = move |file| avro::Reader::with_schema(&reader_schema, file);
                             let (source, capability) = source::file(
-                                src_id,
+                                uid,
                                 region,
                                 format!("ocf-{}", src_id),
                                 c.path,
                                 read_style,
                                 ctor,
+                                timestamp_histories.clone(),
+                                timestamp_channel.clone(),
+                                consistency,
                             );
                             (decode_avro_values(&source, &envelope), capability)
                         } else {
@@ -328,7 +329,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         format!("kafka-{}-{}", first_export_id, source_number),
                                         c,
                                         uid,
-                                        advance_timestamp,
                                         timestamp_histories.clone(),
                                         timestamp_channel.clone(),
                                         consistency,
@@ -349,7 +349,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         format!("kinesis-{}-{}", first_export_id, source_number),
                                         c,
                                         uid,
-                                        advance_timestamp,
                                         timestamp_histories.clone(),
                                         timestamp_channel.clone(),
                                         consistency,
@@ -374,12 +373,15 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     let ctor =
                                         |file| Ok(std::io::BufReader::new(file).split(b'\n'));
                                     source::file(
-                                        src_id,
+                                        uid,
                                         region,
                                         format!("csv-{}", src_id),
                                         c.path,
                                         read_style,
                                         ctor,
+                                        timestamp_histories.clone(),
+                                        timestamp_channel.clone(),
+                                        consistency,
                                     )
                                 }
                                 ExternalSourceConnector::AvroOcf(_) => unreachable!(),
@@ -415,7 +417,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     let token = Rc::new(capability);
                     source_tokens.insert(src_id.sid, token.clone());
 
-                    // We also need to keep track of this mapping globally to activate Kakfa sources
+                    // We also need to keep track of this mapping globally to activate sources
                     // on timestamp advancement queries
                     let prev = global_source_mappings.insert(uid, Rc::downgrade(&token));
                     assert!(prev.is_none());

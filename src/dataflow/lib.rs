@@ -14,9 +14,9 @@ mod decode;
 mod operator;
 mod render;
 mod sink;
-mod source;
 
 pub mod logging;
 pub mod server;
+pub mod source;
 
 pub use server::{serve, BroadcastToken, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};

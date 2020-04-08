@@ -36,7 +36,6 @@ pub fn kinesis<G>(
     name: String,
     connector: KinesisSourceConnector,
     id: SourceInstanceId,
-    _advance_timestamp: bool,
     timestamp_histories: TimestampHistories,
     timestamp_tx: TimestampChanges,
     consistency: Consistency,

@@ -458,7 +458,7 @@ impl ExternalSourceConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Consistency {
-    BringYourOwn(String),
+    BringYourOwn(PathBuf),
     RealTime,
 }
 

@@ -34,6 +34,7 @@ use std::ops;
 use std::path::Path;
 use std::str;
 use std::thread;
+use std::time::Duration;
 
 use failure::{bail, format_err, ResultExt};
 use futures::executor::block_on;
@@ -42,7 +43,7 @@ use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use regex::Regex;
 
-use coord::ExecuteResponse;
+use coord::{ExecuteResponse, TimestampConfig};
 use dataflow_types::PeekResponse;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
@@ -395,7 +396,10 @@ impl State {
             logging: logging_config.as_ref(),
             data_directory: None,
             executor: &executor,
-            timestamp: None,
+            timestamp: TimestampConfig {
+                frequency: Duration::from_millis(10),
+                max_size: 10000,
+            },
             logical_compaction_window: None,
         })?;
 
@@ -407,7 +411,6 @@ impl State {
             process_id,
             switchboard,
             runtime.handle().clone(),
-            true,
             logging_config,
         )
         .unwrap();

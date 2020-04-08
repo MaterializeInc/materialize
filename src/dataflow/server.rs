@@ -161,7 +161,7 @@ pub enum WorkerFeedback {
     /// The id of a source whose source connector has been dropped
     DroppedSource(SourceInstanceId),
     /// The id of a source whose source connector has been created
-    CreateSource(SourceInstanceId, ExternalSourceConnector, Consistency),
+    CreateSource(SourceInstanceId, ExternalSourceConnector),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -175,7 +175,6 @@ pub fn serve<C>(
     process: usize,
     switchboard: comm::Switchboard<C>,
     executor: tokio::runtime::Handle,
-    advance_timestamp: bool,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String>
 where
@@ -221,7 +220,6 @@ where
                 local_inputs: HashMap::new(),
                 reported_frontiers: HashMap::new(),
                 metrics: Metrics::for_worker_id(worker_idx),
-                advance_timestamp,
                 ts_histories: Default::default(),
                 ts_source_mapping: HashMap::new(),
                 ts_source_drops: Default::default(),
@@ -256,7 +254,6 @@ where
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: HashMap<GlobalId, LocalInput>,
-    advance_timestamp: bool,
     ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
     ts_histories: TimestampHistories,
     ts_source_drops: TimestampChanges,
@@ -447,11 +444,7 @@ where
                 let connector = self.feedback_tx.as_mut().unwrap();
                 block_on(connector.send(WorkerFeedbackWithMeta {
                     worker_id: self.inner.index(),
-                    message: WorkerFeedback::CreateSource(
-                        *id,
-                        ksc.as_ref().unwrap().0.clone(),
-                        ksc.as_ref().unwrap().1.clone(),
-                    ),
+                    message: WorkerFeedback::CreateSource(*id, ksc.as_ref().unwrap().0.clone()),
                 }))
                 .unwrap();
             }
@@ -516,7 +509,6 @@ where
                         &mut self.traces,
                         self.inner,
                         &mut self.sink_tokens,
-                        self.advance_timestamp,
                         &mut self.ts_source_mapping,
                         self.ts_histories.clone(),
                         self.ts_source_drops.clone(),
@@ -695,11 +687,11 @@ where
                     let last_offset = if let Some(offs) = ts.last() {
                         offs.2
                     } else {
-                        -1
+                        0
                     };
                     ts.push((partition_count, timestamp, offset));
                     if last_offset == offset {
-                        // We only activate the Kakfa source if the offset is the same as the last
+                        // We only activate the source if the offset is the same as the last
                         // offset as new data already triggers the Kafka source's activation
                         let source = self
                             .ts_source_mapping
@@ -932,5 +924,5 @@ impl PendingPeek {
 /// doesn't really become slower, because you needed to instantiate these
 /// templates anyway to run tests.
 pub fn __explicit_instantiation__() {
-    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _, _, _, _) -> _);
+    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _, _, _) -> _);
 }
