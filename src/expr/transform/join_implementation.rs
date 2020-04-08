@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
+use crate::{GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Determines the join implementation for join operators.
 ///
@@ -33,7 +33,6 @@ impl super::Transform for JoinImplementation {
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation, indexes);
         Ok(())

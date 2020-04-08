@@ -24,33 +24,19 @@ use repr::regex::Regex;
 use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
-use crate::{like_pattern, EvalEnv, EvalError, ScalarExpr};
+use crate::{like_pattern, EvalError, ScalarExpr};
 
 mod format;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum NullaryFunc {
     MzLogicalTimestamp,
-    Now,
 }
 
 impl NullaryFunc {
-    pub fn eval<'a>(
-        &'a self,
-        _datums: &[Datum<'a>],
-        env: &'a EvalEnv,
-        _temp_storage: &'a RowArena,
-    ) -> Result<Datum<'a>, EvalError> {
-        match self {
-            NullaryFunc::MzLogicalTimestamp => Ok(mz_logical_time(env)),
-            NullaryFunc::Now => Ok(now(env)),
-        }
-    }
-
     pub fn output_type(&self) -> ColumnType {
         match self {
             NullaryFunc::MzLogicalTimestamp => ColumnType::new(ScalarType::Decimal(38, 0)),
-            NullaryFunc::Now => ColumnType::new(ScalarType::TimestampTz),
         }
     }
 }
@@ -59,32 +45,19 @@ impl fmt::Display for NullaryFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             NullaryFunc::MzLogicalTimestamp => f.write_str("mz_logical_timestamp"),
-            NullaryFunc::Now => f.write_str("now"),
         }
     }
 }
 
-fn mz_logical_time(env: &EvalEnv) -> Datum<'static> {
-    Datum::from(
-        env.logical_time
-            .expect("mz_logical_time missing logical time") as i128,
-    )
-}
-
-fn now(env: &EvalEnv) -> Datum<'static> {
-    Datum::from(env.wall_time.expect("now missing wall time in env"))
-}
-
 pub fn and<'a>(
     datums: &[Datum<'a>],
-    env: &'a EvalEnv,
     temp_storage: &'a RowArena,
     a_expr: &'a ScalarExpr,
     b_expr: &'a ScalarExpr,
 ) -> Result<Datum<'a>, EvalError> {
-    match a_expr.eval(datums, env, temp_storage)? {
+    match a_expr.eval(datums, temp_storage)? {
         Datum::False => Ok(Datum::False),
-        a => match (a, b_expr.eval(datums, env, temp_storage)?) {
+        a => match (a, b_expr.eval(datums, temp_storage)?) {
             (_, Datum::False) => Ok(Datum::False),
             (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
             (Datum::True, Datum::True) => Ok(Datum::True),
@@ -95,14 +68,13 @@ pub fn and<'a>(
 
 pub fn or<'a>(
     datums: &[Datum<'a>],
-    env: &'a EvalEnv,
     temp_storage: &'a RowArena,
     a_expr: &'a ScalarExpr,
     b_expr: &'a ScalarExpr,
 ) -> Result<Datum<'a>, EvalError> {
-    match a_expr.eval(datums, env, temp_storage)? {
+    match a_expr.eval(datums, temp_storage)? {
         Datum::True => Ok(Datum::True),
-        a => match (a, b_expr.eval(datums, env, temp_storage)?) {
+        a => match (a, b_expr.eval(datums, temp_storage)?) {
             (_, Datum::True) => Ok(Datum::True),
             (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
             (Datum::False, Datum::False) => Ok(Datum::False),
@@ -1926,15 +1898,14 @@ impl BinaryFunc {
     pub fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
-        env: &'a EvalEnv,
         temp_storage: &'a RowArena,
         a_expr: &'a ScalarExpr,
         b_expr: &'a ScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         macro_rules! eager {
             ($func:expr $(, $args:expr)*) => {{
-                let a = a_expr.eval(datums, env, temp_storage)?;
-                let b = b_expr.eval(datums, env, temp_storage)?;
+                let a = a_expr.eval(datums, temp_storage)?;
+                let b = b_expr.eval(datums, temp_storage)?;
                 if self.propagates_nulls() && (a.is_null() || b.is_null()) {
                     return Ok(Datum::Null);
                 }
@@ -1943,8 +1914,8 @@ impl BinaryFunc {
         }
 
         match self {
-            BinaryFunc::And => and(datums, env, temp_storage, a_expr, b_expr),
-            BinaryFunc::Or => or(datums, env, temp_storage, a_expr, b_expr),
+            BinaryFunc::And => and(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::Or => or(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddInt32 => Ok(eager!(add_int32)),
             BinaryFunc::AddInt64 => Ok(eager!(add_int64)),
             BinaryFunc::AddFloat32 => Ok(eager!(add_float32)),
@@ -2417,11 +2388,10 @@ impl UnaryFunc {
     pub fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
-        env: &'a EvalEnv,
         temp_storage: &'a RowArena,
         a: &'a ScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, env, temp_storage)?;
+        let a = a.eval(datums, temp_storage)?;
         if self.propagates_nulls() && a.is_null() {
             return Ok(Datum::Null);
         }
@@ -2908,12 +2878,11 @@ impl fmt::Display for UnaryFunc {
 
 fn coalesce<'a>(
     datums: &[Datum<'a>],
-    env: &'a EvalEnv,
     temp_storage: &'a RowArena,
     exprs: &'a [ScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
     for e in exprs {
-        let d = e.eval(datums, env, temp_storage)?;
+        let d = e.eval(datums, temp_storage)?;
         if !d.is_null() {
             return Ok(d);
         }
@@ -3086,14 +3055,13 @@ impl VariadicFunc {
     pub fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
-        env: &'a EvalEnv,
         temp_storage: &'a RowArena,
         exprs: &'a [ScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
         macro_rules! eager {
             ($func:ident $(, $args:expr)*) => {{
                 let ds = exprs.iter()
-                    .map(|e| e.eval(datums, env, temp_storage))
+                    .map(|e| e.eval(datums, temp_storage))
                     .collect::<Result<Vec<_>, _>>()?;
                 if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
                     return Ok(Datum::Null);
@@ -3103,7 +3071,7 @@ impl VariadicFunc {
         }
 
         match self {
-            VariadicFunc::Coalesce => coalesce(datums, env, temp_storage, exprs),
+            VariadicFunc::Coalesce => coalesce(datums, temp_storage, exprs),
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
             VariadicFunc::Substr => Ok(eager!(substr)),

@@ -1758,7 +1758,10 @@ fn plan_function<'a>(
                     bail!("{} does not take any arguments", ident);
                 }
                 match ecx.qcx.lifetime {
-                    QueryLifetime::OneShot => Ok(ScalarExpr::CallNullary(NullaryFunc::Now)),
+                    QueryLifetime::OneShot => Ok(ScalarExpr::literal(
+                        Datum::from(ecx.qcx.scx.pcx.wall_time),
+                        ColumnType::new(ScalarType::TimestampTz),
+                    )),
                     QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
                 }
             }

@@ -39,7 +39,6 @@ impl super::Transform for FilterEqualLiteral {
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation, indexes);
         Ok(())
@@ -155,7 +154,6 @@ impl super::Transform for FilterLifting {
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) {
         self.transform(relation, indexes);
     }

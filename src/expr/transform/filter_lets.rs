@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
 
 /// Pushes common filter predicates on gets into the let binding.
 ///
@@ -26,7 +26,6 @@ impl super::Transform for FilterLets {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

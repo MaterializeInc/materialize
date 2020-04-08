@@ -12,10 +12,10 @@
 //! These structures must only be evolved backwards-compatibly, or loading
 //! catalogs created by previous versions of Materialize will fail.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
-use catalog::{Catalog, CatalogItemSerializer, Index, Sink, Source, View};
+use catalog::{Catalog, CatalogItemSerializer, Index, PlanContext, Sink, Source, View};
 use expr::transform::Optimizer;
 use failure::bail;
 use ore::collections::CollectionExt;
@@ -36,20 +36,19 @@ struct EvalEnv {
     pub wall_time: Option<DateTime<Utc>>,
 }
 
-impl From<EvalEnv> for expr::EvalEnv {
-    fn from(eval_env: EvalEnv) -> expr::EvalEnv {
-        expr::EvalEnv {
-            logical_time: eval_env.logical_time,
-            wall_time: eval_env.wall_time,
+impl From<EvalEnv> for PlanContext {
+    fn from(eval_env: EvalEnv) -> PlanContext {
+        PlanContext {
+            wall_time: eval_env.wall_time.unwrap_or_else(|| Utc.timestamp(0, 0)),
         }
     }
 }
 
-impl From<expr::EvalEnv> for EvalEnv {
-    fn from(eval_env: expr::EvalEnv) -> EvalEnv {
+impl From<PlanContext> for EvalEnv {
+    fn from(eval_env: PlanContext) -> EvalEnv {
         EvalEnv {
-            logical_time: eval_env.logical_time,
-            wall_time: eval_env.wall_time,
+            logical_time: None,
+            wall_time: Some(eval_env.wall_time),
         }
     }
 }
@@ -61,19 +60,19 @@ impl CatalogItemSerializer for SqlSerializer {
         let item = match item {
             catalog::CatalogItem::Source(source) => CatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
-                eval_env: None,
+                eval_env: Some(source.plan_cx.clone().into()),
             },
             catalog::CatalogItem::View(view) => CatalogItem::V1 {
                 create_sql: view.create_sql.clone(),
-                eval_env: Some(view.eval_env.clone().into()),
+                eval_env: Some(view.plan_cx.clone().into()),
             },
             catalog::CatalogItem::Index(index) => CatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
-                eval_env: Some(index.eval_env.clone().into()),
+                eval_env: Some(index.plan_cx.clone().into()),
             },
             catalog::CatalogItem::Sink(sink) => CatalogItem::V1 {
                 create_sql: sink.create_sql.clone(),
-                eval_env: None,
+                eval_env: Some(sink.plan_cx.clone().into()),
             },
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
@@ -91,38 +90,40 @@ impl CatalogItemSerializer for SqlSerializer {
             datums: Row::pack(&[]),
             types: vec![],
         };
+        let pcx = match eval_env {
+            // Old sources and sinks don't have plan contexts, but it's safe to
+            // just give them a default, as they clearly don't depend on the
+            // plan context.
+            None => PlanContext::default(),
+            Some(eval_env) => eval_env.into(),
+        };
         let stmt = sql::parse(create_sql)?.into_element();
-        let plan = sql::plan(catalog, &sql::InternalSession, stmt, &params)?;
+        let plan = sql::plan(&pcx, catalog, &sql::InternalSession, stmt, &params)?;
         Ok(match plan {
             Plan::CreateSource { source, .. } => catalog::CatalogItem::Source(Source {
                 create_sql: source.create_sql,
+                plan_cx: pcx,
                 connector: source.connector,
                 desc: source.desc,
             }),
             Plan::CreateView { view, .. } => {
                 let mut optimizer = Optimizer::default();
-                let eval_env = match eval_env {
-                    None => bail!("view missing eval env"),
-                    Some(eval_env) => eval_env.into(),
-                };
                 catalog::CatalogItem::View(View {
                     create_sql: view.create_sql,
-                    optimized_expr: optimizer.optimize(view.expr, catalog.indexes(), &eval_env)?,
-                    eval_env,
+                    plan_cx: pcx,
+                    optimized_expr: optimizer.optimize(view.expr, catalog.indexes())?,
                     desc: view.desc,
                 })
             }
             Plan::CreateIndex { index, .. } => catalog::CatalogItem::Index(Index {
                 create_sql: index.create_sql,
+                plan_cx: pcx,
                 on: index.on,
                 keys: index.keys,
-                eval_env: match eval_env {
-                    None => bail!("index missing eval env"),
-                    Some(eval_env) => eval_env.into(),
-                },
             }),
             Plan::CreateSink { sink, .. } => catalog::CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
+                plan_cx: pcx,
                 from: sink.from,
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder),
             }),

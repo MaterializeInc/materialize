@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
-use expr::{EvalEnv, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
 use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
@@ -74,7 +74,6 @@ pub struct Update {
 pub struct BuildDesc {
     pub id: GlobalId,
     pub relation_expr: OptimizedRelationExpr,
-    pub eval_env: EvalEnv,
     /// is_some if building a view, none otherwise
     pub typ: Option<RelationType>,
 }
@@ -139,13 +138,11 @@ impl DataflowDesc {
         &mut self,
         id: GlobalId,
         expr: OptimizedRelationExpr,
-        eval_env: EvalEnv,
         typ: RelationType,
     ) {
         self.objects_to_build.push(BuildDesc {
             id,
             relation_expr: expr,
-            eval_env,
             typ: Some(typ),
         });
     }
@@ -156,7 +153,6 @@ impl DataflowDesc {
         on_id: GlobalId,
         on_type: RelationType,
         keys: Vec<ScalarExpr>,
-        eval_env: EvalEnv,
     ) {
         self.objects_to_build.push(BuildDesc {
             id,
@@ -164,7 +160,6 @@ impl DataflowDesc {
                 input: Box::new(RelationExpr::global_get(on_id, on_type)),
                 keys: vec![keys],
             }),
-            eval_env,
             typ: None,
         });
     }

@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
+use chrono::{DateTime, Utc};
 use failure::bail;
 use lazy_static::lazy_static;
 use log::{info, trace};
@@ -20,7 +21,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{EvalEnv, GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
+use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::RelationDesc;
 
 use crate::error::{Error, ErrorKind};
@@ -107,6 +108,7 @@ pub enum CatalogItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Source {
     pub create_sql: String,
+    pub plan_cx: PlanContext,
     pub connector: SourceConnector,
     pub desc: RelationDesc,
 }
@@ -114,6 +116,7 @@ pub struct Source {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Sink {
     pub create_sql: String,
+    pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
 }
@@ -127,17 +130,34 @@ pub enum SinkConnectorState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct View {
     pub create_sql: String,
+    pub plan_cx: PlanContext,
     pub optimized_expr: OptimizedRelationExpr,
-    pub eval_env: EvalEnv,
     pub desc: RelationDesc,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
     pub create_sql: String,
+    pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<ScalarExpr>,
-    pub eval_env: EvalEnv,
+}
+
+/// Controls planning of a SQL query.
+///
+// TODO(benesch): this doesn't really belong in `catalog`, but there's nowhere
+// else good to put a type that's used by both `catalog` and `sql`.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct PlanContext {
+    pub wall_time: DateTime<Utc>,
+}
+
+impl Default for PlanContext {
+    fn default() -> PlanContext {
+        PlanContext {
+            wall_time: Utc::now(),
+        }
+    }
 }
 
 impl CatalogItem {

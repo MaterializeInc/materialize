@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, RelationExpr, ScalarExpr};
 
 /// Removes `Reduce` when the input has (compatible) keys.
 ///
@@ -24,7 +24,6 @@ impl super::Transform for ReduceElision {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

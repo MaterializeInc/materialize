@@ -26,5 +26,5 @@ pub use relation::{
     RowSetFinishing,
 };
 pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
-pub use scalar::{like_pattern, EvalEnv, EvalError, ScalarExpr};
+pub use scalar::{like_pattern, EvalError, ScalarExpr};
 pub use transform::OptimizedRelationExpr;
