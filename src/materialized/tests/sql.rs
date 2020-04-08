@@ -153,6 +153,61 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn test_tail_unmaterialized() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let config = util::Config::default();
+    let (_server, mut client) = util::start_server(config)?;
+
+    let temp_dir = tempfile::tempdir()?;
+    let path = Path::join(temp_dir.path(), "dynamic.csv");
+    let mut file = File::create(&path)?;
+    let mut append = |data| -> Result<_, Box<dyn Error>> {
+        file.write_all(data)?;
+        file.sync_all()?;
+        Ok(())
+    };
+
+    client.batch_execute(&*format!(
+        "CREATE SOURCE dynamic_csv FROM FILE '{}' WITH (tail = true)
+         FORMAT CSV WITH 3 COLUMNS",
+        path.display()
+    ))?;
+
+    // Test the TAIL SQL command on the tailed file source. This is end-to-end
+    // tailing: changes to the file will propagate through Materialize and
+    // into the user's SQL console.
+    let cancel_token = client.cancel_token();
+    let mut tail_reader = client.copy_out("TAIL dynamic_csv")?.split(b'\n');
+
+    append(b"City 1,ST,00001\n")?;
+    assert!(tail_reader
+        .next()
+        .unwrap()?
+        .starts_with(&b"City 1\tST\t00001\t1\tDiff: 1 at "[..]));
+
+    append(b"City 2,ST,00002\n")?;
+    assert!(tail_reader
+        .next()
+        .unwrap()?
+        .starts_with(&b"City 2\tST\t00002\t2\tDiff: 1 at "[..]));
+
+    // The tail won't end until a cancellation request is sent.
+    cancel_token.cancel_query(postgres::NoTls)?;
+
+    assert!(tail_reader.next().is_none());
+    drop(tail_reader);
+
+    // Check that writing to the tailed file after the view and source are
+    // dropped doesn't cause a crash (#1361).
+    client.execute("DROP SOURCE dynamic_csv", &[])?;
+    thread::sleep(Duration::from_millis(100));
+    append(b"Glendale,AZ,85310\n")?;
+    thread::sleep(Duration::from_millis(100));
+    Ok(())
+}
+
 // Tests that a client that launches a non-terminating TAIL and disconnects
 // does not keep the server alive forever.
 #[test]
