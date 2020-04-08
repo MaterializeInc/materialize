@@ -26,7 +26,7 @@ Field | Use
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
-**AVRO OCF** _path&lowbar;prefix_ | The absolute path and file name prefix of the Avro Object Container file (OCF) to create and write to.
+**AVRO OCF** _path_ | The absolute path and file name of the Avro Object Container file (OCF) to create and write to. The filename will be modified to let Materialize create a unique file each time Materialize starts, but the file extension will not be modified. You can find more details [here](#avro-ocf-sinks).
 
 ### Kafka connector
 
@@ -41,17 +41,25 @@ Field | Use
 ## Detail
 
 - Materialize currently only supports Avro formatted sinks that write to either a single partition topic or a Avro object container file.
-- On each restart, Materialize creates new, distinct topics and files for each sink. Topic and file prefixes are suffixed with `{sink global-id}-{startup-time}-{nonce}` to get the actual name, and file names preserve the extension in the `path_prefix` argument.
+- On each restart, Materialize creates new, distinct topics and files for each sink.
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
 - Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a [Debezium-style diff envelope](../../overview/api-components/#envelopes) to capture changes in the input view or source.
 
 ### Kafka sinks
 
-When creating Kafka sinks, Materialize uses the Kafka Admin API to create a new topic, and registers its Avro schema in the Confluent Schema Registry.
+When creating Kafka sinks, Materialize uses the Kafka Admin API to create a new topic, and registers its Avro schema in the Confluent Schema Registry. Materialize names the new topic using the format below.
+```nofmt
+{topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
+```
+You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 
 ### Avro OCF sinks
 
-When creating Avro Object Container File (OCF) sinks, Materialize creates a new sink file using the naming scheme defined above and appends the Avro schema data in its header.
+When creating Avro Object Container File (OCF) sinks, Materialize creates a new sink OCF and appends the Avro schema data in its header. Materialize names the new file using the format below.
+```nofmt
+{path.base_directory}-{path.file_stem}-{sink_global_id}-{materialize-startup_time}-{nonce}-{path.file_extension}
+```
+You can query `mz_avro_ocf_sinks` to get file name information for each Avro OCF sink. Look [here](#avro-ocf-sinks-1) for a more concrete example.
 
 ## Examples
 
