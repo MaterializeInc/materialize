@@ -11,14 +11,14 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Cursor, Write};
 use std::os::unix::ffi::OsStringExt;
-use std::path;
+use std::path::{self, PathBuf};
 
-use ::avro::{Codec, Reader, Writer};
+use futures::future::TryFutureExt;
+use futures::stream::TryStreamExt;
 use retry::delay::Fibonacci;
-use tokio::stream::StreamExt;
 
 use crate::action::{Action, State};
-use crate::format::avro;
+use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
 
 pub struct WriteAction {
@@ -58,8 +58,8 @@ impl Action for WriteAction {
         let path = state.temp_dir.path().join(&self.path);
         println!("Writing to {}", path.display());
         let mut file = File::create(path).map_err(|e| e.to_string())?;
-        let schema = interchange::avro::parse_schema(&self.schema)
-            .map_err(|e| format!("parsing avro schema: {}", e))?;
+        let schema =
+            avro::parse_schema(&self.schema).map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut writer = Writer::with_codec_opt(schema, &mut file, self.codec);
         write_records(&mut writer, &self.records)?;
         file.sync_all()
@@ -111,7 +111,7 @@ where
 {
     let schema = writer.schema().clone();
     for record in records {
-        let record = crate::format::avro::json_to_avro(
+        let record = avro::from_json(
             &serde_json::from_str(record).map_err(|e| format!("parsing avro datum: {}", e))?,
             schema.top_node(),
         )?;
@@ -147,67 +147,39 @@ impl Action for VerifyAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path: String = retry::retry(Fibonacci::from_millis(100).take(5), || {
+        let path = retry::retry(Fibonacci::from_millis(100).take(5), || {
             let row = state
                 .pgclient
                 .query_one(
                     "SELECT path FROM mz_catalog_names NATURAL JOIN mz_avro_ocf_sinks \
-                 WHERE name = $1",
+                     WHERE name = $1",
                     &[&self.sink],
                 )
                 .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
             let bytes: Vec<u8> = row.get("path");
-            let os_string: OsString = OsStringExt::from_vec(bytes);
-            Ok::<_, String>(
-                os_string
-                    .into_string()
-                    .map_err(|_| "cannot convert path to string".to_string())?,
-            )
+            Ok::<_, String>(PathBuf::from(OsString::from_vec(bytes)))
         })
         .map_err(|e| format!("retrieving path: {:?}", e))?;
 
-        println!("Verifying results in file {}", path);
+        println!("Verifying results in file {}", path.display());
 
-        // Get the rows from this file
-        let sink_file = state
-            .tokio_runtime
-            .block_on(tokio::fs::File::open(&path))
-            .map_err(|e| format!("reading sink file {}: {}", path, e))?;
-        let reader = state
-            .tokio_runtime
-            .block_on(Reader::new(sink_file))
-            .map_err(|e| format!("parsing avro values from file: {}", e))?;
-        let schema = reader.writer_schema().clone();
-        let actual_messages: Vec<_> = state
-            .tokio_runtime
-            .block_on(reader.into_stream().collect::<Vec<_>>())
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("converting to rust objects: {}", e))?;
+        // Get the rows from this file.
+        let (schema, actual) = state.tokio_runtime.block_on(async {
+            let file = tokio::fs::File::open(&path)
+                .map_err(|e| format!("reading sink file {}: {}", path.display(), e))
+                .await?;
+            let reader = Reader::new(file)
+                .map_err(|e| format!("creating avro reader: {}", e))
+                .await?;
+            let schema = reader.writer_schema().clone();
+            let messages: Vec<_> = reader
+                .into_stream()
+                .try_collect()
+                .map_err(|e| format!("reading avro values from file: {}", e))
+                .await?;
+            Ok::<_, String>((schema, messages))
+        })?;
 
-        let mut converted_expected_messages = Vec::new();
-        for expected in &self.expected {
-            converted_expected_messages.push(
-                crate::format::avro::json_to_avro(
-                    &serde_json::from_str(expected)
-                        .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
-                    schema.top_node(),
-                )
-                .unwrap(),
-            );
-        }
-
-        let missing_values =
-            avro::multiset_difference(&converted_expected_messages, &actual_messages);
-        let additional_values =
-            avro::multiset_difference(&actual_messages, &converted_expected_messages);
-        if !missing_values.is_empty() || !additional_values.is_empty() {
-            return Err(format!(
-                "Mismatched Kafka sink rows. Missing: {:#?}, Unexpected: {:#?}",
-                missing_values, additional_values
-            ));
-        }
-
-        Ok(())
+        avro::validate_sink(&schema, &self.expected, &actual)
     }
 }

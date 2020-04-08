@@ -4,14 +4,18 @@ description: "Expresses a JSON object"
 menu:
   main:
     parent: 'sql-types'
+aliases:
+  - /docs/sql/types/json
 ---
 
-`jsonb` data expresses a JavaScript Object Notation (JSON) object.
+`jsonb` data expresses a JavaScript Object Notation (JSON) object similar to PostgreSQL's implementation.
 
 Detail | Info
 -------|------
 **Quick Syntax** | `'{"1":2,"3":4}'::JSONB`
 **Size** | Variable
+
+Materialize does not yet support a type more similar to PostgreSQL's impplementation of `json`.
 
 ## Syntax
 
@@ -59,17 +63,17 @@ SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB);
 
 You can [cast](../../functions/cast) `jsonb` to:
 
-- [`string`](../string) (stringifies `jsonb`)
-- [`float`](../string)
 - [`bool`](../boolean)
+- [`real`/`double`](../float)
+- [`text`](../text) (stringifies `jsonb`)
 
 #### To `jsonb`
 
 You can [cast](../../functions/cast) the following types to `jsonb`:
 
-- [`string`](../string) (parses `jsonb`)
+- [`text`](../text) (parses `jsonb`)
 
-#### Notes about converting `jsonb` to `string`/`text`
+#### Notes about converting `jsonb` to `text`
 
 `jsonb` can have some odd-feeling corner cases when converting to or from `string` (also known as `text`).
 

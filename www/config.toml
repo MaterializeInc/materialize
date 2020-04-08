@@ -22,14 +22,20 @@ disableKinds = ["home"]
     weight = 5
 
     [[menu.main]]
+    identifier = "cli"
+    name = "CLI"
+    url = "/docs/cli/"
+    weight = 20
+
+    [[menu.main]]
     identifier = "connections"
     name = "Connect"
-    weight = 20
+    weight = 40
 
     [[menu.main]]
     identifier = "sql"
     name = "SQL"
-    weight = 30
+    weight = 60
 
     [[menu.main]]
     identifier = "sql-types"
@@ -52,14 +58,20 @@ disableKinds = ["home"]
     parent = "sql"
 
     [[menu.main]]
+    identifier = "monitoring"
+    name = "Monitoring"
+    url = "/docs/monitoring"
+    weight = 80
+
+    [[menu.main]]
     identifier = "demos"
     name = "Demos"
-    weight = 40
+    weight = 100
 
     [[menu.main]]
     identifier = "third-party"
     name = "Third-Party Tools"
-    weight = 50
+    weight = 120
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works

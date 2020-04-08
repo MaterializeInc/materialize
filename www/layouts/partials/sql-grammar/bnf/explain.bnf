@@ -1,0 +1,11 @@
+explain ::=
+  'EXPLAIN'
+  (
+    'SQL' |
+    'TYPED'? ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN'
+  )
+  'FOR'
+  (
+    select_stmt |
+    'VIEW' view_name
+  )

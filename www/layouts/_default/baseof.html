@@ -11,7 +11,18 @@ by the Apache License, Version 2.0.  */}}
 
 <head>
     <meta charset="utf-8">
-    <title>{{ block "title" . }}{{ .Site.Title }}{{ end }}</title>
+
+    <title>
+    {{ block "title" . }}
+        {{ if isset .Params "htmltitle" }}
+            {{ .Params.htmltitle }}
+        {{ else }}
+            {{ .Page.Title }}
+        {{ end }}
+        &mdash; {{ .Site.Title }}
+    {{ end }}
+    </title>
+
     {{ partial "head.html" . }}
 </head>
 

@@ -64,7 +64,8 @@
             },
             {
                 "signature": "jsonb_agg(expression) -> jsonb",
-                "description": "Aggregate values (including nulls) as a jsonb array"
+                "description": "Aggregate values (including nulls) as a jsonb array.",
+                "url": "jsonb_agg"
             }
         ]
     },
@@ -199,6 +200,10 @@
         "type": "Time",
         "description": "Time functions take or produce a time-like type, e.g. [`date`](../types/date), [`timestamp`](../types/timestamp), [`timestamptz`](../types/timestamptz).",
         "functions": [
+            {
+                "signature": "current_timestamp() -> timestamptz",
+                "description": "The `timestamptz` representing when the query was executed.<br/><br/>**NOTE**: Users cannot define views with queries containing `current_timestamp()`."
+            },
             {
                 "signature": "date_trunc(time_component: str, val: timestamp) -> timestamp",
                 "description": "Largest `time_component` <= `val`",

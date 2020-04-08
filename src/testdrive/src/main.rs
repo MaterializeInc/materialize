@@ -9,10 +9,13 @@
 
 use std::env;
 use std::process;
+use std::time::Duration;
 
 use getopts::Options;
+use tokio::runtime::Runtime;
 
 use testdrive::error::{Error, ResultExt};
+use testdrive::util;
 use testdrive::Config;
 
 fn main() {
@@ -32,10 +35,11 @@ fn run() -> Result<(), Error> {
     opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
     opts.optopt(
         "",
-        "kinesis-region",
-        "optional custom kinesis region",
+        "aws-region",
+        "a named AWS region to target for AWS API requests",
         "custom",
     );
+    opts.optopt("", "aws-endpoint", "custom AWS endpoint", "URL");
     opts.optopt(
         "",
         "materialized-url",
@@ -65,13 +69,50 @@ fn run() -> Result<(), Error> {
         });
     }
 
-    let config = Config {
-        kafka_addr: opts.opt_str("kafka-addr"),
-        schema_registry_url: opts.opt_str("schema-registry-url"),
-        kinesis_region: opts.opt_str("kinesis-region"),
-        materialized_url: opts.opt_str("materialized-url"),
-        materialized_catalog_path: opts.opt_str("validate-catalog"),
-    };
+    let mut config = Config::default();
+    if let Some(addr) = opts.opt_str("kafka-addr") {
+        config.kafka_addr = addr;
+    }
+    if let Some(url) = opts.opt_str("schema-registry-url") {
+        config.schema_registry_url = url.parse().map_err(|e| Error::General {
+            ctx: "parsing schema registry url".into(),
+            cause: Some(Box::new(e)),
+            hints: vec![],
+        })?;
+    }
+    if let (Ok(Some(region)), None) = (opts.opt_get("aws-region"), opts.opt_str("aws-endpoint")) {
+        // Standard AWS region without a custom endpoint. Try to find actual AWS
+        // credentials.
+        let mut runtime = Runtime::new().unwrap();
+        let (account, credentials) =
+            runtime.block_on(util::aws::account_details(Duration::from_secs(5)))?;
+        config.aws_region = region;
+        config.aws_account = account;
+        config.aws_credentials = credentials;
+    } else {
+        // Either a non-standard AWS region, a custom endpoint, or both. Assume
+        // dummy authentication, and just use the default dummy credentials in
+        // the default config.
+        config.aws_region = rusoto_core::Region::Custom {
+            name: opts
+                .opt_str("aws-region")
+                .unwrap_or_else(|| "localstack".into()),
+            endpoint: opts
+                .opt_str("aws-endpoint")
+                .unwrap_or_else(|| "http://localhost:4566".into()),
+        };
+    }
+    if let Some(url) = opts.opt_str("materialized-url") {
+        config.materialized_pgconfig = url.parse().map_err(|e| Error::General {
+            ctx: "parsing materialized url".into(),
+            cause: Some(Box::new(e)),
+            hints: vec![],
+        })?;
+    }
+
+    if let Some(path) = opts.opt_str("validate-catalog") {
+        config.materialized_catalog_path = Some(path.into());
+    }
 
     if opts.free.is_empty() {
         testdrive::run_stdin(&config)

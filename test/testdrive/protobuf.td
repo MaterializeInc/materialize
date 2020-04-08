@@ -21,7 +21,7 @@
 
 $ kafka-create-topic topic=messages
 
-$ kafka-ingest format=protobuf topic=messages message=.Struct timestamp=1
+$ kafka-ingest format=protobuf topic=messages message=struct timestamp=1
 {"int": 1, "bad_int": 1, "bin": "One", "st": "my-string"}
 {"int": 2, "bad_int": 2, "bin": "One", "st": "something-valid"}
 

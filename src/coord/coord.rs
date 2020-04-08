@@ -1212,14 +1212,20 @@ where
         conn_id: u32,
         source_id: GlobalId,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let index_id = if let Some(Some((index_id, _))) = self
+        // Determine the frontier of updates to tail *from*.
+        // Updates greater or equal to this frontier will be produced.
+        let since = if let Some(Some((index_id, _))) = self
             .views
             .get(&source_id)
             .map(|view_state| &view_state.default_idx)
         {
-            index_id
+            self.upper_of(index_id)
+                .expect("name missing at coordinator")
+                .get(0)
+                .copied()
+                .unwrap_or(Timestamp::max_value())
         } else {
-            bail!("Cannot tail a view that has not been materialized.")
+            0 as Timestamp
         };
 
         let sink_name = format!(
@@ -1231,12 +1237,6 @@ where
         let sink_id = self.catalog.allocate_id()?;
         self.active_tails.insert(conn_id, sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-        let since = self
-            .upper_of(index_id)
-            .expect("name missing at coordinator")
-            .get(0)
-            .copied()
-            .unwrap_or(Timestamp::max_value());
         self.create_sink_dataflow(
             sink_name,
             sink_id,

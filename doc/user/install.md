@@ -65,7 +65,7 @@ release.
 git clone https://github.com/MaterializeInc/materialize.git
 cd materialize
 git checkout {{< version >}}
-cargo build
+cargo build --release
 ```
 
 ## Run the binary
@@ -73,8 +73,10 @@ cargo build
 You can start the `materialized` process by simply running the binary, e.g.
 
 ```nofmt
-./materialized
+./materialized --w=1
 ```
+
+`--w=1` specifies that the process will use 1 worker. You can also find more detail about our [command line flags](../cli/#command-line-flags).
 
 By default `materialized` uses:
 

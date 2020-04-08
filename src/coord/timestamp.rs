@@ -663,8 +663,7 @@ impl Timestamper {
                 let pcount: SqlVal<i32> = row.get(0)?;
                 let pid: SqlVal<PartitionId> = match row.get(1) {
                     Ok(val) => val,
-                    Err(err) => {
-                        error!("Reading from timestamps and expected type PartitionId, found other: {}", err);
+                    Err(_err) => {
                         // Historically, pid was an i32 value. If the found value is not of type
                         // PartitionId, try to read an i32.
                         let pid: SqlVal<i32> = row.get(1)?;

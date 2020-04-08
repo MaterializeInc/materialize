@@ -67,7 +67,7 @@ data into Materialize.
     ```sql
     CREATE SOURCE server_source FROM FILE '/Users/sean/server.log'...
     ```
-- All data in file sources are treated as [`string`](../types/string).
+- All data in file sources are treated as [`string`](../../types/string).
 
 ### Regex format details
 

@@ -34,13 +34,15 @@ _tz&lowbar;offset_ | _(NOP)_ The timezone's distance, in hours, from UTC.
 
 You can [cast](../../functions/cast) `date` to:
 
+- [`text`](../text)
 - [`timestamp`](../timestamp)
 - [`timestamptz`](../timestamp)
-- [`string`](../string)
 
 #### To `date`
 
-You cannot cast any other type to `date`.
+You can [cast](../../functions/cast) the following types to `date`:
+
+- [`text`](../text)
 
 ### Valid operations
 

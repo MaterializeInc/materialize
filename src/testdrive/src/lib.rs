@@ -20,6 +20,7 @@ mod format;
 mod parser;
 
 pub mod error;
+pub mod util;
 
 pub use self::action::Config;
 

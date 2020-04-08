@@ -98,7 +98,7 @@ This creates a source that...
 - Has one column, `data`, which represents the stream's incoming bytes.
 
 To use this data in views, you can decode its bytes into
-[`jsonb`](/docs/sql/data-types/jsonb). For example:
+[`jsonb`](/docs/sql/types/jsonb). For example:
 
 ```sql
 CREATE MATERIALIZED VIEW jsonified_kinesis_source AS

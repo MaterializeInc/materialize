@@ -123,7 +123,7 @@ CREATE TABLE date_trunc_timestamps (
 query T multiline
 EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
-0 =
+%0 =
 | Get materialize.public.date_trunc_timestamps (u5)
 | Map date_trunc_day_ts(#0)
 | Project (#1)
@@ -133,14 +133,14 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
-0 =
+%0 =
 | Get materialize.public.date_trunc_fields (u1)
 | ArrangeBy ()
 
-1 =
+%1 =
 | Get materialize.public.date_trunc_timestamps (u5)
 
-2 =
+%2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
 | | demand = (#0, #1)

@@ -9,23 +9,25 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::mem;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use chrono::Utc;
 use lazy_static::lazy_static;
 use protobuf::Message;
 use rand::Rng;
 use regex::{Captures, Regex};
-use rusoto_core::{HttpClient, Region};
-use rusoto_credential::{ChainProvider, ProvideAwsCredentials, StaticProvider};
+use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::KinesisClient;
-use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
+use url::Url;
 
 use repr::strconv;
 
 use crate::error::{Error, InputError, ResultExt};
 use crate::parser::{Command, PosCommand, SqlExpectedResult};
+use crate::util;
 
 mod avro_ocf;
 mod file;
@@ -34,21 +36,39 @@ mod kinesis;
 mod sql;
 
 const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_secs(60);
-// Constants to use when hitting Kinesis locally (via localstack)
-const LOCALSTACK_ENDPOINT: &str = "http://localhost:4568";
-const DUMMY_AWS_ACCOUNT: &str = "000000000000";
-const DUMMY_AWS_REGION: &str = "custom-test";
-const DUMMY_AWS_ACCESS_KEY: &str = "dummy-access-key";
-const DUMMY_AWS_SECRET_ACCESS_KEY: &str = "dummy-secret-access-key";
 
 /// User-settable configuration parameters.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Config {
-    pub kafka_addr: Option<String>,
-    pub schema_registry_url: Option<String>,
-    pub kinesis_region: Option<String>,
-    pub materialized_url: Option<String>,
-    pub materialized_catalog_path: Option<String>,
+    pub kafka_addr: String,
+    pub schema_registry_url: Url,
+    pub aws_region: rusoto_core::Region,
+    pub aws_account: String,
+    pub aws_credentials: AwsCredentials,
+    pub materialized_pgconfig: postgres::Config,
+    pub materialized_catalog_path: Option<PathBuf>,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        const DUMMY_AWS_ACCOUNT: &str = "000000000000";
+        const DUMMY_AWS_ACCESS_KEY: &str = "dummy-access-key";
+        const DUMMY_AWS_SECRET_ACCESS_KEY: &str = "dummy-secret-access-key";
+        Config {
+            kafka_addr: "localhost:9092".into(),
+            schema_registry_url: "http://localhost:8081".parse().unwrap(),
+            aws_region: rusoto_core::Region::default(),
+            aws_account: DUMMY_AWS_ACCOUNT.into(),
+            aws_credentials: AwsCredentials::new(
+                DUMMY_AWS_ACCESS_KEY,
+                DUMMY_AWS_SECRET_ACCESS_KEY,
+                None,
+                None,
+            ),
+            materialized_pgconfig: mem::take(postgres::Config::new().host("localhost").port(6875)),
+            materialized_catalog_path: None,
+        }
+    }
 }
 
 pub struct State {
@@ -58,19 +78,17 @@ pub struct State {
     tokio_runtime: tokio::runtime::Runtime,
     materialized_addr: String,
     pgclient: postgres::Client,
-    schema_registry_url: String,
+    schema_registry_url: Url,
     ccsr_client: ccsr::AsyncClient,
     kafka_addr: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
     kafka_topics: HashMap<String, i32>,
-    kinesis_client: KinesisClient,
-    aws_region: String,
+    aws_region: rusoto_core::Region,
     aws_account: String,
-    aws_access_key: String,
-    aws_secret_access_key: String,
-    token: Option<String>,
+    aws_credentials: AwsCredentials,
+    kinesis_client: KinesisClient,
 }
 
 impl State {
@@ -124,7 +142,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     );
     vars.insert(
         "testdrive.schema-registry-url".into(),
-        state.schema_registry_url.clone(),
+        state.schema_registry_url.to_string(),
     );
     vars.insert("testdrive.seed".into(), state.seed.to_string());
     vars.insert(
@@ -147,24 +165,33 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             path.display().to_string()
         });
     }
-    vars.insert("testdrive.aws-region".into(), state.aws_region.clone());
+    vars.insert(
+        "testdrive.aws-region".into(),
+        state.aws_region.name().to_owned(),
+    );
     vars.insert("testdrive.aws-account".into(), state.aws_account.clone());
     vars.insert(
         "testdrive.aws-access-key".into(),
-        state.aws_access_key.clone(),
+        state.aws_credentials.aws_access_key_id().to_owned(),
     );
     vars.insert(
         "testdrive.aws-secret-access-key".into(),
-        state.aws_secret_access_key.clone(),
+        state.aws_credentials.aws_secret_access_key().to_owned(),
     );
-    let token = match &state.token {
-        Some(token) => token.clone(),
-        None => String::from(""),
-    };
-    vars.insert("testdrive.aws-token".into(), token);
     vars.insert(
-        "testdrive.kinesis-endpoint".into(),
-        LOCALSTACK_ENDPOINT.to_string(),
+        "testdrive.aws-token".into(),
+        state
+            .aws_credentials
+            .token()
+            .clone()
+            .unwrap_or_else(String::new),
+    );
+    vars.insert(
+        "testdrive.aws-endpoint".into(),
+        match &state.aws_region {
+            rusoto_core::Region::Custom { endpoint, .. } => endpoint.clone(),
+            _ => "".into(),
+        },
     );
     for cmd in cmds {
         let pos = cmd.pos;
@@ -274,7 +301,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
     let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory".into())?;
 
     let data_dir = if let Some(path) = &config.materialized_catalog_path {
-        let mut path = PathBuf::from(path);
+        let mut path = path.clone();
         if !path.ends_with("catalog") {
             path.push("catalog");
         }
@@ -302,58 +329,35 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         None
     };
 
-    let mut tokio_runtime = tokio::runtime::Runtime::new().map_err(|e| Error::General {
+    let tokio_runtime = tokio::runtime::Runtime::new().map_err(|e| Error::General {
         ctx: "creating Tokio runtime".into(),
         cause: Some(Box::new(e)),
         hints: vec![],
     })?;
 
     let (materialized_addr, pgclient) = {
-        let url = config
-            .materialized_url
-            .as_deref()
-            .unwrap_or_else(|| "postgres://ignored@localhost:6875");
-        let pgconfig: postgres::Config = url.parse().map_err(|e| Error::General {
-            ctx: "parsing materialized url".into(),
-            cause: Some(Box::new(e)),
-            hints: vec![],
-        })?;
-        let pgclient = pgconfig
+        let materialized_url = util::postgres::config_url(&config.materialized_pgconfig)?;
+        let pgclient = config
+            .materialized_pgconfig
             .connect(postgres::NoTls)
             .map_err(|e| Error::General {
                 ctx: "opening SQL connection".into(),
                 cause: Some(Box::new(e)),
                 hints: vec![
-                    format!("connection string: {}", url),
+                    format!("connection string: {}", materialized_url),
                     "are you running the materialized server?".into(),
                 ],
             })?;
         let materialized_addr = format!(
             "{}:{}",
-            match &pgconfig.get_hosts()[0] {
-                postgres::config::Host::Tcp(s) => s.to_string(),
-                postgres::config::Host::Unix(p) => p.display().to_string(),
-            },
-            pgconfig.get_ports()[0]
+            materialized_url.host_str().unwrap(),
+            materialized_url.port().unwrap()
         );
         (materialized_addr, pgclient)
     };
 
-    let schema_registry_url = config
-        .schema_registry_url
-        .as_deref()
-        .unwrap_or_else(|| "http://localhost:8081")
-        .to_owned();
-
-    let ccsr_client =
-        ccsr::AsyncClient::new(schema_registry_url.parse().map_err(|e| Error::General {
-            ctx: "opening schema registry connection".into(),
-            cause: Some(Box::new(e)),
-            hints: vec![
-                format!("url: {}", schema_registry_url),
-                "are you running the schema registry?".into(),
-            ],
-        })?);
+    let schema_registry_url = config.schema_registry_url.to_owned();
+    let ccsr_client = ccsr::AsyncClient::new(config.schema_registry_url.clone());
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
@@ -361,103 +365,56 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         use rdkafka::config::ClientConfig;
         use rdkafka::producer::FutureProducer;
 
-        let addr = config
-            .kafka_addr
-            .as_deref()
-            .unwrap_or_else(|| "localhost:9092");
-
-        let mut config = ClientConfig::new();
-        config.set("bootstrap.servers", &addr);
+        let mut kafka_config = ClientConfig::new();
+        kafka_config.set("bootstrap.servers", &config.kafka_addr);
 
         let admin: AdminClient<DefaultClientContext> =
-            config.create().map_err(|e| Error::General {
+            kafka_config.create().map_err(|e| Error::General {
                 ctx: "opening Kafka connection".into(),
                 cause: Some(Box::new(e)),
-                hints: vec![format!("connection string: {}", addr)],
+                hints: vec![format!("connection string: {}", config.kafka_addr)],
             })?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
 
-        let producer: FutureProducer = config.create().map_err(|e| Error::General {
+        let producer: FutureProducer = kafka_config.create().map_err(|e| Error::General {
             ctx: "opening Kafka producer connection".into(),
             cause: Some(Box::new(e)),
-            hints: vec![format!("connection string: {}", addr)],
+            hints: vec![format!("connection string: {}", config.kafka_addr)],
         })?;
 
         let topics = HashMap::new();
 
-        (addr.to_owned(), admin, admin_opts, producer, topics)
+        (
+            config.kafka_addr.to_owned(),
+            admin,
+            admin_opts,
+            producer,
+            topics,
+        )
     };
 
-    let (kinesis_client, aws_region, aws_account, aws_access_key, aws_secret_access_key, token) = {
-        match config.kinesis_region.clone() {
-            Some(region_str) => match region_str.parse::<Region>() {
-                Ok(region) => {
-                    // If given a real AWS region, hit real AWS!
-                    let mut chain_provider = ChainProvider::new();
-                    chain_provider.set_timeout(Duration::from_secs(60));
-                    let credentials = match tokio_runtime.block_on(chain_provider.credentials()) {
-                        Ok(credentials) => credentials,
-                        Err(e) => {
-                            return Err(Error::General {
-                                ctx: format!(
-                                    "hit error trying to get AWS credentials from environment: {}",
-                                    e.to_string()
-                                ),
-                                cause: None,
-                                hints: vec![],
-                            })
-                        }
-                    };
+    let (aws_region, aws_account, aws_credentials, kinesis_client) = {
+        let provider = rusoto_credential::StaticProvider::new(
+            config.aws_credentials.aws_access_key_id().to_owned(),
+            config.aws_credentials.aws_secret_access_key().to_owned(),
+            config.aws_credentials.token().clone(),
+            config
+                .aws_credentials
+                .expires_at()
+                .map(|expires_at| (expires_at - Utc::now()).num_seconds()),
+        );
+        let dispatcher = rusoto_core::HttpClient::new().unwrap();
 
-                    // Get the AWS account info for the Kinesis stream ARNs
-                    let sts_client = StsClient::new(region.clone());
-                    let account = match tokio_runtime
-                        .block_on(sts_client.get_caller_identity(GetCallerIdentityRequest {}))
-                    {
-                        Ok(output) => match output.account {
-                            Some(account) => account,
-                            None => {
-                                return Err(Error::General {
-                                    ctx: String::from("expected to find AWS account, found none"),
-                                    cause: None,
-                                    hints: vec![],
-                                })
-                            }
-                        },
-                        Err(e) => {
-                            return Err(Error::General {
-                                ctx: format!(
-                                    "hit error trying to get AWS account from environment: {}",
-                                    e.to_string()
-                                ),
-                                cause: None,
-                                hints: vec![],
-                            })
-                        }
-                    };
+        let kinesis_client =
+            KinesisClient::new_with(dispatcher, provider, config.aws_region.clone());
 
-                    let client =
-                        KinesisClient::new_with(HttpClient::new().unwrap(), chain_provider, region);
-                    (
-                        client,
-                        region_str,
-                        account,
-                        credentials.aws_access_key_id().to_string(),
-                        credentials.aws_secret_access_key().to_string(),
-                        credentials.token().clone(),
-                    )
-                }
-                Err(_e) => {
-                    // Hit fake AWS!
-                    get_kinesis_details_for_localstack()
-                }
-            },
-            None => {
-                // Hit fake AWS!
-                get_kinesis_details_for_localstack()
-            }
-        }
+        (
+            config.aws_region.clone(),
+            config.aws_account.clone(),
+            config.aws_credentials.clone(),
+            kinesis_client,
+        )
     };
 
     Ok(State {
@@ -474,41 +431,9 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         kafka_admin_opts,
         kafka_producer,
         kafka_topics,
-        kinesis_client,
         aws_region,
         aws_account,
-        aws_access_key,
-        aws_secret_access_key,
-        token,
-    })
-}
-
-fn get_kinesis_details_for_localstack() -> (
-    KinesisClient,
-    String,
-    String,
-    String,
-    String,
-    Option<String>,
-) {
-    let region = Region::Custom {
-        name: DUMMY_AWS_REGION.to_string(), // NB: This must match the region localstack is started up with!!
-        endpoint: LOCALSTACK_ENDPOINT.to_string(),
-    };
-    // Create a new KinesisClient
-    let provider = StaticProvider::new(
-        DUMMY_AWS_ACCESS_KEY.to_string(),
-        DUMMY_AWS_SECRET_ACCESS_KEY.to_string(),
-        None,
-        None,
-    );
-    let kinesis_client = KinesisClient::new_with(HttpClient::new().unwrap(), provider, region);
-    (
+        aws_credentials,
         kinesis_client,
-        DUMMY_AWS_REGION.to_string(),
-        DUMMY_AWS_ACCOUNT.to_string(),
-        DUMMY_AWS_ACCESS_KEY.to_string(),
-        DUMMY_AWS_SECRET_ACCESS_KEY.to_string(),
-        None, // default to no token
-    )
+    })
 }

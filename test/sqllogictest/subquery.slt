@@ -196,15 +196,15 @@ mode standard
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
-0 =
+%0 =
 | Get materialize.public.t1 (u37)
 
-1 =
+%1 =
 | Get materialize.public.t2 (u39)
 | Distinct group=()
 | ArrangeBy ()
 
-2 =
+%2 =
 | Join %0 %1
 | | implementation = Differential %0 %1.()
 | | demand = (#0)
@@ -216,19 +216,19 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
-0 =
+%0 =
 | Get materialize.public.t1 (u37)
 | ArrangeBy (#0)
 
-1 =
+%1 =
 | Get materialize.public.t3 (u41)
 
-2 =
+%2 =
 | Get materialize.public.t2 (u39)
 | Distinct group=()
 | ArrangeBy ()
 
-3 =
+%3 =
 | Join %0 %1 %2 (= #0 #1)
 | | implementation = Differential %1 %2.() %0.(#0)
 | | demand = (#0, #2)
@@ -240,38 +240,38 @@ EOF
 query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
-0 =
+%0 =
 | Get materialize.public.t1 (u37)
 | ArrangeBy (#0)
 
-1 =
+%1 =
 | Get materialize.public.t3 (u41)
 
-2 =
+%2 =
 | Join %0 %1 (= #0 #1)
 | | implementation = Differential %1 %0.(#0)
 | | demand = (#0, #2)
 
-3 =
+%3 =
 | Get %2
 
-4 =
+%4 =
 | Get %2
 | Distinct group=(#2)
 | ArrangeBy (#0)
 
-5 =
+%5 =
 | Get materialize.public.t2 (u39)
 | ArrangeBy (#0)
 
-6 =
+%6 =
 | Join %4 %5 (= #0 #1)
 | | implementation = DeltaQuery %4 %5.(#0) | %5 %4.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-7 =
+%7 =
 | Join %3 %6 (= #2 #3)
 | | implementation = Differential %3 %6.(#0)
 | | demand = (#0, #2)
@@ -296,16 +296,16 @@ SELECT age, ascii_num * 2 as result FROM (
   )
 )
 ----
-0 =
+%0 =
 | Get materialize.public.likes (u3)
 | Filter !(isnull(#0))
 | ArrangeBy (#0)
 
-1 =
+%1 =
 | Get materialize.public.age (u21)
 | Filter !(isnull(#0))
 
-2 =
+%2 =
 | Join %0 %1 (= #0 #2)
 | | implementation = Differential %1 %0.(#0)
 | | demand = (#1, #3)

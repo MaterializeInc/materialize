@@ -2,7 +2,7 @@
 title: "Versions"
 description: "Materialize's version information"
 menu: "main"
-weight: 80
+weight: 300
 ---
 
 ## Stable releases

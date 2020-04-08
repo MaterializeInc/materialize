@@ -46,9 +46,9 @@ Use relative links (../path/to/doc), not absolute links
 <span id="v0.2.0"></span>
 ## 0.1.3 &rarr; v0.2.0 (unreleased)
 
-- Require the `-w` / `--threads` command-line option. Consult the
-  [configuration documentation](../overview/configuration/#worker-threads)
-  to determine the correct value for your deployment.
+- Require the `-w` / `--threads` command-line option. Consult the [CLI
+  documentation](../cli/#worker-threads) to determine the correct value for your
+  deployment.
 
 - Make formatting and parsing for [`real`](../sql/types/float) and
   [`double precision`](../sql/types/float) numbers more
@@ -63,9 +63,8 @@ Use relative links (../path/to/doc), not absolute links
   (col_foo,
   col_bar)...`](../sql/create-source/csv-source/#creating-a-source-from-a-dynamic-csv))
 
-- Introduce the [`--listen-addr`](../overview/configuration#listen-address)
-  command-line option to control the address and port that `materialized` binds
-  to.
+- Introduce the [`--listen-addr`](../cli/#listen-address) command-line option to
+  control the address and port that `materialized` binds to.
 
 - Improve conformance of the Avro parser, enabling support for
   a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro).
@@ -73,6 +72,10 @@ Use relative links (../path/to/doc), not absolute links
 - Add the [`jsonb_agg()`](../sql/functions/#aggregate-func) aggregate function.
 
 - Support [casts](../sql/functions/cast/) for `time`->`text`,`time`->`interval`, `interval`->`time`.
+
+- Change the output format of `EXPLAIN` to make large plans more readable.
+- Support `EXPLAIN ... FOR VIEW view_name` to display the plan for an existing view.
+- Support `EXPLAIN stage_name PLAN FOR ...` to display the plan at various stages of the planning process.
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
