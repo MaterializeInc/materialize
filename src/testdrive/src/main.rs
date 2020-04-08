@@ -99,8 +99,9 @@ fn run() -> Result<(), Error> {
                 .unwrap_or_else(|| "localstack".into()),
             endpoint: opts
                 .opt_str("aws-endpoint")
-                .unwrap_or_else(|| "http://localhost:4566".into()),
+                .unwrap_or_else(|| "http://localhost:4568".into()),
         };
+        // todo: figure out what's broken in
     }
     if let Some(url) = opts.opt_str("materialized-url") {
         config.materialized_pgconfig = url.parse().map_err(|e| Error::General {

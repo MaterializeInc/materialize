@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
+
 use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
@@ -24,7 +27,7 @@ const DEFAULT_KINESIS_TIMEOUT: Duration = Duration::from_millis(12700);
 // doesn't matter what it is for now -- we only support streams
 // with one partition.
 // todo@jldlaughlin: Update this when we support multiple partitions.
-const DUMMY_PARTITION_KEY: &str = "testdrive";
+//const DUMMY_PARTITION_KEY: &str = "testdrive";
 
 pub struct IngestAction {
     stream_prefix: String,
@@ -54,10 +57,12 @@ impl Action for IngestAction {
         let stream_name = format!("{}-{}", self.stream_prefix, state.seed);
 
         for row in &self.rows {
+            let random_partition_key: String =
+                thread_rng().sample_iter(&Alphanumeric).take(30).collect();
             let put_input = PutRecordInput {
                 data: Bytes::from(row.clone()),
                 explicit_hash_key: None,
-                partition_key: DUMMY_PARTITION_KEY.to_string(),
+                partition_key: random_partition_key, // todo: is this okay?
                 sequence_number_for_ordering: None,
                 stream_name: stream_name.clone(),
             };
