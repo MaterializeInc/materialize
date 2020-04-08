@@ -61,6 +61,9 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
         .collect();
     assert_eq!(rows, &[-41]);
 
+    // Just ensure it does not panic (see #2498).
+    client.query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])?;
+
     Ok(())
 }
 
