@@ -584,7 +584,7 @@ impl DataflowDesc {
             let input_id = sink.from.0;
             demand
                 .entry(Id::Global(input_id))
-                .or_insert(HashSet::new())
+                .or_insert_with(HashSet::new)
                 .extend(0..self.arity_of(&input_id));
         }
 
@@ -593,7 +593,7 @@ impl DataflowDesc {
             let input_id = desc.on_id;
             demand
                 .entry(Id::Global(input_id))
-                .or_insert(HashSet::new())
+                .or_insert_with(HashSet::new)
                 .extend(0..self.arity_of(&input_id));
         }
 
