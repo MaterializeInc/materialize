@@ -352,15 +352,6 @@ where
     })
 }
 
-pub fn drop_key<G>(
-    stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
-) -> Stream<G, (Vec<u8>, Option<i64>)>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    stream.map(|((_key, payload), aux_num)| (payload, aux_num))
-}
-
 fn decode_values_inner<G, V>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     mut value_decoder_state: V,
