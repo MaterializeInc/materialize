@@ -71,5 +71,5 @@ mtrlz-shell() {
         echo "you must start materialize with 'mtrlz-start'"
         return
     fi
-    psql -h localhost -p "$_MTRLZ_PORT" sslmode=disable
+    psql -h localhost -p "$_MTRLZ_PORT" sslmode=disable materialize
 }
