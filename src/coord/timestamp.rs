@@ -394,19 +394,18 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
 /// will have been encoded using the same formatting/envelope
 fn identify_consistency_format(msgs: &[Vec<u8>]) -> ConsistencyFormatting {
     use avro::from_avro_datum;
-    use futures::executor::block_on;
 
     let msg = match msgs.first() {
         Some(msg) => msg,
         None => return ConsistencyFormatting::Unknown,
     };
 
-    if block_on(from_avro_datum(&DEBEZIUM_TRX_SCHEMA_KEY, &mut &msg[5..])).is_ok()
-        || block_on(from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut &msg[5..])).is_ok()
+    if from_avro_datum(&DEBEZIUM_TRX_SCHEMA_KEY, &mut &msg[5..]).is_ok()
+        || from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut &msg[5..]).is_ok()
     {
         ConsistencyFormatting::DebeziumKafka
-    } else if block_on(Reader::with_schema(&DEBEZIUM_TRX_SCHEMA_KEY, &msg[..])).is_ok()
-        || block_on(Reader::with_schema(&DEBEZIUM_TRX_SCHEMA_VALUE, &msg[..])).is_ok()
+    } else if Reader::with_schema(&DEBEZIUM_TRX_SCHEMA_KEY, &msg[..]).is_ok()
+        || Reader::with_schema(&DEBEZIUM_TRX_SCHEMA_VALUE, &msg[..]).is_ok()
     {
         ConsistencyFormatting::DebeziumOcf
     } else if msg.iter().filter(|b| **b == b',').count() == 4 {
@@ -634,10 +633,7 @@ impl Timestamper {
                     for msg in messages {
                         // The first 5 bytes are reserved for the schema id/schema registry information
                         let mut bytes = &msg[5..];
-                        let res = futures::executor::block_on(avro::from_avro_datum(
-                            &DEBEZIUM_TRX_SCHEMA_VALUE,
-                            &mut bytes,
-                        ));
+                        let res = avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
                         let results = match res {
                             Ok(record) => {
                                 if let Value::Record(record) = record {
