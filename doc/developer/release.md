@@ -32,7 +32,7 @@ To start a new release version the steps look like:
 1. A developer creates and updates the tag and release branch with a tag that looks like
    `v<VERSION>-rc<N>`:
 
-        git tag --annotated v0.1.0-rc1 <C>
+        git tag --annotate v0.1.0-rc1 <C>
         git push origin v0.1.0-rc1
 
    Resulting in a repo that looks like:
