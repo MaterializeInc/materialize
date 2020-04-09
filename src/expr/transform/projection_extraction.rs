@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, RelationExpr, ScalarExpr};
 
 /// Extracts simple projections from the scalar expressions in a `Map` operator
 /// into a `Project`, so they can be subjected to other optimizations.
@@ -21,7 +21,6 @@ impl super::Transform for ProjectionExtraction {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use repr::RelationType;
 
-use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, RelationExpr, ScalarExpr};
 
 /// Removes singleton constants from joins, and removes joins with
 /// single input relations.
@@ -23,7 +23,6 @@ impl super::Transform for JoinElision {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

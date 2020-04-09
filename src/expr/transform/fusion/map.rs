@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::mem;
 
-use crate::{EvalEnv, GlobalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct Map;
@@ -20,7 +20,6 @@ impl crate::transform::Transform for Map {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), crate::transform::TransformError> {
         self.transform(relation);
         Ok(())

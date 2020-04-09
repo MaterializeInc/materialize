@@ -35,7 +35,7 @@ use sql_parser::ast::{DataType, ObjectType, Statement};
 use tokio_postgres::types::FromSql;
 
 use catalog::names::FullName;
-use catalog::Catalog;
+use catalog::{Catalog, PlanContext};
 use repr::decimal::Significand;
 use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
@@ -121,11 +121,16 @@ END $$;
 
     pub async fn execute(
         &mut self,
+        pcx: &PlanContext,
         catalog: &Catalog,
         session: &Session,
         stmt: &Statement,
     ) -> Result<Plan, failure::Error> {
-        let scx = StatementContext { catalog, session };
+        let scx = StatementContext {
+            pcx,
+            catalog,
+            session,
+        };
         Ok(match stmt {
             Statement::CreateTable {
                 name,

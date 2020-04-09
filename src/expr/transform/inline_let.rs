@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct InlineLet;
@@ -19,7 +19,6 @@ impl super::Transform for InlineLet {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

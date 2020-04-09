@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
+use crate::{GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Remove TopK operators with both an offset of zero and no limit.
 #[derive(Debug)]
@@ -20,7 +20,6 @@ impl crate::transform::Transform for TopKElision {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

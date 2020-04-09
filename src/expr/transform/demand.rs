@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
+use crate::{GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Drive demand from the root through operators.
 ///
@@ -31,7 +31,6 @@ impl crate::transform::Transform for Demand {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

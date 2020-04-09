@@ -22,7 +22,7 @@ use rusoto_core::Region;
 use url::Url;
 
 use catalog::names::{DatabaseSpecifier, FullName, PartialName};
-use catalog::{Catalog, CatalogItem, SchemaType};
+use catalog::{Catalog, CatalogItem, PlanContext, SchemaType};
 use dataflow_types::{
     AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding, Envelope,
     ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
@@ -50,7 +50,12 @@ pub fn describe_statement(
     session: &dyn PlanSession,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
-    let scx = &StatementContext { catalog, session };
+    let pcx = &PlanContext::default();
+    let scx = &StatementContext {
+        catalog,
+        session,
+        pcx,
+    };
     Ok(match stmt {
         Statement::CreateDatabase { .. }
         | Statement::CreateSchema { .. }
@@ -222,12 +227,17 @@ pub fn describe_statement(
 }
 
 pub fn handle_statement(
+    pcx: &PlanContext,
     catalog: &Catalog,
     session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let scx = &StatementContext { catalog, session };
+    let scx = &StatementContext {
+        pcx,
+        catalog,
+        session,
+    };
     match stmt {
         Statement::Tail { name } => handle_tail(scx, name),
         Statement::StartTransaction { .. } => Ok(Plan::StartTransaction),
@@ -509,7 +519,7 @@ fn handle_show_indexes(
                 create_sql,
                 keys,
                 on,
-                eval_env: _,
+                ..
             }) => {
                 let key_sqls = match crate::parse(create_sql.to_owned())
                     .expect("create_sql cannot be invalid")
@@ -1511,7 +1521,7 @@ fn handle_explain(
     } else {
         false
     };
-    let (sql, query) = match explainee {
+    let (scx, sql, query) = match explainee {
         Explainee::View(name) => {
             let full_name = scx.resolve_name(name.clone())?;
             let entry = scx.catalog.get(&full_name)?;
@@ -1529,14 +1539,19 @@ fn handle_explain(
                 Statement::CreateView { query, .. } => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            (view.create_sql.clone(), *query)
+            let scx = StatementContext {
+                pcx: &view.plan_cx,
+                catalog: scx.catalog,
+                session: scx.session,
+            };
+            (scx, view.create_sql.clone(), *query)
         }
-        Explainee::Query(query) => (query.to_string(), query),
+        Explainee::Query(query) => (scx.clone(), query.to_string(), query),
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     let (mut sql_expr, _desc, finishing, _param_types) =
-        query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+        query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
     let finishing = if is_view {
         // views don't use a separate finishing
         sql_expr.finish(finishing);
@@ -1629,8 +1644,9 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 }
 
 /// Immutable state that applies to the planning of an entire `Statement`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StatementContext<'a> {
+    pub pcx: &'a PlanContext,
     pub catalog: &'a Catalog,
     pub session: &'a dyn PlanSession,
 }

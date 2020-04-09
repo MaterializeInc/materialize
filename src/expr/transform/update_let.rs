@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use repr::RelationType;
 
-use crate::{EvalEnv, GlobalId, Id, IdGen, LocalId, RelationExpr, ScalarExpr};
+use crate::{GlobalId, Id, IdGen, LocalId, RelationExpr, ScalarExpr};
 
 /// Refreshes identifiers and types for local let bindings.
 ///
@@ -27,7 +27,6 @@ impl super::Transform for UpdateLet {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

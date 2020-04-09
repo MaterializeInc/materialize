@@ -10,7 +10,6 @@
 use std::collections::HashSet;
 use std::mem;
 
-use chrono::{DateTime, Utc};
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 use serde::{Deserialize, Serialize};
@@ -256,7 +255,7 @@ impl ScalarExpr {
     /// Reduces a complex expression where possible.
     ///
     /// ```rust
-    /// use expr::{BinaryFunc, EvalEnv, ScalarExpr};
+    /// use expr::{BinaryFunc, ScalarExpr};
     /// use repr::{ColumnType, Datum, RelationType, ScalarType};
     ///
     /// let expr_0 = ScalarExpr::Column(0);
@@ -270,19 +269,15 @@ impl ScalarExpr {
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
     /// let input_type = RelationType::new(vec![ColumnType::new(ScalarType::Int32)]);
-    /// test.reduce(&input_type, &EvalEnv::default());
+    /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, relation_type: &RelationType, env: &EvalEnv) {
+    pub fn reduce(&mut self, relation_type: &RelationType) {
         let temp_storage = &RowArena::new();
-        let eval = |e: &ScalarExpr| {
-            ScalarExpr::literal(e.eval(&[], env, temp_storage), e.typ(&relation_type))
-        };
+        let eval =
+            |e: &ScalarExpr| ScalarExpr::literal(e.eval(&[], temp_storage), e.typ(&relation_type));
         self.visit_mut(&mut |e| match e {
-            ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => (),
-            ScalarExpr::CallNullary(_) => {
-                *e = eval(e);
-            }
+            ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) | ScalarExpr::CallNullary(_) => (),
             ScalarExpr::CallUnary { expr, .. } => {
                 if expr.is_literal() {
                     *e = eval(e);
@@ -444,7 +439,6 @@ impl ScalarExpr {
     pub fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
-        env: &'a EvalEnv,
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
         match self {
@@ -453,27 +447,22 @@ impl ScalarExpr {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),
             },
-            ScalarExpr::CallNullary(func) => func.eval(datums, env, temp_storage),
-            ScalarExpr::CallUnary { func, expr } => func.eval(datums, env, temp_storage, expr),
+            // Nullary functions must be transformed away before evaluation.
+            // Their purpose is as a placeholder for data that is not known at
+            // plan time but can be inlined before runtime.
+            ScalarExpr::CallNullary(_) => panic!("eval called on nullary function"),
+            ScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                func.eval(datums, env, temp_storage, expr1, expr2)
+                func.eval(datums, temp_storage, expr1, expr2)
             }
-            ScalarExpr::CallVariadic { func, exprs } => func.eval(datums, env, temp_storage, exprs),
-            ScalarExpr::If { cond, then, els } => match cond.eval(datums, env, temp_storage)? {
-                Datum::True => then.eval(datums, env, temp_storage),
-                Datum::False | Datum::Null => els.eval(datums, env, temp_storage),
-                d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
+            ScalarExpr::CallVariadic { func, exprs } => func.eval(datums, temp_storage, exprs),
+            ScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
+                Datum::True => then.eval(datums, temp_storage),
+                Datum::False | Datum::Null => els.eval(datums, temp_storage),
+                d => panic!("IF condition ev aluated to non-boolean datum {:?}", d),
             },
         }
     }
-}
-
-/// An evaluation environment. Stores state that controls how certain
-/// expressions are evaluated.
-#[derive(Default, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct EvalEnv {
-    pub logical_time: Option<u64>,
-    pub wall_time: Option<DateTime<Utc>>,
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -597,9 +586,8 @@ mod tests {
         ];
 
         for tc in test_cases {
-            let eval_env = EvalEnv::default();
             let mut actual = tc.input.clone();
-            actual.reduce(&relation_type, &eval_env);
+            actual.reduce(&relation_type);
             assert!(
                 actual == tc.output,
                 "input: {}\nactual: {}\nexpected: {}",

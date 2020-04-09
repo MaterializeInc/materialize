@@ -57,7 +57,6 @@ impl super::Transform for JoinOrder {
         &self,
         relation: &mut RelationExpr,
         arrangements: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation, arrangements);
         Ok(())

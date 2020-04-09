@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, UnaryTableFunc};
+use crate::{GlobalId, Id, RelationExpr, ScalarExpr, UnaryTableFunc};
 
 /// Drive non-null requirements to `RelationExpr::Constant` collections.
 ///
@@ -34,7 +34,6 @@ impl crate::transform::Transform for NonNullRequirements {
         &self,
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        _: &EvalEnv,
     ) -> Result<(), super::TransformError> {
         self.transform(relation);
         Ok(())

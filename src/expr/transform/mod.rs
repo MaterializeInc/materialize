@@ -15,7 +15,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{EvalEnv, EvalError, GlobalId, RelationExpr, ScalarExpr};
+use crate::{EvalError, GlobalId, RelationExpr, ScalarExpr};
 
 pub mod binding;
 pub mod column_knowledge;
@@ -50,7 +50,6 @@ pub trait Transform: std::fmt::Debug {
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        env: &EvalEnv,
     ) -> Result<(), TransformError>;
 }
 
@@ -88,12 +87,11 @@ impl Transform for Fixpoint {
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        env: &EvalEnv,
     ) -> Result<(), TransformError> {
         for _ in 0..100 {
             let original = relation.clone();
             for transform in self.transforms.iter() {
-                transform.transform(relation, indexes, env)?;
+                transform.transform(relation, indexes)?;
             }
             if *relation == original {
                 return Ok(());
@@ -101,7 +99,7 @@ impl Transform for Fixpoint {
         }
         let original = relation.clone();
         for transform in self.transforms.iter() {
-            transform.transform(relation, indexes, env)?;
+            transform.transform(relation, indexes)?;
         }
         Err(TransformError::Internal(format!(
             "fixpoint looped 100 times {:#?} {}\n{}",
@@ -129,10 +127,9 @@ impl Transform for Optimizer {
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        env: &EvalEnv,
     ) -> Result<(), TransformError> {
         for transform in self.transforms.iter() {
-            transform.transform(relation, indexes, env)?;
+            transform.transform(relation, indexes)?;
         }
         Ok(())
     }
@@ -227,9 +224,8 @@ impl Optimizer {
         &mut self,
         mut relation: RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-        env: &EvalEnv,
     ) -> Result<OptimizedRelationExpr, TransformError> {
-        self.transform(&mut relation, indexes, env)?;
+        self.transform(&mut relation, indexes)?;
         Ok(OptimizedRelationExpr(relation))
     }
 

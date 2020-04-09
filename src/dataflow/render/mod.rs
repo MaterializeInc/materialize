@@ -26,7 +26,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
 use dataflow_types::*;
-use expr::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
 use repr::{Datum, RelationType, Row, RowArena};
 
 use self::context::{ArrangementFlavor, Context};
@@ -71,7 +71,6 @@ pub(crate) fn build_local_input<A: Allocate>(
                 .insert(get_expr.clone(), stream.as_collection());
             context.render_arranged(
                 &get_expr.clone().arrange_by(&[index.keys.clone()]),
-                &EvalEnv::default(),
                 region,
                 worker_index,
                 Some(&index_id.to_string()),
@@ -354,12 +353,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
             for object in dataflow.objects_to_build.clone() {
                 if let Some(typ) = object.typ {
-                    context.ensure_rendered(
-                        object.relation_expr.as_ref(),
-                        &object.eval_env,
-                        region,
-                        worker_index,
-                    );
+                    context.ensure_rendered(object.relation_expr.as_ref(), region, worker_index);
                     context.clone_from_to(
                         &object.relation_expr.as_ref(),
                         &RelationExpr::global_get(object.id, typ.clone()),
@@ -367,7 +361,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 } else {
                     context.render_arranged(
                         &object.relation_expr.as_ref(),
-                        &object.eval_env,
                         region,
                         worker_index,
                         Some(&object.id.to_string()),
@@ -494,7 +487,6 @@ where
     pub fn ensure_rendered(
         &mut self,
         relation_expr: &RelationExpr,
-        env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
     ) {
@@ -537,15 +529,15 @@ where
                     if self.has_collection(&bind) {
                         panic!("Inappropriate to re-bind name: {:?}", bind);
                     } else {
-                        self.ensure_rendered(value, env, scope, worker_index);
+                        self.ensure_rendered(value, scope, worker_index);
                         self.clone_from_to(value, &bind);
-                        self.ensure_rendered(body, env, scope, worker_index);
+                        self.ensure_rendered(body, scope, worker_index);
                         self.clone_from_to(body, relation_expr);
                     }
                 }
 
                 RelationExpr::Project { input, outputs } => {
-                    self.ensure_rendered(input, env, scope, worker_index);
+                    self.ensure_rendered(input, scope, worker_index);
                     let outputs = outputs.clone();
                     let collection = self.collection(input).unwrap().map(move |row| {
                         let datums = row.unpack();
@@ -556,14 +548,13 @@ where
                 }
 
                 RelationExpr::Map { input, scalars } => {
-                    self.ensure_rendered(input, env, scope, worker_index);
-                    let env = env.clone();
+                    self.ensure_rendered(input, scope, worker_index);
                     let scalars = scalars.clone();
                     let collection = self.collection(input).unwrap().map(move |input_row| {
                         let mut datums = input_row.unpack();
                         let temp_storage = RowArena::new();
                         for scalar in &scalars {
-                            let datum = scalar.eval(&datums, &env, &temp_storage);
+                            let datum = scalar.eval(&datums, &temp_storage);
                             // Scalar is allowed to see the outputs of previous scalars.
                             // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
                             // Note that this doesn't mutate input_row.
@@ -581,8 +572,7 @@ where
                     expr,
                     demand,
                 } => {
-                    self.ensure_rendered(input, env, scope, worker_index);
-                    let env = env.clone();
+                    self.ensure_rendered(input, scope, worker_index);
                     let func = func.clone();
                     let expr = expr.clone();
 
@@ -613,10 +603,8 @@ where
                         let datums = input_row.unpack();
                         let replace = replace.clone();
                         let temp_storage = RowArena::new();
-                        let expr = expr
-                            .eval(&datums, &env, &temp_storage)
-                            .unwrap_or(Datum::Null);
-                        let output_rows = func.eval(expr, &env, &temp_storage);
+                        let expr = expr.eval(&datums, &temp_storage).unwrap_or(Datum::Null);
+                        let output_rows = func.eval(expr, &temp_storage);
                         output_rows
                             .into_iter()
                             .map(move |output_row| {
@@ -649,31 +637,25 @@ where
                     let collection = if let RelationExpr::Join { implementation, .. } = &**input {
                         match implementation {
                             expr::JoinImplementation::Differential(_start, _order) => {
-                                self.render_join(input, predicates, env, scope, worker_index)
+                                self.render_join(input, predicates, scope, worker_index)
                             }
                             expr::JoinImplementation::DeltaQuery(_orders) => self
-                                .render_delta_join(
-                                    input,
-                                    predicates,
-                                    env,
-                                    scope,
-                                    worker_index,
-                                    |t| t.saturating_sub(1),
-                                ),
+                                .render_delta_join(input, predicates, scope, worker_index, |t| {
+                                    t.saturating_sub(1)
+                                }),
                             expr::JoinImplementation::Unimplemented => {
                                 panic!("Attempt to render unimplemented join");
                             }
                         }
                     } else {
-                        self.ensure_rendered(input, env, scope, worker_index);
-                        let env = env.clone();
+                        self.ensure_rendered(input, scope, worker_index);
                         let temp_storage = RowArena::new();
                         let predicates = predicates.clone();
                         self.collection(input).unwrap().filter(move |input_row| {
                             let datums = input_row.unpack();
                             predicates.iter().all(|predicate| {
                                 match predicate
-                                    .eval(&datums, &env, &temp_storage)
+                                    .eval(&datums, &temp_storage)
                                     .unwrap_or(Datum::Null)
                                 {
                                     Datum::True => true,
@@ -688,19 +670,14 @@ where
 
                 RelationExpr::Join { implementation, .. } => match implementation {
                     expr::JoinImplementation::Differential(_start, _order) => {
-                        let collection =
-                            self.render_join(relation_expr, &[], env, scope, worker_index);
+                        let collection = self.render_join(relation_expr, &[], scope, worker_index);
                         self.collections.insert(relation_expr.clone(), collection);
                     }
                     expr::JoinImplementation::DeltaQuery(_orders) => {
-                        let collection = self.render_delta_join(
-                            relation_expr,
-                            &[],
-                            env,
-                            scope,
-                            worker_index,
-                            |t| t.saturating_sub(1),
-                        );
+                        let collection =
+                            self.render_delta_join(relation_expr, &[], scope, worker_index, |t| {
+                                t.saturating_sub(1)
+                            });
                         self.collections.insert(relation_expr.clone(), collection);
                     }
                     expr::JoinImplementation::Unimplemented => {
@@ -709,26 +686,26 @@ where
                 },
 
                 RelationExpr::Reduce { .. } => {
-                    self.render_reduce(relation_expr, env, scope, worker_index);
+                    self.render_reduce(relation_expr, scope, worker_index);
                 }
 
                 RelationExpr::TopK { .. } => {
-                    self.render_topk(relation_expr, env, scope, worker_index);
+                    self.render_topk(relation_expr, scope, worker_index);
                 }
 
                 RelationExpr::Negate { input } => {
-                    self.ensure_rendered(input, env, scope, worker_index);
+                    self.ensure_rendered(input, scope, worker_index);
                     let collection = self.collection(input).unwrap().negate();
                     self.collections.insert(relation_expr.clone(), collection);
                 }
 
                 RelationExpr::Threshold { .. } => {
-                    self.render_threshold(relation_expr, env, scope, worker_index);
+                    self.render_threshold(relation_expr, scope, worker_index);
                 }
 
                 RelationExpr::Union { left, right } => {
-                    self.ensure_rendered(left, env, scope, worker_index);
-                    self.ensure_rendered(right, env, scope, worker_index);
+                    self.ensure_rendered(left, scope, worker_index);
+                    self.ensure_rendered(right, scope, worker_index);
 
                     let input1 = self.collection(left).unwrap();
                     let input2 = self.collection(right).unwrap();
@@ -738,7 +715,7 @@ where
                 }
 
                 RelationExpr::ArrangeBy { .. } => {
-                    self.render_arranged(relation_expr, env, scope, worker_index, None);
+                    self.render_arranged(relation_expr, scope, worker_index, None);
                 }
             };
         }
@@ -747,23 +724,21 @@ where
     fn render_arranged(
         &mut self,
         relation_expr: &RelationExpr,
-        env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
         id: Option<&str>,
     ) {
         if let RelationExpr::ArrangeBy { input, keys } = relation_expr {
             if keys.is_empty() {
-                self.ensure_rendered(input, env, scope, worker_index);
+                self.ensure_rendered(input, scope, worker_index);
                 let collection = self.collection(input).unwrap();
                 self.collections.insert(relation_expr.clone(), collection);
             }
             for key_set in keys {
                 if self.arrangement(&input, &key_set).is_none() {
-                    self.ensure_rendered(input, env, scope, worker_index);
+                    self.ensure_rendered(input, scope, worker_index);
                     let built = self.collection(input).unwrap();
                     let keys2 = key_set.clone();
-                    let env = env.clone();
                     let name = if let Some(id) = id {
                         format!("Arrange: {}", id)
                     } else {
@@ -773,9 +748,10 @@ where
                         .map(move |row| {
                             let datums = row.unpack();
                             let temp_storage = RowArena::new();
-                            let key_row = Row::pack(keys2.iter().map(|k| {
-                                k.eval(&datums, &env, &temp_storage).unwrap_or(Datum::Null)
-                            }));
+                            let key_row =
+                                Row::pack(keys2.iter().map(|k| {
+                                    k.eval(&datums, &temp_storage).unwrap_or(Datum::Null)
+                                }));
                             (key_row, row)
                         })
                         .arrange_named::<OrdValSpine<_, _, _, _>>(&name);
@@ -799,7 +775,6 @@ where
         &mut self,
         relation_expr: &RelationExpr,
         predicates: &[ScalarExpr],
-        env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
     ) -> Collection<G, Row> {
@@ -822,7 +797,7 @@ where
             }
 
             for input in inputs.iter() {
-                self.ensure_rendered(input, env, scope, worker_index);
+                self.ensure_rendered(input, scope, worker_index);
             }
 
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -862,7 +837,6 @@ where
                 &source_columns,
                 &mut predicates,
                 &mut equivalences,
-                env,
             );
 
             for (input, next_keys) in order.iter() {
@@ -958,16 +932,15 @@ where
                     .collect();
 
                 // We exploit the demand information to restrict `prev` to its demanded columns.
-                let env_clone = env.clone();
                 let prev_keyed = joined
                     .map({
                         move |row| {
                             let datums = row.unpack();
                             let temp_storage = RowArena::new();
-                            let key = Row::pack(prev_keys.iter().map(|e| {
-                                e.eval(&datums, &env_clone, &temp_storage)
-                                    .unwrap_or(Datum::Null)
-                            }));
+                            let key =
+                                Row::pack(prev_keys.iter().map(|e| {
+                                    e.eval(&datums, &temp_storage).unwrap_or(Datum::Null)
+                                }));
                             let row = Row::pack(prev_vals.iter().map(|i| datums[*i]));
                             (key, row)
                         }
@@ -1011,7 +984,6 @@ where
                     &source_columns,
                     &mut predicates,
                     &mut equivalences,
-                    env,
                 );
             }
 
@@ -1048,13 +1020,7 @@ where
         }
     }
 
-    fn render_topk(
-        &mut self,
-        relation_expr: &RelationExpr,
-        env: &EvalEnv,
-        scope: &mut G,
-        worker_index: usize,
-    ) {
+    fn render_topk(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
         if let RelationExpr::TopK {
             input,
             group_key,
@@ -1065,7 +1031,7 @@ where
         {
             use differential_dataflow::operators::reduce::Reduce;
 
-            self.ensure_rendered(input, env, scope, worker_index);
+            self.ensure_rendered(input, scope, worker_index);
             let input = self.collection(input).unwrap();
 
             // To provide a robust incremental orderby-limit experience, we want to avoid grouping
@@ -1197,7 +1163,6 @@ where
     fn render_threshold(
         &mut self,
         relation_expr: &RelationExpr,
-        env: &EvalEnv,
         scope: &mut G,
         worker_index: usize,
     ) {
@@ -1208,7 +1173,7 @@ where
 
             // TODO: easier idioms for detecting, re-using, and stashing.
             if self.arrangement_columns(&input, &keys[..]).is_none() {
-                self.ensure_rendered(input, env, scope, worker_index);
+                self.ensure_rendered(input, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
                 let keyed = built

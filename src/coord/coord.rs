@@ -32,7 +32,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem, SinkConnectorState};
+use catalog::{Catalog, CatalogItem, PlanContext, SinkConnectorState};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -42,7 +42,7 @@ use dataflow_types::{
 };
 use expr::transform::Optimizer;
 use expr::{
-    EvalEnv, GlobalId, Id, IdHumanizer, PartitionId, RelationExpr, RowSetFinishing, ScalarExpr,
+    GlobalId, Id, IdHumanizer, NullaryFunc, PartitionId, RelationExpr, RowSetFinishing, ScalarExpr,
     SourceInstanceId,
 };
 use ore::collections::CollectionExt;
@@ -379,7 +379,9 @@ where
                     result,
                     params,
                 } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
-                    Ok(plan) => self.sequence_plan(&internal_cmd_tx, tx, session, plan, conn_id),
+                    Ok((pcx, plan)) => {
+                        self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan, conn_id)
+                    }
                     Err(e) => tx.send(Err(e), session),
                 },
 
@@ -521,6 +523,7 @@ where
         internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
+        pcx: PlanContext,
         plan: Plan,
         conn_id: u32,
     ) {
@@ -544,7 +547,7 @@ where
                 desc,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_table(name, desc, if_not_exists),
+                self.sequence_create_table(pcx, name, desc, if_not_exists),
                 session,
             ),
 
@@ -554,7 +557,7 @@ where
                 if_not_exists,
                 materialized,
             } => tx.send(
-                self.sequence_create_source(name, source, if_not_exists, materialized),
+                self.sequence_create_source(pcx, name, source, if_not_exists, materialized),
                 session,
             ),
 
@@ -563,6 +566,7 @@ where
                 sink,
                 if_not_exists,
             } => self.sequence_create_sink(
+                pcx,
                 internal_cmd_tx.clone(),
                 tx,
                 session,
@@ -578,7 +582,7 @@ where
                 materialize,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_view(name, view, replace, materialize, if_not_exists),
+                self.sequence_create_view(pcx, name, view, replace, materialize, if_not_exists),
                 session,
             ),
 
@@ -587,7 +591,7 @@ where
                 index,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_index(name, index, if_not_exists),
+                self.sequence_create_index(pcx, name, index, if_not_exists),
                 session,
             ),
 
@@ -724,6 +728,7 @@ where
 
     fn sequence_create_table(
         &mut self,
+        pcx: PlanContext,
         name: FullName,
         desc: RelationDesc,
         if_not_exists: bool,
@@ -731,6 +736,7 @@ where
         let source_id = self.catalog.allocate_id()?;
         let source = catalog::Source {
             create_sql: "TODO".to_string(),
+            plan_cx: pcx,
             connector: dataflow_types::SourceConnector::Local,
             desc,
         };
@@ -776,6 +782,7 @@ where
 
     fn sequence_create_source(
         &mut self,
+        pcx: PlanContext,
         name: FullName,
         source: sql::Source,
         if_not_exists: bool,
@@ -783,6 +790,7 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         let source = catalog::Source {
             create_sql: source.create_sql,
+            plan_cx: pcx,
             connector: source.connector,
             desc: source.desc,
         };
@@ -827,8 +835,10 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sequence_create_sink(
         &mut self,
+        pcx: PlanContext,
         mut internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
@@ -856,6 +866,7 @@ where
             name,
             item: CatalogItem::Sink(catalog::Sink {
                 create_sql: sink.create_sql,
+                plan_cx: pcx,
                 from: sink.from,
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
             }),
@@ -890,6 +901,7 @@ where
 
     fn sequence_create_view(
         &mut self,
+        pcx: PlanContext,
         name: FullName,
         view: sql::View,
         replace: Option<GlobalId>,
@@ -901,16 +913,11 @@ where
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
         let view_id = self.catalog.allocate_id()?;
-        let eval_env = EvalEnv::default();
         let view = catalog::View {
             create_sql: view.create_sql,
-            optimized_expr: self.optimizer.optimize(
-                view.expr,
-                self.catalog.indexes(),
-                &eval_env,
-            )?,
+            plan_cx: pcx,
+            optimized_expr: self.optimizer.optimize(view.expr, self.catalog.indexes())?,
             desc: view.desc,
-            eval_env,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -954,15 +961,16 @@ where
 
     fn sequence_create_index(
         &mut self,
+        pcx: PlanContext,
         name: FullName,
         index: sql::Index,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, failure::Error> {
         let index = catalog::Index {
             create_sql: index.create_sql,
+            plan_cx: pcx,
             keys: index.keys,
             on: index.on,
-            eval_env: EvalEnv::default(),
         };
         let id = self.catalog.allocate_id()?;
         let op = catalog::Op::CreateItem {
@@ -1055,23 +1063,26 @@ where
     fn sequence_peek(
         &mut self,
         conn_id: u32,
-        source: RelationExpr,
+        mut source: RelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
         materialize: bool,
     ) -> Result<ExecuteResponse, failure::Error> {
         let timestamp = self.determine_timestamp(&source, when)?;
-        let eval_env = EvalEnv {
-            wall_time: Some(chrono::Utc::now()),
-            logical_time: Some(timestamp),
-        };
+
+        // See if the query is introspecting its own logical timestamp, and
+        // install the determined timestamp if so.
+        source.visit_scalars_mut(&mut |e| {
+            if let ScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
+                *e = ScalarExpr::literal_ok(Datum::from(timestamp as i128), f.output_type());
+            }
+        });
+
         // TODO (wangandi): Is there anything that optimizes to a
         // constant expression that originally contains a global get? Is
         // there anything not containing a global get that cannot be
         // optimized to a constant expression?
-        let mut source = self
-            .optimizer
-            .optimize(source, self.catalog.indexes(), &eval_env)?;
+        let mut source = self.optimizer.optimize(source, self.catalog.indexes())?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
         if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
@@ -1150,9 +1161,9 @@ where
                 dataflow.as_of(Some(vec![timestamp.clone()]));
                 let view = catalog::View {
                     create_sql: "<none>".into(),
+                    plan_cx: PlanContext::default(),
                     optimized_expr: source,
                     desc,
-                    eval_env: eval_env.clone(),
                 };
                 self.build_view_collection(&view_id, &view, &mut dataflow);
                 let index = auto_generate_view_idx(index_name, view_name, &view, view_id);
@@ -1172,7 +1183,6 @@ where
                     finishing: finishing.clone(),
                     project,
                     filter,
-                    eval_env,
                 },
             );
 
@@ -1280,13 +1290,9 @@ where
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
-                let eval_env = EvalEnv {
-                    wall_time: Some(chrono::Utc::now()),
-                    logical_time: Some(0),
-                };
                 let optimized_plan = self
                     .optimizer
-                    .optimize(decorrelated_plan?, self.catalog.indexes(), &eval_env)?
+                    .optimize(decorrelated_plan?, self.catalog.indexes())?
                     .into_inner();
                 let mut explanation = optimized_plan.explain(&self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
@@ -1580,7 +1586,6 @@ where
         dataflow.add_view_to_build(
             *view_id,
             view.optimized_expr.clone(),
-            view.eval_env.clone(),
             view.desc.typ().clone(),
         );
     }
@@ -1593,13 +1598,7 @@ where
         mut dataflow: DataflowDesc,
     ) {
         self.import_source_or_view(id, &index.on, &mut dataflow);
-        dataflow.add_index_to_build(
-            *id,
-            index.on.clone(),
-            on_type.clone(),
-            index.keys.clone(),
-            index.eval_env.clone(),
-        );
+        dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
         dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
         // TODO: should we still support creating multiple dataflows with a single command,
         // Or should it all be compacted into a single DataflowDesc with multiple exports?
@@ -2074,22 +2073,17 @@ where
         session: &Session,
         stmt: sql::Statement,
         params: &sql::Params,
-    ) -> Result<sql::Plan, failure::Error> {
-        let plan_result = sql::plan(&self.catalog, session, stmt.clone(), params);
-        // Try Postgres if we realize synchronously that we failed.
-        if let Err(err) = plan_result {
-            match self.symbiosis {
+    ) -> Result<(PlanContext, sql::Plan), failure::Error> {
+        let pcx = PlanContext::default();
+        match sql::plan(&pcx, &self.catalog, session, stmt.clone(), params) {
+            Ok(plan) => Ok((pcx, plan)),
+            Err(err) => match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    block_on(postgres.execute(&self.catalog, session, &stmt))
+                    let plan = block_on(postgres.execute(&pcx, &self.catalog, session, &stmt))?;
+                    Ok((pcx, plan))
                 }
                 _ => Err(err),
-            }
-        // Otherwise, just return the future.
-        // Nothing that we do asynchronously could
-        // possibly work in Postgres anyway, so don't bother
-        // piping through the logic to try in symbiosis mode in this case.
-        } else {
-            plan_result
+            },
         }
     }
 
@@ -2273,9 +2267,9 @@ pub fn auto_generate_primary_idx(
     };
     catalog::Index {
         create_sql: index_sql(index_name, on_name, &on_desc, &keys),
+        plan_cx: PlanContext::default(),
         on: on_id,
         keys: keys.into_iter().map(ScalarExpr::Column).collect(),
-        eval_env: EvalEnv::default(),
     }
 }
 
@@ -2339,6 +2333,7 @@ fn open_catalog(
                     },
                     CatalogItem::Source(catalog::Source {
                         create_sql: "TODO".to_string(),
+                        plan_cx: PlanContext::default(),
                         connector: dataflow_types::SourceConnector::Local,
                         desc: log_src.schema(),
                     }),
@@ -2363,12 +2358,13 @@ fn open_catalog(
                             &log_src.schema(),
                             &log_src.index_by(),
                         ),
-                        eval_env: EvalEnv::default(),
+                        plan_cx: PlanContext::default(),
                     }),
                 );
             }
 
             for log_view in logging_config.active_views() {
+                let pcx = PlanContext::default();
                 let params = Params {
                     datums: Row::pack(&[]),
                     types: vec![],
@@ -2376,7 +2372,7 @@ fn open_catalog(
                 let stmt = sql::parse(log_view.sql.to_owned())
                     .expect("failed to parse bootstrap sql")
                     .into_element();
-                match sql::plan(catalog, &sql::InternalSession, stmt, &params) {
+                match sql::plan(&pcx, catalog, &sql::InternalSession, stmt, &params) {
                     Ok(Plan::CreateView {
                         name: _,
                         view,
@@ -2387,13 +2383,12 @@ fn open_catalog(
                         assert!(replace.is_none());
                         assert!(!if_not_exists);
                         assert!(materialize);
-                        let eval_env = EvalEnv::default();
                         let view = catalog::View {
                             create_sql: view.create_sql,
+                            plan_cx: pcx,
                             optimized_expr: optimizer
-                                .optimize(view.expr, catalog.indexes(), &eval_env)
+                                .optimize(view.expr, catalog.indexes())
                                 .expect("failed to optimize bootstrap sql"),
-                            eval_env,
                             desc: view.desc,
                         };
                         let view_name = FullName {
