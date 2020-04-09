@@ -86,7 +86,6 @@ impl Demand {
             }
             RelationExpr::Map { input, scalars } => {
                 let arity = input.arity();
-
                 // contains columns whose supports have yet to be explored
                 let mut new_columns = columns.clone();
                 new_columns.retain(|c| *c >= arity);
@@ -102,7 +101,7 @@ impl Demand {
                     new_columns.retain(|c| *c >= arity);
                 }
 
-                // Replace un-read expressions with Null literals to prevent evaluation.
+                // Replace un-read expressions with literals to prevent evaluation.
                 for (index, scalar) in scalars.iter_mut().enumerate() {
                     if !columns.contains(&(arity + index)) {
                         // Leave literals as they are, to benefit explain.
