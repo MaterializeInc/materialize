@@ -12,7 +12,6 @@ path = "lib.rs"
 avro = { path = "../avro" }
 bincode = "1.2.1"
 ccsr = { path = "../ccsr" }
-chrono = "0.4"
 comm = { path = "../comm" }
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }
@@ -39,7 +38,6 @@ rusoto_kinesis = "0.43.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.51"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
-timer = "0.2"
 tokio = { version = "0.2", features = ["blocking", "fs", "rt-threaded"] }
 tokio-util = { version = "0.3", features = ["codec"] }
 url = { version = "2.1.1", features = ["serde"] }

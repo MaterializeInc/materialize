@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::ffi::OsString;
-use std::fs::{self, File};
-use std::io::{Cursor, Write};
+use std::fs::File;
+use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{self, PathBuf};
 
@@ -90,12 +90,11 @@ impl Action for AppendAction {
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let path = state.temp_dir.path().join(&self.path);
         println!("Appending to {}", path.display());
-        let mut buf = fs::read(&path).map_err(|e| e.to_string())?;
+        let file = File::open(path).map_err(|e| e.to_string())?;
         // TODO(benesch): we'll be able to open the writer on the file directly
         // once the Avro reader is no longer asynchronous.
-        let mut writer = Writer::append_to(Cursor::new(&mut buf)).map_err(|e| e.to_string())?;
+        let mut writer = Writer::append_to(file).map_err(|e| e.to_string())?;
         write_records(&mut writer, &self.records)?;
-        fs::write(path, buf).map_err(|e| format!("error syncing file: {}", e))?;
         Ok(())
     }
 }
@@ -160,7 +159,7 @@ impl Action for VerifyAction {
 
         // Get the rows from this file.
         let (schema, actual) = state.tokio_runtime.block_on(async {
-            let file = std::fs::File::open(&path)
+            let file = File::open(&path)
                 .map_err(|e| format!("reading sink file {}: {}", path.display(), e))?;
             let reader = Reader::new(file).map_err(|e| format!("creating avro reader: {}", e))?;
             let schema = reader.writer_schema().clone();

@@ -150,11 +150,12 @@ fn read_file_task<Ctor, I, Out, Err>(
             #[cfg(target_os = "macos")]
             let (file_events_stream, handle) = {
                 let (timer_tx, timer_rx) = std::sync::mpsc::channel();
-                let timer = timer::MessageTimer::new(timer_tx);
-                timer
-                    .schedule_repeating(chrono::Duration::milliseconds(100), ())
-                    .ignore();
-                (timer_rx, timer)
+                std::thread::spawn(move || {
+                    while let Ok(()) = timer_tx.send(()) {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                });
+                (timer_rx, ())
             };
 
             #[cfg(not(target_os = "macos"))]
