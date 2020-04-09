@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{self, PathBuf};
@@ -90,9 +90,11 @@ impl Action for AppendAction {
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let path = state.temp_dir.path().join(&self.path);
         println!("Appending to {}", path.display());
-        let file = File::open(path).map_err(|e| e.to_string())?;
-        // TODO(benesch): we'll be able to open the writer on the file directly
-        // once the Avro reader is no longer asynchronous.
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
         let mut writer = Writer::append_to(file).map_err(|e| e.to_string())?;
         write_records(&mut writer, &self.records)?;
         Ok(())
