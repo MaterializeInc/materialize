@@ -19,6 +19,7 @@ use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
+use postgres::error::SqlState;
 use prometheus::{register_int_counter, IntCounter};
 use tokio::io;
 use tokio_util::codec::{Decoder, Encoder};
@@ -93,7 +94,7 @@ impl Codec {
     fn encode_error_notice_response(
         dst: &mut BytesMut,
         severity: &'static str,
-        code: &'static str,
+        code: SqlState,
         message: String,
         detail: Option<String>,
         hint: Option<String>,
@@ -101,7 +102,7 @@ impl Codec {
         dst.put_u8(b'S');
         dst.put_string(severity);
         dst.put_u8(b'C');
-        dst.put_string(code);
+        dst.put_string(code.code());
         dst.put_u8(b'M');
         dst.put_string(&message);
         if let Some(detail) = &detail {
