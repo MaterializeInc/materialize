@@ -504,6 +504,15 @@ where
         };
 
         let param_types = stmt.param_types();
+        if param_types.len() > raw_params.len() {
+            return self
+                .error(
+                    session,
+                    SqlState::PROTOCOL_VIOLATION,
+                    format!("there is no parameter ${}", raw_params.len() + 1),
+                )
+                .await;
+        }
         let param_formats = match pad_formats(param_formats, raw_params.len()) {
             Ok(param_formats) => param_formats,
             Err(msg) => return self.error(session, SqlState::PROTOCOL_VIOLATION, msg).await,
