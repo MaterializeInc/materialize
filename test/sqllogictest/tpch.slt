@@ -1336,7 +1336,7 @@ ORDER BY
 | | demand = (#0, #5)
 | Reduce group=(#0, #0) sum(#5)
 | Filter (#2 > 30000dec)
-| Reduce group=(#0) any(true)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %8 =
@@ -1539,7 +1539,7 @@ ORDER BY
 | | implementation = Differential %11 %14.(#0, #1)
 | | demand = (#0, #13, #30)
 | Filter ((i32todec(#13) * 1000dec) > #30)
-| Reduce group=(#0) any(true)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %16 =

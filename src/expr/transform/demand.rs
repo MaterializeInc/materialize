@@ -105,13 +105,16 @@ impl Demand {
                 // Replace un-read expressions with Null literals to prevent evaluation.
                 for (index, scalar) in scalars.iter_mut().enumerate() {
                     if !columns.contains(&(arity + index)) {
-                        let typ = relation_type.column_types[arity + index].clone();
-                        let datum = if typ.nullable {
-                            repr::Datum::Null
-                        } else {
-                            typ.scalar_type.dummy_datum()
-                        };
-                        *scalar = ScalarExpr::Literal(Ok(repr::Row::pack(Some(datum))), typ);
+                        // Leave literals as they are, to benefit explain.
+                        if !scalar.is_literal() {
+                            let typ = relation_type.column_types[arity + index].clone();
+                            let datum = if typ.nullable {
+                                repr::Datum::Null
+                            } else {
+                                typ.scalar_type.dummy_datum()
+                            };
+                            *scalar = ScalarExpr::Literal(Ok(repr::Row::pack(Some(datum))), typ);
+                        }
                     }
                 }
 
@@ -266,7 +269,9 @@ impl Demand {
 
                 self.action(input, new_columns, gets);
 
-                *relation = relation.take_dangerous().map(map_exprs).project(projection);
+                if !map_exprs.is_empty() {
+                    *relation = relation.take_dangerous().map(map_exprs).project(projection);
+                }
             }
             RelationExpr::TopK {
                 input,
