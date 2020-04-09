@@ -86,7 +86,11 @@ impl Transcoder {
                 val.write_to_vec(&mut out).map_err(|e| e.to_string())?;
             }
             Transcoder::Bytes { terminator } => match terminator {
-                Some(t) => row.read_until(*t, &mut out).map(|_n| ()),
+                Some(t) => {
+                    row.read_until(*t, &mut out).map_err(|e| e.to_string())?;
+                    out.pop();
+                    Ok(())
+                }
                 None => row.read_to_end(&mut out).map(|_n| ()),
             }
             .map_err(|e| e.to_string())?,

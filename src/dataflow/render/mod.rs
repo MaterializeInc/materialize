@@ -15,6 +15,7 @@ use std::rc::Weak;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::{AsCollection, Collection};
@@ -34,7 +35,7 @@ use super::source;
 use super::source::FileReadStyle;
 use super::source::SourceToken;
 use crate::arrangement::manager::{TraceManager, WithDrop};
-use crate::decode::{decode, decode_avro_values};
+use crate::decode::{decode_avro_values, decode_key_values, decode_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
@@ -138,57 +139,22 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     consistency,
                 } = src.connector
                 {
+                    let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
+
                     // This uid must be unique across all different instantiations of a source
                     let uid = SourceInstanceId {
                         sid: src_id.sid,
                         vid: first_export_id,
                     };
 
-                    let (stream, capability) = if let ExternalSourceConnector::AvroOcf(c) =
-                        connector
-                    {
-                        // Distribute read responsibility among workers.
-                        use differential_dataflow::hashable::Hashable;
-                        let hash = src_id.hashed() as usize;
-                        let should_read = hash % worker_peers == worker_index;
-                        let read_style = if should_read {
-                            if c.tail {
-                                FileReadStyle::TailFollowFd
-                            } else {
-                                FileReadStyle::ReadOnce
-                            }
-                        } else {
-                            FileReadStyle::None
-                        };
-
-                        let reader_schema = match &encoding {
-                            DataEncoding::AvroOcf { reader_schema } => reader_schema,
-                            _ => unreachable!(
-                                "Internal error: \
-                                     Avro OCF schema should have already been resolved.\n\
-                                     Encoding is: {:?}",
-                                encoding
-                            ),
-                        };
-                        let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                        let ctor = move |file| avro::Reader::with_schema(&reader_schema, file);
-                        let (source, capability) = source::file(
-                            src_id,
-                            region,
-                            format!("ocf-{}", src_id),
-                            c.path,
-                            read_style,
-                            ctor,
-                        );
-                        (decode_avro_values(&source, &envelope), capability)
-                    } else {
-                        let (source, capability) = match connector {
+                    let capability = if let Envelope::Upsert(key_encoding) = envelope {
+                        match connector {
                             ExternalSourceConnector::Kafka(c) => {
                                 // Distribute read responsibility among workers.
                                 use differential_dataflow::hashable::Hashable;
                                 let hash = src_id.hashed() as usize;
                                 let read_from_kafka = hash % worker_peers == worker_index;
-                                source::kafka(
+                                let (source, capability) = source::kafka(
                                     region,
                                     format!("kafka-{}-{}", first_export_id, source_number),
                                     c,
@@ -198,77 +164,156 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     timestamp_channel.clone(),
                                     consistency,
                                     read_from_kafka,
-                                )
+                                );
+                                let arranged = arrange_from_upsert(
+                                    &decode_key_values(&source, encoding, key_encoding),
+                                    &format!("UpsertArrange: {}", src_id.to_string()),
+                                );
+                                let keys = src.desc.typ().keys[0]
+                                    .iter()
+                                    .map(|k| ScalarExpr::Column(*k))
+                                    .collect::<Vec<_>>();
+                                context.set_local(&get_expr, &keys, arranged);
+                                capability
                             }
-                            ExternalSourceConnector::Kinesis(c) => {
-                                // Distribute read responsibility among workers.
-                                use differential_dataflow::hashable::Hashable;
-                                let hash = src_id.hashed() as usize;
-                                let read_from_kinesis = hash % worker_peers == worker_index;
-                                source::kinesis(
-                                    region,
-                                    format!("kinesis-{}-{}", first_export_id, source_number),
-                                    c,
-                                    uid,
-                                    advance_timestamp,
-                                    timestamp_histories.clone(),
-                                    timestamp_channel.clone(),
-                                    consistency,
-                                    read_from_kinesis,
-                                )
-                            }
-                            ExternalSourceConnector::File(c) => {
-                                // Distribute read responsibility among workers.
-                                use differential_dataflow::hashable::Hashable;
-                                let hash = src_id.hashed() as usize;
-                                let should_read = hash % worker_peers == worker_index;
-                                let read_style = if should_read {
-                                    if c.tail {
-                                        FileReadStyle::TailFollowFd
-                                    } else {
-                                        FileReadStyle::ReadOnce
-                                    }
-                                } else {
-                                    FileReadStyle::None
-                                };
-
-                                let ctor = |file| Ok(std::io::BufReader::new(file).split(b'\n'));
-                                source::file(
-                                    src_id,
-                                    region,
-                                    format!("csv-{}", src_id),
-                                    c.path,
-                                    read_style,
-                                    ctor,
-                                )
-                            }
-                            ExternalSourceConnector::AvroOcf(_) => unreachable!(),
-                        };
-                        // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
-                        // a hypothetical future avro_extract, protobuf_extract, etc.
-                        let stream = decode(&source, encoding, &dataflow.debug_name, &envelope);
-
-                        (stream, capability)
-                    };
-
-                    let collection = match envelope {
-                        Envelope::None => stream.as_collection(),
-                        Envelope::Debezium => {
-                            // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
-                            stream.as_collection().explode(|row| {
-                                let mut datums = row.unpack();
-                                let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                                Some((Row::pack(datums.into_iter()), diff))
-                            })
+                            _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
                         }
-                        Envelope::Upsert(_) => unreachable!("Upsert is not supported yet"),
+                    } else {
+                        let (stream, capability) = if let ExternalSourceConnector::AvroOcf(c) =
+                            connector
+                        {
+                            // Distribute read responsibility among workers.
+                            use differential_dataflow::hashable::Hashable;
+                            let hash = src_id.hashed() as usize;
+                            let should_read = hash % worker_peers == worker_index;
+                            let read_style = if should_read {
+                                if c.tail {
+                                    FileReadStyle::TailFollowFd
+                                } else {
+                                    FileReadStyle::ReadOnce
+                                }
+                            } else {
+                                FileReadStyle::None
+                            };
+
+                            let reader_schema = match &encoding {
+                                DataEncoding::AvroOcf { reader_schema } => reader_schema,
+                                _ => unreachable!(
+                                    "Internal error: \
+                                         Avro OCF schema should have already been resolved.\n\
+                                        Encoding is: {:?}",
+                                    encoding
+                                ),
+                            };
+                            let reader_schema = Schema::parse_str(reader_schema).unwrap();
+                            let ctor = move |file| avro::Reader::with_schema(&reader_schema, file);
+                            let (source, capability) = source::file(
+                                src_id,
+                                region,
+                                format!("ocf-{}", src_id),
+                                c.path,
+                                read_style,
+                                ctor,
+                            );
+                            (decode_avro_values(&source, &envelope), capability)
+                        } else {
+                            let (source, capability) = match connector {
+                                ExternalSourceConnector::Kafka(c) => {
+                                    // Distribute read responsibility among workers.
+                                    use differential_dataflow::hashable::Hashable;
+                                    use timely::dataflow::operators::Map;
+                                    let hash = src_id.hashed() as usize;
+                                    let read_from_kafka = hash % worker_peers == worker_index;
+                                    let (source, capability) = source::kafka(
+                                        region,
+                                        format!("kafka-{}-{}", first_export_id, source_number),
+                                        c,
+                                        uid,
+                                        advance_timestamp,
+                                        timestamp_histories.clone(),
+                                        timestamp_channel.clone(),
+                                        consistency,
+                                        read_from_kafka,
+                                    );
+                                    (
+                                        source.map(|((_key, payload), aux_num)| (payload, aux_num)),
+                                        capability,
+                                    )
+                                }
+                                ExternalSourceConnector::Kinesis(c) => {
+                                    // Distribute read responsibility among workers.
+                                    use differential_dataflow::hashable::Hashable;
+                                    let hash = src_id.hashed() as usize;
+                                    let read_from_kinesis = hash % worker_peers == worker_index;
+                                    source::kinesis(
+                                        region,
+                                        format!("kinesis-{}-{}", first_export_id, source_number),
+                                        c,
+                                        uid,
+                                        advance_timestamp,
+                                        timestamp_histories.clone(),
+                                        timestamp_channel.clone(),
+                                        consistency,
+                                        read_from_kinesis,
+                                    )
+                                }
+                                ExternalSourceConnector::File(c) => {
+                                    // Distribute read responsibility among workers.
+                                    use differential_dataflow::hashable::Hashable;
+                                    let hash = src_id.hashed() as usize;
+                                    let should_read = hash % worker_peers == worker_index;
+                                    let read_style = if should_read {
+                                        if c.tail {
+                                            FileReadStyle::TailFollowFd
+                                        } else {
+                                            FileReadStyle::ReadOnce
+                                        }
+                                    } else {
+                                        FileReadStyle::None
+                                    };
+
+                                    let ctor =
+                                        |file| Ok(std::io::BufReader::new(file).split(b'\n'));
+                                    source::file(
+                                        src_id,
+                                        region,
+                                        format!("csv-{}", src_id),
+                                        c.path,
+                                        read_style,
+                                        ctor,
+                                    )
+                                }
+                                ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                            };
+                            // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
+                            // a hypothetical future avro_extract, protobuf_extract, etc.
+                            let stream =
+                                decode_values(&source, encoding, &dataflow.debug_name, &envelope);
+
+                            (stream, capability)
+                        };
+
+                        let collection = match envelope {
+                            Envelope::None => stream.as_collection(),
+                            Envelope::Debezium => {
+                                // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+                                stream.as_collection().explode(|row| {
+                                    let mut datums = row.unpack();
+                                    let diff = datums.pop().unwrap().unwrap_int64() as isize;
+                                    Some((Row::pack(datums.into_iter()), diff))
+                                })
+                            }
+                            Envelope::Upsert(_) => unreachable!(),
+                        };
+
+                        // Introduce the stream by name, as an unarranged collection.
+                        context.collections.insert(
+                            RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
+                            collection,
+                        );
+                        capability
                     };
 
-                    // Introduce the stream by name, as an unarranged collection.
-                    context.collections.insert(
-                        RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
-                        collection,
-                    );
                     let token = Rc::new(capability);
                     source_tokens.insert(src_id.sid, token.clone());
 

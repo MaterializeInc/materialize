@@ -50,3 +50,21 @@ a
 ---
 1
 2
+
+#In the event of null payload, materialize should skip the entry and not panic
+$ kafka-create-topic topic=nullpayload
+
+$ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=nullpayload timestamp=1
+:Sé
+:
+:así
+
+> CREATE MATERIALIZED SOURCE nullpayload (col)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nullpayload-${testdrive.seed}'
+  FORMAT BYTES
+
+> SELECT col from nullpayload
+col
+---
+"S\\xc3\\xa9"
+"as\\xc3\\xad"

@@ -7,65 +7,110 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use differential_dataflow::Hashable;
 use log::error;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{Diff, Timestamp};
 use interchange::protobuf::{self, Decoder};
 use repr::Row;
 
-use super::EVENTS_COUNTER;
+use super::{DecoderState, PushSession, EVENTS_COUNTER};
 
-pub fn protobuf<G>(
-    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
-    descriptors: &[u8],
-    message_name: &str,
-) -> Stream<G, (Row, Timestamp, Diff)>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    let message_name = message_name.to_owned();
-    let descriptors = protobuf::decode_descriptors(descriptors)
-        .expect("descriptors provided to protobuf source are pre-validated");
-    let mut decoder = Decoder::new(descriptors, &message_name);
+pub struct ProtobufDecoderState {
+    decoder: Decoder,
+    events_success: i64,
+    events_error: i64,
+}
 
-    stream.unary(
-        Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
-        "ProtobufDecode",
-        move |_, _| {
-            move |input, output| {
-                let mut events_success = 0;
-                let mut events_error = 0;
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for (payload, _) in data.iter() {
-                        match decoder.decode(payload) {
-                            Ok(row) => {
-                                if let Some(row) = row {
-                                    events_success += 1;
-                                    session.give((row, *cap.time(), 1));
-                                } else {
-                                    events_error += 1;
-                                    error!("protobuf deserialization returned None");
-                                }
-                            }
-                            Err(err) => {
-                                events_error += 1;
-                                error!("protobuf deserialization error: {}", err)
-                            }
-                        }
-                    }
-                });
-                if events_success > 0 {
-                    EVENTS_COUNTER.protobuf.success.inc_by(events_success);
-                }
-                if events_error > 0 {
-                    EVENTS_COUNTER.protobuf.error.inc_by(events_error);
+impl ProtobufDecoderState {
+    pub fn new(descriptors: &[u8], message_name: &str) -> Self {
+        let descriptors = protobuf::decode_descriptors(descriptors)
+            .expect("descriptors provided to protobuf source are pre-validated");
+        ProtobufDecoderState {
+            decoder: Decoder::new(descriptors, message_name),
+            events_success: 0,
+            events_error: 0,
+        }
+    }
+}
+
+impl DecoderState for ProtobufDecoderState {
+    /// Reset number of success and failures with decoding
+    fn reset_event_count(&mut self) {
+        self.events_success = 0;
+        self.events_error = 0;
+    }
+
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+        match self.decoder.decode(bytes) {
+            Ok(row) => {
+                if let Some(row) = row {
+                    self.events_success += 1;
+                    Ok(row)
+                } else {
+                    self.events_error += 1;
+                    Err("protobuf deserialization returned None".to_string())
                 }
             }
-        },
-    )
+            Err(err) => {
+                self.events_error += 1;
+                Err(format!("protobuf deserialization error: {}", err))
+            }
+        }
+    }
+
+    /// give a session a key-value pair
+    fn give_key_value<'a>(
+        &mut self,
+        key: Row,
+        bytes: &[u8],
+        _: Option<i64>,
+        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
+        time: Timestamp,
+    ) {
+        match self.decoder.decode(bytes) {
+            Ok(row) => {
+                self.events_success += 1;
+                session.give((key, row, time));
+            }
+            Err(err) => {
+                self.events_error += 1;
+                error!("protobuf deserialization error: {}", err)
+            }
+        }
+    }
+
+    /// give a session a plain value
+    fn give_value<'a>(
+        &mut self,
+        bytes: &[u8],
+        _: Option<i64>,
+        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        time: Timestamp,
+    ) {
+        match self.decoder.decode(bytes) {
+            Ok(row) => {
+                if let Some(row) = row {
+                    self.events_success += 1;
+                    session.give((row, time, 1));
+                } else {
+                    self.events_error += 1;
+                    error!("protobuf deserialization returned None");
+                }
+            }
+            Err(err) => {
+                self.events_error += 1;
+                error!("protobuf deserialization error: {}", err)
+            }
+        }
+    }
+
+    /// Register number of success and failures with decoding
+    fn log_error_count(&self) {
+        if self.events_success > 0 {
+            EVENTS_COUNTER.protobuf.success.inc_by(self.events_success);
+        }
+        if self.events_error > 0 {
+            EVENTS_COUNTER.protobuf.error.inc_by(self.events_error);
+        }
+    }
 }

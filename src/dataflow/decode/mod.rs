@@ -13,30 +13,30 @@ use differential_dataflow::hashable::Hashable;
 use prometheus::{register_int_counter_vec, IntCounterVec};
 use prometheus_static_metric::make_static_metric;
 use timely::dataflow::{
-    channels::pact::Exchange,
+    channels::pact::{Exchange, ParallelizationContract, Pipeline},
+    channels::pushers::buffer::Session,
+    channels::pushers::Counter as PushCounter,
+    channels::pushers::Tee,
     operators::{map::Map, Operator},
     Scope, Stream,
 };
 
 use dataflow_types::{DataEncoding, Diff, Envelope, Timestamp};
 use repr::Datum;
-use repr::Row;
+use repr::{Row, RowPacker};
 
 mod avro;
 mod csv;
 mod protobuf;
 mod regex;
 
-use self::avro::avro;
 use self::csv::csv;
 use self::regex::regex as regex_fn;
 use ::avro::types::Value;
 use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
 
 use log::error;
-use protobuf::protobuf;
 use std::iter;
-use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 
 make_static_metric! {
     pub struct EventsRead: IntCounter {
@@ -118,7 +118,275 @@ where
     })
 }
 
-pub fn decode<G>(
+pub type PushSession<'a, R> =
+    Session<'a, Timestamp, R, PushCounter<Timestamp, R, Tee<Timestamp, R>>>;
+
+pub trait DecoderState {
+    /// Reset number of success and failures with decoding
+    fn reset_event_count(&mut self);
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
+    /// give a session a key-value pair
+    fn give_key_value<'a>(
+        &mut self,
+        key: Row,
+        bytes: &[u8],
+        aux_num: Option<i64>,
+        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
+        time: Timestamp,
+    );
+    /// give a session a plain value
+    fn give_value<'a>(
+        &mut self,
+        bytes: &[u8],
+        aux_num: Option<i64>,
+        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        time: Timestamp,
+    );
+    /// Register number of success and failures with decoding
+    fn log_error_count(&self);
+}
+
+fn pack_with_line_no(datum: Datum, line_no: Option<i64>) -> Row {
+    Row::pack(iter::once(datum).chain(line_no.map(Datum::from)))
+}
+
+fn bytes_to_datum(bytes: &[u8]) -> Datum {
+    Datum::from(bytes)
+}
+
+fn text_to_datum(bytes: &[u8]) -> Datum {
+    Datum::from(std::str::from_utf8(bytes).ok())
+}
+
+struct OffsetDecoderState<F: Fn(&[u8]) -> Datum> {
+    datum_func: F,
+}
+
+impl<F: Fn(&[u8]) -> Datum> DecoderState for OffsetDecoderState<F> {
+    fn reset_event_count(&mut self) {}
+
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+        let mut result = RowPacker::new();
+        result.push((self.datum_func)(bytes));
+        Ok(result.finish())
+    }
+
+    /// give a session a key-value pair
+    fn give_key_value<'a>(
+        &mut self,
+        key: Row,
+        bytes: &[u8],
+        line_no: Option<i64>,
+        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
+        time: Timestamp,
+    ) {
+        session.give((
+            key,
+            Some(pack_with_line_no((self.datum_func)(bytes), line_no)),
+            time,
+        ));
+    }
+
+    /// give a session a plain value
+    fn give_value<'a>(
+        &mut self,
+        bytes: &[u8],
+        line_no: Option<i64>,
+        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        time: Timestamp,
+    ) {
+        session.give((
+            pack_with_line_no((self.datum_func)(bytes), line_no),
+            time,
+            1,
+        ));
+    }
+
+    /// Register number of success and failures with decoding
+    fn log_error_count(&self) {}
+}
+
+fn decode_key_values_inner<G, K, V>(
+    stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+    mut key_decoder_state: K,
+    mut value_decoder_state: V,
+    op_name: &str,
+) -> Stream<G, (Row, Option<Row>, Timestamp)>
+where
+    G: Scope<Timestamp = Timestamp>,
+    K: DecoderState + 'static,
+    V: DecoderState + 'static,
+{
+    stream.unary(
+        Exchange::new(|x: &((Vec<u8>, _), _)| (x.0).0.hashed()),
+        &op_name,
+        move |_, _| {
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for ((key, payload), aux_num) in data.iter() {
+                        if key.is_empty() {
+                            error!("{}", "Encountered empty key");
+                            continue;
+                        }
+                        match key_decoder_state.decode_key(key) {
+                            Ok(key) => {
+                                if payload.is_empty() {
+                                    session.give((key, None, *cap.time()));
+                                } else {
+                                    value_decoder_state.give_key_value(
+                                        key,
+                                        payload,
+                                        *aux_num,
+                                        &mut session,
+                                        *cap.time(),
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                error!("{}", err);
+                            }
+                        }
+                    }
+                });
+                key_decoder_state.log_error_count();
+                value_decoder_state.log_error_count();
+            }
+        },
+    )
+}
+
+pub fn decode_key_values<G>(
+    stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+    value_encoding: DataEncoding,
+    key_encoding: DataEncoding,
+) -> Stream<G, (Row, Option<Row>, Timestamp)>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let op_name = format!(
+        "{}-{}Decode",
+        key_encoding.op_name(),
+        value_encoding.op_name()
+    );
+    let decoded_stream = match (key_encoding, value_encoding) {
+        (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            avro::AvroDecoderState::new(
+                &val_enc.value_schema,
+                val_enc.schema_registry_url,
+                interchange::avro::EnvelopeType::Upsert,
+            ),
+            &op_name,
+        ),
+        (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            avro::AvroDecoderState::new(
+                &val_enc.value_schema,
+                val_enc.schema_registry_url,
+                interchange::avro::EnvelopeType::Upsert,
+            ),
+            &op_name,
+        ),
+        (DataEncoding::Avro(key_enc), DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+            stream,
+            avro::AvroDecoderState::new(
+                &key_enc.value_schema,
+                key_enc.schema_registry_url,
+                interchange::avro::EnvelopeType::None,
+            ),
+            avro::AvroDecoderState::new(
+                &val_enc.value_schema,
+                val_enc.schema_registry_url,
+                interchange::avro::EnvelopeType::Upsert,
+            ),
+            &op_name,
+        ),
+        (DataEncoding::Text, DataEncoding::Bytes) => decode_key_values_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            &op_name,
+        ),
+        (DataEncoding::Bytes, DataEncoding::Bytes) => decode_key_values_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            &op_name,
+        ),
+        (DataEncoding::Text, DataEncoding::Text) => decode_key_values_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            &op_name,
+        ),
+        _ => unreachable!(),
+    };
+    decoded_stream.map(|(key, value, timestamp)| {
+        if let Some(value) = value {
+            let mut value_with_key = RowPacker::new();
+            value_with_key.extend_by_row(&key);
+            value_with_key.extend_by_row(&value);
+            (key, Some(value_with_key.finish()), timestamp)
+        } else {
+            (key, None, timestamp)
+        }
+    })
+}
+
+fn decode_values_inner<G, V>(
+    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
+    mut value_decoder_state: V,
+    op_name: &str,
+) -> Stream<G, (Row, Timestamp, Diff)>
+where
+    G: Scope<Timestamp = Timestamp>,
+    V: DecoderState + 'static,
+{
+    stream.unary(
+        Exchange::new(|x: &(Vec<u8>, _)| (x.0.hashed())),
+        &op_name,
+        move |_, _| {
+            move |input, output| {
+                value_decoder_state.reset_event_count();
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for (payload, aux_num) in data.iter() {
+                        if !payload.is_empty() {
+                            value_decoder_state.give_value(
+                                payload,
+                                *aux_num,
+                                &mut session,
+                                *cap.time(),
+                            );
+                        }
+                    }
+                });
+                value_decoder_state.log_error_count();
+            }
+        },
+    )
+}
+
+pub fn decode_values<G>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     encoding: DataEncoding,
     name: &str,
@@ -127,16 +395,23 @@ pub fn decode<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let op_name = format!("{}Decode", encoding.op_name());
+
     match (encoding, envelope) {
-        (_, Envelope::Upsert(_)) => unreachable!("Upsert-envelope not implemented yet."),
+        (_, Envelope::Upsert(_)) => {
+            unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
+        }
         (DataEncoding::Csv(enc), Envelope::None) => {
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter)
         }
-        (DataEncoding::Avro(enc), envelope) => avro(
+        (DataEncoding::Avro(enc), envelope) => decode_values_inner(
             stream,
-            &enc.value_schema,
-            enc.schema_registry_url,
-            envelope.get_avro_envelope_type() == interchange::avro::EnvelopeType::Debezium,
+            avro::AvroDecoderState::new(
+                &enc.value_schema,
+                enc.schema_registry_url,
+                envelope.get_avro_envelope_type(),
+            ),
+            &op_name,
         ),
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
@@ -145,37 +420,24 @@ where
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
         (DataEncoding::Regex { regex }, Envelope::None) => regex_fn(stream, regex, name),
-        (DataEncoding::Protobuf(enc), Envelope::None) => {
-            protobuf(stream, &enc.descriptors, &enc.message_name)
-        }
-        (DataEncoding::Bytes, Envelope::None) => pass_through(
+        (DataEncoding::Protobuf(enc), Envelope::None) => decode_values_inner(
             stream,
-            "RawBytes",
-            Exchange::new(|payload: &(Vec<u8>, Option<i64>)| payload.0.hashed()),
-        )
-        .map(|((payload, line_no), r, d)| {
-            (
-                Row::pack(
-                    iter::once(Datum::from(payload.as_slice())).chain(line_no.map(Datum::from)),
-                ),
-                r,
-                d,
-            )
-        }),
-        (DataEncoding::Text, Envelope::None) => pass_through(
+            protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
+            &op_name,
+        ),
+        (DataEncoding::Bytes, Envelope::None) => decode_values_inner(
             stream,
-            "Text",
-            Exchange::new(|payload: &(Vec<u8>, Option<i64>)| payload.0.hashed()),
-        )
-        .map(|((payload, line_no), r, d)| {
-            (
-                Row::pack(
-                    iter::once(Datum::from(std::str::from_utf8(&payload).ok()))
-                        .chain(line_no.map(Datum::from)),
-                ),
-                r,
-                d,
-            )
-        }),
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            &op_name,
+        ),
+        (DataEncoding::Text, Envelope::None) => decode_values_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            &op_name,
+        ),
     }
 }
