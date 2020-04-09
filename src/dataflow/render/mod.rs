@@ -21,7 +21,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
@@ -89,27 +89,6 @@ pub(crate) fn build_local_input<A: Allocate>(
             };
         });
     });
-}
-
-fn stream_as_collection<G>(
-    stream: Stream<G, (Row, Timestamp, Diff)>,
-    envelope: Envelope,
-) -> Collection<G, Row, Diff>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    match envelope {
-        Envelope::None => stream.as_collection(),
-        Envelope::Debezium => {
-            // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
-            stream.as_collection().explode(|row| {
-                let mut datums = row.unpack();
-                let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                Some((Row::pack(datums.into_iter()), diff))
-            })
-        }
-        Envelope::Upsert(_) => unreachable!(),
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -256,10 +235,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         consistency,
                                         read_from_kafka,
                                     );
-                                    (source.map(|((_key, payload), aux_num)| {
-                                        (payload, aux_num)
-                                        }),
-                                    capability,
+                                    (
+                                        source.map(|((_key, payload), aux_num)| (payload, aux_num)),
+                                        capability,
                                     )
                                 }
                                 ExternalSourceConnector::Kinesis(c) => {
@@ -294,7 +272,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         FileReadStyle::None
                                     };
 
-                                    let ctor = |file| Ok(std::io::BufReader::new(file).split(b'\n'));
+                                    let ctor =
+                                        |file| Ok(std::io::BufReader::new(file).split(b'\n'));
                                     source::file(
                                         src_id,
                                         region,
@@ -308,7 +287,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream = decode(&source, encoding, &dataflow.debug_name, &envelope);
+                            let stream =
+                                decode_values(&source, encoding, &dataflow.debug_name, &envelope);
 
                             (stream, capability)
                         };
@@ -326,6 +306,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             Envelope::Upsert(_) => unreachable!(),
                         };
 
+                        // Introduce the stream by name, as an unarranged collection.
+                        context.collections.insert(
+                            RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
+                            collection,
+                        );
                         capability
                     };
 

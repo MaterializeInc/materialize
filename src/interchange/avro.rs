@@ -535,7 +535,7 @@ impl Decoder {
             }
         } else {
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-            let row = extract_row(val, false, iter::empty())?;
+            let row = extract_row(val, self.envelope == EnvelopeType::Upsert, iter::empty())?;
             DiffPair {
                 before: None,
                 after: row,

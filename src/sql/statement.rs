@@ -1211,6 +1211,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     (connector, encoding)
                 }
             };
+
             // TODO (materialize#2537): cleanup format validation
             // Avro format validation is different for the Debezium envelope
             // vs the Upsert envelope.
@@ -1225,6 +1226,8 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             // the key schema, if it exists, over to the value schema position
             // in the Upsert envelope's key_format so it can be validated like
             // a schema used to decode records.
+
+            // TODO: remove bails as more support for upsert is added.
             let envelope = match &envelope {
                 sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
                 sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
@@ -1235,15 +1238,18 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         } else {
                             encoding.clone()
                         };
-                        if let DataEncoding::Avro(AvroEncoding {
-                            key_schema,
-                            value_schema,
-                            ..
-                        }) = &mut key_encoding
-                        {
-                            if key_schema.is_some() {
-                                *value_schema = key_schema.take().unwrap();
+                        match &mut key_encoding {
+                            DataEncoding::Avro(AvroEncoding {
+                                key_schema,
+                                value_schema,
+                                ..
+                            }) => {
+                                if key_schema.is_some() {
+                                    *value_schema = key_schema.take().unwrap();
+                                }
                             }
+                            DataEncoding::Bytes | DataEncoding::Text => {}
+                            _ => bail!("Format for upsert key is not yet supported."),
                         }
                         dataflow_types::Envelope::Upsert(key_encoding)
                     }
@@ -1252,11 +1258,16 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             };
 
             if let dataflow_types::Envelope::Upsert(_) = envelope {
-                // delete the key schema because 1) the format in the upsert is already
-                // taking care of that 2) to prevent schema validation from looking for the
-                // key columns in the value record
-                if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &mut encoding {
-                    *key_schema = None;
+                if let Consistency::BringYourOwn(_) = consistency {
+                    match &mut encoding {
+                        DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
+                            *key_schema = None;
+                        }
+                        DataEncoding::Bytes | DataEncoding::Text => {}
+                        _ => bail!("Upsert envelope is not yet supported for this format."),
+                    }
+                } else {
+                    bail!("Upsert envelope is only supported for BYO consistency.")
                 }
             }
 
