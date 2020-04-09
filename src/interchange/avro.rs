@@ -15,7 +15,6 @@ use std::iter;
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use failure::bail;
-use futures::executor::block_on;
 use itertools::Itertools;
 use serde_json::json;
 use sha2::Sha256;
@@ -520,22 +519,22 @@ impl Decoder {
                 // The record is laid out such that we can extract the `before` and
                 // `after` fields without decoding the entire record.
                 let before = extract_row(
-                    block_on(avro::from_avro_datum(&schema, &mut bytes))?,
+                    avro::from_avro_datum(&schema, &mut bytes)?,
                     true,
                     iter::once(Datum::Int64(-1)),
                 )?;
                 let after = extract_row(
-                    block_on(avro::from_avro_datum(&schema, &mut bytes))?,
+                    avro::from_avro_datum(&schema, &mut bytes)?,
                     true,
                     iter::once(Datum::Int64(1)),
                 )?;
                 DiffPair { before, after }
             } else {
-                let val = block_on(avro::from_avro_datum(resolved_schema, &mut bytes))?;
+                let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
                 extract_debezium_slow(val)?
             }
         } else {
-            let val = block_on(avro::from_avro_datum(resolved_schema, &mut bytes))?;
+            let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
             let row = extract_row(val, false, iter::empty())?;
             DiffPair {
                 before: None,

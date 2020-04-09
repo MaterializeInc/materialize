@@ -9,31 +9,23 @@
 
 use std::fmt::Display;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(not(target_os = "macos"))]
-use {
-    notify::{RecursiveMode, Watcher},
-    tokio::task,
-};
+use notify::{RecursiveMode, Watcher};
 
 use expr::SourceInstanceId;
-use futures::sink::SinkExt;
-use futures::stream::{Fuse, Stream, StreamExt};
-use futures::{ready, Future};
 use log::{error, warn};
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
-use tokio::fs::File;
-use tokio::io::{self, AsyncRead};
 
 use dataflow_types::Timestamp;
 
 use crate::source::util::source;
 use crate::source::{SourceStatus, SourceToken};
+use std::io::Read;
+use std::sync::mpsc::TryRecvError;
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
@@ -43,70 +35,50 @@ pub enum FileReadStyle {
     // TODO: TailFollowName,
 }
 
-/// Wraps a Tokio file, producing a stream that is tailed forever.
+/// Wraps a file, producing a stream that is tailed forever.
 ///
 /// This involves silently swallowing EOFs,
 /// and waiting on a Notify handle for more data to be written.
-struct ForeverTailedAsyncFile<S> {
-    rx: Fuse<S>,
-    inner: tokio::fs::File,
-    // This field only exists to keep the watcher alive, if we're using a
-    // watcher on this platform.
-    _w: Option<notify::RecommendedWatcher>,
+struct ForeverTailedFile<Ev, Handle> {
+    rx: std::sync::mpsc::Receiver<Ev>,
+    inner: std::fs::File,
+    // This field only exists to keep the file watcher or timer
+    // alive
+    _h: Handle,
 }
 
-impl<S> ForeverTailedAsyncFile<S>
-where
-    S: Stream + Unpin,
-{
-    fn rx_pin(&mut self) -> Pin<&mut Fuse<S>> {
-        Pin::new(&mut self.rx)
-    }
-
-    fn inner_pin(&mut self) -> Pin<&mut tokio::fs::File> {
-        Pin::new(&mut self.inner)
-    }
-}
-
-impl<S> AsyncRead for ForeverTailedAsyncFile<S>
-where
-    S: Stream + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<Result<usize, io::Error>> {
+impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
             // First drain the buffer of pending events from notify.
-            while let Poll::Ready(Some(_)) = self.rx_pin().poll_next(cx) {}
-            // After draining all the events, try reading the file. If we
-            // run out of data, sleep until `notify` wakes us up again.
-            match ready!(self.inner_pin().poll_read(cx, buf))? {
+            for _ in self.rx.try_iter() {}
+            match self.inner.read(buf)? {
                 0 => {
-                    if ready!(self.rx_pin().poll_next(cx)).is_some() {
+                    if self.rx.recv().is_ok() {
                         // Notify thinks there might be new data. Go around
                         // the loop again to check.
                     } else {
                         error!("notify hung up while tailing file");
-                        return Poll::Ready(Ok(0));
+                        return Ok(0);
                     }
                 }
-                n => return Poll::Ready(Ok(n)),
+                n => {
+                    return Ok(n);
+                }
             }
         }
     }
 }
 
-async fn send_records<S, Out, Err>(
-    mut stream: S,
-    mut tx: futures::channel::mpsc::Sender<Out>,
+fn send_records<I, Out, Err>(
+    iter: I,
+    tx: std::sync::mpsc::SyncSender<Out>,
     activator: Arc<Mutex<SyncActivator>>,
 ) where
-    S: Stream<Item = Result<Out, Err>> + Unpin,
+    I: IntoIterator<Item = Result<Out, Err>>,
     Err: Display,
 {
-    while let Some(record) = stream.next().await {
+    for record in iter {
         let record = match record {
             Ok(record) => record,
             Err(err) => {
@@ -114,7 +86,7 @@ async fn send_records<S, Out, Err>(
                 return;
             }
         };
-        if tx.send(record).await.is_err() {
+        if tx.send(record).is_err() {
             // The receiver went away, probably due to `DROP SOURCE`
             break;
         }
@@ -126,19 +98,18 @@ async fn send_records<S, Out, Err>(
     }
 }
 
-async fn read_file_task<Ctor, S, Out, Err, Fut>(
+fn read_file_task<Ctor, I, Out, Err>(
     path: PathBuf,
-    tx: futures::channel::mpsc::Sender<Out>,
+    tx: std::sync::mpsc::SyncSender<Out>,
     activator: Arc<Mutex<SyncActivator>>,
     read_style: FileReadStyle,
-    stream_ctor: Ctor,
+    iter_ctor: Ctor,
 ) where
-    S: Stream<Item = Result<Out, Err>> + Unpin,
-    Ctor: FnOnce(Box<dyn AsyncRead + Unpin + Send>) -> Fut,
+    I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
+    Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err>,
     Err: Display,
-    Fut: Future<Output = Result<S, Err>>,
 {
-    let file = match File::open(&path).await {
+    let file = match std::fs::File::open(&path) {
         Ok(file) => file,
         Err(err) => {
             error!(
@@ -153,14 +124,14 @@ async fn read_file_task<Ctor, S, Out, Err, Fut>(
     match read_style {
         FileReadStyle::None => unreachable!(),
         FileReadStyle::ReadOnce => {
-            let stream = match stream_ctor(Box::new(file)).await {
-                Ok(stream) => stream,
+            let iter = match iter_ctor(Box::new(file)) {
+                Ok(iter) => iter,
                 Err(err) => {
                     error!("Failed to create read-once source: {}", err);
                     return;
                 }
             };
-            send_records(stream, tx, activator).await
+            send_records(iter, tx, activator)
         }
         FileReadStyle::TailFollowFd => {
             // FSEvents doesn't raise events until you close the file, making it
@@ -177,13 +148,18 @@ async fn read_file_task<Ctor, S, Out, Err, Fut>(
             //
             // https://github.com/notify-rs/notify/issues/240
             #[cfg(target_os = "macos")]
-            let (file_events_stream, watcher) = {
-                let interval = tokio::time::interval(Duration::from_millis(100));
-                (interval, None)
+            let (file_events_stream, handle) = {
+                let (timer_tx, timer_rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    while let Ok(()) = timer_tx.send(()) {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                });
+                (timer_rx, ())
             };
 
             #[cfg(not(target_os = "macos"))]
-            let (file_events_stream, watcher) = {
+            let (file_events_stream, handle) = {
                 let (notice_tx, notice_rx) = std::sync::mpsc::channel();
                 let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
                     Ok(w) => w,
@@ -196,54 +172,44 @@ async fn read_file_task<Ctor, S, Out, Err, Fut>(
                     error!("file source: failed to add watch: {}", err);
                     return;
                 }
-                let (async_tx, async_rx) = futures::channel::mpsc::unbounded();
-                task::spawn_blocking(move || {
-                    for msg in notice_rx {
-                        if async_tx.unbounded_send(msg).is_err() {
-                            break;
-                        }
-                    }
-                });
-                (async_rx, Some(w))
+                (notice_rx, w)
             };
 
-            let file = ForeverTailedAsyncFile {
-                rx: file_events_stream.fuse(),
+            let file = ForeverTailedFile {
+                rx: file_events_stream,
                 inner: file,
-                _w: watcher,
+                _h: handle,
             };
 
-            let stream = match stream_ctor(Box::new(file)).await {
-                Ok(stream) => stream,
+            let iter = match iter_ctor(Box::new(file)) {
+                Ok(iter) => iter,
                 Err(err) => {
                     error!("Failed to create tailed file source: {}", err);
                     return;
                 }
             };
-            send_records(stream, tx, activator).await
+            send_records(iter, tx, activator)
         }
     }
 }
 
-pub fn file<G, Ctor, S, Out, Err, Fut>(
+pub fn file<G, Ctor, I, Out, Err>(
     id: SourceInstanceId,
     region: &G,
     name: String,
     path: PathBuf,
-    executor: &tokio::runtime::Handle,
     read_style: FileReadStyle,
-    stream_ctor: Ctor,
+    iter_ctor: Ctor,
 ) -> (
     timely::dataflow::Stream<G, (Out, Option<i64>)>,
     Option<SourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: Stream<Item = Result<Out, Err>> + Unpin + Send + 'static,
-    Ctor: FnOnce(Box<dyn AsyncRead + Unpin + Send>) -> Fut + Send + 'static,
+    I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
+    Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err> + Send + 'static,
     Err: Display + Send + 'static,
     Out: Send + Clone + 'static,
-    Fut: Future<Output = Result<S, Err>> + Send + 'static,
 {
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
     const MAX_RECORDS_PER_INVOCATION: usize = 1024;
@@ -251,10 +217,10 @@ where
     let read_file = read_style != FileReadStyle::None;
     let (stream, capability) = source(id, None, region, &name, move |info| {
         let activator = region.activator_for(&info.address[..]);
-        let (tx, mut rx) = futures::channel::mpsc::channel(MAX_RECORDS_PER_INVOCATION);
+        let (tx, rx) = std::sync::mpsc::sync_channel(MAX_RECORDS_PER_INVOCATION);
         if read_file {
             let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
-            executor.spawn(read_file_task(path, tx, activator, read_style, stream_ctor));
+            std::thread::spawn(|| read_file_task(path, tx, activator, read_style, iter_ctor));
         }
         let mut total_records_read = 0;
         move |cap, output| {
@@ -307,15 +273,14 @@ where
 
             let mut session = output.session(cap);
             while records_read < MAX_RECORDS_PER_INVOCATION {
-                if let Ok(record) = rx.try_next() {
-                    records_read += 1;
-                    total_records_read += 1;
-                    match record {
-                        Some(record) => session.give((record, Some(total_records_read))),
-                        None => return SourceStatus::Done,
+                match rx.try_recv() {
+                    Ok(record) => {
+                        records_read += 1;
+                        total_records_read += 1;
+                        session.give((record, Some(total_records_read)));
                     }
-                } else {
-                    break;
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return SourceStatus::Done,
                 }
             }
             if records_read == MAX_RECORDS_PER_INVOCATION {

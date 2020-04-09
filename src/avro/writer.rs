@@ -9,11 +9,10 @@
 
 //! Logic handling writing in Avro format at user level.
 use std::collections::HashMap;
-use std::io::{SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use failure::{Error, Fail};
 use rand::random;
-use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt};
 
 use crate::encode::{encode, encode_ref, encode_to_vec};
 use crate::reader::Block;
@@ -88,13 +87,13 @@ impl<W: Write> Writer<W> {
     }
 
     /// Creates a `Writer` that appends to an existing OCF file.
-    pub async fn append_to(file: W) -> Result<Writer<W>, Error>
+    pub fn append_to(file: W) -> Result<Writer<W>, Error>
     where
-        W: AsyncRead + AsyncSeek + Unpin + Send,
+        W: Read + Seek + Unpin + Send,
     {
-        let block = Block::new(file, None).await?;
+        let block = Block::new(file, None)?;
         let (mut file, schema, codec, marker) = block.into_parts();
-        file.seek(SeekFrom::End(0)).await?;
+        file.seek(SeekFrom::End(0))?;
         Ok(Writer {
             schema,
             writer: file,
@@ -345,7 +344,6 @@ pub fn to_avro_datum<T: ToAvro>(schema: &Schema, value: T) -> Result<Vec<u8>, Er
 mod tests {
     use std::io::Cursor;
 
-    use futures::stream::TryStreamExt;
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -555,8 +553,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_writer_roundtrip() {
+    #[test]
+    fn test_writer_roundtrip() {
         let schema = Schema::parse_str(SCHEMA).unwrap();
         let make_record = |a: i64, b| {
             let mut record = Record::new(schema.top_node()).unwrap();
@@ -578,21 +576,22 @@ mod tests {
 
         // Add another block from a new writer, part i.
         {
-            let mut writer = Writer::append_to(Cursor::new(&mut buf)).await.unwrap();
+            let mut writer = Writer::append_to(Cursor::new(&mut buf)).unwrap();
             writer.append(make_record(42, "baz")).unwrap();
             writer.flush().unwrap();
         }
 
         // Add another block from a new writer, part ii.
         {
-            let mut writer = Writer::append_to(Cursor::new(&mut buf)).await.unwrap();
+            let mut writer = Writer::append_to(Cursor::new(&mut buf)).unwrap();
             writer.append(make_record(84, "zar")).unwrap();
             writer.flush().unwrap();
         }
 
         // Ensure all four blocks appear in the file.
-        let reader = Reader::new(&buf[..]).await.unwrap().into_stream();
-        let actual: Vec<_> = reader.try_collect().await.unwrap();
+        let reader = Reader::new(&buf[..]).unwrap();
+        let actual: Result<Vec<_>, _> = reader.collect();
+        let actual = actual.unwrap();
         assert_eq!(
             vec![
                 make_record(27, "foo"),

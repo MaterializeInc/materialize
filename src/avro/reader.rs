@@ -8,12 +8,11 @@
 // by the Apache License, Version 2.0.
 
 //! Logic handling reading from Avro format at user level.
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::str::{from_utf8, FromStr};
 
 use failure::Error;
 use serde_json::from_slice;
-use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::decode::decode;
 use crate::schema::{
@@ -25,8 +24,6 @@ use crate::schema::{ResolvedRecordField, Schema};
 use crate::types::Value;
 use crate::util::{self, DecodeError};
 use crate::{Codec, SchemaResolutionError};
-use futures::stream::try_unfold;
-use futures::Stream;
 
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -46,8 +43,8 @@ pub(crate) struct Block<R> {
     resolved_schema: Option<Schema>,
 }
 
-impl<R: AsyncRead + Unpin + Send> Block<R> {
-    pub(crate) async fn new(reader: R, reader_schema: Option<&Schema>) -> Result<Block<R>, Error> {
+impl<R: Read> Block<R> {
+    pub(crate) fn new(reader: R, reader_schema: Option<&Schema>) -> Result<Block<R>, Error> {
         let mut block = Block {
             reader,
             codec: Codec::Null,
@@ -63,7 +60,7 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
             resolved_schema: None,
         };
 
-        block.read_header(reader_schema).await?;
+        block.read_header(reader_schema)?;
         Ok(block)
     }
 
@@ -73,7 +70,7 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
 
     /// Try to read the header and to set the writer `Schema`, the `Codec` and the marker based on
     /// its content.
-    async fn read_header(&mut self, reader_schema: Option<&Schema>) -> Result<(), Error> {
+    fn read_header(&mut self, reader_schema: Option<&Schema>) -> Result<(), Error> {
         let meta_schema = Schema {
             named: vec![],
             indices: Default::default(),
@@ -81,13 +78,13 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
         };
 
         let mut buf = [0u8; 4];
-        self.reader.read_exact(&mut buf).await?;
+        self.reader.read_exact(&mut buf)?;
 
         if buf != [b'O', b'b', b'j', 1u8] {
             return Err(DecodeError::new("wrong magic in header").into());
         }
 
-        if let Value::Map(meta) = decode(meta_schema.top_node(), &mut self.reader).await? {
+        if let Value::Map(meta) = decode(meta_schema.top_node(), &mut self.reader)? {
             // TODO: surface original parse schema errors instead of coalescing them here
             let json = meta
                 .get("avro.schema")
@@ -140,13 +137,13 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
         }
 
         let mut buf = [0u8; 16];
-        self.reader.read_exact(&mut buf).await?;
+        self.reader.read_exact(&mut buf)?;
         self.marker = buf;
 
         Ok(())
     }
 
-    async fn fill_buf(&mut self, n: usize) -> Result<(), Error> {
+    fn fill_buf(&mut self, n: usize) -> Result<(), Error> {
         // We don't have enough space in the buffer, need to grow it.
         if n >= self.buf.capacity() {
             self.buf.reserve(n);
@@ -155,21 +152,21 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
         unsafe {
             self.buf.set_len(n);
         }
-        self.reader.read_exact(&mut self.buf[..n]).await?;
+        self.reader.read_exact(&mut self.buf[..n])?;
         self.buf_idx = 0;
         Ok(())
     }
 
     /// Try to read a data block. The objects are stored in an internal buffer to the `Reader`.
-    async fn read_block_next(&mut self) -> Result<(), Error> {
+    fn read_block_next(&mut self) -> Result<(), Error> {
         assert!(self.is_empty(), "Expected self to be empty!");
-        match util::read_long(&mut self.reader).await {
+        match util::read_long(&mut self.reader) {
             Ok(block_len) => {
                 self.message_count = block_len as usize;
-                let block_bytes = util::read_long(&mut self.reader).await?;
-                self.fill_buf(block_bytes as usize).await?;
+                let block_bytes = util::read_long(&mut self.reader)?;
+                self.fill_buf(block_bytes as usize)?;
                 let mut marker = [0u8; 16];
-                self.reader.read_exact(&mut marker).await?;
+                self.reader.read_exact(&mut marker)?;
 
                 if marker != self.marker {
                     return Err(
@@ -205,9 +202,9 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
         self.len() == 0
     }
 
-    async fn read_next(&mut self) -> Result<Option<Value>, Error> {
+    fn read_next(&mut self) -> Result<Option<Value>, Error> {
         if self.is_empty() {
-            self.read_block_next().await?;
+            self.read_block_next()?;
             if self.is_empty() {
                 return Ok(None);
             }
@@ -215,14 +212,8 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
 
         let mut block_bytes = &self.buf[self.buf_idx..];
         let b_original = block_bytes.len();
-        //
-        // ```
-        // let item = from_avro_datum(self.schema(), &mut block_bytes).await?;
-        // ```
-        // spews pages of incomprehensible Send/Sync errors, but splitting it into
-        // two statements works...
         let schema = self.schema();
-        let item = from_avro_datum(schema, &mut block_bytes).await?;
+        let item = from_avro_datum(schema, &mut block_bytes)?;
         self.buf_idx += b_original - block_bytes.len();
         self.message_count -= 1;
         Ok(Some(item))
@@ -235,16 +226,20 @@ impl<R: AsyncRead + Unpin + Send> Block<R> {
 
 pub struct Reader<R> {
     block: Block<R>,
+    errored: bool,
 }
 
-impl<R: AsyncRead + Unpin + Send> Reader<R> {
+impl<R: Read> Reader<R> {
     /// Creates a `Reader` given something implementing the `tokio::io::AsyncRead` trait to read from.
     /// No reader `Schema` will be set.
     ///
     /// **NOTE** The avro header is going to be read automatically upon creation of the `Reader`.
-    pub async fn new(reader: R) -> Result<Reader<R>, Error> {
-        let block = Block::new(reader, None).await?;
-        let reader = Reader { block };
+    pub fn new(reader: R) -> Result<Reader<R>, Error> {
+        let block = Block::new(reader, None)?;
+        let reader = Reader {
+            block,
+            errored: false,
+        };
         Ok(reader)
     }
 
@@ -252,9 +247,12 @@ impl<R: AsyncRead + Unpin + Send> Reader<R> {
     /// to read from.
     ///
     /// **NOTE** The avro header is going to be read automatically upon creation of the `Reader`.
-    pub async fn with_schema(schema: &Schema, reader: R) -> Result<Reader<R>, Error> {
-        let block = Block::new(reader, Some(schema)).await?;
-        Ok(Reader { block })
+    pub fn with_schema(schema: &Schema, reader: R) -> Result<Reader<R>, Error> {
+        let block = Block::new(reader, Some(schema))?;
+        Ok(Reader {
+            block,
+            errored: false,
+        })
     }
 
     /// Get a reference to the writer `Schema`.
@@ -264,14 +262,26 @@ impl<R: AsyncRead + Unpin + Send> Reader<R> {
 
     #[inline]
     /// Read the next Avro value from the file, if one exists.
-    pub async fn read_next(&mut self) -> Result<Option<Value>, Error> {
-        self.block.read_next().await
+    pub fn read_next(&mut self) -> Result<Option<Value>, Error> {
+        self.block.read_next()
     }
+}
 
-    pub fn into_stream(self) -> impl Stream<Item = Result<Value, Error>> + Unpin {
-        Box::pin(try_unfold(self, |mut r| async {
-            Ok(r.read_next().await?.map(|v| (v, r)))
-        }))
+impl<R: Read> Iterator for Reader<R> {
+    type Item = Result<Value, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // to prevent continuing to read after the first error occurs
+        if self.errored {
+            return None;
+        };
+        match self.read_next() {
+            Ok(opt) => opt.map(Ok),
+            Err(e) => {
+                self.errored = true;
+                Some(Err(e))
+            }
+        }
     }
 }
 
@@ -726,11 +736,8 @@ impl<'a> SchemaResolver<'a> {
 /// **NOTE** This function has a quite small niche of usage and does NOT take care of reading the
 /// header and consecutive data blocks; use [`Reader`](struct.Reader.html) if you don't know what
 /// you are doing, instead.
-pub async fn from_avro_datum<R: AsyncRead + Unpin + Send>(
-    schema: &Schema,
-    reader: &mut R,
-) -> Result<Value, Error> {
-    let value = decode(schema.top_node(), reader).await?;
+pub fn from_avro_datum<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
+    let value = decode(schema.top_node(), reader)?;
     Ok(value)
 }
 
@@ -740,7 +747,6 @@ mod tests {
     use crate::types::{Record, ToAvro};
     use crate::Reader;
 
-    use futures::stream::StreamExt;
     use std::io::Cursor;
 
     static SCHEMA: &str = r#"
@@ -773,8 +779,8 @@ mod tests {
         207u8, 108u8, 180u8, 158u8, 57u8, 114u8, 40u8, 173u8, 199u8, 228u8, 239u8,
     ];
 
-    #[tokio::test]
-    async fn test_from_avro_datum() {
+    #[test]
+    fn test_from_avro_datum() {
         let schema = Schema::parse_str(SCHEMA).unwrap();
         let mut encoded: &'static [u8] = &[54, 6, 102, 111, 111];
 
@@ -783,30 +789,24 @@ mod tests {
         record.put("b", "foo");
         let expected = record.avro();
 
-        assert_eq!(
-            from_avro_datum(&schema, &mut encoded).await.unwrap(),
-            expected
-        );
+        assert_eq!(from_avro_datum(&schema, &mut encoded).unwrap(), expected);
     }
 
-    #[tokio::test]
-    async fn test_null_union() {
+    #[test]
+    fn test_null_union() {
         let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
         let mut encoded: &'static [u8] = &[2, 0];
 
         assert_eq!(
-            from_avro_datum(&schema, &mut encoded).await.unwrap(),
+            from_avro_datum(&schema, &mut encoded).unwrap(),
             Value::Union(1, Box::new(Value::Long(0)))
         );
     }
 
-    #[tokio::test]
-    async fn test_reader_stream() {
+    #[test]
+    fn test_reader_stream() {
         let schema = Schema::parse_str(SCHEMA).unwrap();
-        let mut reader = Reader::with_schema(&schema, ENCODED)
-            .await
-            .unwrap()
-            .into_stream();
+        let reader = Reader::with_schema(&schema, ENCODED).unwrap();
 
         let mut record1 = Record::new(schema.top_node()).unwrap();
         record1.put("a", 27i64);
@@ -818,22 +818,20 @@ mod tests {
 
         let expected = vec![record1.avro(), record2.avro()];
 
-        let mut i = 0;
-        while let Some(value) = reader.next().await {
+        for (i, value) in reader.enumerate() {
             assert_eq!(value.unwrap(), expected[i]);
-            i += 1
         }
     }
 
-    #[tokio::test]
-    async fn test_reader_invalid_header() {
+    #[test]
+    fn test_reader_invalid_header() {
         let schema = Schema::parse_str(SCHEMA).unwrap();
         let invalid = ENCODED.to_owned().into_iter().skip(1).collect::<Vec<u8>>();
-        assert!(Reader::with_schema(&schema, &invalid[..]).await.is_err());
+        assert!(Reader::with_schema(&schema, &invalid[..]).is_err());
     }
 
-    #[tokio::test]
-    async fn test_reader_invalid_block() {
+    #[test]
+    fn test_reader_invalid_block() {
         let schema = Schema::parse_str(SCHEMA).unwrap();
         let invalid = ENCODED
             .to_owned()
@@ -844,30 +842,27 @@ mod tests {
             .into_iter()
             .rev()
             .collect::<Vec<u8>>();
-        let mut reader = Reader::with_schema(&schema, &invalid[..])
-            .await
-            .unwrap()
-            .into_stream();
-        while let Some(value) = reader.next().await {
+        let reader = Reader::with_schema(&schema, &invalid[..]).unwrap();
+        for value in reader {
             assert!(value.is_err());
         }
     }
 
-    #[tokio::test]
-    async fn test_reader_empty_buffer() {
+    #[test]
+    fn test_reader_empty_buffer() {
         let empty = Cursor::new(Vec::new());
-        assert!(Reader::new(empty).await.is_err());
+        assert!(Reader::new(empty).is_err());
     }
 
-    #[tokio::test]
-    async fn test_reader_only_header() {
+    #[test]
+    fn test_reader_only_header() {
         let invalid = ENCODED
             .to_owned()
             .into_iter()
             .take(165)
             .collect::<Vec<u8>>();
-        let mut reader = Reader::new(&invalid[..]).await.unwrap().into_stream();
-        while let Some(value) = reader.next().await {
+        let reader = Reader::new(&invalid[..]).unwrap();
+        for value in reader {
             assert!(value.is_err());
         }
     }

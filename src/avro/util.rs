@@ -12,7 +12,7 @@ use std::sync::Once;
 
 use failure::{Error, Fail};
 use serde_json::{Map, Value};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use std::io::Read;
 
 /// Maximum number of bytes that can be allocated when decoding
 /// Avro-encoded values. This is a protection against ill-formed
@@ -69,8 +69,8 @@ impl MapHelper for Map<String, Value> {
     }
 }
 
-pub async fn read_long<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i64, Error> {
-    zag_i64(reader).await
+pub fn read_long<R: Read>(reader: &mut R) -> Result<i64, Error> {
+    zag_i64(reader)
 }
 
 pub fn zig_i32(n: i32, buffer: &mut Vec<u8>) {
@@ -81,8 +81,8 @@ pub fn zig_i64(n: i64, buffer: &mut Vec<u8>) {
     encode_variable(((n << 1) ^ (n >> 63)) as u64, buffer)
 }
 
-pub async fn zag_i32<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i32, Error> {
-    let i = zag_i64(reader).await?;
+pub fn zag_i32<R: Read>(reader: &mut R) -> Result<i32, Error> {
+    let i = zag_i64(reader)?;
     if i < i64::from(i32::min_value()) || i > i64::from(i32::max_value()) {
         Err(DecodeError::new("int out of range").into())
     } else {
@@ -90,8 +90,8 @@ pub async fn zag_i32<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i32, Error>
     }
 }
 
-pub async fn zag_i64<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i64, Error> {
-    let z = decode_variable(reader).await?;
+pub fn zag_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
+    let z = decode_variable(reader)?;
     Ok(if z & 0x1 == 0 {
         (z >> 1) as i64
     } else {
@@ -111,7 +111,7 @@ fn encode_variable(mut z: u64, buffer: &mut Vec<u8>) {
     }
 }
 
-async fn decode_variable<R: AsyncRead + Unpin>(reader: &mut R) -> Result<u64, Error> {
+fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, Error> {
     let mut i = 0u64;
     let mut buf = [0u8; 1];
 
@@ -121,7 +121,7 @@ async fn decode_variable<R: AsyncRead + Unpin>(reader: &mut R) -> Result<u64, Er
             // if j * 7 > 64
             return Err(DecodeError::new("Overflow when decoding integer value").into());
         }
-        reader.read_exact(&mut buf[..]).await?;
+        reader.read_exact(&mut buf[..])?;
         i |= (u64::from(buf[0] & 0x7F)) << (j * 7);
         if (buf[0] >> 7) == 0 {
             break;
@@ -230,12 +230,10 @@ mod tests {
         assert_eq!(s, [255, 255, 255, 255, 15]);
     }
 
-    #[tokio::test]
-    async fn test_overflow() {
+    #[test]
+    fn test_overflow() {
         let causes_left_shift_overflow: &[u8] = &[0xe1, 0xe1, 0xe1, 0xe1, 0xe1];
-        assert!(decode_variable(&mut &causes_left_shift_overflow[..])
-            .await
-            .is_err());
+        assert!(decode_variable(&mut &causes_left_shift_overflow[..]).is_err());
     }
 
     #[test]
