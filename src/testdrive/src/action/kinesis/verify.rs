@@ -10,11 +10,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::FromIterator;
 use std::str;
+use std::time;
 
 use rusoto_kinesis::{GetRecordsInput, GetShardIteratorInput, Kinesis, ListShardsInput};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+
+const DEFAULT_KINESIS_TIMEOUT: time::Duration = time::Duration::from_millis(12700);
 
 pub struct VerifyAction {
     stream_prefix: String,
@@ -38,43 +41,51 @@ impl Action for VerifyAction {
         Ok(())
     }
 
-    // Consume messages from the stream, assert they match the expected.
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
 
-        // Get all of the stream's shards.
         let (shard_queue, shard_to_iterator) = &mut get_shard_information(&stream_name, state)?;
 
-        // todo: should put some type of timeout here
+        let timer = time::Instant::now();
         let mut records = Vec::new();
-        while let Some(shard) = shard_queue.pop_front() {
-            println!("on shard: {}", shard);
-            if let Some(shard_iterator) = shard_to_iterator.get(&shard) {
-                let mut shard_iterator = shard_iterator.clone();
-                while let Some(iterator) = &shard_iterator {
-                    let get_records_input = GetRecordsInput {
-                        limit: None,
-                        shard_iterator: iterator.clone(),
-                    };
-                    let output = state
-                        .tokio_runtime
-                        .block_on(state.kinesis_client.get_records(get_records_input))
-                        .map_err(|e| format!("getting Kinesis records: {}", e))?;
-                    for record in output.records {
-                        dbg!(&record);
-                        records.push(record);
-                    }
-
-                    match output.millis_behind_latest {
-                        Some(0) => shard_iterator = None,
-                        _ => shard_iterator = output.next_shard_iterator,
-                    }
+        while let Some(shard_id) = shard_queue.pop_front() {
+            while let Some(iterator) = shard_to_iterator.get(&shard_id).unwrap_or_else(|| {
+                println!("missing shard iterator for shard {}, closing", shard_id);
+                &None
+            }) {
+                let get_records_input = GetRecordsInput {
+                    limit: None,
+                    shard_iterator: iterator.clone(),
+                };
+                let output = state
+                    .tokio_runtime
+                    .block_on(state.kinesis_client.get_records(get_records_input))
+                    .map_err(|e| format!("getting Kinesis records: {}", e))?;
+                for record in output.records {
+                    records.push(record);
                 }
-                println!("done with shard: {}", shard);
+
+                match output.millis_behind_latest {
+                    // Test hack!
+                    // Assume all records have already been written to the stream. Once you've
+                    // caught up, you're done with that shard.
+                    // NOTE: this is not true for real Kinesis streams as data could still be
+                    // arriving.
+                    Some(0) => shard_to_iterator.insert(shard_id.clone(), None),
+                    _ => shard_to_iterator.insert(shard_id.clone(), output.next_shard_iterator),
+                };
+                if timer.elapsed() > DEFAULT_KINESIS_TIMEOUT {
+                    // Unable to read all Kinesis records in the default
+                    // time allotted -- fail.
+                    return Err(format!(
+                        "Timeout reading from Kinesis stream: {}",
+                        stream_name
+                    ));
+                }
             }
         }
 
-        // We don't guarantee order!
+        // For now, we don't guarantee any type of ordering!
         let mut expected_set: HashSet<String> =
             HashSet::from_iter(self.expected_messages.iter().cloned());
         for record in records {
