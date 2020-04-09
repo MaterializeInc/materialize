@@ -41,9 +41,11 @@ PEEKER_COMMAND=(--queries loadtest)
 declare -a OPTIONS=()
 
 main() {
-    if [[ $# -lt 1 ]]; then
+    if [[ $# -lt 1 || "$*" =~ -h|--help ]]; then
         usage
     fi
+    dc_lock
+
     local -a cmd=()
     local arg=$1 && shift
     case "$arg" in
@@ -548,5 +550,33 @@ demo_load() {
 	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
     dc_run -d peeker --only-initialize --queries q01,q02,q17,q22
 }
+
+DCSH_LOCK=.dcsh-lock
+ACQUIRED_LOCK=n
+dc_lock() {
+    local echoed_lock=
+    while [[ -f "$DCSH_LOCK" ]]; do
+        if [[ ${MZ_IN_AUTOMATION:-n} == y ]]; then
+            echo "$(uw ERROR:) Refusing to wait for the chbench lock when run as part of automation"
+            exit 10
+        fi
+
+        if [[ ! "$echoed_lock" ]]; then
+            echo -n "waiting for lock on chbench directory"
+            echoed_lock=y
+        fi
+        echo -n "."
+        sleep 0.5
+    done
+    touch "$DCSH_LOCK"
+    ACQUIRED_LOCK=y
+}
+
+dc_unlock() {
+    if [[ $ACQUIRED_LOCK == y ]]; then
+        rm -f "$DCSH_LOCK"
+    fi
+}
+trap dc_unlock EXIT
 
 main "$@"
