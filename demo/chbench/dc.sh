@@ -332,17 +332,20 @@ dc_run() {
 }
 
 dc_logs() {
-  if [[ $# -eq 1 ]]; then
-    local run_cmd
-    run_cmd=$(dc_is_run_cmd "$1")
-    if [[ -n $run_cmd ]]; then
-        runv docker logs "$run_cmd"
+    if [[ "$#" -eq 2 && "$2" =~ [0-9]+ ]]; then
+        local cmd=("$1") && shift
+        local tail_count="${1}" && shift
     else
-        runv docker-compose logs "$1"
+        local cmd=("$@")
+        local tail_count=all
     fi
-  elif [[ $# -eq 2 ]]; then
-    runv docker-compose logs --tail "$2" "$1"
-  fi
+    local -a args=(--tail "$tail_count")
+    run_cmd=$(dc_is_run_cmd "${cmd[0]}")
+    if [[ -n $run_cmd ]]; then
+        runv docker logs "${args[@]}" "$run_cmd"
+    else
+        runv docker-compose logs "${args[@]}" "${cmd[@]}"
+    fi
 }
 
 dc_prom_backup() {
@@ -425,7 +428,8 @@ dc_ensure_stays_up() {
     for i in $(seq 1 "$seconds"); do
         sleep 1
         if [[ -z $(dc_is_running "$container") ]]; then
-            echo
+            echo "Logs for failed container $container:"
+            dc_logs "$container" 50
             uw "$container is not running!"
             exit 1
         fi
@@ -529,10 +533,11 @@ load_test() {
         -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
         --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
     dc_ensure_stays_up chbench 20
-    dc_logs chbench
+    dc_logs chbench 50
     dc_run -d peeker \
          "${PEEKER_COMMAND[@]}"
     dc_ensure_stays_up peeker
+    dc_ensure_stays_up prometheus 1
     dc_status
 }
 
