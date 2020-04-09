@@ -13,6 +13,11 @@ use crate::{EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Drive demand from the root through operators.
 ///
+/// This transform alerts operators to their columns that influence the
+/// ultimate output of the expression, and gives them permission to swap
+/// other columns for dummy values. As part of this, operators should not
+/// actually use any of these dummy values, lest they run-time error.
+///
 /// This transformation primarily informs the `Join` operator, which can
 /// simplify its intermediate state when it knows that certain columns are
 /// not observed in its output. Internal arrangements need not maintain
@@ -49,6 +54,7 @@ impl Demand {
         mut columns: HashSet<usize>,
         gets: &mut HashMap<Id, HashSet<usize>>,
     ) {
+        let relation_type = relation.typ();
         match relation {
             RelationExpr::Constant { .. } => {
                 // Nothing clever to do with constants, that I can think of.
@@ -94,6 +100,23 @@ impl Demand {
                     columns.extend(new_columns.clone());
                     new_columns.retain(|c| *c >= arity);
                 }
+
+                // Replace un-read expressions with literals to prevent evaluation.
+                for (index, scalar) in scalars.iter_mut().enumerate() {
+                    if !columns.contains(&(arity + index)) {
+                        // Leave literals as they are, to benefit explain.
+                        if !scalar.is_literal() {
+                            let typ = relation_type.column_types[arity + index].clone();
+                            let datum = if typ.nullable {
+                                repr::Datum::Null
+                            } else {
+                                typ.scalar_type.dummy_datum()
+                            };
+                            *scalar = ScalarExpr::Literal(Ok(repr::Row::pack(Some(datum))), typ);
+                        }
+                    }
+                }
+
                 columns.retain(|c| *c < arity);
                 self.action(input, columns, gets);
             }
@@ -205,13 +228,31 @@ impl Demand {
                 // each crucial in determining aggregates and even the
                 // multiplicities of other keys.
                 new_columns.extend(group_key.iter().flat_map(|e| e.support()));
-                for column in columns {
+                for column in columns.iter() {
                     // No obvious requirements on aggregate columns.
                     // A "non-empty" requirement, I guess?
-                    if column >= group_key.len() {
-                        new_columns.extend(aggregates[column - group_key.len()].expr.support());
+                    if *column >= group_key.len() {
+                        new_columns.extend(aggregates[*column - group_key.len()].expr.support());
                     }
                 }
+
+                // Replace un-demanded aggregations with literals.
+                let input_type = input.typ();
+                for index in (0..aggregates.len()).rev() {
+                    if !columns.contains(&(group_key.len() + index)) {
+                        if !aggregates[index].expr.is_literal() {
+                            let typ = aggregates[index].expr.typ(&input_type);
+                            let datum = if typ.nullable {
+                                repr::Datum::Null
+                            } else {
+                                typ.scalar_type.dummy_datum()
+                            };
+                            aggregates[index].expr =
+                                ScalarExpr::Literal(Ok(repr::Row::pack(Some(datum))), typ);
+                        }
+                    }
+                }
+
                 self.action(input, new_columns, gets);
             }
             RelationExpr::TopK {

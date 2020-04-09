@@ -181,6 +181,10 @@ disabled_lints=(
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#naive_bytecount
     # Clippy unnecessarily forces use of the bytecount crates for counting bytes
     clippy::naive-bytecount
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+    # Collapsing if statements can render code unreadable, and should not be mandated.
+    clippy::collapsible-if
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
