@@ -226,7 +226,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     if c.tail {
                                         FileReadStyle::TailFollowFd
                                     } else {
-<<<<<<< HEAD
                                         FileReadStyle::ReadOnce
                                     }
                                 } else {
@@ -244,44 +243,16 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 )
                             }
                             ExternalSourceConnector::AvroOcf(_) => unreachable!(),
-=======
-                                        FileReadStyle::None
-                                    };
-
-                                    let ctor = |file| {
-                                        futures::future::ok(
-                                            FramedRead::new(file, LinesCodec::new())
-                                                .map(|res| res.map(String::into_bytes)),
-                                        )
-                                    };
-                                    source::file(
-                                        src_id,
-                                        region,
-                                        format!("csv-{}", src_id),
-                                        c.path,
-                                        executor,
-                                        read_style,
-                                        ctor,
-                                    )
-                                }
-                                ExternalSourceConnector::AvroOcf(_) => unreachable!(),
-                            };
-                            // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
-                            // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream = decode(
-                                &source,
-                                encoding,
-                                &dataflow.debug_name,
-                                &envelope,
-                                &mut src.operators,
-                            );
-
-                            (stream, capability)
->>>>>>> demonstrate CSV projection
                         };
                         // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                         // a hypothetical future avro_extract, protobuf_extract, etc.
-                        let stream = decode(&source, encoding, &dataflow.debug_name, &envelope);
+                        let stream = decode(
+                            &source,
+                            encoding,
+                            &dataflow.debug_name,
+                            &envelope,
+                            &mut src.operators,
+                        );
 
                         (stream, capability)
                     };

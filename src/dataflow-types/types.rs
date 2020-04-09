@@ -635,8 +635,8 @@ impl DataflowDesc {
                 return desc.desc.typ().arity();
             }
         }
-        for (index_id, (_desc, typ)) in self.index_imports.iter() {
-            if index_id == id {
+        for (_index_id, (desc, typ)) in self.index_imports.iter() {
+            if &desc.on_id == id {
                 return typ.arity();
             }
         }
@@ -645,6 +645,6 @@ impl DataflowDesc {
                 return desc.relation_expr.as_ref().arity();
             }
         }
-        panic!("GlobalId {} not found in DataflowDesc", id);
+        panic!("GlobalId {} not found in DataflowDesc: {:?}", id, self);
     }
 }

@@ -118,21 +118,21 @@ where
                                             session.give((
                                                 Row::pack(
                                                     (0..n_cols)
-                                                        .map(|i| {
-                                                            // Unsafety rationalized as 1. the input text is determined to be
-                                                            // valid utf8, and 2. the delimiter is ascii, which should make each
-                                                            // delimited region also utf8.
-                                                            Datum::String(unsafe {
-                                                                if demanded[i] {
+                                                        .map(|i|
+                                                            if demanded[i] {
+                                                                // Unsafety rationalized as 1. the input text is determined to be
+                                                                // valid utf8, and 2. the delimiter is ascii, which should make each
+                                                                // delimited region also utf8.
+                                                                Datum::String(unsafe {
                                                                     std::str::from_utf8_unchecked(
                                                                         &buffer
                                                                             [bounds[i]..bounds[i + 1]],
                                                                     )
-                                                                } else {
-                                                                    ""
-                                                                }
-                                                            })
-                                                        })
+                                                                })
+                                                            } else {
+                                                                Datum::Null
+                                                            }
+                                                        )
                                                         .chain(iter::once(
                                                             line_no.map(Datum::Int64).into(),
                                                         )),
