@@ -237,41 +237,24 @@ impl Demand {
                     }
                 }
 
-                // Replace un-demanded aggregations with a Map, then a Project to re-order.
-                let initial_len = aggregates.len();
+                // Replace un-demanded aggregations with literals.
+                let input_type = input.typ();
                 for index in (0..aggregates.len()).rev() {
                     if !columns.contains(&(group_key.len() + index)) {
-                        aggregates.remove(index);
-                    }
-                }
-                let mut projection = (0..group_key.len()).collect::<Vec<_>>();
-                let mut map_exprs = Vec::new();
-                for index in 0..aggregates.len() {
-                    if columns.contains(&(group_key.len() + index)) {
-                        let count = (0..index)
-                            .filter(|c| columns.contains(&(group_key.len() + *c)))
-                            .count();
-                        projection.push(count);
-                    } else {
-                        let count = (0..index)
-                            .filter(|c| !columns.contains(&(group_key.len() + *c)))
-                            .count();
-                        projection.push(initial_len + count);
-                        let typ = relation_type.column_types[group_key.len() + index].clone();
-                        let datum = if typ.nullable {
-                            repr::Datum::Null
-                        } else {
-                            typ.scalar_type.dummy_datum()
-                        };
-                        map_exprs.push(ScalarExpr::Literal(Ok(repr::Row::pack(Some(datum))), typ));
+                        if !aggregates[index].expr.is_literal() {
+                            let typ = aggregates[index].expr.typ(&input_type);
+                            let datum = if typ.nullable {
+                                repr::Datum::Null
+                            } else {
+                                typ.scalar_type.dummy_datum()
+                            };
+                            aggregates[index].expr =
+                                ScalarExpr::Literal(Ok(repr::Row::pack(Some(datum))), typ);
+                        }
                     }
                 }
 
                 self.action(input, new_columns, gets);
-
-                if !map_exprs.is_empty() {
-                    *relation = relation.take_dangerous().map(map_exprs).project(projection);
-                }
             }
             RelationExpr::TopK {
                 input,
