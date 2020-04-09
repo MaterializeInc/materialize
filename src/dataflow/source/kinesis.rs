@@ -70,6 +70,7 @@ where
         let activator = scope.activator_for(&info.address[..]);
 
         move |cap, output| {
+            // todo@jldlaughlin: We need to be able to update our list of shards dynamically. #2607
             let (client, shard_queue, shard_to_iterator) = match &mut state {
                 Ok(state) => state,
                 Err(e) => {
@@ -77,7 +78,6 @@ where
                     return SourceStatus::Done;
                 }
             };
-            // todo: add any new shards to queue, if found.
 
             // If reading from Kinesis takes more than 10 milliseconds,
             // pause execution and reactivate later.
