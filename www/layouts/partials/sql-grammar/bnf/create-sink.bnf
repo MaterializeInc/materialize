@@ -1,9 +1,7 @@
 create_sink ::=
    'CREATE SINK' 'IF NOT EXISTS'? sink_name
    'FROM' item_name
-   'INTO' 'KAFKA BROKER' host 'TOPIC' topic
-   'FORMAT' 'AVRO USING'
-      ('CONFLUENT SCHEMA REGISTRY' url |
-      'SCHEMA'
-         ('FILE' path | inline_schema)
-      )
+   'INTO' (
+    kafka_connector |
+   'AVRO OCF' path-prefix
+   )

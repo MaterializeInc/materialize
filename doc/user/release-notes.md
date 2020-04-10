@@ -74,8 +74,14 @@ Use relative links (../path/to/doc), not absolute links
 - Support [casts](../sql/functions/cast/) for `time`->`text`,`time`->`interval`, `interval`->`time`.
 
 - Change the output format of `EXPLAIN` to make large plans more readable.
+
 - Support `EXPLAIN ... FOR VIEW view_name` to display the plan for an existing view.
+
 - Support `EXPLAIN stage_name PLAN FOR ...` to display the plan at various stages of the planning process.
+
+- Support Avro Object Container File (OCF) [sinks](../sql/create-sink/#avro-ocf-sinks).
+
+- Makes [sink](../sql/create-sink/) output more correct and consistent by writing to a new sink topic or file on every restart.
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
