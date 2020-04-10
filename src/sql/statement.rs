@@ -336,15 +336,29 @@ fn handle_show_databases(
     scx: &StatementContext,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
-    if filter.is_some() {
-        bail!("SHOW DATABASES {LIKE | WHERE} is not yet supported");
-    }
-    Ok(Plan::SendRows(
-        scx.catalog
-            .databases()
-            .map(|database| Row::pack(&[Datum::from(database)]))
-            .collect(),
-    ))
+    // TODO(justin): kind of gross this will get called twice. Is there a nice way around that?
+    let (desc, _) = describe_statement(
+        scx.catalog,
+        scx.session,
+        Statement::ShowDatabases {
+            filter: filter.map(|x| (*x).clone()),
+        },
+    )?;
+
+    let rows = scx
+        .catalog
+        .databases()
+        .map(|database| vec![Datum::from(database)])
+        .collect();
+
+    let (r, finishing) = query::plan_show_where(scx, filter, rows, &desc.unwrap())?;
+
+    Ok(Plan::Peek {
+        source: r.decorrelate()?,
+        when: PeekWhen::Immediately,
+        finishing,
+        materialize: true,
+    })
 }
 
 fn handle_show_objects(
