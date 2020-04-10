@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 if [[ ! "${BUILDKITE-}" ]]; then
     sqllogictest() {
         cargo run --release --bin sqllogictest -- "$@"
@@ -155,6 +157,7 @@ tests=(
 )
 
 if [[ "${BUILDKITE-}" ]]; then
-    wait-for-it postgres:5432
+    await_postgres -h postgres -p 5432
 fi
+
 sqllogictest -v "${tests[@]}"
