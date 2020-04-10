@@ -25,21 +25,21 @@ pub mod util;
 pub use self::action::Config;
 
 /// Runs a testdrive script stored in a file.
-pub fn run_file(config: &Config, filename: &str) -> Result<(), Error> {
+pub async fn run_file(config: &Config, filename: &str) -> Result<(), Error> {
     let mut file = File::open(&filename).err_ctx(format!("opening {}", filename))?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)
         .err_ctx(format!("reading {}", filename))?;
-    run_string(config, filename, &contents)
+    run_string(config, filename, &contents).await
 }
 
 /// Runs a testdrive script from the standard input.
-pub fn run_stdin(config: &Config) -> Result<(), Error> {
+pub async fn run_stdin(config: &Config) -> Result<(), Error> {
     let mut contents = String::new();
     io::stdin()
         .read_to_string(&mut contents)
         .err_ctx("reading <stdin>".into())?;
-    run_string(config, "<stdin>", &contents)
+    run_string(config, "<stdin>", &contents).await
 }
 
 /// Runs a testdrive script stored in a string.
@@ -47,31 +47,37 @@ pub fn run_stdin(config: &Config) -> Result<(), Error> {
 /// The script in `contents` is used verbatim. The provided `filename` is used
 /// only as output in error messages and such. No attempt is made to read
 /// `filename`.
-pub fn run_string(config: &Config, filename: &str, contents: &str) -> Result<(), Error> {
+pub async fn run_string(config: &Config, filename: &str, contents: &str) -> Result<(), Error> {
     println!("==> {}", filename);
     let mut line_reader = LineReader::new(contents);
-    // TODO(benesch): when `try` blocks land, use one here.
     run_line_reader(config, &mut line_reader)
+        .await
         .map_err(|e| e.with_input_details(&filename, &contents, &line_reader))
 }
 
-fn run_line_reader(config: &Config, line_reader: &mut LineReader) -> Result<(), Error> {
+async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> Result<(), Error> {
     let cmds = parser::parse(line_reader)?;
     // TODO(benesch): consider sharing state between files, to avoid
     // reconnections for every file. For now it's nice to not open any
     // connections until after parsing.
-    let mut state = action::create_state(config)?;
-    state.reset_materialized()?;
-    let actions = action::build(cmds, &state)?;
-    for a in actions.iter().rev() {
-        a.action
-            .undo(&mut state)
-            .map_err(|e| InputError { msg: e, pos: a.pos })?;
-    }
-    for a in &actions {
-        a.action
-            .redo(&mut state)
-            .map_err(|e| InputError { msg: e, pos: a.pos })?;
-    }
-    Ok(())
+    let (mut state, state_cleanup) = action::create_state(config).await?;
+    state.reset_materialized().await?;
+    // The `tokio::spawn` allows using `block_in_place` to run sync code within
+    // the spawned task. The spawn will one day not be necessary.
+    // See: https://github.com/tokio-rs/tokio/issues/1838.
+    tokio::spawn(async move {
+        let actions = action::build(cmds, &state)?;
+        for a in actions.iter().rev() {
+            let undo = a.action.undo(&mut state);
+            undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+        }
+        for a in &actions {
+            let redo = a.action.redo(&mut state);
+            redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+        }
+        drop(state);
+        state_cleanup.await
+    })
+    .await
+    .expect("action task unexpectedly canceled")
 }

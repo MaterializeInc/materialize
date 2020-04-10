@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use postgres::Config;
+use tokio_postgres::config::Host;
+use tokio_postgres::Config;
 use url::Url;
 
 use crate::error::Error;
@@ -21,8 +22,8 @@ pub fn config_url(config: &Config) -> Result<Url, Error> {
 
     let host = match config.get_hosts() {
         [] => "localhost".into(),
-        [postgres::config::Host::Tcp(host)] => host.clone(),
-        [postgres::config::Host::Unix(path)] => path.display().to_string(),
+        [Host::Tcp(host)] => host.clone(),
+        [Host::Unix(path)] => path.display().to_string(),
         _ => {
             return Err(Error::General {
                 ctx: "materialized URL cannot contain multiple hosts".into(),

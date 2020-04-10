@@ -9,12 +9,15 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::mem;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use chrono::Utc;
+use futures::future::FutureExt;
 use lazy_static::lazy_static;
 use protobuf::Message;
 use rand::Rng;
@@ -45,7 +48,7 @@ pub struct Config {
     pub aws_region: rusoto_core::Region,
     pub aws_account: String,
     pub aws_credentials: AwsCredentials,
-    pub materialized_pgconfig: postgres::Config,
+    pub materialized_pgconfig: tokio_postgres::Config,
     pub materialized_catalog_path: Option<PathBuf>,
 }
 
@@ -65,7 +68,9 @@ impl Default for Config {
                 None,
                 None,
             ),
-            materialized_pgconfig: mem::take(postgres::Config::new().host("localhost").port(6875)),
+            materialized_pgconfig: mem::take(
+                tokio_postgres::Config::new().host("localhost").port(6875),
+            ),
             materialized_catalog_path: None,
         }
     }
@@ -75,9 +80,8 @@ pub struct State {
     seed: u32,
     temp_dir: tempfile::TempDir,
     data_dir: Option<PathBuf>,
-    tokio_runtime: tokio::runtime::Runtime,
     materialized_addr: String,
-    pgclient: postgres::Client,
+    pgclient: tokio_postgres::Client,
     schema_registry_url: Url,
     ccsr_client: ccsr::AsyncClient,
     kafka_addr: String,
@@ -92,17 +96,18 @@ pub struct State {
 }
 
 impl State {
-    pub fn reset_materialized(&mut self) -> Result<(), Error> {
+    pub async fn reset_materialized(&mut self) -> Result<(), Error> {
         for message in self
             .pgclient
             .simple_query("SHOW DATABASES")
+            .await
             .err_ctx("resetting materialized state: SHOW DATABASES".into())?
         {
-            if let postgres::SimpleQueryMessage::Row(row) = message {
+            if let tokio_postgres::SimpleQueryMessage::Row(row) = message {
                 let name = row.get(0).expect("database name is not nullable");
                 let query = format!("DROP DATABASE {}", name);
                 sql::print_query(&query);
-                self.pgclient.batch_execute(&query).err_ctx(format!(
+                self.pgclient.batch_execute(&query).await.err_ctx(format!(
                     "restting materialized state: DROP DATABASE {}",
                     name,
                 ))?;
@@ -110,6 +115,7 @@ impl State {
         }
         self.pgclient
             .batch_execute("CREATE DATABASE materialize")
+            .await
             .err_ctx("resetting materialized state: CREATE DATABASE materialize".into())?;
         Ok(())
     }
@@ -117,12 +123,32 @@ impl State {
 
 pub struct PosAction {
     pub pos: usize,
-    pub action: Box<dyn Action>,
+    pub action: Box<dyn Action + Send + Sync>,
 }
 
+#[async_trait]
 pub trait Action {
+    async fn undo(&self, state: &mut State) -> Result<(), String>;
+    async fn redo(&self, state: &mut State) -> Result<(), String>;
+}
+
+pub trait SyncAction: Send + Sync {
     fn undo(&self, state: &mut State) -> Result<(), String>;
     fn redo(&self, state: &mut State) -> Result<(), String>;
+}
+
+#[async_trait]
+impl<T> Action for T
+where
+    T: SyncAction,
+{
+    async fn undo(&self, state: &mut State) -> Result<(), String> {
+        tokio::task::block_in_place(|| self.undo(state))
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        tokio::task::block_in_place(|| self.redo(state))
+    }
 }
 
 pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
@@ -197,7 +223,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
         let subst = |msg: &str| substitute_vars(msg, &vars).map_err(wrap_err);
-        let action: Box<dyn Action> = match cmd.command {
+        let action: Box<dyn Action + Send + Sync> = match cmd.command {
             Command::Builtin(mut builtin) => {
                 for val in builtin.args.values_mut() {
                     *val = subst(val)?;
@@ -296,7 +322,16 @@ fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, 
     }
 }
 
-pub fn create_state(config: &Config) -> Result<State, Error> {
+/// Initializes a [`State`] object by connecting to the various external
+/// services specified in `config`.
+///
+/// Returns the initialized `State` and a cleanup future. The cleanup future
+/// should be `await`ed only *after* dropping the `State` to check whether any
+/// errors occured while dropping the `State`. This awkward API is a workaround
+/// for the lack of `AsyncDrop` support in Rust.
+pub async fn create_state(
+    config: &Config,
+) -> Result<(State, impl Future<Output = Result<(), Error>>), Error> {
     let seed = rand::thread_rng().gen();
     let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory".into())?;
 
@@ -329,17 +364,12 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         None
     };
 
-    let tokio_runtime = tokio::runtime::Runtime::new().map_err(|e| Error::General {
-        ctx: "creating Tokio runtime".into(),
-        cause: Some(Box::new(e)),
-        hints: vec![],
-    })?;
-
-    let (materialized_addr, pgclient) = {
+    let (materialized_addr, pgclient, pgconn_task) = {
         let materialized_url = util::postgres::config_url(&config.materialized_pgconfig)?;
-        let pgclient = config
+        let (pgclient, pgconn) = config
             .materialized_pgconfig
-            .connect(postgres::NoTls)
+            .connect(tokio_postgres::NoTls)
+            .await
             .map_err(|e| Error::General {
                 ctx: "opening SQL connection".into(),
                 cause: Some(Box::new(e)),
@@ -348,12 +378,20 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
                     "are you running the materialized server?".into(),
                 ],
             })?;
+        let pgconn_task = tokio::spawn(pgconn).map(|join| {
+            join.expect("pgconn_task unexpectedly canceled")
+                .map_err(|e| Error::General {
+                    ctx: "running SQL connection".into(),
+                    cause: Some(Box::new(e)),
+                    hints: vec![],
+                })
+        });
         let materialized_addr = format!(
             "{}:{}",
             materialized_url.host_str().unwrap(),
             materialized_url.port().unwrap()
         );
-        (materialized_addr, pgclient)
+        (materialized_addr, pgclient, pgconn_task)
     };
 
     let schema_registry_url = config.schema_registry_url.to_owned();
@@ -417,11 +455,10 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         )
     };
 
-    Ok(State {
+    let state = State {
         seed,
         temp_dir,
         data_dir,
-        tokio_runtime,
         materialized_addr,
         pgclient,
         schema_registry_url,
@@ -435,5 +472,6 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         aws_account,
         aws_credentials,
         kinesis_client,
-    })
+    };
+    Ok((state, pgconn_task))
 }

@@ -11,8 +11,11 @@ use std::collections::{HashSet, VecDeque};
 use std::str;
 use std::time::Instant;
 
+use async_trait::async_trait;
 use itertools::Itertools;
-use rusoto_kinesis::{GetRecordsInput, GetShardIteratorInput, Kinesis, ListShardsInput};
+use rusoto_kinesis::{
+    GetRecordsInput, GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput,
+};
 
 use crate::action::kinesis::DEFAULT_KINESIS_TIMEOUT;
 use crate::action::{Action, State};
@@ -35,25 +38,27 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
     })
 }
 
+#[async_trait]
 impl Action for VerifyAction {
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
 
-        let mut shard_iterators = get_shard_iterators(&stream_name, state)?;
+        let mut shard_iterators = get_shard_iterators(&state.kinesis_client, &stream_name).await?;
         let timer = Instant::now();
         let mut records: HashSet<String> = HashSet::new();
         while let Some(iterator) = shard_iterators.pop_front() {
             if let Some(iterator) = &iterator {
                 let output = state
-                    .tokio_runtime
-                    .block_on(state.kinesis_client.get_records(GetRecordsInput {
+                    .kinesis_client
+                    .get_records(GetRecordsInput {
                         limit: None,
                         shard_iterator: iterator.clone(),
-                    }))
+                    })
+                    .await
                     .map_err(|e| format!("getting Kinesis records: {}", e))?;
                 for record in output.records {
                     records.insert(
@@ -97,9 +102,9 @@ impl Action for VerifyAction {
     }
 }
 
-fn get_shard_iterators(
+async fn get_shard_iterators(
+    kinesis_client: &KinesisClient,
     stream_name: &str,
-    state: &mut State,
 ) -> Result<VecDeque<Option<String>>, String> {
     let list_shards_input = ListShardsInput {
         exclusive_start_shard_id: None,
@@ -109,9 +114,9 @@ fn get_shard_iterators(
         stream_name: Some(stream_name.to_string()),
     };
     let mut iterators: VecDeque<Option<String>> = VecDeque::new();
-    match state
-        .tokio_runtime
-        .block_on(state.kinesis_client.list_shards(list_shards_input))
+    match kinesis_client
+        .list_shards(list_shards_input)
+        .await
         .map_err(|e| format!("listing Kinesis shards: {}", e))?
         .shards
         .as_deref()
@@ -126,13 +131,9 @@ fn get_shard_iterators(
                     timestamp: None,
                 };
                 iterators.push_back(
-                    state
-                        .tokio_runtime
-                        .block_on(
-                            state
-                                .kinesis_client
-                                .get_shard_iterator(shard_iterator_input),
-                        )
+                    kinesis_client
+                        .get_shard_iterator(shard_iterator_input)
+                        .await
                         .map_err(|e| format!("getting Kinesis shard iterator: {}", e))?
                         .shard_iterator,
                 );

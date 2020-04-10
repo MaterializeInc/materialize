@@ -13,11 +13,12 @@ use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{self, PathBuf};
 
-use retry::delay::Fibonacci;
+use async_trait::async_trait;
 
-use crate::action::{Action, State};
+use crate::action::{Action, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
+use crate::util::retry;
 
 pub struct WriteAction {
     path: String,
@@ -45,7 +46,7 @@ pub fn build_write(mut cmd: BuiltinCommand) -> Result<WriteAction, String> {
     })
 }
 
-impl Action for WriteAction {
+impl SyncAction for WriteAction {
     fn undo(&self, _state: &mut State) -> Result<(), String> {
         // Files are written to a fresh temporary directory, so no need to
         // explicitly remove the file here.
@@ -82,7 +83,7 @@ pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
     Ok(AppendAction { path, records })
 }
 
-impl Action for AppendAction {
+impl SyncAction for AppendAction {
     fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
@@ -137,13 +138,14 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
     Ok(VerifyAction { sink, expected })
 }
 
+#[async_trait]
 impl Action for VerifyAction {
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = retry::retry(Fibonacci::from_millis(100).take(5), || {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let path = retry::retry(|| async {
             let row = state
                 .pgclient
                 .query_one(
@@ -151,25 +153,27 @@ impl Action for VerifyAction {
                      WHERE name = $1",
                     &[&self.sink],
                 )
+                .await
                 .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
             let bytes: Vec<u8> = row.get("path");
-            Ok::<_, String>(PathBuf::from(OsString::from_vec(bytes)))
+            Ok(PathBuf::from(OsString::from_vec(bytes)))
         })
+        .await
         .map_err(|e| format!("retrieving path: {:?}", e))?;
 
         println!("Verifying results in file {}", path.display());
 
-        // Get the rows from this file.
-        let (schema, actual) = state.tokio_runtime.block_on(async {
+        // Get the rows from this file. There is no async `avro::Reader`, so
+        // we drop into synchronous code here.
+        tokio::task::block_in_place(|| {
             let file = File::open(&path)
                 .map_err(|e| format!("reading sink file {}: {}", path.display(), e))?;
             let reader = Reader::new(file).map_err(|e| format!("creating avro reader: {}", e))?;
             let schema = reader.writer_schema().clone();
-            let messages: Result<Vec<_>, _> = reader.collect();
-            let messages = messages.map_err(|e| format!("reading avro values from file: {}", e))?;
-            Ok::<_, String>((schema, messages))
-        })?;
-
-        avro::validate_sink(&schema, &self.expected, &actual)
+            let actual = reader
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("reading avro values from file: {}", e))?;
+            avro::validate_sink(&schema, &self.expected, &actual)
+        })
     }
 }

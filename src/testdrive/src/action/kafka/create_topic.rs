@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::thread;
 use std::time::Duration;
 
-use futures::executor::block_on;
+use async_trait::async_trait;
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::error::RDKafkaError;
 
@@ -18,6 +17,7 @@ use ore::collections::CollectionExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+use crate::util::retry;
 
 pub struct CreateTopicAction {
     topic_prefix: String,
@@ -35,8 +35,9 @@ pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, 
     })
 }
 
+#[async_trait]
 impl Action for CreateTopicAction {
-    fn undo(&self, state: &mut State) -> Result<(), String> {
+    async fn undo(&self, state: &mut State) -> Result<(), String> {
         let metadata = state
             .kafka_producer
             .client()
@@ -60,11 +61,10 @@ impl Action for CreateTopicAction {
                 "Deleting stale Kafka topics {}",
                 stale_kafka_topics.join(", ")
             );
-            let res = block_on(
-                state
-                    .kafka_admin
-                    .delete_topics(&stale_kafka_topics, &state.kafka_admin_opts),
-            );
+            let res = state
+                .kafka_admin
+                .delete_topics(&stale_kafka_topics, &state.kafka_admin_opts)
+                .await;
             let res = match res {
                 Err(err) => return Err(err.to_string()),
                 Ok(res) => res,
@@ -88,7 +88,7 @@ impl Action for CreateTopicAction {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
         let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
         println!(
             "Creating Kafka topic {} with partition count of {}",
@@ -150,11 +150,10 @@ impl Action for CreateTopicAction {
             // "1" is interpreted as January 1, 1970 00:00:01, which is
             // breaches the default 7-day retention policy.
             .set("retention.ms", "-1");
-        let res = block_on(
-            state
-                .kafka_admin
-                .create_topics(&[new_topic], &state.kafka_admin_opts),
-        );
+        let res = state
+            .kafka_admin
+            .create_topics(&[new_topic], &state.kafka_admin_opts)
+            .await;
         let res = match res {
             Err(err) => return Err(err.to_string()),
             Ok(res) => res,
@@ -175,52 +174,42 @@ impl Action for CreateTopicAction {
         // get automatically created with multiple partitions. (Since
         // multiple partitions have no ordering guarantees, this violates
         // many assumptions that our tests make.)
-        let mut i = 0;
-        loop {
-            let res = (|| {
-                let metadata = state
-                    .kafka_producer
-                    .client()
-                    // N.B. It is extremely important not to ask specifically
-                    // about the topic here, even though the API supports it!
-                    // Asking about the topic will create it automatically...
-                    // with the wrong number of partitions. Yes, this is
-                    // unbelievably horrible.
-                    .fetch_metadata(None, Some(Duration::from_secs(1)))
-                    .map_err(|e| e.to_string())?;
-                if metadata.topics().is_empty() {
-                    return Err("metadata fetch returned no topics".to_string());
-                }
-                let topic = match metadata.topics().iter().find(|t| t.name() == topic_name) {
-                    Some(topic) => topic,
-                    None => {
-                        return Err(format!(
-                            "metadata fetch did not return topic {}",
-                            topic_name,
-                        ))
-                    }
-                };
-                if topic.partitions().is_empty() {
-                    return Err("metadata fetch returned a topic with no partitions".to_string());
-                } else if topic.partitions().len() as i32 != self.partitions {
-                    return Err(format!(
-                        "topic {} was created with {} partitions when exactly {} was expected",
-                        topic_name,
-                        topic.partitions().len(),
-                        self.partitions
-                    ));
-                }
-                Ok(())
-            })();
-            match res {
-                Ok(()) => break,
-                Err(e) if i == 6 => return Err(e),
-                _ => {
-                    thread::sleep(Duration::from_millis(100 * 2_u64.pow(i)));
-                    i += 1;
-                }
+        retry::retry(|| async {
+            let metadata = state
+                .kafka_producer
+                .client()
+                // N.B. It is extremely important not to ask specifically
+                // about the topic here, even though the API supports it!
+                // Asking about the topic will create it automatically...
+                // with the wrong number of partitions. Yes, this is
+                // unbelievably horrible.
+                .fetch_metadata(None, Some(Duration::from_secs(1)))
+                .map_err(|e| e.to_string())?;
+            if metadata.topics().is_empty() {
+                return Err("metadata fetch returned no topics".to_string());
             }
-        }
+            let topic = match metadata.topics().iter().find(|t| t.name() == topic_name) {
+                Some(topic) => topic,
+                None => {
+                    return Err(format!(
+                        "metadata fetch did not return topic {}",
+                        topic_name,
+                    ))
+                }
+            };
+            if topic.partitions().is_empty() {
+                return Err("metadata fetch returned a topic with no partitions".to_string());
+            } else if topic.partitions().len() as i32 != self.partitions {
+                return Err(format!(
+                    "topic {} was created with {} partitions when exactly {} was expected",
+                    topic_name,
+                    topic.partitions().len(),
+                    self.partitions
+                ));
+            }
+            Ok(())
+        })
+        .await?;
         state.kafka_topics.insert(topic_name, self.partitions);
         Ok(())
     }
