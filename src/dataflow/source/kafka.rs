@@ -62,7 +62,7 @@ where
     let KafkaSourceConnector {
         url,
         topic,
-        ssl_certificate_file,
+        config_options,
     } = connector.clone();
 
     let ts = if read_kafka {
@@ -93,16 +93,8 @@ where
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &url.to_string());
-
-        if let Some(path) = ssl_certificate_file {
-            // See https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka
-            // for more details on this librdkafka option
-            config.set("security.protocol", "ssl");
-            config.set(
-                "ssl.ca.location",
-                path.to_str()
-                    .expect("Converting ssl certificate file path failed"),
-            );
+        for (k, v) in &config_options {
+            config.set(k, v);
         }
 
         let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if read_kafka {

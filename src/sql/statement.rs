@@ -39,6 +39,7 @@ use sql_parser::ast::{
     Statement, Value,
 };
 
+use crate::kafka_util;
 use crate::query::QueryLifetime;
 use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, View};
 use regex::Regex;
@@ -964,8 +965,15 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
         let with_options_map = normalize::with_options(with_options);
 
         match connector {
-            Connector::Kafka { broker, .. } if !broker.contains(':') => {
-                *broker += ":9092";
+            Connector::Kafka { broker, .. } => {
+                if !broker.contains(':') {
+                    *broker += ":9092";
+                }
+
+                // Verify that the provided security options are valid and then test them.
+                let specified_options =
+                    kafka_util::extract_security_options(&mut with_options_map.clone())?;
+                kafka_util::test_config(&specified_options)?;
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
@@ -1100,11 +1108,8 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut consistency = Consistency::RealTime;
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
-                    let ssl_certificate_file = match with_options.remove("ssl_certificate_file") {
-                        None => None,
-                        Some(Value::SingleQuotedString(p)) => Some(p.into()),
-                        Some(_) => bail!("ssl_certificate_file must be a string"),
-                    };
+                    let config_options = kafka_util::extract_security_options(&mut with_options)?;
+
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
                         Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
@@ -1114,7 +1119,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,
                         topic: topic.clone(),
-                        ssl_certificate_file,
+                        config_options,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)

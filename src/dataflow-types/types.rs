@@ -466,7 +466,9 @@ pub enum Consistency {
 pub struct KafkaSourceConnector {
     pub url: Url,
     pub topic: String,
-    pub ssl_certificate_file: Option<PathBuf>,
+    // Represents options specified by user when creating the source, e.g.
+    // security settings.
+    pub config_options: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
