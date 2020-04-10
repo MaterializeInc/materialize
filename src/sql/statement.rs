@@ -18,6 +18,7 @@ use std::time::UNIX_EPOCH;
 use aws_arn::{Resource, ARN};
 use failure::{bail, format_err, ResultExt};
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use rusoto_core::Region;
 use url::Url;
 
@@ -44,6 +45,11 @@ use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, Vi
 use regex::Regex;
 
 use tokio::io::AsyncBufReadExt;
+
+lazy_static! {
+    static ref SHOW_DATABASES_DESC: RelationDesc =
+        { RelationDesc::empty().add_column("Database", ScalarType::String) };
+}
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -147,10 +153,7 @@ pub fn describe_statement(
             vec![],
         ),
 
-        Statement::ShowDatabases { .. } => (
-            Some(RelationDesc::empty().add_column("Database", ScalarType::String)),
-            vec![],
-        ),
+        Statement::ShowDatabases { .. } => (Some(SHOW_DATABASES_DESC.clone()), vec![]),
 
         Statement::ShowObjects {
             object_type,
@@ -336,15 +339,20 @@ fn handle_show_databases(
     scx: &StatementContext,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
-    if filter.is_some() {
-        bail!("SHOW DATABASES {LIKE | WHERE} is not yet supported");
-    }
-    Ok(Plan::SendRows(
-        scx.catalog
-            .databases()
-            .map(|database| Row::pack(&[Datum::from(database)]))
-            .collect(),
-    ))
+    let rows = scx
+        .catalog
+        .databases()
+        .map(|database| vec![Datum::from(database)])
+        .collect();
+
+    let (r, finishing) = query::plan_show_where(scx, filter, rows, &SHOW_DATABASES_DESC)?;
+
+    Ok(Plan::Peek {
+        source: r.decorrelate()?,
+        when: PeekWhen::Immediately,
+        finishing,
+        materialize: true,
+    })
 }
 
 fn handle_show_objects(
