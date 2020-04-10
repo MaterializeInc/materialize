@@ -11,9 +11,13 @@ $ kinesis-create-stream stream=test
 
 $ kinesis-ingest format=bytes stream=test
 here's a test string
+here's a different test string
+and a third!
 
 $ kinesis-verify stream=test
 here's a test string
+here's a different test string
+and a third!
 
 > CREATE SOURCE f
   FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
@@ -28,3 +32,5 @@ here's a test string
 
 > SELECT * FROM f_view
 "here's a test string"
+"here's a different test string"
+"and a third!"

@@ -3293,6 +3293,7 @@ dependencies = [
  "futures",
  "getopts",
  "interchange",
+ "itertools 0.9.0",
  "lazy_static",
  "md-5",
  "ore",

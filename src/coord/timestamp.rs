@@ -26,7 +26,7 @@ use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use rusoto_core::HttpClient;
 use rusoto_credential::StaticProvider;
-use rusoto_kinesis::KinesisClient;
+use rusoto_kinesis::{Kinesis, KinesisClient, ListShardsInput};
 use rusqlite::{params, NO_PARAMS};
 
 use catalog::sql::SqlVal;
@@ -38,6 +38,7 @@ use expr::{PartitionId, SourceInstanceId};
 
 use crate::coord;
 
+use futures::executor::block_on;
 use itertools::Itertools;
 
 lazy_static! {
@@ -187,6 +188,7 @@ struct ByoKafkaConnector {
 /// Data consumer for Kinesis source with RT consistency
 #[allow(dead_code)]
 struct RtKinesisConnector {
+    stream_name: String,
     kinesis_client: KinesisClient,
 }
 
@@ -750,16 +752,19 @@ impl Timestamper {
         _id: SourceInstanceId,
         kinc: KinesisSourceConnector,
     ) -> RtKinesisConnector {
+        let request_dispatcher = HttpClient::new().unwrap();
         let provider = StaticProvider::new(
             kinc.access_key.clone(),
             kinc.secret_access_key.clone(),
-            None,
+            kinc.token.clone(),
             None,
         );
-        let request_dispatcher = HttpClient::new().unwrap();
         let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, kinc.region);
 
-        RtKinesisConnector { kinesis_client }
+        RtKinesisConnector {
+            stream_name: kinc.stream_name.clone(),
+            kinesis_client,
+        }
     }
 
     /// Creates a BYO connector
@@ -967,10 +972,26 @@ impl Timestamper {
                 RtTimestampConnector::File(_cons) => {
                     error!("Timestamping for File sources is not supported");
                 }
-                RtTimestampConnector::Kinesis(_kc) => {
-                    // For now, always just push the current system timestamp.
-                    // todo: Github issue #2219
-                    result.push((*id, 0, PartitionId::Kafka(0), self.current_timestamp as i64));
+                RtTimestampConnector::Kinesis(kc) => {
+                    match block_on(kc.kinesis_client.list_shards(ListShardsInput {
+                        exclusive_start_shard_id: None,
+                        max_results: None,
+                        next_token: None,
+                        stream_creation_timestamp: None,
+                        stream_name: Some(kc.stream_name.clone()),
+                    })) {
+                        Ok(output) => match output.shards {
+                            Some(shards) => {
+                                // For now, always just push the current system timestamp.
+                                // todo@jldlaughlin Github issue #2219
+                                for shard in shards {
+                                    result.push((*id, 0, PartitionId::Kinesis(shard.shard_id.clone()), self.current_timestamp as i64));
+                                }
+                            },
+                            None => error!("Kinesis stream {} has no shards, cannot update watermark information", kc.stream_name),
+                        },
+                        Err(e) => error!("Failed to list shards for Kinesis stream {} and update watermark information: {}", kc.stream_name, e),
+                    }
                 }
             }
         }

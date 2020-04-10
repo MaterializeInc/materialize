@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use rand::Rng;
 use rusoto_kinesis::{CreateStreamInput, DeleteStreamInput, Kinesis, ListStreamsInput};
 
 use crate::action::{Action, State};
@@ -53,8 +54,9 @@ impl Action for CreateStreamAction {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!("creating Kinesis stream {}", stream_name);
 
+        let random_shard_count = rand::thread_rng().gen_range(1, 10);
         let create_stream_input = CreateStreamInput {
-            shard_count: 1,
+            shard_count: random_shard_count,
             stream_name,
         };
         state
