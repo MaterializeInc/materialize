@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path;
+
+use async_trait::async_trait;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -30,22 +32,25 @@ pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
     Ok(AppendAction { path, contents })
 }
 
+#[async_trait]
 impl Action for AppendAction {
-    fn undo(&self, _: &mut State) -> Result<(), String> {
+    async fn undo(&self, _: &mut State) -> Result<(), String> {
         // Files are written to a fresh temporary directory, so no need to
         // explicitly remove the file here.
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
         let path = state.temp_dir.path().join(&self.path);
         println!("Appending to file {}", path.display());
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
+            .await
             .map_err(|e| e.to_string())?;
         file.write_all(self.contents.as_bytes())
+            .await
             .map_err(|e| e.to_string())?;
         Ok(())
     }

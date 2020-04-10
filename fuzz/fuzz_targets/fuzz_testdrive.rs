@@ -10,12 +10,19 @@
 #![cfg_attr(not(test), no_main)]
 
 use libfuzzer_sys::fuzz_target;
+use tokio::runtime::Runtime;
 
 use testdrive::error::Error;
+use testdrive::Config;
 
 fuzz_target!(|data: &[u8]| {
+    let mut runtime = Runtime::new().unwrap();
     if let Ok(string) = std::str::from_utf8(data) {
-        match testdrive::run_string(&testdrive::Config::default(), "<fuzzer>", &string) {
+        match runtime.block_on(testdrive::run_string(
+            &Config::default(),
+            "<fuzzer>",
+            &string,
+        )) {
             Ok(()) | Err(Error::Input { .. }) | Err(Error::Usage { .. }) => {}
             Err(error @ Error::General { .. }) => panic!("{}", error),
         }

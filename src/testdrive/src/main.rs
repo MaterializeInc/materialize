@@ -18,8 +18,9 @@ use testdrive::error::{Error, ResultExt};
 use testdrive::util;
 use testdrive::Config;
 
-fn main() {
-    if let Err(err) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(err) = run().await {
         // If printing the error message fails, there's not a whole lot we can
         // do.
         let _ = err.print_stderr();
@@ -27,7 +28,7 @@ fn main() {
     }
 }
 
-fn run() -> Result<(), Error> {
+async fn run() -> Result<(), Error> {
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
@@ -115,13 +116,13 @@ fn run() -> Result<(), Error> {
     }
 
     if opts.free.is_empty() {
-        testdrive::run_stdin(&config)
+        testdrive::run_stdin(&config).await
     } else {
         for arg in opts.free {
             if arg == "-" {
-                testdrive::run_stdin(&config)?
+                testdrive::run_stdin(&config).await?
             } else {
-                testdrive::run_file(&config, &arg)?
+                testdrive::run_file(&config, &arg).await?
             }
         }
         Ok(())

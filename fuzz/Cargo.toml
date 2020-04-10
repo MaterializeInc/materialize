@@ -25,4 +25,5 @@ libfuzzer-sys = "0.3"
 rand = { version = "0.7.3", features = ["small_rng"] }
 sqllogictest = { path = "../src/sqllogictest" }
 testdrive = { path = "../src/testdrive" }
+tokio = "0.2"
 walkdir = "2"

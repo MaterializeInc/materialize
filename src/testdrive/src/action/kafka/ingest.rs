@@ -9,9 +9,8 @@
 
 use std::io::{BufRead, Read};
 
+use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
-use futures::executor::block_on;
-use futures::future::{self, TryFutureExt};
 use futures::stream::{FuturesUnordered, TryStreamExt};
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
@@ -31,6 +30,7 @@ pub struct IngestAction {
     rows: Vec<String>,
 }
 
+#[derive(Clone)]
 enum Format {
     Avro { schema: String },
     Protobuf { message: protobuf::MessageType },
@@ -144,15 +144,15 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     })
 }
 
+#[async_trait]
 impl Action for IngestAction {
-    fn undo(&self, state: &mut State) -> Result<(), String> {
+    async fn undo(&self, state: &mut State) -> Result<(), String> {
         if self.publish {
-            let subjects = state.tokio_runtime.block_on(
-                state
-                    .ccsr_client
-                    .list_subjects()
-                    .map_err(|e| format!("unable to list subjects in schema registry: {}", e)),
-            )?;
+            let subjects = state
+                .ccsr_client
+                .list_subjects()
+                .await
+                .map_err(|e| format!("unable to list subjects in schema registry: {}", e))?;
 
             let stale_subjects: Vec<_> = subjects
                 .iter()
@@ -161,10 +161,7 @@ impl Action for IngestAction {
 
             for subject in stale_subjects {
                 println!("Deleting stale schema registry subject {}", subject);
-                match state
-                    .tokio_runtime
-                    .block_on(state.ccsr_client.delete_subject(&subject))
-                {
+                match state.ccsr_client.delete_subject(&subject).await {
                     Ok(()) | Err(ccsr::DeleteError::SubjectNotFound) => (),
                     Err(e) => return Err(e.to_string()),
                 }
@@ -174,35 +171,34 @@ impl Action for IngestAction {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
-        let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
-        let mut make_transcoder = |format: &Format, typ| match format {
-            Format::Avro { schema } => {
-                let schema_id = if self.publish {
-                    let ccsr_subject = format!("{}-{}", topic_name, typ);
-                    let schema_id = state.tokio_runtime.block_on(
-                        state
-                            .ccsr_client
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let topic_name = &format!("{}-{}", self.topic_prefix, state.seed);
+        let ccsr_client = &state.ccsr_client;
+        let make_transcoder = |format, typ| async move {
+            match format {
+                Format::Avro { schema } => {
+                    let schema_id = if self.publish {
+                        let ccsr_subject = format!("{}-{}", topic_name, typ);
+                        let schema_id = ccsr_client
                             .publish_schema(&ccsr_subject, &schema)
-                            .map_err(|e| format!("schema registry error: {}", e)),
-                    )?;
-                    schema_id
-                } else {
-                    1
-                };
-                let schema = avro::parse_schema(&schema)
-                    .map_err(|e| format!("parsing avro schema: {}", e))?;
-                Ok::<_, String>(Transcoder::Avro { schema, schema_id })
+                            .await
+                            .map_err(|e| format!("schema registry error: {}", e))?;
+                        schema_id
+                    } else {
+                        1
+                    };
+                    let schema = avro::parse_schema(&schema)
+                        .map_err(|e| format!("parsing avro schema: {}", e))?;
+                    Ok::<_, String>(Transcoder::Avro { schema, schema_id })
+                }
+                Format::Protobuf { message } => Ok(Transcoder::Protobuf { message }),
+                Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
             }
-            Format::Protobuf { message } => Ok(Transcoder::Protobuf { message: *message }),
-            Format::Bytes { terminator } => Ok(Transcoder::Bytes {
-                terminator: *terminator,
-            }),
         };
-        let value_transcoder = make_transcoder(&self.format, "value")?;
-        let key_transcoder = match &self.key_format {
+        let value_transcoder = make_transcoder(self.format.clone(), "value").await?;
+        let key_transcoder = match self.key_format.clone() {
             None => None,
-            Some(f) => Some(make_transcoder(f, "key")?),
+            Some(f) => Some(make_transcoder(f, "key").await?),
         };
 
         let futs = FuturesUnordered::new();
@@ -214,7 +210,7 @@ impl Action for IngestAction {
             };
             let value = value_transcoder.transcode(&mut row)?;
 
-            let mut record: FutureRecord<_, _> = FutureRecord::to(&topic_name)
+            let mut record: FutureRecord<_, _> = FutureRecord::to(topic_name)
                 .payload(&value)
                 .partition(self.partition);
             if let Some(key) = &key {
@@ -225,9 +221,13 @@ impl Action for IngestAction {
             }
             futs.push(state.kafka_producer.send(record, 1000 /* block_ms */));
         }
-        block_on(futs.map_err(|e| e.to_string()).try_for_each(|r| match r {
-            Ok(_) => future::ok(()),
-            Err((e, _)) => future::err(e.to_string()),
-        }))
+        futs.map_err(|e| e.to_string())
+            .try_for_each(|r| async {
+                match r {
+                    Ok(_) => Ok(()),
+                    Err((e, _)) => Err(e.to_string()),
+                }
+            })
+            .await
     }
 }

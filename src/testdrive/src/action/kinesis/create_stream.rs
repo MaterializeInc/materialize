@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use async_trait::async_trait;
 use rand::Rng;
 use rusoto_kinesis::{CreateStreamInput, DeleteStreamInput, Kinesis, ListStreamsInput};
 
@@ -24,15 +25,17 @@ pub fn build_create_stream(mut cmd: BuiltinCommand) -> Result<CreateStreamAction
     Ok(CreateStreamAction { stream_name })
 }
 
+#[async_trait]
 impl Action for CreateStreamAction {
-    fn undo(&self, state: &mut State) -> Result<(), String> {
+    async fn undo(&self, state: &mut State) -> Result<(), String> {
         let list_streams_input = ListStreamsInput {
             exclusive_start_stream_name: None,
             limit: None,
         };
         let stream_names = state
-            .tokio_runtime
-            .block_on(state.kinesis_client.list_streams(list_streams_input))
+            .kinesis_client
+            .list_streams(list_streams_input)
+            .await
             .map_err(|e| format!("listing Kinesis streams: {}", e))?
             .stream_names;
 
@@ -42,15 +45,16 @@ impl Action for CreateStreamAction {
                 stream_name: stream_name.clone(),
             };
             state
-                .tokio_runtime
-                .block_on(state.kinesis_client.delete_stream(delete_stream_input))
+                .kinesis_client
+                .delete_stream(delete_stream_input)
+                .await
                 .map_err(|e| format!("deleting Kinesis stream: {}", e))?;
             println!("Deleted stale Kinesis stream: {}", &stream_name);
         }
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!("creating Kinesis stream {}", stream_name);
 
@@ -60,8 +64,9 @@ impl Action for CreateStreamAction {
             stream_name,
         };
         state
-            .tokio_runtime
-            .block_on(state.kinesis_client.create_stream(create_stream_input))
+            .kinesis_client
+            .create_stream(create_stream_input)
+            .await
             .map_err(|e| format!("creating stream: {}", e))?;
 
         Ok(())
