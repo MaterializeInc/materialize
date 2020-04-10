@@ -7,21 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
-
 use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
 use bytes::Bytes;
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{Kinesis, PutRecordError, PutRecordInput};
 
+use crate::action::kinesis::DEFAULT_KINESIS_TIMEOUT;
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-
-const DEFAULT_KINESIS_TIMEOUT: Duration = Duration::from_millis(12700);
 
 pub struct IngestAction {
     stream_prefix: String,

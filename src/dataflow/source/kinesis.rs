@@ -71,7 +71,7 @@ where
 
         move |cap, output| {
             // todo@jldlaughlin: We need to be able to update our list of shards dynamically. #2607
-            let (client, shard_queue, shard_to_iterator) = match &mut state {
+            let (client, shard_queue) = match &mut state {
                 Ok(state) => state,
                 Err(e) => {
                     error!("failed to create Kinesis state: {}", e);
@@ -85,89 +85,86 @@ where
 
             // Rotate through the queue of shards. Start with a new
             // shard on each activation.
-            while let Some(shard_id) = shard_queue.pop_front() {
+            while let Some(shard_information) = shard_queue.pop_front() {
                 // While the next_shard_iterator is Some(iterator), the shard is open
                 // and could return more data.
-                while let Some(iterator) = shard_to_iterator.get(&shard_id).unwrap_or_else(|| {
-                    error!("Expected to find shard iterator for shard {}, found None. Closing shard...", shard_id);
-                    &None
-                }) {
-                    {
-                        // Pushing back to the shard_queue will allow us to read from the
-                        // shard again.
-                        shard_queue.push_back(shard_id.clone());
-                        let get_records_output = match block_on(get_records(&client, &iterator)) {
-                            Ok(output) => {
-                                shard_to_iterator.insert(shard_id.clone(), output.next_shard_iterator.clone());
-                                output
-                            }
-                            Err(RusotoError::HttpDispatch(e)) => {
-                                // todo@jldlaughlin: Parse this to determine fatal/retriable?
-                                error!("{}", e);
-                                activator.activate_after(get_reactivation_duration(timer));
-                                return SourceStatus::Alive;
-                            }
-                            Err(RusotoError::Service(GetRecordsError::ExpiredIterator(e))) => {
-                                // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
-                                error!("{}", e);
-                                return SourceStatus::Done;
-                            }
-                            Err(RusotoError::Service(
-                                GetRecordsError::ProvisionedThroughputExceeded(_),
-                            )) => {
-                                activator.activate_after(get_reactivation_duration(timer));
-                                return SourceStatus::Alive;
-                            }
-                            Err(e) => {
-                                // Fatal service errors:
-                                //  - InvalidArgument
-                                //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
-                                //    KMSOptInRequired, KMSThrottling
-                                //  - ResourceNotFound
-                                //
-                                // Other fatal Rusoto errors:
-                                // - Credentials
-                                // - Validation
-                                // - ParseError
-                                // - Unknown (raw HTTP provided)
-                                // - Blocking
-                                error!("{}", e);
-                                // Don't reactivate reading from this shard.
-                                shard_queue.pop_back();
-                                return SourceStatus::Done;
-                            }
-                        };
-
-                        for record in get_records_output.records {
-                            let data = record.data.as_ref().to_vec();
-                            output.session(&cap).give((data, None));
+                let (shard_id, mut shard_iterator) = shard_information;
+                while let Some(iterator) = &shard_iterator {
+                    // Pushing back to the shard_queue will allow us to read from the
+                    // shard again.
+                    let get_records_output = match block_on(get_records(&client, &iterator)) {
+                        Ok(output) => {
+                            shard_iterator = output.next_shard_iterator.clone();
+                            shard_queue.push_back((shard_id.clone(), shard_iterator.clone()));
+                            output
                         }
-                        downgrade_capability(cap, &name);
-
-                        if let Some(0) = get_records_output.millis_behind_latest {
-                            // This activation does the following:
-                            //      1. Ensures we poll Kinesis more often than the eviction timeout (5 minutes)
-                            //      2. Proactively and frequently reactivates this source, since we don't have a
-                            //         smarter solution atm.
-                            // todo@jldlaughlin: Improve Kinesis source activation #2195
+                        Err(RusotoError::HttpDispatch(e)) => {
+                            // todo@jldlaughlin: Parse this to determine fatal/retriable?
+                            // Retry reading from the same iterator.
+                            shard_queue.push_back((shard_id, shard_iterator.clone()));
+                            error!("{}", e);
                             activator.activate_after(get_reactivation_duration(timer));
                             return SourceStatus::Alive;
                         }
-
-                        if timer.elapsed().as_millis() > 10 {
-                            // todo: fix this comment -- copied from kafka
-                            // We didn't drain the entire queue, so indicate that we
-                            // should run again. We suppress the activation when the
-                            // queue is drained, as in that case librdkafka is
-                            // configured to unpark our thread when a new message
-                            // arrives.
-                            activator.activate_after(get_reactivation_duration(timer));
+                        Err(RusotoError::Service(GetRecordsError::ExpiredIterator(e))) => {
+                            // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
+                            error!("{}", e);
+                            return SourceStatus::Done;
+                        }
+                        Err(RusotoError::Service(
+                            GetRecordsError::ProvisionedThroughputExceeded(_),
+                        )) => {
+                            // Retry reading from the same iterator.
+                            shard_queue.push_back((shard_id, shard_iterator.clone()));
+                            activator.activate();
                             return SourceStatus::Alive;
                         }
-                        // Each Kinesis shard can support up to 5 read requests per second.
-                        // This will throttle ourselves.
-                        activator.activate_after(get_reactivation_duration(timer));
+                        Err(e) => {
+                            // Fatal service errors:
+                            //  - InvalidArgument
+                            //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
+                            //    KMSOptInRequired, KMSThrottling
+                            //  - ResourceNotFound
+                            //
+                            // Other fatal Rusoto errors:
+                            // - Credentials
+                            // - Validation
+                            // - ParseError
+                            // - Unknown (raw HTTP provided)
+                            // - Blocking
+                            error!("{}", e);
+                            return SourceStatus::Done;
+                        }
+                    };
+
+                    for record in get_records_output.records {
+                        let data = record.data.as_ref().to_vec();
+                        output.session(&cap).give((data, None));
                     }
+                    downgrade_capability(cap, &name);
+
+                    if let Some(0) = get_records_output.millis_behind_latest {
+                        // This activation does the following:
+                        //      1. Ensures we poll Kinesis more often than the eviction timeout (5 minutes)
+                        //      2. Proactively and frequently reactivates this source, since we don't have a
+                        //         smarter solution atm.
+                        activator.activate();
+                        return SourceStatus::Alive;
+                    }
+
+                    if timer.elapsed().as_millis() > 10 {
+                        // todo: fix this comment -- copied from kafka
+                        // We didn't drain the entire queue, so indicate that we
+                        // should run again. We suppress the activation when the
+                        // queue is drained, as in that case librdkafka is
+                        // configured to unpark our thread when a new message
+                        // arrives.
+                        activator.activate();
+                        return SourceStatus::Alive;
+                    }
+                    // Each Kinesis shard can support up to 5 read requests per second.
+                    // This will throttle ourselves.
+                    activator.activate();
                 }
             }
             // When there are no more shards in the queue,
@@ -187,28 +184,19 @@ where
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
 fn create_state(
     c: KinesisSourceConnector,
-) -> Result<
-    (
-        KinesisClient,
-        VecDeque<String>,
-        HashMap<String, Option<String>>,
-    ),
-    failure::Error,
-> {
+) -> Result<(KinesisClient, VecDeque<(String, Option<String>)>), failure::Error> {
     let http_client = HttpClient::new()?;
     let provider = StaticProvider::new(c.access_key, c.secret_access_key, c.token, None);
     let client = KinesisClient::new_with(http_client, provider, c.region);
 
-    let (shard_queue, shard_to_iterator) = match block_on(get_shards_list(&client, &c.stream_name))
+    let shard_queue = match block_on(get_shards_list(&client, &c.stream_name))
         .with_context(|e| format!("fetching shard list: {}", e))?
         .shards
     {
         Some(shards) => {
-            let mut shard_queue = VecDeque::new();
-            let mut shard_to_iterator = HashMap::new();
+            let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
             for shard in shards {
-                shard_queue.push_back(shard.shard_id.clone());
-                shard_to_iterator.insert(
+                shard_queue.push_back((
                     shard.shard_id.clone(),
                     block_on(get_shard_iterator(
                         &client,
@@ -218,13 +206,13 @@ fn create_state(
                     ))
                     .with_context(|e| format!("fetching shard iterator: {}", e))?
                     .shard_iterator,
-                );
+                ));
             }
-            (shard_queue, shard_to_iterator)
+            shard_queue
         }
         None => bail!("kinesis stream does not contain any shards"),
     };
-    Ok((client, shard_queue, shard_to_iterator))
+    Ok((client, shard_queue))
 }
 
 fn downgrade_capability(cap: &mut Capability<u64>, name: &str) {
