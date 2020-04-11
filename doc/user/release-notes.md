@@ -44,7 +44,7 @@ Use relative links (../path/to/doc), not absolute links
 {{< /comment >}}
 
 <span id="v0.2.0"></span>
-## 0.1.3 &rarr; v0.2.0 (unreleased)
+## 0.1.3 &rarr; v0.2.0
 
 - Require the `-w` / `--threads` command-line option. Consult the [CLI
   documentation](../cli/#worker-threads) to determine the correct value for your
