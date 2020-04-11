@@ -134,15 +134,27 @@ where
                 // in differential dataflow.
                 let oks = differential_dataflow::collection::concatenate(scope, ok_partials)
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
+                    let aggregates_clone = aggregates.clone();
                     let aggregates_len = aggregates.len();
                     move |key, input, output| {
                         // The intent, unless things are terribly wrong, is that `input`
-                        // contains, in order, the values to drop into `output`.
-                        assert_eq!(input.len(), aggregates_len);
+                        // contains, in order, the values to drop into `output`. If this
+                        // is not the case, we should express our specific discontent.
+                        if input.len() != aggregates_len || input.iter().enumerate().any(|(i,((p,_),_))| &i != p) {
+                            // TODO(frank): Arguably, the absence of one aggregate is evidence
+                            // that the key doesn't exist (the others could be phantoms due to
+                            // negative input records); we could just suppress the output in that
+                            // case, rather than panic, though we surely want to see what is up.
+                            panic!(
+                                "ReduceCollation found unexpected indexes:\n\tExpected:\t{:?}\n\tFound:\t{:?}\n\tFor:\t{:?}",
+                                (0..aggregates_len).collect::<Vec<_>>(),
+                                input.iter().map(|((p,_),_)| p).collect::<Vec<_>>(),
+                                aggregates_clone,
+                            );
+                        }
                         let mut result = RowPacker::new();
                         result.extend(key.iter());
-                        for (index, ((pos, val), cnt)) in input.iter().enumerate() {
-                            assert_eq!(*pos, index);
+                        for ((_pos, val), cnt) in input.iter() {
                             assert_eq!(*cnt, 1);
                             result.push(val.unpack().pop().unwrap());
                         }
@@ -315,6 +327,14 @@ where
                 let agg1 = accum.element2.element1;
                 let agg2 = accum.element2.element2;
 
+                if tot == 0 && (agg1 != 0 || agg2 != 0) {
+                    // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation
+                    // operator, when this key is presented but matching aggregates are not found. We will
+                    // suppress the output for inputs without net-positive records, which *should* avoid
+                    // that panic.
+                    log::error!("ReduceAccumulable observed net-zero records with non-zero accumulation: {:?}: {:?}, {:?}", aggr, agg1, agg2);
+                }
+
                 // The finished value depends on the aggregation function in a variety of ways.
                 let value = match (&aggr, agg2) {
                     (AggregateFunc::Count, _) => Datum::Int64(agg2 as i64),
@@ -354,13 +374,19 @@ where
                     (AggregateFunc::SumNull, _) => Datum::Null,
                     x => panic!("Unexpected accumulable aggregation: {:?}", x),
                 };
-                // Pack the value with the key as the result.
-                let mut packer = RowPacker::new();
-                if prepend_key {
-                    packer.extend(key.iter());
+
+                // If net zero records, we probably shouldn't be here (negative inputs)
+                // but in any case we should suppress the output to attempt to avoid a
+                // panic in ReduceCollation.
+                if tot != 0 {
+                    // Pack the value with the key as the result.
+                    let mut packer = RowPacker::new();
+                    if prepend_key {
+                        packer.extend(key.iter());
+                    }
+                    packer.push(value);
+                    output.push((packer.finish(), 1));
                 }
-                packer.push(value);
-                output.push((packer.finish(), 1));
             },
         )
 }
