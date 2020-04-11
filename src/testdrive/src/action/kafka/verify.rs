@@ -9,16 +9,17 @@
 
 use std::time::Duration;
 
+use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
-use retry::delay::Fibonacci;
 use tokio::stream::StreamExt;
 
 use crate::action::{Action, State};
 use crate::format::avro;
 use crate::parser::BuiltinCommand;
+use crate::util::retry;
 
 pub struct VerifyAction {
     sink: String,
@@ -36,31 +37,33 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
     })
 }
 
+#[async_trait]
 impl Action for VerifyAction {
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
-        let topic: String = retry::retry(Fibonacci::from_millis(100).take(5), || {
-            let row = state.pgclient.query_one(
-                "SELECT topic FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks \
-                 WHERE name = $1",
-                &[&self.sink],
-            )?;
-            Ok::<_, postgres::Error>(row.get("topic"))
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let topic: String = retry::retry(|| async {
+            let row = state
+                .pgclient
+                .query_one(
+                    "SELECT topic FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks \
+                     WHERE name = $1",
+                    &[&self.sink],
+                )
+                .await
+                .map_err(|e| format!("retrieving topic name: {}", e))?;
+            Ok(row.get("topic"))
         })
-        .map_err(|e| format!("retrieving topic name: {}", e.to_string()))?;
+        .await?;
 
         println!("Verifying results in Kafka topic {}", topic);
 
         let schema = state
-            .tokio_runtime
-            .block_on(
-                state
-                    .ccsr_client
-                    .get_schema_by_subject(&format!("{}-value", topic)),
-            )
+            .ccsr_client
+            .get_schema_by_subject(&format!("{}-value", topic))
+            .await
             .map_err(|e| format!("fetching schema: {}", e))?
             .raw;
 
@@ -78,52 +81,48 @@ impl Action for VerifyAction {
             .map_err(|e| format!("creating kafka consumer: {}", e))?;
         consumer.subscribe(&[&topic]).map_err(|e| e.to_string())?;
 
-        let actual_messages = state.tokio_runtime.block_on(async move {
-            // Wait up to 10 seconds for each message.
-            let mut message_stream = consumer
-                .start()
-                .take(self.expected_messages.len())
-                .timeout(Duration::from_secs(15));
+        // Wait up to 10 seconds for each message.
+        let mut message_stream = consumer
+            .start()
+            .take(self.expected_messages.len())
+            .timeout(Duration::from_secs(15));
 
-            let mut out = vec![];
+        let mut actual_messages = vec![];
 
-            // Collect all messages that arrive without timing out. If we trip
-            // the timeout, suppress the error and return what we have. This
-            // is nicer than returning "timeout expired", as the user will
-            // instead get an error message about the expected messages that
-            // were missing.
-            while let Some(Ok(message)) = message_stream.next().await {
-                let message = message.map_err(|e| e.to_string())?;
+        // Collect all messages that arrive without timing out. If we trip
+        // the timeout, suppress the error and return what we have. This
+        // is nicer than returning "timeout expired", as the user will
+        // instead get an error message about the expected messages that
+        // were missing.
+        while let Some(Ok(message)) = message_stream.next().await {
+            let message = message.map_err(|e| e.to_string())?;
 
-                let mut bytes = match message.payload() {
-                    None => return Err("empty message payload".into()),
-                    Some(bytes) => bytes,
-                };
+            let mut bytes = match message.payload() {
+                None => return Err("empty message payload".into()),
+                Some(bytes) => bytes,
+            };
 
-                if bytes.len() < 5 {
-                    return Err(format!(
-                        "avro datum is too few bytes: expected at least 5 bytes, got {}",
-                        bytes.len()
-                    ));
-                }
-                let magic = bytes[0];
-                let _schema_id = BigEndian::read_i32(&bytes[1..5]);
-                bytes = &bytes[5..];
+            if bytes.len() < 5 {
+                return Err(format!(
+                    "avro datum is too few bytes: expected at least 5 bytes, got {}",
+                    bytes.len()
+                ));
+            }
+            let magic = bytes[0];
+            let _schema_id = BigEndian::read_i32(&bytes[1..5]);
+            bytes = &bytes[5..];
 
-                if magic != 0 {
-                    return Err(format!(
-                        "wrong avro serialization magic: expected 0, got {}",
-                        bytes[0]
-                    ));
-                }
-
-                let datum = avro::from_avro_datum(schema, &mut bytes)
-                    .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?;
-                out.push(datum);
+            if magic != 0 {
+                return Err(format!(
+                    "wrong avro serialization magic: expected 0, got {}",
+                    bytes[0]
+                ));
             }
 
-            Ok(out)
-        })?;
+            let datum = avro::from_avro_datum(schema, &mut bytes)
+                .map_err(|e| format!("from_avro_datum: {}", e.to_string()))?;
+            actual_messages.push(datum);
+        }
 
         avro::validate_sink(schema, &self.expected_messages, &actual_messages)
     }

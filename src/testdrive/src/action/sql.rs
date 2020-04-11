@@ -12,14 +12,14 @@ use std::cmp;
 use std::error::Error as _;
 use std::fmt::Write as _;
 use std::io::{self, Write};
-use std::thread;
-use std::time::Duration;
 
+use async_trait::async_trait;
 use md5::{Digest, Md5};
-use postgres::error::DbError;
-use postgres::row::Row;
-use postgres::types::{Json, Type};
 use serde_json::Value;
+use tokio::time::{self, Duration};
+use tokio_postgres::error::DbError;
+use tokio_postgres::row::Row;
+use tokio_postgres::types::{Json, Type};
 
 use ore::collections::CollectionExt;
 use pgrepr::{Interval, Numeric};
@@ -52,40 +52,56 @@ pub fn build_sql(mut cmd: SqlCommand, timeout: Duration) -> Result<SqlAction, St
     })
 }
 
+#[async_trait]
 impl Action for SqlAction {
-    fn undo(&self, state: &mut State) -> Result<(), String> {
+    async fn undo(&self, state: &mut State) -> Result<(), String> {
         match &self.stmt {
-            Statement::CreateDatabase { name, .. } => self.try_drop(
-                &mut state.pgclient,
-                &format!("DROP DATABASE IF EXISTS {}", name.to_string()),
-            ),
-            Statement::CreateSchema { name, .. } => self.try_drop(
-                &mut state.pgclient,
-                &format!("DROP SCHEMA IF EXISTS {} CASCADE", name.to_string()),
-            ),
-            Statement::CreateSource { name, .. } => self.try_drop(
-                &mut state.pgclient,
-                &format!("DROP SOURCE IF EXISTS {} CASCADE", name.to_string()),
-            ),
-            Statement::CreateView { name, .. } => self.try_drop(
-                &mut state.pgclient,
-                &format!("DROP VIEW IF EXISTS {} CASCADE", name.to_string()),
-            ),
-            Statement::CreateTable { name, .. } => self.try_drop(
-                &mut state.pgclient,
-                &format!("DROP TABLE IF EXISTS {} CASCADE", name.to_string()),
-            ),
+            Statement::CreateDatabase { name, .. } => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP DATABASE IF EXISTS {}", name.to_string()),
+                )
+                .await
+            }
+            Statement::CreateSchema { name, .. } => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP SCHEMA IF EXISTS {} CASCADE", name.to_string()),
+                )
+                .await
+            }
+            Statement::CreateSource { name, .. } => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP SOURCE IF EXISTS {} CASCADE", name.to_string()),
+                )
+                .await
+            }
+            Statement::CreateView { name, .. } => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP VIEW IF EXISTS {} CASCADE", name.to_string()),
+                )
+                .await
+            }
+            Statement::CreateTable { name, .. } => {
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!("DROP TABLE IF EXISTS {} CASCADE", name.to_string()),
+                )
+                .await
+            }
             _ => Ok(()),
         }
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
         let query = &self.cmd.query;
         print_query(&query);
         let mut total_backoff = Duration::from_millis(0);
         let mut backoff = cmp::min(Duration::from_millis(100), self.timeout);
         loop {
-            match self.try_redo(&mut state.pgclient, &query) {
+            match self.try_redo(&mut state.pgclient, &query).await {
                 Ok(()) => {
                     if total_backoff > Duration::from_millis(0) {
                         println!();
@@ -110,7 +126,7 @@ impl Action for SqlAction {
                     }
                 }
             }
-            thread::sleep(backoff);
+            time::delay_for(backoff).await;
             total_backoff += backoff;
         }
 
@@ -125,12 +141,14 @@ impl Action for SqlAction {
                 | Statement::DropDatabase { .. }
                 | Statement::DropObjects { .. } => {
                     let disk_state = coord::dump_catalog(data_dir).map_err(|e| e.to_string())?;
-                    let mem_state = reqwest::blocking::get(&format!(
+                    let mem_state = reqwest::get(&format!(
                         "http://{}/internal/catalog",
-                        state.materialized_addr
+                        state.materialized_addr,
                     ))
+                    .await
                     .map_err(|e| e.to_string())?
                     .text()
+                    .await
                     .map_err(|e| e.to_string())?;
                     if disk_state != mem_state {
                         return Err(format!(
@@ -150,17 +168,26 @@ impl Action for SqlAction {
 }
 
 impl SqlAction {
-    fn try_drop(&self, pgclient: &mut postgres::Client, query: &str) -> Result<(), String> {
+    async fn try_drop(
+        &self,
+        pgclient: &mut tokio_postgres::Client,
+        query: &str,
+    ) -> Result<(), String> {
         print_query(&query);
-        match pgclient.query(query, &[]) {
+        match pgclient.query(query, &[]).await {
             Err(err) => Err(err.to_string()),
             Ok(_) => Ok(()),
         }
     }
 
-    fn try_redo(&self, pgclient: &mut postgres::Client, query: &str) -> Result<(), String> {
+    async fn try_redo(
+        &self,
+        pgclient: &mut tokio_postgres::Client,
+        query: &str,
+    ) -> Result<(), String> {
         let mut actual: Vec<_> = pgclient
             .query(query, &[])
+            .await
             .map_err(|e| format!("query failed: {}", e))?
             .into_iter()
             .map(decode_row)
@@ -241,15 +268,16 @@ pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, String> {
     Ok(FailSqlAction(cmd))
 }
 
+#[async_trait]
 impl Action for FailSqlAction {
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
         let query = &self.0.query;
         print_query(&query);
-        match state.pgclient.query(query.as_str(), &[]) {
+        match state.pgclient.query(query.as_str(), &[]).await {
             Ok(_) => Err(format!(
                 "query succeeded, but expected error '{}'",
                 self.0.expected_error

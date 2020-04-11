@@ -12,14 +12,14 @@ use std::process;
 use std::time::Duration;
 
 use getopts::Options;
-use tokio::runtime::Runtime;
 
 use testdrive::error::{Error, ResultExt};
 use testdrive::util;
 use testdrive::Config;
 
-fn main() {
-    if let Err(err) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(err) = run().await {
         // If printing the error message fails, there's not a whole lot we can
         // do.
         let _ = err.print_stderr();
@@ -27,7 +27,7 @@ fn main() {
     }
 }
 
-fn run() -> Result<(), Error> {
+async fn run() -> Result<(), Error> {
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
@@ -83,9 +83,7 @@ fn run() -> Result<(), Error> {
     if let (Ok(Some(region)), None) = (opts.opt_get("aws-region"), opts.opt_str("aws-endpoint")) {
         // Standard AWS region without a custom endpoint. Try to find actual AWS
         // credentials.
-        let mut runtime = Runtime::new().unwrap();
-        let (account, credentials) =
-            runtime.block_on(util::aws::account_details(Duration::from_secs(5)))?;
+        let (account, credentials) = util::aws::account_details(Duration::from_secs(5)).await?;
         config.aws_region = region;
         config.aws_account = account;
         config.aws_credentials = credentials;
@@ -115,13 +113,13 @@ fn run() -> Result<(), Error> {
     }
 
     if opts.free.is_empty() {
-        testdrive::run_stdin(&config)
+        testdrive::run_stdin(&config).await
     } else {
         for arg in opts.free {
             if arg == "-" {
-                testdrive::run_stdin(&config)?
+                testdrive::run_stdin(&config).await?
             } else {
-                testdrive::run_file(&config, &arg)?
+                testdrive::run_file(&config, &arg).await?
             }
         }
         Ok(())

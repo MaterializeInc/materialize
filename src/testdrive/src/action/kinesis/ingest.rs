@@ -8,14 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::io::{self, Write};
-use std::thread;
-use std::time::Duration;
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{Kinesis, PutRecordError, PutRecordInput};
+use tokio::time::{self, Duration};
 
 use crate::action::kinesis::DEFAULT_KINESIS_TIMEOUT;
 use crate::action::{Action, State};
@@ -40,12 +40,13 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     })
 }
 
+#[async_trait]
 impl Action for IngestAction {
-    fn undo(&self, _state: &mut State) -> Result<(), String> {
+    async fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 
-    fn redo(&self, state: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("{}-{}", self.stream_prefix, state.seed);
 
         for row in &self.rows {
@@ -67,10 +68,7 @@ impl Action for IngestAction {
             let mut total_backoff = Duration::from_millis(0);
             let mut backoff = Duration::from_millis(100);
             loop {
-                match state
-                    .tokio_runtime
-                    .block_on(state.kinesis_client.put_record(put_input.clone()))
-                {
+                match state.kinesis_client.put_record(put_input.clone()).await {
                     Ok(_output) => {
                         println!();
                         break;
@@ -91,7 +89,7 @@ impl Action for IngestAction {
                         return Err(format!("unable to put Kinesis record: {}", err.to_string()))
                     }
                 }
-                thread::sleep(backoff);
+                time::delay_for(backoff).await;
                 total_backoff += backoff;
             }
         }
