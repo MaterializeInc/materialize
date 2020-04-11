@@ -504,13 +504,16 @@ where
         };
 
         let param_types = stmt.param_types();
-        if param_types.len() > raw_params.len() {
+        if param_types.len() != raw_params.len() {
+            let message = format!(
+                "bind message supplies {actual} parameters, \
+                 but prepared statement \"{name}\" requires {expected}",
+                name = statement_name,
+                actual = raw_params.len(),
+                expected = param_types.len()
+            );
             return self
-                .error(
-                    session,
-                    SqlState::PROTOCOL_VIOLATION,
-                    format!("there is no parameter ${}", raw_params.len() + 1),
-                )
+                .error(session, SqlState::PROTOCOL_VIOLATION, message)
                 .await;
         }
         let param_formats = match pad_formats(param_formats, raw_params.len()) {

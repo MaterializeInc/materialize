@@ -63,6 +63,7 @@ copyright_files=$(grep -vE \
     -e '^netlify\.toml$' \
     -e '^rust-toolchain$' \
     -e '^rustfmt\.toml$' \
+    -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
     -e '\.(md|json|asc|png|jpe?g|svg|avro|pb)$' \
     -e '^www/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
