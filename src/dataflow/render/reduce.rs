@@ -231,7 +231,7 @@ where
                 // because we don't know that the aggregation method is not sensitive
                 // to the number of records.
                 let iter = source.iter().flat_map(|(v, w)| {
-                    std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
+                    std::iter::repeat(v.iter().next().unwrap()).take(std::cmp::max(0, *w) as usize)
                 });
                 let mut packer = RowPacker::new();
                 if prepend_key {
@@ -429,7 +429,10 @@ where
                 // We ignore the count here under the belief that it cannot affect
                 // hierarchical aggregations; should that belief be incorrect, we
                 // should certainly revise this implementation.
-                let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
+                let iter = source
+                    .iter()
+                    .filter(|(_val, cnt)| cnt > &0)
+                    .map(|(val, _cnt)| val.iter().next().unwrap());
                 target.push((Row::pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
             }
         })
