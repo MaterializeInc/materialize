@@ -227,18 +227,23 @@ where
         // The same code should work on data that can not be hierarchically reduced.
         partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
             move |key, source, target| {
-                // We respect the multiplicity here (unlike in hierarchical aggregation)
-                // because we don't know that the aggregation method is not sensitive
-                // to the number of records.
-                let iter = source.iter().flat_map(|(v, w)| {
-                    std::iter::repeat(v.iter().next().unwrap()).take(std::cmp::max(0, *w) as usize)
-                });
-                let mut packer = RowPacker::new();
-                if prepend_key {
-                    packer.extend(key.iter());
+                if source.iter().any(|(_val, cnt)| cnt <= &0) {
+                    // TODO(frank): Consider reporting the actual offending data.
+                    log::error!("Negative accumulation in ReduceInaccumulable");
+                } else {
+                    // We respect the multiplicity here (unlike in hierarchical aggregation)
+                    // because we don't know that the aggregation method is not sensitive
+                    // to the number of records.
+                    let iter = source.iter().flat_map(|(v, w)| {
+                        std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
+                    });
+                    let mut packer = RowPacker::new();
+                    if prepend_key {
+                        packer.extend(key.iter());
+                    }
+                    packer.push(func.eval(iter, &RowArena::new()));
+                    target.push((packer.finish(), 1));
                 }
-                packer.push(func.eval(iter, &RowArena::new()));
-                target.push((packer.finish(), 1));
             }
         })
     };
@@ -426,14 +431,17 @@ where
         .map(move |((key, hash), row)| ((key, hash % modulus), row))
         .reduce_named("ReduceHierarchical", {
             move |_key, source, target| {
-                // We ignore the count here under the belief that it cannot affect
-                // hierarchical aggregations; should that belief be incorrect, we
-                // should certainly revise this implementation.
-                let iter = source
-                    .iter()
-                    .filter(|(_val, cnt)| cnt > &0)
-                    .map(|(val, _cnt)| val.iter().next().unwrap());
-                target.push((Row::pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
+                // Should negative accumulations reach us, we should loudly complain.
+                if source.iter().any(|(_val, cnt)| cnt <= &0) {
+                    // TODO(frank): Consider reporting the actual offending data.
+                    log::error!("Negative accumulation in ReduceHierarchical");
+                } else {
+                    // We ignore the count here under the belief that it cannot affect
+                    // hierarchical aggregations; should that belief be incorrect, we
+                    // should certainly revise this implementation.
+                    let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
+                    target.push((Row::pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
+                }
             }
         })
 }
