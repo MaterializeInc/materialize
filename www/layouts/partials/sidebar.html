@@ -1,5 +1,7 @@
 {{ $currentPage := . }}
 <nav role="navigation" class="hg-left">
+  <input id="search-input" placeholder="Search">
+
   <ul>
     <li class="nav-top-level"><a href="{{ "/docs" | relURL }}">Docs Home</a></li>
     {{ range .Site.Menus.main.ByWeight }}

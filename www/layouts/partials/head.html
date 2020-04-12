@@ -19,3 +19,19 @@
 
 {{/* Linked fonts here  */}}
 <link href="https://fonts.googleapis.com/css?family=Roboto+Mono&display=swap" rel="stylesheet">
+
+{{/* Algolia DocSearch */}}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css" />
+<script src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+<script defer>
+addEventListener("DOMContentLoaded", () => {
+  console.log("now");
+  console.log(document.querySelectorAll("#search"));
+  docsearch({
+    apiKey: "4a00e9b5208d93ae2445d7ea064ddbac",
+    indexName: "materialize",
+    inputSelector: '#search-input',
+    debug: true,
+  });
+});
+</script>

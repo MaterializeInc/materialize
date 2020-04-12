@@ -1,3 +1,26 @@
+.algolia-autocomplete {
+    width: 100%;
+
+    .ds-cursor .algolia-docsearch-suggestion--content {
+        background: rgba($purple, 0.03) !important;
+    }
+
+    .algolia-docsearch-suggestion--highlight {
+        background: rgba($purple, 0.03) !important;
+        color: $purple !important;
+        box-shadow: inset 0 -2px 0 0 $purple-light !important;
+    }
+}
+
+#search-input {
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    display: block;
+    margin-bottom: 14px;
+    padding: 2px 5px;
+    width: 100%;
+}
+
 .nav-parent-closed::after {
   content: ">";
   display: inline-block;
