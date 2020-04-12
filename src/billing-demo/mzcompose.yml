@@ -1,0 +1,59 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+version: '3.7'
+services:
+  materialized:
+    mzbuild: materialized
+    volumes:
+      - db-data:/share/billing-demo/data
+    ports:
+     - 6875
+    init: true
+    command: --threads 1
+    environment:
+      - MZ_LOG=dataflow=error,info
+      - DIFFERENTIAL_EAGER_MERGE=1000
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  kafka:
+    image: confluentinc/cp-enterprise-kafka:5.3.0
+    ports:
+      - 9092
+    depends_on: [zookeeper]
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9991
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.2.1
+    environment:
+    - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
+    - SCHEMA_REGISTRY_HOST_NAME=localhost
+    depends_on: [kafka, zookeeper]
+  billing-demo:
+    mzbuild: billing-demo
+    entrypoint: /bin/bash
+    volumes:
+      - db-data:/share/billing-demo/data
+    environment:
+      - RUST_LOG=billing-demo=debug,info
+    command: -c "wait-for-it materialized:6875 -- wait-for-it kafka:9092 --
+      wait-for-it schema-registry:8081 --
+      billing-demo --message-count 1000 --materialized-host materialized
+      --kafka-host kafka --schema-registry-url http://schema-registry:8081
+      --csv-file-name /share/billing-demo/data/prices.csv"
+    depends_on: [kafka, schema-registry, materialized]
+
+volumes:
+  db-data:

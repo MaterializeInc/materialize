@@ -17,5 +17,6 @@ miri-target
 .netlify
 mzdata
 __pycache__
+.mypy_cache
 venv
 node_modules

@@ -26,7 +26,7 @@ distributions or for macOS.
    sudo apt install -y jq
    ```
 
-2. Edit `demo/chbench/docker-compose.yml` to remove all references to the
+2. Edit `demo/chbench/mzcompose.yml` to remove all references to the
    following containers: `materialize`, `cli`, and all the metrics-related
    containers (beginning with `grafana` and continuing to the end of the file).
    Make sure you don't delete the `volumes` section at the bottom.
@@ -35,7 +35,7 @@ distributions or for macOS.
    you removed):
 
    ```shell
-   sudo docker-compose down && sudo docker-compose up -d --build
+   ./mzcompose down && ./mzcompose up -d --build
    ```
 
 3. From the top repository directory, start `materialized`:

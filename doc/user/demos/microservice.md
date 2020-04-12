@@ -427,7 +427,7 @@ In a future iteration, we'll make this demo more interactive.
     ```
 
     You can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/master/src/billing-demo).
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/src/billing-demo).
 
 1. Deploy and start all of the components we've listed above.
 
@@ -436,7 +436,7 @@ In a future iteration, we'll make this demo more interactive.
 
     ```shell
     # Deploy the web server, load generator, and Materialize
-    docker-compose up
+    ./mzcompose up
     ```
 
     This will start up all of our infrastructure and generate ~1000 events.

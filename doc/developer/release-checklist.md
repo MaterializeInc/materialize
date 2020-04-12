@@ -84,7 +84,7 @@ production readiness.
 
     ```shell
     cd src/billing-demo
-    # Manually edit the docker-compose.yml to have `--message-count 100000000`
+    # Manually edit the mzcompose.yml to have `--message-count 100000000`
     # Follow the rest of the instructions in README.md
     ```
 

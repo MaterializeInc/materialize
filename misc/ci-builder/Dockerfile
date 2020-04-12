@@ -10,9 +10,11 @@
 FROM ubuntu:xenial
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    bsdmainutils \
     ca-certificates \
     cmake \
     curl \
+    docker.io \
     gcc \
     g++ \
     git \
@@ -21,6 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libz-dev \
     openssh-client \
     pkg-config \
+    python3 \
+    python3-pip \
+    python3-setuptools \
     rsync \
     ruby \
     && rm -rf /var/lib/apt/lists/*
@@ -67,7 +72,14 @@ RUN mkdir rust \
 
 RUN cargo install --root /usr/local cargo-deb cargo-deny
 
-RUN gem install gemfury
+COPY requirements.txt /workdir/requirements.txt
+
+RUN pip3 install -r /workdir/requirements.txt && rm /workdir/requirements.txt
+
+RUN curl -fsSL "https://github.com/docker/compose/releases/download/1.25.4/docker-compose-Linux-x86_64" > /usr/local/bin/docker-compose \
+    && chmod +x /usr/local/bin/docker-compose
 
 # TODO(benesch): why is this required now with nightly?
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc
+
+ENV MZ_DEV_CI_BUILDER=1

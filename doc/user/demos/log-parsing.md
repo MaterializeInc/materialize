@@ -240,29 +240,36 @@ In a future iteration, we'll make this demo more interactive.
 1. Start the Docker daemon for your machine, and [follow our Docker integration
    guide](../../third-party/docker).
 
+1. Verify that you have Python 3 or greater installed.
+
+    ```shell
+    $ python3 --version
+    Python 3.7.5
+    ```
+
 1. Clone the Materialize repo:
 
     ```shell
     git clone git@github.com:MaterializeInc/materialize.git
     ```
 
-2. Move to the `demo/http_logs` dir:
+1. Move to the `demo/http_logs` dir:
 
     ```shell
     cd <path to materialize>/demo/http_logs
     ```
 
     You can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/master/demo/http_logs).
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/http_logs).
 
-3. Deploy and start all of the components we've listed above.
+1. Deploy and start all of the components we've listed above.
 
     Note that pulling down all of the Docker images necessary for the demo takes
     some time (upwards of 3 minutes, even on very fast connections).
 
     ```shell
     # Deploy the web server, load generator, and Materialize
-    docker-compose up
+    ./mzcompose up
     ```
 
 ### Understanding sources & views
@@ -276,7 +283,7 @@ get a chance to see how Materialize can handle queries on our data.
 1. Launch the Materialize CLI (`mzcli`) by running:
 
     ```shell
-    docker-compose run cli
+    ./mzcompose run cli
     ```
 
 1. Within `mzcli`, ensure you have all of the necessary sources, which represent
