@@ -41,6 +41,8 @@ note.
 
 Use relative links (../path/to/doc), not absolute links
 (https://materialize.io/docs/path/to/doc).
+
+Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
 <span id="v0.2.0"></span>
@@ -50,38 +52,43 @@ Use relative links (../path/to/doc), not absolute links
   documentation](../cli/#worker-threads) to determine the correct value for your
   deployment.
 
+- Introduce the [`--listen-addr`](../cli/#listen-address) command-line option to
+  control the address and port that `materialized` binds to.
+
 - Make formatting and parsing for [`real`](../sql/types/float) and
   [`double precision`](../sql/types/float) numbers more
   consistent with PostgreSQL. The strings `NaN`, and `[+-]Infinity` are
   accepted as input, to select the special not-a-number and infinity states,
   respectively,  of floating-point numbers.
 
-- Allow [CSV-formatted sources](../sql/create-source/csv-source/#csv-format-details) to include a
-  header row (`CREATE SOURCE ... FORMAT CSV WITH HEADER`).
+- Allow [CSV-formatted sources](../sql/create-source/csv-source/#csv-format-details)
+  to include a header row (`CREATE SOURCE ... FORMAT CSV WITH HEADER`).
 
-- Provide users the option to name columns in sources (e.g. [`CREATE SOURCE foo
-  (col_foo,
-  col_bar)...`](../sql/create-source/csv-source/#creating-a-source-from-a-dynamic-csv))
-
-- Introduce the [`--listen-addr`](../cli/#listen-address) command-line option to
-  control the address and port that `materialized` binds to.
+- Provide the option to name columns in sources (e.g. [`CREATE SOURCE foo
+  (col_foo, col_bar)...`](../sql/create-source/csv-source/#creating-a-source-from-a-dynamic-csv)).
 
 - Improve conformance of the Avro parser, enabling support for
   a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro).
+
+- Introduce [Avro Object Container File (OCF) sinks](../sql/create-sink/#avro-ocf-sinks).
+
+- Make [sink](../sql/create-sink/) output more correct and consistent by
+  writing to a new Kafka topic or file on every restart.
 
 - Add the [`jsonb_agg()`](../sql/functions/#aggregate-func) aggregate function.
 
 - Support [casts](../sql/functions/cast/) for `time`->`text`,`time`->`interval`, `interval`->`time`.
 
-- Change the output format of `EXPLAIN` to make large plans more readable.
+- Improve the usability of the [`EXPLAIN` statement](../sql/explain):
 
-- Support `EXPLAIN ... FOR VIEW view_name` to display the plan for an existing view.
+  - Change the output format of to make large plans more readable by avoiding
+    nesting.
 
-- Support `EXPLAIN stage_name PLAN FOR ...` to display the plan at various stages of the planning process.
+  - Add `EXPLAIN ... FOR VIEW ...` to display the plan for an existing
+    view.
 
-- Support Avro Object Container File (OCF) [sinks](../sql/create-sink/#avro-ocf-sinks).
-
-- Makes [sink](../sql/create-sink/) output more correct and consistent by writing to a new sink topic or file on every restart.
+  - Add `EXPLAIN <stage> PLAN FOR ...` to display the plan at various
+    stages of the planning process.
 
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
