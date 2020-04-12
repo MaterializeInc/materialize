@@ -21,13 +21,13 @@ use tokio_postgres::row::Row;
 use tokio_postgres::types::{Json, Type};
 
 use ore::collections::CollectionExt;
+use ore::retry;
 use pgrepr::{Interval, Numeric};
 use sql_parser::ast::Statement;
 use sql_parser::parser::Parser as SqlParser;
 
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedResult};
-use crate::util::retry;
 
 pub struct SqlAction {
     cmd: SqlCommand,

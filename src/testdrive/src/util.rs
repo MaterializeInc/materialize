@@ -10,4 +10,3 @@
 pub mod aws;
 pub mod kinesis;
 pub mod postgres;
-pub mod retry;

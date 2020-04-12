@@ -124,7 +124,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           config: test/metabase/mzcompose.yml
-          run: healthcheck
+          run: smoketest
 
   - id: lang-js
     label: ":javascript: tests"

@@ -7,15 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-version: '3.7'
-services:
-  materialized:
-    mzbuild: materialized
-    command: -w1 --logging-granularity=10ms
-  metabase:
-    image: materialize/metabase:v0.0.5
-    ports:
-    - 3000:3000
-  smoketest:
-    mzbuild: ci-metabase-smoketest
-    depends_on: [materialized, metabase]
+name: ci-metabase-smoketest
+pre-image:
+  type: cargo-build
+  bin: metabase-smoketest

@@ -14,10 +14,10 @@ use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::error::RDKafkaError;
 
 use ore::collections::CollectionExt;
+use ore::retry;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-use crate::util::retry;
 
 pub struct CreateTopicAction {
     topic_prefix: String,
