@@ -23,7 +23,6 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::Offset::Offset;
 use rdkafka::{ClientConfig, ClientContext};
 use rdkafka::{Message, Timestamp as KafkaTimestamp};
-use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
 
@@ -121,6 +120,9 @@ where
         let mut partitions: HashSet<i32> = HashSet::new();
         // The current number of partitions that we expect for this topic initially 1)
         let mut expected_partition_count = 1;
+        // Rows with keys cannot be emitted until the capacity is about to be downgraded.
+        let mut max_offset_row: HashMap<Timestamp, HashMap<Vec<u8>, (Vec<u8>, i64)>> =
+            HashMap::new();
 
         if let Some(consumer) = consumer.as_mut() {
             consumer.subscribe(&[&topic]).unwrap();
@@ -139,6 +141,7 @@ where
         move |cap, output| {
             // Accumulate updates to BYTES_READ_COUNTER;
             let mut bytes_read = 0;
+
             if advance_timestamp {
                 if let Some(consumer) = consumer.as_mut() {
                     // Repeatedly interrogate Kafka for messages. Cease when
@@ -148,9 +151,8 @@ where
                     // Check if the capability can be downgraded (this is independent of whether
                     // there are new messages that can be processed) as timestamps can become
                     // closed in the absence of messages
-                    downgrade_capability(
+                    let (downgrade, new_min) = check_downgrade_capability(
                         &id,
-                        cap,
                         &mut last_processed_offsets,
                         &mut next_partition_ts,
                         &timestamp_histories,
@@ -159,6 +161,10 @@ where
                         &topic,
                         &mut last_closed_ts,
                     );
+                    if downgrade && new_min > 0 {
+                        cap.downgrade(&(&new_min));
+                        last_closed_ts = new_min;
+                    }
 
                     // Check if there was a message buffered and if we can now process it
                     // If we can now process it, clear the buffer and proceed to poll from
@@ -209,7 +215,7 @@ where
                             };
 
                         if offset <= last_processed_offset {
-                            warn!("duplicate Kakfa message: souce {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
+                            warn!("duplicate Kakfa message: source {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
                             let res = consumer.seek(
                                 &topic,
                                 partition,
@@ -238,19 +244,29 @@ where
                                 activator.activate();
                                 return SourceStatus::Alive;
                             }
-                            Some(_) => {
+                            Some(time) => {
                                 last_processed_offsets
                                     .insert(PartitionId::Kafka(partition), offset);
                                 let out = payload.map(|p| p.to_vec()).unwrap_or_default();
                                 bytes_read += key.len() as i64;
                                 bytes_read += out.len() as i64;
-                                output
-                                    .session(&cap)
-                                    .give(((key, out), Some(message.offset())));
+                                if key.is_empty() {
+                                    output
+                                        .session(&cap)
+                                        .give(((key, out), Some(message.offset())));
+                                } else {
+                                    let max_offset_row_by_timestamp =
+                                        max_offset_row.entry(time).or_insert_with(HashMap::new);
+                                    if !max_offset_row_by_timestamp.contains_key(&key)
+                                        || max_offset_row_by_timestamp[&key].1 < message.offset()
+                                    {
+                                        max_offset_row_by_timestamp
+                                            .insert(key, (out, message.offset()));
+                                    }
+                                }
 
-                                downgrade_capability(
+                                let (downgrade, new_min) = check_downgrade_capability(
                                     &id,
-                                    cap,
                                     &mut last_processed_offsets,
                                     &mut next_partition_ts,
                                     &timestamp_histories,
@@ -259,6 +275,25 @@ where
                                     &topic,
                                     &mut last_closed_ts,
                                 );
+                                if downgrade && new_min > 0 {
+                                    let mut timestamps_to_output = Vec::new();
+                                    for time in max_offset_row.keys() {
+                                        if time < &new_min {
+                                            timestamps_to_output.push(time.clone());
+                                        }
+                                    }
+                                    for time in timestamps_to_output {
+                                        for (key, (out, offset)) in
+                                            max_offset_row.remove(&time).unwrap().iter()
+                                        {
+                                            output
+                                                .session(&cap)
+                                                .give(((key.clone(), out.clone()), Some(*offset)));
+                                        }
+                                    }
+                                    cap.downgrade(&(&new_min));
+                                    last_closed_ts = new_min;
+                                }
                             }
                         }
 
@@ -453,9 +488,8 @@ fn update_partition_list(
 /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
 /// partitions
 #[allow(clippy::too_many_arguments)]
-fn downgrade_capability(
+fn check_downgrade_capability(
     id: &SourceInstanceId,
-    cap: &mut Capability<Timestamp>,
     last_processed_offset: &mut HashMap<PartitionId, i64>,
     next_partition_ts: &mut HashMap<PartitionId, u64>,
     timestamp_histories: &TimestampHistories,
@@ -463,7 +497,7 @@ fn downgrade_capability(
     consumer: &BaseConsumer<GlueConsumerContext>,
     topic: &str,
     last_closed_ts: &mut u64,
-) {
+) -> (bool, u64) {
     let mut changed = false;
     let mut min = std::u64::MAX;
 
@@ -521,10 +555,7 @@ fn downgrade_capability(
         }
     }
     // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-    if changed && min > 0 {
-        cap.downgrade(&(&min + 1));
-        *last_closed_ts = min;
-    }
+    (changed, min + 1)
 }
 
 /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
