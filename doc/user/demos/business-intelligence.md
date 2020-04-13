@@ -302,30 +302,16 @@ Materialize to maintain for us.
     SELECT * FROM query01;
     ```
 
-    Materialize relies on you already having created a view with this name,
-    which you did the Materialize CLI [a few steps back](#define-query01).
+    Materialize relies on you already having created a materialized view with
+    this name, which you did the Materialize CLI [a few steps
+    back](#define-query01).
 
-    Metabase will store comments alongside queries, and it's a good practice
-    to keep a verbatim copy of the view's definition alongside places that
-    use it. However, this same information is also retrievable with `SHOW CREATE VIEW <name>`. If you follow that practice, the text entry box would
-    look like:
-
-    ```sql
-    -- CREATE MATERIALIZED VIEW query01 as SELECT
-    --     ol_number,
-    --     sum(ol_quantity) as sum_qty,
-    --     sum(ol_amount) as sum_amount,
-    --     avg(ol_quantity) as avg_qty,
-    --     avg(ol_amount) as avg_amount,
-    --     count(*) as count_order
-    -- FROM
-    --     mysql_tpcch_orderline
-    -- WHERE
-    --     ol_delivery_d > date '1998-12-01'
-    -- GROUP BY
-    --     ol_number;
-    SELECT * FROM query01;
-    ```
+    In a production setting, you might want to let users find views' underlying
+    queries. For example, you might store the underlying queries in a GitHub
+    repository, and provide a link to the repository as a comment. Those with
+    direct access to the `materialized` process through a SQL client can find
+    the underlying queries using [`SHOW CREATE
+    VIEW`](../../sql/show-create-view).
 
 1. Click the large **>** button.
 
