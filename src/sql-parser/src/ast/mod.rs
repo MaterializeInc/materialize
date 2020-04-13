@@ -219,7 +219,10 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// Unary operation e.g. `NOT foo`
-    UnaryOp { op: UnaryOperator, expr: Box<Expr> },
+    UnaryOp {
+        op: UnaryOperator,
+        expr: Box<Expr>,
+    },
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr>,
@@ -270,6 +273,7 @@ pub enum Expr {
         op: BinaryOperator,
         right: Box<Query>,
     },
+    Array(Vec<Expr>),
 }
 
 impl fmt::Display for Expr {
@@ -360,6 +364,18 @@ impl fmt::Display for Expr {
                 right
             ),
             Expr::All { left, op, right } => write!(f, "{} {} ALL ({})", left, op, right),
+            Expr::Array(exprs) => {
+                let mut exprs = exprs.iter().peekable();
+                write!(f, "ARRAY[")?;
+                while let Some(expr) = exprs.next() {
+                    write!(f, "{}", expr)?;
+                    if exprs.peek().is_some() {
+                        write!(f, ", ")?;
+                    }
+                }
+                write!(f, "]")?;
+                Ok(())
+            }
         }
     }
 }
