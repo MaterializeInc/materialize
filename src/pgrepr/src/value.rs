@@ -54,6 +54,8 @@ pub enum Value {
     Numeric(Numeric),
     /// A binary JSON blob.
     Jsonb(Jsonb),
+    /// An array of values
+    Array(Vec<Option<Value>>),
 }
 
 impl Value {
@@ -81,6 +83,11 @@ impl Value {
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
+            (Datum::List(list), ScalarType::Array(elem_type)) => Some(Value::Array(
+                list.iter()
+                    .map(|elem| Value::from_datum(elem, elem_type))
+                    .collect(),
+            )),
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -115,6 +122,15 @@ impl Value {
                 buf.push_row(jsonb.into_row()).unpack_first(),
                 ScalarType::Jsonb,
             ),
+            Value::Array(elems) => (
+                buf.push_row(Row::pack(
+                    elems
+                        .into_iter()
+                        .map(|elem| elem.map_or(Datum::Null, |elem| elem.into_datum(buf).0)),
+                ))
+                .unpack_first(),
+                ScalarType::Array(panic!("TODO(jamii/array)")),
+            ),
         }
     }
 
@@ -144,6 +160,20 @@ impl Value {
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Text(s) => buf.put(s.as_bytes()),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js),
+            Value::Array(elems) => {
+                buf.put("{".as_bytes());
+                let mut elems = elems.iter().peekable();
+                while let Some(elem) = elems.next() {
+                    match elem {
+                        Some(elem) => elem.encode_text(buf),
+                        None => buf.put("NULL".as_bytes()),
+                    }
+                    if elems.peek().is_some() {
+                        buf.put(",".as_bytes())
+                    }
+                }
+                buf.put("}".as_bytes());
+            }
         }
     }
 
@@ -165,6 +195,7 @@ impl Value {
             Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Jsonb(jsonb) => jsonb.as_serde_json().to_sql(&PgType::JSONB, buf),
+            Value::Array(array) => panic!("TODO(jamii/array)"),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         match is_null {

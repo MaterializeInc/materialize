@@ -340,7 +340,7 @@ impl<'a> Datum<'a> {
                     (Datum::String(_), ScalarType::String) => true,
                     (Datum::String(_), _) => false,
                     (Datum::List(list), ScalarType::Array(t)) => {
-                        list.iter().all(|e| is_instance_of_scalar(e, t))
+                        list.iter().all(|e| e.is_instance_of(t))
                     }
                     (Datum::List(_), _) => false,
                     (Datum::Dict(_), _) => false,
@@ -589,7 +589,7 @@ pub enum ScalarType {
     Jsonb,
     /// Postgres-style arrays (but we only support 1d arrays)
     /// Backed by a DatumList
-    Array(Box<ScalarType>),
+    Array(Box<ColumnType>),
 }
 
 impl<'a> ScalarType {

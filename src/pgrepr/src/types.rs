@@ -118,7 +118,8 @@ impl From<&ScalarType> for Type {
             ScalarType::Bytes => Type::Bytea,
             ScalarType::String => Type::Text,
             ScalarType::Jsonb => Type::Jsonb,
-            ScalarType::Array(_t) => unimplemented!("jamii/array"),
+            // there isn't an obvious way to assign an oid to a parametric type
+            ScalarType::Array(_t) => Type::Unknown,
         }
     }
 }
