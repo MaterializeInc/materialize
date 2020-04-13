@@ -4731,33 +4731,54 @@ fn parse_show() {
 fn parse_array() {
     let expr = verified_expr("ARRAY[]");
 
-    assert_eq!(expr, Expr::Value(Value::Array(vec![])));
+    assert_eq!(expr, Expr::Array(vec![]));
 
     let expr = verified_expr("ARRAY[1, 'foo']");
 
     assert_eq!(
         expr,
-        Expr::Value(Value::Array(vec![
-            Value::Number("1".into()),
-            Value::SingleQuotedString("foo".to_owned())
-        ]))
+        Expr::Array(vec![
+            Expr::Value(Value::Number("1".into())),
+            Expr::Value(Value::SingleQuotedString("foo".to_owned())),
+        ])
     );
 
     let select = verified_only_select("SELECT ARRAY[]");
 
     assert_eq!(
         expr_from_projection(only(&select.projection)),
-        &Expr::Value(Value::Array(vec![]))
+        &Expr::Array(vec![])
     );
 
     let select = verified_only_select("SELECT ARRAY[1, 'foo']");
 
     assert_eq!(
         expr_from_projection(only(&select.projection)),
-        &Expr::Value(Value::Array(vec![
-            Value::Number("1".into()),
-            Value::SingleQuotedString("foo".to_owned())
-        ]))
+        &Expr::Array(vec![
+            Expr::Value(Value::Number("1".into())),
+            Expr::Value(Value::SingleQuotedString("foo".to_owned())),
+        ])
+    );
+
+    let expr = verified_expr("ARRAY[ARRAY[1 + 1, 2], a || b]");
+
+    assert_eq!(
+        expr,
+        Expr::Array(vec![
+            Expr::Array(vec![
+                Expr::BinaryOp {
+                    left: Box::new(Expr::Value(Value::Number("1".to_string()))),
+                    op: BinaryOperator::Plus,
+                    right: Box::new(Expr::Value(Value::Number("1".to_string()))),
+                },
+                Expr::Value(Value::Number("2".to_string())),
+            ]),
+            Expr::BinaryOp {
+                left: Box::new(Expr::Identifier(Ident::new("a"))),
+                op: BinaryOperator::JsonConcat,
+                right: Box::new(Expr::Identifier(Ident::new("b")))
+            }
+        ])
     );
 }
 
