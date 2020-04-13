@@ -37,11 +37,9 @@ fn main() {
         }
     }
 
-    protoc_rust::run(protoc_rust::Args {
-        out_dir,
-        input,
-        includes: &[],
-        customize: Default::default(),
-    })
-    .expect("protoc");
+    protoc_rust::Codegen::new()
+        .out_dir(out_dir)
+        .inputs(input)
+        .run()
+        .expect("protoc");
 }

@@ -40,4 +40,4 @@ base64 = "0.12.0"
 criterion = "0.3"
 
 [build-dependencies]
-protoc-rust = "2.12.0"
+protoc-rust = "2.14.0"
