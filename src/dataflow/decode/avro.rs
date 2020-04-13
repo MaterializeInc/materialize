@@ -93,6 +93,11 @@ impl DecoderState for AvroDecoderState {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 if let Some(before) = diff_pair.before {
+                    // Note - this is indeed supposed to be an insert,
+                    // not a retraction! `before` already contains a `-1` value as the last
+                    // element of the data, which will cause it to turn into a retraction
+                    // in a future call to `explode`
+                    // (currently in dataflow/render/mod.rs:299)
                     session.give((before, time, 1));
                 }
                 if let Some(after) = diff_pair.after {
