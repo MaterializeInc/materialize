@@ -1474,6 +1474,48 @@ fn plan_expr_returning_name<'a>(
                 (expr.call_unary(func), None)
             }
             Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
+            Expr::Array(exprs) => {
+                let elem_type_hint = if let Some(ScalarType::Array(elem_type_hint)) = type_hint {
+                    Some(elem_type_hint.scalar_type)
+                } else {
+                    None
+                };
+                let exprs = exprs
+                    .iter()
+                    .map(|expr| plan_expr(ecx, expr, elem_type_hint.clone()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let elem_scalar_types = exprs
+                    .iter()
+                    .map(|expr| ecx.scalar_type(expr))
+                    .collect::<Vec<_>>();
+                let elem_scalar_type =
+                    if let Some(elem_scalar_type) = elem_scalar_types.iter().next() {
+                        &elem_scalar_type
+                    } else if let Some(elem_type_hint) = &elem_type_hint {
+                        elem_type_hint
+                    } else {
+                        bail!("Cannot assign type to this empty array")
+                    };
+                if let Some(pos) = elem_scalar_types
+                    .iter()
+                    .position(|est| est != elem_scalar_type)
+                {
+                    bail!("Cannot create array with mixed types. Element 1 has type {} but element {} has type {}", elem_scalar_type, pos+1, &elem_scalar_types[pos])
+                }
+                (
+                    ScalarExpr::CallVariadic {
+                        func: VariadicFunc::ArrayCreate {
+                            // surprise! array elements are always nullable
+                            elem_type: ColumnType::new(elem_scalar_type.clone()).nullable(true),
+                        },
+                        exprs,
+                    },
+                    Some(ScopeItemName {
+                        table_name: None,
+                        column_name: Some(ColumnName::from("array")),
+                    }),
+                )
+            }
         })
     }
 }
@@ -3126,7 +3168,6 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             (Datum::Interval(i), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Unknown),
-        Value::Array(_) => bail!("ARRAY literals are not supported: {}", l.to_string()),
     })
 }
 

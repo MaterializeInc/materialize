@@ -3004,6 +3004,10 @@ fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> D
     }
 }
 
+fn array_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    temp_storage.make_datum(|packer| packer.push_list(datums))
+}
+
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
@@ -3049,6 +3053,10 @@ pub enum VariadicFunc {
     Replace,
     JsonbBuildArray,
     JsonbBuildObject,
+    ArrayCreate {
+        // we need to know this to type exprs with empty arrays
+        elem_type: ColumnType,
+    },
 }
 
 impl VariadicFunc {
@@ -3079,6 +3087,7 @@ impl VariadicFunc {
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
             VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
+            VariadicFunc::ArrayCreate { .. } => Ok(eager!(array_create, temp_storage)),
         }
     }
 
@@ -3111,14 +3120,27 @@ impl VariadicFunc {
             LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
             JsonbBuildArray | JsonbBuildObject => ColumnType::new(ScalarType::Jsonb).nullable(true),
+            ArrayCreate { elem_type } => {
+                debug_assert!(
+                    input_types
+                        .iter()
+                        .all(|t| t.scalar_type == elem_type.scalar_type
+                            || (t.scalar_type == ScalarType::Unknown && elem_type.nullable)),
+                    "Args to ArrayCreate should have types that are compatible with the elem_type"
+                );
+                ColumnType::new(ScalarType::Array(Box::new(elem_type.clone())))
+            }
         }
     }
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
         match self {
-            VariadicFunc::Coalesce | VariadicFunc::Concat => false,
-            VariadicFunc::JsonbBuildArray | VariadicFunc::JsonbBuildObject => false,
+            VariadicFunc::Coalesce
+            | VariadicFunc::Concat
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::ArrayCreate { .. } => false,
             _ => true,
         }
     }
@@ -3135,6 +3157,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Replace => f.write_str("replace"),
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
+            VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
         }
     }
 }
