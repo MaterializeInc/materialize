@@ -9,17 +9,16 @@
 
 #![allow(clippy::op_ref)]
 
+use differential_dataflow::lattice::Lattice;
+use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
 
-use differential_dataflow::lattice::Lattice;
-
-use dogsdogsdogs::altneu::AltNeu;
-
 use dataflow_types::Timestamp;
-use expr::{RelationExpr, ScalarExpr};
+use expr::{EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena};
 
 use super::context::{ArrangementFlavor, Context};
+use crate::operator::CollectionExt;
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
@@ -33,7 +32,7 @@ where
         scope: &mut G,
         worker_index: usize,
         subtract: F,
-    ) -> Collection<G, Row>
+    ) -> (Collection<G, Row>, Collection<G, EvalError>)
     where
         F: Fn(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
@@ -74,6 +73,7 @@ where
                             offset += arities[input];
                         }
 
+                        let mut err_streams = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
 
                             // We maintain a private copy of `equivalences`, which we will digest
@@ -89,23 +89,26 @@ where
                             // concurrent updates from relations prior to `relation`.
                             let delta_query = inner.clone().region(|region| {
                                 // Ensure this input is rendered, and extract its update stream.
-                                let mut update_stream = self
+                                let (update_stream, errs) = self
                                     .collection(&inputs[relation])
-                                    .expect("Failed to render update stream")
-                                    .enter(inner)
-                                    .enter(region);
+                                    .expect("Failed to render update stream");
+                                let update_stream = update_stream.enter(inner).enter(region);
+                                err_streams.push(errs);
 
                                 // We track the sources of each column in our update stream.
                                 let mut source_columns = (prior_arities[relation]..prior_arities[relation]+arities[relation])
                                     .collect::<Vec<_>>();
 
                                 let mut predicates = predicates.to_vec();
-                                update_stream = build_filter(
+                                let (mut update_stream, errs) = build_filter(
                                     update_stream,
                                     &source_columns,
                                     &mut predicates,
                                     &mut equivalences,
                                 );
+                                if let Some(errs) = errs {
+                                    err_streams.push(errs.leave().leave());
+                                }
 
                                 // We use the order specified by the implementation.
                                 let order = &orders[relation];
@@ -166,7 +169,7 @@ where
                                     // We may need to cache each of these if we want to re-use the same wrapped
                                     // arrangement, rather than re-wrap each time we use a thing.
                                     let subtract = subtract.clone();
-                                    update_stream = match self
+                                    let (oks, errs) = match self
                                         .arrangement(&inputs[*other], &next_key[..])
                                         .unwrap_or_else(|| {
                                             panic!(
@@ -175,60 +178,68 @@ where
                                                 &next_key[..]
                                             )
                                         }) {
-                                        ArrangementFlavor::Local(local) => {
+                                        ArrangementFlavor::Local(oks, errs) => {
+                                            err_streams.push(errs.as_collection(|k, _v| k.clone()));
                                             if other > &relation {
-                                                let local = local
+                                                let oks = oks
                                                     .enter_at(
                                                         inner,
                                                         |_, _, t| AltNeu::alt(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, local, prev_key)
+                                                build_lookup(update_stream, oks, prev_key)
                                             } else {
-                                                let local = local
+                                                let oks = oks
                                                     .enter_at(
                                                         inner,
                                                         |_, _, t| AltNeu::neu(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, local, prev_key)
+                                                build_lookup(update_stream, oks, prev_key)
                                             }
                                         }
-                                        ArrangementFlavor::Trace(_gid, trace) => {
+                                        ArrangementFlavor::Trace(_gid, oks, errs) => {
+                                            err_streams.push(errs.as_collection(|k, _v| k.clone()));
                                             if other > &relation {
-                                                let trace = trace
+                                                let oks = oks
                                                     .enter_at(
                                                         inner,
                                                         |_, _, t| AltNeu::alt(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, trace, prev_key)
+                                                build_lookup(update_stream, oks, prev_key)
                                             } else {
-                                                let trace = trace
+                                                let oks = oks
                                                     .enter_at(
                                                         inner,
                                                         |_, _, t| AltNeu::neu(t.clone()),
                                                         move |t| subtract(&t.time),
                                                     )
                                                     .enter(region);
-                                                build_lookup(update_stream, trace, prev_key)
+                                                build_lookup(update_stream, oks, prev_key)
                                             }
                                         }
                                     };
+                                    update_stream = oks;
+                                    err_streams.push(errs.leave().leave());
 
                                     // Update our map of the sources of each column in the update stream.
                                     source_columns
                                         .extend((0..arities[*other]).map(|c| prior_arities[*other] + c));
 
-                                    update_stream = build_filter(
+                                    let (oks, errs) = build_filter(
                                         update_stream,
                                         &source_columns,
                                         &mut predicates,
                                         &mut equivalences,
                                     );
+                                    update_stream = oks;
+                                    if let Some(errs) = errs {
+                                        err_streams.push(errs.leave().leave());
+                                    }
                                 }
 
                                 // We must now de-permute the results to return to the common order.
@@ -248,7 +259,11 @@ where
                         }
 
                         // Concatenate the results of each delta query as the accumulated results.
-                        differential_dataflow::collection::concatenate(inner, delta_queries).leave()
+                        (
+                            differential_dataflow::collection::concatenate(inner, delta_queries)
+                                .leave(),
+                            differential_dataflow::collection::concatenate(scope, err_streams),
+                        )
                     });
             results
         } else {
@@ -270,7 +285,7 @@ fn build_lookup<G, Tr>(
     updates: Collection<G, Row>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<ScalarExpr>,
-) -> Collection<G, Row>
+) -> (Collection<G, Row>, Collection<G, EvalError>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -278,21 +293,21 @@ where
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
-    dogsdogsdogs::operators::lookup_map(
+    let (updates, errs) = updates.map_fallible(move |row| {
+        let datums = row.unpack();
+        let temp_storage = RowArena::new();
+        let row_key = Row::try_pack(prev_key.iter().map(|e| e.eval(&datums, &temp_storage)))?;
+        Ok((row, row_key))
+    });
+
+    let oks = dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
-        move |row, key| {
+        move |(_row, row_key), key| {
             // Prefix key selector must populate `key` with key from prefix `row`.
-            // TODO: This could re-use the allocation behind `key`.
-            let datums = row.unpack();
-            let temp_storage = RowArena::new();
-            *key = Row::pack(
-                prev_key
-                    .iter()
-                    .map(|e| e.eval(&datums, &temp_storage).unwrap_or(Datum::Null)),
-            );
+            *key = row_key.clone();
         },
-        |prev_row, diff1, next_row, diff2| {
+        |(prev_row, _prev_row_key), diff1, next_row, diff2| {
             // Output selector must produce (d_out, r_out) for each match.
             // TODO: We can improve this.
             let prev_datums = prev_row.unpack();
@@ -307,7 +322,9 @@ where
         Row::pack::<_, Datum>(None),
         Row::pack::<_, Datum>(None),
         Row::pack::<_, Datum>(None),
-    )
+    );
+
+    (oks, errs)
 }
 
 /// Filters updates on some columns by predicates that are ready to go.
@@ -318,7 +335,7 @@ pub fn build_filter<G>(
     source_columns: &[usize],
     predicates: &mut Vec<ScalarExpr>,
     equivalences: &mut Vec<Vec<ScalarExpr>>,
-) -> Collection<G, Row>
+) -> (Collection<G, Row>, Option<Collection<G, EvalError>>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -374,21 +391,18 @@ where
     }
 
     if ready_to_go.is_empty() {
-        updates
+        (updates, None)
     } else {
         let temp_storage = repr::RowArena::new();
-        updates.filter(move |input_row| {
+        let (ok_collection, err_collection) = updates.filter_fallible(move |input_row| {
             let datums = input_row.unpack();
-            ready_to_go.iter().all(|predicate| {
-                match predicate
-                    .eval(&datums, &temp_storage)
-                    .unwrap_or(Datum::Null)
-                {
-                    Datum::True => true,
-                    Datum::False | Datum::Null => false,
-                    _ => unreachable!(),
+            for p in &ready_to_go {
+                if p.eval(&datums, &temp_storage)? != Datum::True {
+                    return Ok(false);
                 }
-            })
-        })
+            }
+            Ok::<_, EvalError>(true)
+        });
+        (ok_collection, Some(err_collection))
     }
 }

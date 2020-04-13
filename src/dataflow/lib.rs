@@ -11,6 +11,7 @@
 
 mod arrangement;
 mod decode;
+mod operator;
 mod render;
 mod sink;
 mod source;
