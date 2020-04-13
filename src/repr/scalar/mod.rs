@@ -339,6 +339,9 @@ impl<'a> Datum<'a> {
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ScalarType::String) => true,
                     (Datum::String(_), _) => false,
+                    (Datum::List(list), ScalarType::Array(t)) => {
+                        list.iter().all(|e| is_instance_of_scalar(e, t))
+                    }
                     (Datum::List(_), _) => false,
                     (Datum::Dict(_), _) => false,
                     (Datum::JsonNull, _) => false,
