@@ -18,3 +18,4 @@ miri-target
 mzdata
 __pycache__
 venv
+node_modules

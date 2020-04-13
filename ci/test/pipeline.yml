@@ -155,6 +155,17 @@ steps:
       env:
         SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
 
+  - id: lang-js
+    label: ":javascript: tests"
+    depends_on: build
+    timeout_in_minutes: 10
+    plugins:
+      - MaterializeInc/uid#master: ~
+      - docker-compose#v3.3.0:
+          config: ci/test/lang.js.compose.yml
+          run: js
+    if: $CHANGED_RUST || $CHANGED_JS
+
   - id: deploy
     label: ":rocket: Deploy"
     depends_on: [lint-fast, lint-slow, cargo-test, testdrive, streaming-demo, metabase-demo, short-sqllogictest]
