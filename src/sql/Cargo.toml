@@ -21,6 +21,7 @@ failure = "0.1.7"
 futures = "0.3"
 interchange = { path = "../interchange" }
 itertools = "0.9"
+lazy_static = "1.4.0"
 log = "0.4.8"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
