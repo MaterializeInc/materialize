@@ -1124,7 +1124,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     let verbose_stats_ms = match with_options.remove("verbose_stats_ms") {
                         None => 0,
                         Some(Value::Number(n)) => match n.parse::<i32>() {
-                            Ok(n @ 0..=86400000) => n,
+                            Ok(n @ 0..=86_400_000) => n,
                             _ => bail!(verbose_stats_err),
                         },
                         Some(_) => bail!(verbose_stats_err),
