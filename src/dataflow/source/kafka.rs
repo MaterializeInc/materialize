@@ -17,11 +17,11 @@ use std::time::Duration;
 use crate::server::{TimestampChanges, TimestampHistories};
 use dataflow_types::{Consistency, ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
-use log::{error, warn};
+use log::{error, info, warn};
 use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::Offset::Offset;
-use rdkafka::{ClientConfig, ClientContext};
+use rdkafka::{ClientConfig, ClientContext, Statistics};
 use rdkafka::{Message, Timestamp as KafkaTimestamp};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
@@ -531,7 +531,11 @@ fn downgrade_capability(
 /// when the message queue switches from nonempty to empty.
 struct GlueConsumerContext(Mutex<SyncActivator>);
 
-impl ClientContext for GlueConsumerContext {}
+impl ClientContext for GlueConsumerContext {
+    fn stats(&self, statistics: Statistics) {
+        info!("Client stats: {:#?}", statistics);
+    }
+}
 
 impl ConsumerContext for GlueConsumerContext {
     fn message_queue_nonempty_callback(&self) {
