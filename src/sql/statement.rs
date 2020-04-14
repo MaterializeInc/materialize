@@ -1123,14 +1123,17 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         "verbose_stats_ms must be a number between 0 and 86400000";
                     let verbose_stats_ms = match with_options.remove("verbose_stats_ms") {
                         None => 0,
-                        Some(Value::Number(n)) => match n.try_into::<i32>() {
-                            Ok(n @ 0...86400000) => n,
+                        Some(Value::Number(n)) => match n.parse::<i32>() {
+                            Ok(n @ 0..=86400000) => n,
                             _ => bail!(verbose_stats_err),
                         },
                         Some(_) => bail!(verbose_stats_err),
                     };
 
-                    config_options.push(("statistics.interval.ms".into(), verbose_stats_ms.into()));
+                    config_options.push((
+                        "statistics.interval.ms".to_string(),
+                        verbose_stats_ms.to_string(),
+                    ));
 
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,

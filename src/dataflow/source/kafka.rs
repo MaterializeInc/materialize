@@ -182,7 +182,6 @@ where
                         let partition = message.partition();
                         let offset = message.offset() + 1;
                         let key = message.key().map(|k| k.to_vec()).unwrap_or_default();
-
                         if !partitions.contains(&partition) {
                             // We have received a message for a partition for which we do not yet
                             // have any metadata. Buffer the message and wait until we get the
