@@ -1,0 +1,24 @@
+{
+  "name": "materialized-test",
+  "private": true,
+  "scripts": {
+    "test": "jest",
+    "fmt": "prettier --write .",
+    "fmt-check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@babel/core": "^7.9.0",
+    "@babel/preset-env": "^7.9.5",
+    "@babel/preset-typescript": "^7.9.0",
+    "@types/jest": "^25.2.1",
+    "@types/pg": "^7.14.3",
+    "babel-jest": "^25.3.0",
+    "jest": "^25.3.0",
+    "pg": "^8.0.2",
+    "prettier": "^2.0.4"
+  },
+  "prettier": {
+    "tabWidth": 2,
+    "trailingComma": "all"
+  }
+}

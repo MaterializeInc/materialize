@@ -32,6 +32,21 @@ pub fn transform(query: &mut Query) {
 struct AggFuncRewriter;
 
 impl AggFuncRewriter {
+    // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL.
+    fn plan_divide(lhs: Expr, rhs: Expr) -> Expr {
+        Expr::BinaryOp {
+            left: Box::new(lhs),
+            op: BinaryOperator::Divide,
+            right: Box::new(Expr::Function(Function {
+                name: ObjectName(vec!["nullif".into()]),
+                args: vec![rhs, Expr::Value(Value::Number("0".into()))],
+                filter: None,
+                over: None,
+                distinct: false,
+            })),
+        }
+    }
+
     fn plan_avg(expr: Expr, filter: Option<&Expr>, distinct: bool) -> Expr {
         let sum = Expr::Function(Function {
             name: ObjectName(vec!["sum".into()]),
@@ -54,11 +69,7 @@ impl AggFuncRewriter {
             over: None,
             distinct,
         });
-        Expr::BinaryOp {
-            left: Box::new(sum),
-            op: BinaryOperator::Divide,
-            right: Box::new(count),
-        }
+        Self::plan_divide(sum, count)
     }
 
     fn plan_variance(expr: Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {
@@ -113,18 +124,13 @@ impl AggFuncRewriter {
             over: None,
             distinct,
         });
-        Expr::BinaryOp {
-            left: Box::new(Expr::BinaryOp {
+        Self::plan_divide(
+            Expr::BinaryOp {
                 left: Box::new(sum_squares),
                 op: BinaryOperator::Minus,
-                right: Box::new(Expr::BinaryOp {
-                    left: Box::new(sum_squared),
-                    op: BinaryOperator::Divide,
-                    right: Box::new(count.clone()),
-                }),
-            }),
-            op: BinaryOperator::Divide,
-            right: Box::new(if sample {
+                right: Box::new(Self::plan_divide(sum_squared, count.clone())),
+            },
+            if sample {
                 Expr::BinaryOp {
                     left: Box::new(count),
                     op: BinaryOperator::Minus,
@@ -132,8 +138,8 @@ impl AggFuncRewriter {
                 }
             } else {
                 count
-            }),
-        }
+            },
+        )
     }
 
     fn plan_stddev(expr: Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {

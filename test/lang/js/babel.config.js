@@ -7,16 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Driver for timely/differential dataflow.
-
-mod arrangement;
-mod decode;
-mod operator;
-mod render;
-mod sink;
-mod source;
-
-pub mod logging;
-pub mod server;
-
-pub use server::{serve, BroadcastToken, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+module.exports = {
+  presets: [
+    ["@babel/preset-env", { targets: { node: "current" } }],
+    "@babel/preset-typescript",
+  ],
+};

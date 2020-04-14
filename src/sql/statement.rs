@@ -18,6 +18,7 @@ use std::time::UNIX_EPOCH;
 use aws_arn::{Resource, ARN};
 use failure::{bail, format_err, ResultExt};
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use rusoto_core::Region;
 use url::Url;
 
@@ -45,6 +46,11 @@ use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, Vi
 use regex::Regex;
 
 use tokio::io::AsyncBufReadExt;
+
+lazy_static! {
+    static ref SHOW_DATABASES_DESC: RelationDesc =
+        { RelationDesc::empty().add_column("Database", ScalarType::String) };
+}
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -153,10 +159,7 @@ pub fn describe_statement(
             vec![],
         ),
 
-        Statement::ShowDatabases { .. } => (
-            Some(RelationDesc::empty().add_column("Database", ScalarType::String)),
-            vec![],
-        ),
+        Statement::ShowDatabases { .. } => (Some(SHOW_DATABASES_DESC.clone()), vec![]),
 
         Statement::ShowObjects {
             object_type,
@@ -347,15 +350,20 @@ fn handle_show_databases(
     scx: &StatementContext,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
-    if filter.is_some() {
-        bail!("SHOW DATABASES {LIKE | WHERE} is not yet supported");
-    }
-    Ok(Plan::SendRows(
-        scx.catalog
-            .databases()
-            .map(|database| Row::pack(&[Datum::from(database)]))
-            .collect(),
-    ))
+    let rows = scx
+        .catalog
+        .databases()
+        .map(|database| vec![Datum::from(database)])
+        .collect();
+
+    let (r, finishing) = query::plan_show_where(scx, filter, rows, &SHOW_DATABASES_DESC)?;
+
+    Ok(Plan::Peek {
+        source: r.decorrelate()?,
+        when: PeekWhen::Immediately,
+        finishing,
+        materialize: true,
+    })
 }
 
 fn handle_show_objects(
@@ -1108,13 +1116,32 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut consistency = Consistency::RealTime;
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
-                    let config_options = kafka_util::extract_security_options(&mut with_options)?;
+                    let mut config_options =
+                        kafka_util::extract_security_options(&mut with_options)?;
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
                         Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
+
+                    // The range of values comes from `statistics.interval.ms` in
+                    // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+                    let verbose_stats_err =
+                        "verbose_stats_ms must be a number between 0 and 86400000";
+                    let verbose_stats_ms = match with_options.remove("verbose_stats_ms") {
+                        None => 0,
+                        Some(Value::Number(n)) => match n.parse::<i32>() {
+                            Ok(n @ 0..=86_400_000) => n,
+                            _ => bail!(verbose_stats_err),
+                        },
+                        Some(_) => bail!(verbose_stats_err),
+                    };
+
+                    config_options.push((
+                        "statistics.interval.ms".to_string(),
+                        verbose_stats_ms.to_string(),
+                    ));
 
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,

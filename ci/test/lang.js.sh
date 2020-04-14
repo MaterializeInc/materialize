@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -6,24 +8,22 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+#
+# lang.js.sh — run JavaScript language tests.
 
-[*]
-end_of_line = lf
-insert_final_newline = true
-indent_style = space
-indent_size = 4
+set -euo pipefail
 
-[*.js]
-indent_size = 2
+cd "$(dirname "$0")/../.."
 
-[*.json]
-indent_size = 2
+. misc/shlib/shlib.bash
 
-[*.yml]
-indent_size = 2
+cd test/lang/js
 
-[*.html]
-indent_size = 2
+yarn install
 
-[Makefile]
-indent_style = tab
+ci_init
+
+ci_try yarn run fmt-check
+ci_try yarn test
+
+ci_status_report

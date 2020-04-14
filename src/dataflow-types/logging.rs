@@ -525,7 +525,7 @@ const VIEW_PERF_ARRANGEMENT_RECORDS: LogView = LogView {
     name: "mz_perf_arrangement_records",
     sql: "CREATE MATERIALIZED VIEW mz_perf_arrangement_records AS SELECT mas.worker, name, records, operator
 FROM mz_catalog.mz_arrangement_sizes mas
-JOIN mz_catalog.mz_dataflow_operators mdo ON mdo.id = mas.operator",
+LEFT JOIN mz_catalog.mz_dataflow_operators mdo ON mdo.id = mas.operator AND mdo.worker = mas.worker",
     id: GlobalId::System(47),
     index_id: GlobalId::System(48),
 };

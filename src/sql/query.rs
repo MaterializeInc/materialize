@@ -32,8 +32,8 @@ use failure::{bail, ensure, format_err, ResultExt};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, ExtractField, Function, Ident, JoinConstraint, JoinOperator,
-    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, TableAlias, TableFactor,
-    TableWithJoins, UnaryOperator, Value, Values,
+    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableAlias,
+    TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -84,6 +84,70 @@ pub fn plan_root_query(
         param_types.push(typ);
     }
     Ok((expr, desc, finishing, param_types))
+}
+
+/// Plans a SHOW statement that might have a WHERE or LIKE clause attached to it. A LIKE clause is
+/// treated as a WHERE applied to the first column in the result set.
+pub fn plan_show_where(
+    scx: &StatementContext,
+    filter: Option<&ShowStatementFilter>,
+    rows: Vec<Vec<Datum>>,
+    desc: &RelationDesc,
+) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
+    let names: Vec<Option<String>> = desc
+        .iter_names()
+        .map(|name| name.map(|x| x.as_str().into()))
+        .collect();
+
+    let num_cols = names.len();
+    let mut row_expr = RelationExpr::constant(rows, desc.typ().clone());
+
+    if let Some(f) = filter {
+        let owned;
+        let predicate = match &f {
+            ShowStatementFilter::Like(s) => {
+                owned = Expr::BinaryOp {
+                    left: Box::new(Expr::Identifier(Ident::with_quote(
+                        '"',
+                        names[0].clone().unwrap(),
+                    ))),
+                    op: BinaryOperator::Like,
+                    right: Box::new(Expr::Value(Value::SingleQuotedString(s.into()))),
+                };
+                &owned
+            }
+            ShowStatementFilter::Where(selection) => selection,
+        };
+        let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+        let scope = Scope::from_source(None, names, None);
+        let ecx = ExprContext {
+            qcx: &qcx,
+            name: "SHOW WHERE clause",
+            scope: &scope,
+            relation_type: &qcx.relation_type(&row_expr),
+            allow_aggregates: false,
+            allow_subqueries: true,
+        };
+        let expr = plan_expr(&ecx, &predicate, Some(ScalarType::Bool))?;
+        let typ = ecx.column_type(&expr);
+        if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Unknown {
+            bail!(
+                "WHERE clause must have boolean type, not {:?}",
+                typ.scalar_type
+            );
+        }
+        row_expr = row_expr.filter(vec![expr]);
+    }
+
+    Ok((
+        row_expr,
+        RowSetFinishing {
+            order_by: vec![],
+            limit: None,
+            offset: 0,
+            project: (0..num_cols).collect(),
+        },
+    ))
 }
 
 pub fn plan_index_exprs<'a>(
