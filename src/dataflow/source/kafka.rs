@@ -50,17 +50,13 @@ struct MessageParts {
     key: Option<Vec<u8>>,
 }
 
-trait BorrowedMessageExt {
-    fn detach_parts(&self) -> MessageParts;
-}
-
-impl<'a> BorrowedMessageExt for BorrowedMessage<'a> {
-    fn detach_parts(&self) -> MessageParts {
-        MessageParts {
-            payload: self.payload().map(|p| p.to_vec()),
-            partition: self.partition(),
-            offset: self.offset(),
-            key: self.key().map(|k| k.to_vec()),
+impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
+    fn from(msg: &BorrowedMessage<'a>) -> Self {
+        Self {
+            payload: msg.payload().map(|p| p.to_vec()),
+            partition: msg.partition(),
+            offset: msg.offset(),
+            key: msg.key().map(|k| k.to_vec()),
         }
     }
 }
@@ -192,7 +188,7 @@ where
                     } else {
                         // No currently buffered message, poll from stream
                         match consumer.poll(Duration::from_millis(0)) {
-                            Some(Ok(msg)) => Some(msg.detach_parts()),
+                            Some(Ok(msg)) => Some(MessageParts::from(&msg)),
                             Some(Err(err)) => {
                                 error!("kafka error: {}: {}", name, err);
                                 None
@@ -296,7 +292,7 @@ where
 
                         // Try and poll for next message
                         next_message = match consumer.poll(Duration::from_millis(0)) {
-                            Some(Ok(msg)) => Some(msg.detach_parts()),
+                            Some(Ok(msg)) => Some(MessageParts::from(&msg)),
                             Some(Err(err)) => {
                                 error!("kafka error: {}: {}", name, err);
                                 None
