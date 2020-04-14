@@ -1321,16 +1321,12 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             };
 
             if let dataflow_types::Envelope::Upsert(_) = envelope {
-                if let Consistency::BringYourOwn(_) = consistency {
-                    match &mut encoding {
-                        DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
-                            *key_schema = None;
-                        }
-                        DataEncoding::Bytes | DataEncoding::Text => {}
-                        _ => bail!("Upsert envelope is not yet supported for this format."),
+                match &mut encoding {
+                    DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
+                        *key_schema = None;
                     }
-                } else {
-                    bail!("Upsert envelope is only supported for BYO consistency.")
+                    DataEncoding::Bytes | DataEncoding::Text => {}
+                    _ => bail!("Upsert envelope is not yet supported for this format."),
                 }
             }
 
