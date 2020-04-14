@@ -31,7 +31,7 @@ use super::util::source;
 use super::{SourceStatus, SourceToken};
 use expr::{PartitionId, SourceInstanceId};
 use itertools::Itertools;
-use rdkafka::message::OwnedMessage;
+use rdkafka::message::BorrowedMessage;
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
@@ -39,6 +39,30 @@ lazy_static! {
         "Count of kafka bytes we have read from the wire"
     )
     .unwrap();
+}
+
+// There is other stuff in librdkafka messages, e.g. headers.
+// But this struct only contains what we actually use, to avoid unnecessary cloning.
+struct MessageParts {
+    payload: Option<Vec<u8>>,
+    partition: i32,
+    offset: i64,
+    key: Option<Vec<u8>>,
+}
+
+trait BorrowedMessageExt {
+    fn detach_parts(&self) -> MessageParts;
+}
+
+impl<'a> BorrowedMessageExt for BorrowedMessage<'a> {
+    fn detach_parts(&self) -> MessageParts {
+        MessageParts {
+            payload: self.payload().map(|p| p.to_vec()),
+            partition: self.partition(),
+            offset: self.offset(),
+            key: self.key().map(|k| k.to_vec()),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -111,7 +135,7 @@ where
         // The next smallest timestamp that isn't closed
         let mut last_closed_ts: u64 = 0;
         // Buffer place older for buffering messages for which we did not have a timestamp
-        let mut buffer: Option<OwnedMessage> = None;
+        let mut buffer: Option<MessageParts> = None;
         // Index of the last offset that we have already processed for each partition
         let mut last_processed_offsets: HashMap<PartitionId, i64> = HashMap::new();
         // Records closed timestamps for each partition. It corresponds to smallest timestamp
@@ -168,7 +192,7 @@ where
                     } else {
                         // No currently buffered message, poll from stream
                         match consumer.poll(Duration::from_millis(0)) {
-                            Some(Ok(msg)) => Some(msg.detach()),
+                            Some(Ok(msg)) => Some(msg.detach_parts()),
                             Some(Err(err)) => {
                                 error!("kafka error: {}: {}", name, err);
                                 None
@@ -178,11 +202,8 @@ where
                     };
 
                     while let Some(message) = next_message {
-                        let payload = message.payload();
-                        let partition = message.partition();
-                        let offset = message.offset() + 1;
-                        let key = message.key().map(|k| k.to_vec()).unwrap_or_default();
-
+                        let partition = message.partition;
+                        let offset = message.offset + 1;
                         if !partitions.contains(&partition) {
                             // We have received a message for a partition for which we do not yet
                             // have any metadata. Buffer the message and wait until we get the
@@ -239,14 +260,15 @@ where
                                 return SourceStatus::Alive;
                             }
                             Some(_) => {
+                                let key = message.key.unwrap_or_default();
+                                let out = message.payload.unwrap_or_default();
                                 last_processed_offsets
                                     .insert(PartitionId::Kafka(partition), offset);
-                                let out = payload.map(|p| p.to_vec()).unwrap_or_default();
                                 bytes_read += key.len() as i64;
                                 bytes_read += out.len() as i64;
                                 output
                                     .session(&cap)
-                                    .give(((key, out), Some(message.offset())));
+                                    .give(((key, out), Some(message.offset)));
 
                                 downgrade_capability(
                                     &id,
@@ -274,7 +296,7 @@ where
 
                         // Try and poll for next message
                         next_message = match consumer.poll(Duration::from_millis(0)) {
-                            Some(Ok(msg)) => Some(msg.detach()),
+                            Some(Ok(msg)) => Some(msg.detach_parts()),
                             Some(Err(err)) => {
                                 error!("kafka error: {}: {}", name, err);
                                 None
