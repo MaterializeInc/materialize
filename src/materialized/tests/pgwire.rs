@@ -252,8 +252,8 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             &[
                 ("@1".into(), 1),
                 ("@2".into(), 2),
+                ("@4".into(), 4),
                 ("c".into(), 3),
-                ("@4".into(), 4)
             ],
         );
         assert_eq!(

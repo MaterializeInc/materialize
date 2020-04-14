@@ -45,10 +45,7 @@ statement ok
 INSERT INTO xyz VALUES (1, 2, 3), (4, 5, 6)
 ----
 
-query B
-SELECT (EXISTS (SELECT * FROM xyz))
-----
-true
+# SHOW DATABASES
 
 query T
 SHOW DATABASES WHERE (EXISTS (SELECT * FROM xyz))
@@ -63,3 +60,139 @@ materialize
 query T
 SHOW DATABASES WHERE (EXISTS (SELECT * FROM xyz WHERE x = 3))
 ----
+
+statement ok
+CREATE MATERIALIZED VIEW v AS SELECT 1 AS a, 2 AS b, 3 AS c
+----
+
+statement ok
+CREATE INDEX idx1 ON v (b)
+----
+
+# SHOW INDEXES
+
+query TTTTTT colnames
+SHOW INDEXES FROM v
+----
+Source_or_view        Key_name                 Column_name Expression Null  Seq_in_index
+materialize.public.v  materialize.public.idx1  b           NULL       false 1
+
+query TTTTTT colnames
+SHOW INDEXES FROM v WHERE "Column_name" = 'b'
+----
+Source_or_view        Key_name                 Column_name Expression Null  Seq_in_index
+materialize.public.v  materialize.public.idx1  b           NULL       false 1
+
+query TTTTTT colnames
+SHOW INDEXES FROM v WHERE "Column_name" = 'c'
+----
+Source_or_view        Key_name                 Column_name Expression Null  Seq_in_index
+
+# Reference a different column
+
+query TTTTTT colnames
+SHOW INDEXES FROM v WHERE "Key_name" = 'materialize.public.idx1'
+----
+Source_or_view        Key_name                 Column_name Expression Null  Seq_in_index
+materialize.public.v  materialize.public.idx1  b           NULL       false 1
+
+# TODO(justin): not handled in parser yet:
+#   SHOW INDEXES FROM v LIKE '%v'
+
+query TTT colnames
+SHOW COLUMNS FROM v
+----
+Field Nullable Type
+a     NO       int4
+b     NO       int4
+c     NO       int4
+
+query TTT
+SHOW COLUMNS FROM v LIKE 'b'
+----
+b  NO  int4
+
+query TTT
+SHOW COLUMNS FROM v WHERE "Nullable" = 'NO'
+----
+a  NO  int4
+b  NO  int4
+c  NO  int4
+
+# SHOW SCHEMAS
+
+query T colnames
+SHOW SCHEMAS
+----
+SCHEMAS
+public
+
+query T
+SHOW SCHEMAS LIKE 'public'
+----
+public
+
+query T
+SHOW SCHEMAS LIKE 'private'
+----
+
+query T
+SHOW SCHEMAS WHERE "SCHEMAS" = 'public'
+----
+public
+
+# SHOW VIEWS/SOURCES
+
+statement ok
+CREATE MATERIALIZED VIEW u AS SELECT 1 AS x, 2 AS y
+
+query T
+SHOW VIEWS
+----
+u
+v
+
+query TTBB colnames
+SHOW FULL VIEWS
+----
+VIEWS TYPE QUERYABLE MATERIALIZED
+u     USER true      true
+v     USER true      true
+
+query T
+SHOW VIEWS LIKE '%u'
+----
+u
+
+statement error not supported
+SHOW VIEWS WHERE "VIEWS" = 'u'
+
+query T
+SHOW SOURCES
+----
+xyz
+
+statement error not supported
+SHOW SOURCES WHERE "SOURCES" = 'u'
+
+# SHOW OBJECTS
+
+query T colnames
+SHOW TABLES
+----
+TABLES
+xyz
+
+query T
+SHOW TABLES LIKE 'xyz'
+----
+xyz
+
+query T
+SHOW TABLES LIKE 'abc'
+----
+
+query T
+SHOW TABLES WHERE "TABLES" = 'xyz'
+----
+xyz
