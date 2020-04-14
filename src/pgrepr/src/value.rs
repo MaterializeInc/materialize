@@ -122,15 +122,35 @@ impl Value {
                 buf.push_row(jsonb.into_row()).unpack_first(),
                 ScalarType::Jsonb,
             ),
-            Value::Array(elems) => (
-                buf.push_row(Row::pack(
-                    elems
-                        .into_iter()
-                        .map(|elem| elem.map_or(Datum::Null, |elem| elem.into_datum(buf).0)),
-                ))
-                .unpack_first(),
-                ScalarType::Array(panic!("TODO(jamii/array)")),
-            ),
+            Value::Array(elems) => {
+                let typed_elems = elems
+                    .into_iter()
+                    .map(|elem| {
+                        elem.map_or((Datum::Null, ScalarType::Unknown), |elem| {
+                            elem.into_datum(buf)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let mut elem_type = ScalarType::Unknown;
+                for (_, typ) in &typed_elems {
+                    if *typ == ScalarType::Unknown {
+                        // uninformative
+                        ()
+                    } else if elem_type == ScalarType::Unknown {
+                        elem_type = typ.clone();
+                    } else if elem_type != *typ {
+                        panic!(
+                            "Received an array with mixed types: {} and {}",
+                            elem_type, typ
+                        );
+                    }
+                }
+                (
+                    buf.push_row(Row::pack(typed_elems.into_iter().map(|et| et.0)))
+                        .unpack_first(),
+                    ScalarType::Array(Box::new(ColumnType::new(elem_type).nullable(true))),
+                )
+            }
         }
     }
 
