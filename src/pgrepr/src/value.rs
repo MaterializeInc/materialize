@@ -54,8 +54,8 @@ pub enum Value {
     Numeric(Numeric),
     /// A binary JSON blob.
     Jsonb(Jsonb),
-    /// An array of values
-    Array(Vec<Option<Value>>),
+    /// An 1d array of values (distinct from postgres Nd arrays)
+    List(Vec<Option<Value>>),
 }
 
 impl Value {
@@ -83,7 +83,7 @@ impl Value {
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
-            (Datum::List(list), ScalarType::Array(elem_type)) => Some(Value::Array(
+            (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
                 list.iter()
                     .map(|elem| Value::from_datum(elem, elem_type))
                     .collect(),
@@ -122,7 +122,7 @@ impl Value {
                 buf.push_row(jsonb.into_row()).unpack_first(),
                 ScalarType::Jsonb,
             ),
-            Value::Array(elems) => {
+            Value::List(elems) => {
                 let typed_elems = elems
                     .into_iter()
                     .map(|elem| {
@@ -140,7 +140,7 @@ impl Value {
                         elem_type = typ.clone();
                     } else if elem_type != *typ {
                         panic!(
-                            "Received an array with mixed types: {} and {}",
+                            "Received a list with mixed types: {} and {}",
                             elem_type, typ
                         );
                     }
@@ -148,7 +148,7 @@ impl Value {
                 (
                     buf.push_row(Row::pack(typed_elems.into_iter().map(|et| et.0)))
                         .unpack_first(),
-                    ScalarType::Array(Box::new(ColumnType::new(elem_type).nullable(true))),
+                    ScalarType::List(Box::new(ColumnType::new(elem_type).nullable(true))),
                 )
             }
         }
@@ -185,7 +185,7 @@ impl Value {
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Text(s) => buf.put(s.as_bytes()),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js),
-            Value::Array(elems) => {
+            Value::List(elems) => {
                 buf.put("{".as_bytes());
                 let mut elems = elems.iter().peekable();
                 while let Some(elem) = elems.next() {
@@ -220,9 +220,9 @@ impl Value {
             Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Jsonb(jsonb) => jsonb.as_serde_json().to_sql(&PgType::JSONB, buf),
-            Value::Array(_) => {
+            Value::List(_) => {
                 return Err(
-                    failure::format_err!("Cannot encode arrays using the binary format").into(),
+                    failure::format_err!("Cannot encode LIST using the binary format").into(),
                 )
             }
         }

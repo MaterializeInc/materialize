@@ -339,7 +339,7 @@ impl<'a> Datum<'a> {
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ScalarType::String) => true,
                     (Datum::String(_), _) => false,
-                    (Datum::List(list), ScalarType::Array(t)) => {
+                    (Datum::List(list), ScalarType::List(t)) => {
                         list.iter().all(|e| e.is_instance_of(t))
                     }
                     (Datum::List(_), _) => false,
@@ -589,7 +589,7 @@ pub enum ScalarType {
     Jsonb,
     /// Postgres-style arrays (but we only support 1d arrays)
     /// Backed by a DatumList
-    Array(Box<ColumnType>),
+    List(Box<ColumnType>),
 }
 
 impl<'a> ScalarType {
@@ -619,7 +619,7 @@ impl<'a> ScalarType {
             ScalarType::Bytes => Datum::Bytes(&[]),
             ScalarType::String => Datum::String(""),
             ScalarType::Jsonb => Datum::JsonNull,
-            ScalarType::Array(_) => Datum::List(DatumList::empty()),
+            ScalarType::List(_) => Datum::List(DatumList::empty()),
         }
     }
 }
@@ -648,7 +648,7 @@ impl PartialEq for ScalarType {
             | (String, String)
             | (Jsonb, Jsonb) => true,
 
-            (Array(a), Array(b)) => a.eq(b),
+            (List(a), List(b)) => a.eq(b),
 
             (Unknown, _)
             | (Bool, _)
@@ -665,7 +665,7 @@ impl PartialEq for ScalarType {
             | (Bytes, _)
             | (String, _)
             | (Jsonb, _)
-            | (Array(_), _) => false,
+            | (List(_), _) => false,
         }
     }
 }
@@ -694,7 +694,7 @@ impl Hash for ScalarType {
             Bytes => state.write_u8(12),
             String => state.write_u8(13),
             Jsonb => state.write_u8(14),
-            Array(t) => {
+            List(t) => {
                 state.write_u8(15);
                 t.hash(state);
             }
@@ -726,7 +726,7 @@ impl fmt::Display for ScalarType {
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
             Jsonb => f.write_str("jsonb"),
-            Array(t) => write!(f, "{}[]", t),
+            List(t) => write!(f, "{}[]", t),
         }
     }
 }

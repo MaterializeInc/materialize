@@ -287,8 +287,8 @@ macro_rules! make_visitor {
                 visit_all(self, left, op, right)
             }
 
-            fn visit_array(&mut self, exprs: &'ast $($mut)* [Expr]) {
-                visit_array(self, exprs)
+            fn visit_list(&mut self, exprs: &'ast $($mut)* [Expr]) {
+                visit_list(self, exprs)
             }
 
             fn visit_insert(
@@ -1020,7 +1020,7 @@ macro_rules! make_visitor {
                 Expr::Subquery(query) => visitor.visit_subquery(query),
                 Expr::Any{left, op, right, some: _} => visitor.visit_any(left, op, right),
                 Expr::All{left, op, right} => visitor.visit_all(left, op, right),
-                Expr::Array(exprs) => visitor.visit_array(exprs),
+                Expr::List(exprs) => visitor.visit_list(exprs),
             }
         }
 
@@ -1241,7 +1241,7 @@ macro_rules! make_visitor {
             visitor.visit_query(right);
         }
 
-        pub fn visit_array<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, exprs: &'ast $($mut)* [Expr]) {
+        pub fn visit_list<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, exprs: &'ast $($mut)* [Expr]) {
             for expr in exprs {
                 visitor.visit_expr(expr);
             }
