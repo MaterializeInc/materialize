@@ -9,6 +9,7 @@
 
 //! Integration tests for pgwire functionality.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
@@ -246,13 +247,16 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .query("SHOW INDEXES FROM mat", &[])?
                 .into_iter()
                 .map(|row| (row.get("Column_name"), row.get("Seq_in_index")))
-                .collect::<Vec<(String, i64)>>(),
-            &[
+                .collect::<HashSet<(String, i64)>>(),
+            [
                 ("@1".into(), 1),
                 ("@2".into(), 2),
                 ("c".into(), 3),
                 ("@4".into(), 4)
-            ],
+            ]
+            .iter()
+            .cloned()
+            .collect(),
         );
         assert_eq!(
             client
