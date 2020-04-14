@@ -297,6 +297,11 @@ fn format_row(
             "NULL".to_owned()
         } else if let ScalarType::Jsonb = col_typ.scalar_type {
             Jsonb::from_datum(datum).to_string()
+        } else if let ScalarType::List(_) = col_typ.scalar_type {
+            // produce the same output as we would for psql
+            pgrepr::Value::from_datum(datum, &col_typ)
+                .unwrap()
+                .to_string()
         } else {
             match (slt_typ, datum) {
                 // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
@@ -362,6 +367,7 @@ fn format_row(
                     }
                     buf
                 }
+
                 other => panic!("Don't know how to format {:?}", other),
             }
         }
