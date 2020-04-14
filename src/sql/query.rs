@@ -1503,7 +1503,7 @@ fn plan_expr_returning_name<'a>(
                     };
                 if let Some(pos) = elem_scalar_types
                     .iter()
-                    .position(|est| est != elem_scalar_type)
+                    .position(|est| (est != elem_scalar_type) && (*est != ScalarType::Unknown))
                 {
                     bail!("Cannot create array with mixed types. Element 1 has type {} but element {} has type {}", elem_scalar_type, pos+1, &elem_scalar_types[pos])
                 }
@@ -3587,8 +3587,10 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
         DataType::Jsonb => ScalarType::Jsonb,
-        other @ DataType::Array(_)
-        | other @ DataType::Binary(..)
+        DataType::Array(elem_type) => ScalarType::Array(Box::new(
+            ColumnType::new(scalar_type_from_sql(elem_type)?).nullable(true),
+        )),
+        other @ DataType::Binary(..)
         | other @ DataType::Blob(_)
         | other @ DataType::Clob(_)
         | other @ DataType::Regclass
