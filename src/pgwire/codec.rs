@@ -204,7 +204,8 @@ impl Encoder<BackendMessage> for Codec {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
-                        f.encode(*ff, dst);
+                        f.encode(*ff, dst)
+                            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
                         let len = dst.len() - base - 4;
                         let len = (len as u32).to_be_bytes();
                         dst[base..base + 4].copy_from_slice(&len);

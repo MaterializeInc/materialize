@@ -155,11 +155,16 @@ impl Value {
     }
 
     /// Serializes this value to `buf` in the specified `format`.
-    pub fn encode(&self, format: Format, buf: &mut BytesMut) {
+    pub fn encode(
+        &self,
+        format: Format,
+        buf: &mut BytesMut,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
         match format {
             Format::Text => self.encode_text(buf),
-            Format::Binary => self.encode_binary(buf),
+            Format::Binary => self.encode_binary(buf)?,
         }
+        Ok(())
     }
 
     /// Serializes this value to `buf` using the [text encoding
@@ -199,7 +204,7 @@ impl Value {
 
     /// Serializes this value to `buf` using the [binary encoding
     /// format](Format::Binary).
-    pub fn encode_binary(&self, buf: &mut BytesMut) {
+    pub fn encode_binary(&self, buf: &mut BytesMut) -> Result<(), Box<dyn Error + Sync + Send>> {
         let is_null = match self {
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
@@ -215,13 +220,17 @@ impl Value {
             Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Jsonb(jsonb) => jsonb.as_serde_json().to_sql(&PgType::JSONB, buf),
-            Value::Array(array) => panic!("TODO(jamii/array)"),
+            Value::Array(_) => {
+                return Err(
+                    failure::format_err!("Cannot encode arrays using the binary format").into(),
+                )
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
-        match is_null {
-            IsNull::Yes => panic!("encode_binary impossibly called on a null value"),
-            IsNull::No => (),
+        if let IsNull::Yes = is_null {
+            panic!("encode_binary impossibly called on a null value")
         }
+        Ok(())
     }
 
     /// Deserializes a value of type `ty` from `raw` using the specified
