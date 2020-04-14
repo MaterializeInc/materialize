@@ -91,7 +91,7 @@ impl MzClient {
             .map_err(|e| format!("creating materialized view: {}", e))?;
         Ok(())
     }
-    
+
     pub async fn query_view(&self, view_name: &str) -> Result<Vec<Row>, String> {
         let query = format!("SELECT * FROM {view_name};", view_name = view_name);
         //        log::debug!("querying view=> {}", query);
