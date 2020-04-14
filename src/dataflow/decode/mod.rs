@@ -13,7 +13,7 @@ use timely::dataflow::{
     channels::pushers::buffer::Session,
     channels::pushers::Counter as PushCounter,
     channels::pushers::Tee,
-    operators::{map::Map, Operator},
+    operators::{aggregation::Aggregate, map::Map, Operator},
     Scope, Stream,
 };
 
@@ -186,7 +186,7 @@ impl<F: Fn(&[u8]) -> Datum> DecoderState for OffsetDecoderState<F> {
 }
 
 fn decode_key_values_inner<G, K, V>(
-    stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     mut key_decoder_state: K,
     mut value_decoder_state: V,
     op_name: &str,
@@ -196,47 +196,63 @@ where
     K: DecoderState + 'static,
     V: DecoderState + 'static,
 {
-    stream.unary(
-        Exchange::new(|x: &((Vec<u8>, _), _)| (x.0).0.hashed()),
-        &op_name,
-        move |_, _| {
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for ((key, payload), aux_num) in data.iter() {
-                        if key.is_empty() {
-                            error!("{}", "Encountered empty key");
-                            continue;
+    stream
+        .aggregate::<_, (Vec<u8>, Option<i64>), _, _, _>(
+            |_key, val, agg| {
+                if let Some(new_offset) = val.1 {
+                    if let Some(offset) = agg.1 {
+                        if offset < new_offset {
+                            *agg = val;
                         }
-                        match key_decoder_state.decode_key(key) {
-                            Ok(key) => {
-                                if payload.is_empty() {
-                                    session.give((key, None, *cap.time()));
-                                } else {
-                                    value_decoder_state.give_key_value(
-                                        key,
-                                        payload,
-                                        *aux_num,
-                                        &mut session,
-                                        *cap.time(),
-                                    );
+                    } else {
+                        *agg = val;
+                    }
+                }
+            },
+            |key, agg| (key, agg),
+            |key| key.hashed(),
+        )
+        .unary(
+            Exchange::new(|x: &(Vec<u8>, (_, _))| (x.0).hashed()),
+            &op_name,
+            move |_, _| {
+                move |input, output| {
+                    input.for_each(|cap, data| {
+                        let mut session = output.session(&cap);
+                        for (key, (payload, aux_num)) in data.iter() {
+                            if key.is_empty() {
+                                error!("{}", "Encountered empty key");
+                                continue;
+                            }
+                            match key_decoder_state.decode_key(key) {
+                                Ok(key) => {
+                                    if payload.is_empty() {
+                                        session.give((key, None, *cap.time()));
+                                    } else {
+                                        value_decoder_state.give_key_value(
+                                            key,
+                                            payload,
+                                            *aux_num,
+                                            &mut session,
+                                            *cap.time(),
+                                        );
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("{}", err);
                                 }
                             }
-                            Err(err) => {
-                                error!("{}", err);
-                            }
                         }
-                    }
-                });
-                key_decoder_state.log_error_count();
-                value_decoder_state.log_error_count();
-            }
-        },
-    )
+                    });
+                    key_decoder_state.log_error_count();
+                    value_decoder_state.log_error_count();
+                }
+            },
+        )
 }
 
 pub fn decode_key_values<G>(
-    stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     value_encoding: DataEncoding,
     key_encoding: DataEncoding,
 ) -> Stream<G, (Row, Option<Row>, Timestamp)>

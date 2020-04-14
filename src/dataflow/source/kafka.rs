@@ -71,7 +71,7 @@ pub fn kafka<G>(
     consistency: Consistency,
     read_kafka: bool,
 ) -> (
-    Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+    Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     Option<SourceToken>,
 )
 where
@@ -257,7 +257,7 @@ where
                             last_processed_offsets.insert(PartitionId::Kafka(partition), offset);
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
-                            output.session(&cap).give(((key, out), Some(offset - 1)));
+                            output.session(&cap).give((key, (out, Some(offset - 1))));
 
                             downgrade_capability(
                                 &id,
