@@ -135,7 +135,6 @@ impl Value {
                 for (_, typ) in &typed_elems {
                     if *typ == ScalarType::Unknown {
                         // uninformative
-                        ()
                     } else if elem_type == ScalarType::Unknown {
                         elem_type = typ.clone();
                     } else if elem_type != *typ {
@@ -186,18 +185,18 @@ impl Value {
             Value::Text(s) => buf.put(s.as_bytes()),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js),
             Value::List(elems) => {
-                buf.put("{".as_bytes());
+                buf.put(&b"{"[..]);
                 let mut elems = elems.iter().peekable();
                 while let Some(elem) = elems.next() {
                     match elem {
                         Some(elem) => elem.encode_text(buf),
-                        None => buf.put("NULL".as_bytes()),
+                        None => buf.put(&b"NULL"[..]),
                     }
                     if elems.peek().is_some() {
-                        buf.put(",".as_bytes())
+                        buf.put(&b","[..])
                     }
                 }
-                buf.put("}".as_bytes());
+                buf.put(&b"}"[..]);
             }
         }
     }
