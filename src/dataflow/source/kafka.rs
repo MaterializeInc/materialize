@@ -53,7 +53,7 @@ pub fn kafka<G>(
     consistency: Consistency,
     read_kafka: bool,
 ) -> (
-    Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+    Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     Option<SourceToken>,
 )
 where
@@ -246,7 +246,7 @@ where
                                 bytes_read += out.len() as i64;
                                 output
                                     .session(&cap)
-                                    .give(((key, out), Some(message.offset())));
+                                    .give((key, (out, Some(message.offset()))));
 
                                 downgrade_capability(
                                     &id,
@@ -333,7 +333,7 @@ where
                                 bytes_read += out.len() as i64;
                                 output
                                     .session(&cap)
-                                    .give(((key, out), Some(message.offset())));
+                                    .give((key, (out, Some(message.offset()))));
                             }
                             Err(err) => error!("kafka error: {}: {}", name, err),
                         }

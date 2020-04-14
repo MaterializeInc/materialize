@@ -244,7 +244,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         read_from_kafka,
                                     );
                                     (
-                                        source.map(|((_key, payload), aux_num)| (payload, aux_num)),
+                                        source.map(|(_key, (payload, aux_num))| (payload, aux_num)),
                                         capability,
                                     )
                                 }
