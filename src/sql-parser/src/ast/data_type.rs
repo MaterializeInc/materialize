@@ -71,8 +71,8 @@ pub enum DataType {
     Text,
     /// Bytea
     Bytea,
-    /// Arrays
-    Array(Box<DataType>),
+    /// List
+    List(Box<DataType>),
     /// Binary JSON
     Jsonb,
 }
@@ -112,7 +112,7 @@ impl fmt::Display for DataType {
             DataType::Regclass => write!(f, "regclass"),
             DataType::Text => write!(f, "text"),
             DataType::Bytea => write!(f, "bytea"),
-            DataType::Array(ty) => write!(f, "{}[]", ty),
+            DataType::List(ty) => write!(f, "list({})", ty),
             DataType::Jsonb => write!(f, "jsonb"),
         }
     }

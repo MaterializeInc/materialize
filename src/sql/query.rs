@@ -1474,8 +1474,8 @@ fn plan_expr_returning_name<'a>(
                 (expr.call_unary(func), None)
             }
             Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
-            Expr::Array(exprs) => {
-                let elem_type_hint = if let Some(ScalarType::Array(elem_type_hint)) = type_hint {
+            Expr::List(exprs) => {
+                let elem_type_hint = if let Some(ScalarType::List(elem_type_hint)) = type_hint {
                     Some(elem_type_hint.scalar_type)
                 } else {
                     None
@@ -1494,25 +1494,25 @@ fn plan_expr_returning_name<'a>(
                     } else if let Some(elem_type_hint) = &elem_type_hint {
                         elem_type_hint
                     } else {
-                        bail!("Cannot assign type to this empty array")
+                        bail!("Cannot assign type to this empty list")
                     };
                 if let Some(pos) = elem_scalar_types
                     .iter()
                     .position(|est| (est != elem_scalar_type) && (*est != ScalarType::Unknown))
                 {
-                    bail!("Cannot create array with mixed types. Element 1 has type {} but element {} has type {}", elem_scalar_type, pos+1, &elem_scalar_types[pos])
+                    bail!("Cannot create list with mixed types. Element 1 has type {} but element {} has type {}", elem_scalar_type, pos+1, &elem_scalar_types[pos])
                 }
                 (
                     ScalarExpr::CallVariadic {
-                        func: VariadicFunc::ArrayCreate {
-                            // surprise! array elements are always nullable
+                        func: VariadicFunc::ListCreate {
+                            // surprise! list elements are always nullable
                             elem_type: ColumnType::new(elem_scalar_type.clone()).nullable(true),
                         },
                         exprs,
                     },
                     Some(ScopeItemName {
                         table_name: None,
-                        column_name: Some(ColumnName::from("array")),
+                        column_name: Some(ColumnName::from("list")),
                     }),
                 )
             }
@@ -3582,7 +3582,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
         DataType::Jsonb => ScalarType::Jsonb,
-        DataType::Array(elem_type) => ScalarType::Array(Box::new(
+        DataType::List(elem_type) => ScalarType::List(Box::new(
             ColumnType::new(scalar_type_from_sql(elem_type)?).nullable(true),
         )),
         other @ DataType::Binary(..)

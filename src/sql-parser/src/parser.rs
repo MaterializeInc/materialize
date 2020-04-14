@@ -236,7 +236,7 @@ impl Parser {
                     self.prev_token();
                     Ok(Expr::Value(self.parse_value()?))
                 }
-                "ARRAY" => self.parse_array(),
+                "LIST" => self.parse_list(),
                 "CASE" => self.parse_case_expr(),
                 "CAST" => self.parse_cast_expr(),
                 "DATE" => Ok(Expr::Value(self.parse_date()?)),
@@ -1767,7 +1767,7 @@ impl Parser {
         }
     }
 
-    fn parse_array(&mut self) -> Result<Expr, ParserError> {
+    fn parse_list(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let mut exprs = vec![];
         loop {
@@ -1780,7 +1780,7 @@ impl Parser {
             }
         }
         self.expect_token(&Token::RBracket)?;
-        Ok(Expr::Array(exprs))
+        Ok(Expr::List(exprs))
     }
 
     pub fn parse_number_value(&mut self) -> Result<Value, ParserError> {
@@ -1882,16 +1882,9 @@ impl Parser {
             other => self.expected(self.peek_prev_range(), "a data type name", other)?,
         };
         match &self.peek_token() {
-            Some(Token::LBracket) => {
-                while self.consume_token(&Token::LBracket) {
-                    // Note: this is postgresql-specific
-                    self.expect_token(&Token::RBracket)?;
-                    data_type = DataType::Array(Box::new(data_type));
-                }
-            }
-            Some(Token::Word(k)) if &k.keyword == "ARRAY" => {
+            Some(Token::Word(k)) if &k.keyword == "LIST" => {
                 self.next_token();
-                data_type = DataType::Array(Box::new(data_type));
+                data_type = DataType::List(Box::new(data_type));
             }
             _ => (),
         }

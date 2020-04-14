@@ -268,6 +268,7 @@ define_keywords!(
     LEVEL,
     LIKE,
     LIKE_REGEX,
+    LIST,
     LIMIT,
     LN,
     LOCAL,

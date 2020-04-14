@@ -119,7 +119,7 @@ impl From<&ScalarType> for Type {
             ScalarType::String => Type::Text,
             ScalarType::Jsonb => Type::Jsonb,
             // there isn't an obvious way to assign an oid to a parametric type
-            ScalarType::Array(_t) => Type::Unknown,
+            ScalarType::List(_t) => Type::Unknown,
         }
     }
 }
