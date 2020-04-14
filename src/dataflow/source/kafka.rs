@@ -17,11 +17,11 @@ use std::time::Duration;
 use crate::server::{TimestampChanges, TimestampHistories};
 use dataflow_types::{Consistency, ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
-use log::{error, warn};
+use log::{error, info, warn};
 use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::Offset::Offset;
-use rdkafka::{ClientConfig, ClientContext};
+use rdkafka::{ClientConfig, ClientContext, Statistics};
 use rdkafka::{Message, Timestamp as KafkaTimestamp};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
@@ -182,7 +182,6 @@ where
                         let partition = message.partition();
                         let offset = message.offset() + 1;
                         let key = message.key().map(|k| k.to_vec()).unwrap_or_default();
-
                         if !partitions.contains(&partition) {
                             // We have received a message for a partition for which we do not yet
                             // have any metadata. Buffer the message and wait until we get the
@@ -531,7 +530,11 @@ fn downgrade_capability(
 /// when the message queue switches from nonempty to empty.
 struct GlueConsumerContext(Mutex<SyncActivator>);
 
-impl ClientContext for GlueConsumerContext {}
+impl ClientContext for GlueConsumerContext {
+    fn stats(&self, statistics: Statistics) {
+        info!("Client stats: {:#?}", statistics);
+    }
+}
 
 impl ConsumerContext for GlueConsumerContext {
     fn message_queue_nonempty_callback(&self) {
