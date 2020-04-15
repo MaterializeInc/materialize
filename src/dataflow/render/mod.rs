@@ -149,7 +149,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     // error stream. Likely we will want to plumb this
                     // collection into the source connector so that sources
                     // can produce errors.
-                    let err_collection = Collection::empty(region);
+                    let mut err_collection = Collection::empty(region);
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
@@ -323,6 +323,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         // At the moment this is strictly optional, but we perform it anyhow
                         // to demonstrate the intended use.
                         if let Some(operators) = src.operators.clone() {
+                            // Determine replacement values for unused columns.
                             let source_type = src.desc.typ();
                             let position_or = (0..source_type.arity())
                                 .map(|col| {
@@ -341,27 +342,37 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 })
                                 .collect::<Vec<_>>();
 
-                            collection = collection.flat_map(move |input_row| {
-                                let temp_storage = RowArena::new();
-                                let datums = input_row.unpack();
-                                if operators.predicates.iter().all(|predicate| {
-                                    match predicate
-                                        .eval(&datums, &temp_storage)
-                                        .unwrap_or(Datum::Null)
-                                    {
-                                        Datum::True => true,
-                                        Datum::False | Datum::Null => false,
-                                        _ => unreachable!(),
+                            // Evaluate the predicate on each record, noting potential errors that might result.
+                            let (collection2, errors) =
+                                collection.flat_map_fallible(move |input_row| {
+                                    let temp_storage = RowArena::new();
+                                    let datums = input_row.unpack();
+                                    let pred_eval = operators
+                                        .predicates
+                                        .iter()
+                                        .map(|predicate| predicate.eval(&datums, &temp_storage))
+                                        .filter(|result| result != &Ok(Datum::True))
+                                        .next();
+                                    match pred_eval {
+                                        None => {
+                                            Some(Ok(Row::pack(position_or.iter().map(|pos_or| {
+                                                match pos_or {
+                                                    Result::Ok(index) => datums[*index],
+                                                    Result::Err(datum) => *datum,
+                                                }
+                                            }))))
+                                        }
+                                        Some(Ok(Datum::False)) => None,
+                                        Some(Ok(Datum::Null)) => None,
+                                        Some(Ok(x)) => {
+                                            panic!("Predicate evaluated to invalid value: {:?}", x)
+                                        }
+                                        Some(Err(x)) => Some(Err(x)),
                                     }
-                                }) {
-                                    Some(Row::pack(position_or.iter().map(|pos_or| match pos_or {
-                                        Result::Ok(index) => datums[*index],
-                                        Result::Err(datum) => *datum,
-                                    })))
-                                } else {
-                                    None
-                                }
-                            });
+                                });
+
+                            collection = collection2;
+                            err_collection = err_collection.concat(&errors);
                         }
 
                         // Introduce the stream by name, as an unarranged collection.
