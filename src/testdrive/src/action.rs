@@ -251,11 +251,8 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "kinesis-create-stream" => {
                         Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)
                     }
-                    "kinesis-add-shards" => {
-                        Box::new(kinesis::build_add_shards(builtin).map_err(wrap_err)?)
-                    }
-                    "kinesis-remove-shards" => {
-                        Box::new(kinesis::build_remove_shards(builtin).map_err(wrap_err)?)
+                    "kinesis-update-shards" => {
+                        Box::new(kinesis::build_update_shards(builtin).map_err(wrap_err)?)
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),

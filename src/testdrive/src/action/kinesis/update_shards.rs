@@ -9,30 +9,29 @@
 
 use async_trait::async_trait;
 use futures::executor::block_on;
-use rusoto_kinesis::{Kinesis, UpdateShardCountInput};
+use rusoto_kinesis::{DescribeStreamInput, Kinesis, UpdateShardCountInput};
 
-use crate::action::kinesis::{get_current_shard_count, verify_shard_count};
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
-pub struct AddShardsAction {
+pub struct UpdateShardCountAction {
     stream_name: String,
     target_shard_count: i64,
 }
 
-pub fn build_add_shards(mut cmd: BuiltinCommand) -> Result<AddShardsAction, String> {
+pub fn build_update_shards(mut cmd: BuiltinCommand) -> Result<UpdateShardCountAction, String> {
     let stream_name = format!("testdrive-{}", cmd.args.string("stream")?);
     let target_shard_count = cmd.args.parse("shards")?;
     cmd.args.done()?;
 
-    Ok(AddShardsAction {
+    Ok(UpdateShardCountAction {
         stream_name,
         target_shard_count,
     })
 }
 
 #[async_trait]
-impl Action for AddShardsAction {
+impl Action for UpdateShardCountAction {
     async fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
@@ -40,26 +39,40 @@ impl Action for AddShardsAction {
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!(
-            "adding {} shards to Kinesis stream {}",
-            self.target_shard_count, stream_name
+            "updating Kinesis stream {} to have {} shards",
+            stream_name, self.target_shard_count
         );
 
-        let current_shard_count = get_current_shard_count(&state.kinesis_client, &stream_name)?;
         state
             .kinesis_client
             .update_shard_count(UpdateShardCountInput {
                 scaling_type: "UNIFORM_SCALING".to_owned(),
                 stream_name: stream_name.clone(),
-                target_shard_count: current_shard_count + self.target_shard_count,
+                target_shard_count: self.target_shard_count,
             })
             .await
             .map_err(|e| format!("adding shards to stream {}: {}", &stream_name, e))?;
 
-        block_on(verify_shard_count(
-            &state.kinesis_client,
-            &stream_name,
-            self.target_shard_count,
-        ))?;
+        // Verify the current shard count.
+        let current_shard_count = state
+            .kinesis_client
+            .describe_stream(DescribeStreamInput {
+                exclusive_start_shard_id: None,
+                limit: None,
+                stream_name: stream_name.clone(),
+            })
+            .await
+            .map_err(|e| format!("getting current shard count: {}", e))?
+            .stream_description
+            .shards
+            .len();
+        //https://stackoverflow.com/questions/28273169/how-do-i-convert-between-numeric-types-safely-and-idiomatically
+        if current_shard_count as i64 != self.target_shard_count {
+            return Err(format!(
+                "Expected {} shards, found {}",
+                self.target_shard_count, current_shard_count
+            ));
+        }
 
         Ok(())
     }
