@@ -186,7 +186,7 @@ class CargoBuild(PreImage):
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
         return super().depends(root, path) + git_ls_files(
-            root, "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
+            root, "demo/billing/**", "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
         )
 
 
@@ -252,7 +252,7 @@ class CargoTest(PreImage):
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
         return super().depends(root, path) + git_ls_files(
-            root, "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
+            root, "demo/billing/**", "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
         )
 
 

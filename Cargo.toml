@@ -1,8 +1,8 @@
 [workspace]
 members = [
+    "demo/billing",
     "fuzz",
     "src/avro",
-    "src/billing-demo",
     "src/ccsr",
     "src/comm",
     "src/dataflow-bin",

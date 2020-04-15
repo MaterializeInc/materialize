@@ -420,14 +420,14 @@ In a future iteration, we'll make this demo more interactive.
     git clone git@github.com:MaterializeInc/materialize.git
     ```
 
-1. Move to the `src/billing-demo` dir:
+1. Move to the `demo/billing` dir:
 
     ```shell
-    cd <path to materialize>/src/billing-demo
+    cd <path to materialize>/demo/billing
     ```
 
     You can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/src/billing-demo).
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/master/demo/billing).
 
 1. Deploy and start all of the components we've listed above.
 
