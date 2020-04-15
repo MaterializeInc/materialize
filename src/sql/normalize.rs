@@ -22,11 +22,7 @@ use sql_parser::ast::{
 use crate::statement::StatementContext;
 
 pub fn ident(ident: Ident) -> String {
-    if ident.quote_style.is_some() {
-        ident.value
-    } else {
-        ident.value.to_lowercase()
-    }
+    ident.as_str().into()
 }
 
 pub fn function_name(name: ObjectName) -> Result<String, failure::Error> {
@@ -71,10 +67,10 @@ pub fn with_options(options: &[SqlOption]) -> HashMap<String, Value> {
 pub fn unresolve(name: FullName) -> ObjectName {
     let mut out = vec![];
     if let DatabaseSpecifier::Name(n) = name.database {
-        out.push(Ident::with_quote('"', n));
+        out.push(Ident::new(n));
     }
-    out.push(Ident::with_quote('"', name.schema));
-    out.push(Ident::with_quote('"', name.item));
+    out.push(Ident::new(name.schema));
+    out.push(Ident::new(name.item));
     ObjectName(out)
 }
 
@@ -89,13 +85,6 @@ pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement,
 ) -> Result<String, failure::Error> {
-    fn norm_ident(ident: &mut Ident) {
-        if ident.quote_style.is_none() {
-            ident.value = ident.value.to_lowercase();
-        }
-        ident.quote_style = Some('"');
-    };
-
     let allocate_name = |name: &ObjectName| -> Result<_, failure::Error> {
         Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
     };
@@ -150,10 +139,6 @@ pub fn create_statement(
                 Err(e) => self.err = Some(e),
             };
         }
-
-        fn visit_ident(&mut self, ident: &'ast mut Ident) {
-            norm_ident(ident);
-        }
     }
 
     // Think very hard before changing any of the branches in this match
@@ -169,7 +154,7 @@ pub fn create_statement(
     match &mut stmt {
         Statement::CreateSource {
             name,
-            col_names,
+            col_names: _,
             connector: _,
             with_options: _,
             format: _,
@@ -178,9 +163,6 @@ pub fn create_statement(
             materialized,
         } => {
             *name = allocate_name(name)?;
-            for c in col_names {
-                norm_ident(c);
-            }
             *if_not_exists = false;
             *materialized = false;
         }
@@ -199,16 +181,13 @@ pub fn create_statement(
 
         Statement::CreateView {
             name,
-            columns,
+            columns: _,
             query,
             materialized,
             if_exists,
             with_options: _,
         } => {
             *name = allocate_name(name)?;
-            for c in columns {
-                norm_ident(c);
-            }
             {
                 let mut normalizer = QueryNormalizer { scx, err: None };
                 normalizer.visit_query(query);
@@ -221,12 +200,11 @@ pub fn create_statement(
         }
 
         Statement::CreateIndex {
-            name,
+            name: _,
             on_name,
             key_parts,
             if_not_exists,
         } => {
-            norm_ident(name);
             *on_name = resolve_name(on_name)?;
             let mut normalizer = QueryNormalizer { scx, err: None };
             for key_part in key_parts {
@@ -241,5 +219,5 @@ pub fn create_statement(
         _ => unreachable!(),
     }
 
-    Ok(stmt.to_string())
+    Ok(format!("{:#}", stmt))
 }

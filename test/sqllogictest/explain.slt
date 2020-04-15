@@ -174,7 +174,7 @@ CREATE VIEW foo AS SELECT * FROM (SELECT 1)
 query T multiline
 EXPLAIN SQL FOR VIEW foo
 ----
-CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM (SELECT 1)
+CREATE VIEW materialize.public.foo AS SELECT * FROM (SELECT 1)
 EOF
 
 query T multiline
