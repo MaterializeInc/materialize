@@ -125,7 +125,7 @@ Metabase](/images/demos/bi_architecture_diagram.png)
     ```
 
     You can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/master/demo/chbench).
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/chbench).
 
 1. Deploy and start all of the components we've listed above.
 
@@ -152,7 +152,7 @@ Materialize to maintain for us.
 1. Launch the Materialize CLI (`mzcli`) by running:
 
     ```shell
-    docker-compose run cli
+    ./mzcompose run cli
     ```
 
 1. Within `mzcli`, ensure you have all of the necessary sources, which represent

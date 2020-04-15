@@ -15,21 +15,7 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-docker pull "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID"
-
 version=${BUILDKITE_TAG:-$BUILDKITE_COMMIT}
-
-if [[ $BUILDKITE_TAG ]]; then
-    tags=("$BUILDKITE_TAG")
-else
-    tags=("unstable-$BUILDKITE_COMMIT" latest)
-fi
-
-for tag in "${tags[@]}"; do
-    echo "Processing docker tag $tag"
-    runv docker tag "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID" "materialize/materialized:$tag"
-    runv docker push "materialize/materialized:$tag"
-done
 
 # Keep archive building in sync with macos.sh.
 # TODO(benesch): extract into shared script.
@@ -55,19 +41,3 @@ if [[ -z $BUILDKITE_TAG ]]; then
         empty \
         "s3://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz"
 fi
-
-docker pull "materialize/ci-peeker:$MATERIALIZED_IMAGE_ID"
-
-for tag in "${tags[@]}"; do
-    echo "Processing docker tag for peeker: $tag"
-    runv docker tag "materialize/ci-peeker:$MATERIALIZED_IMAGE_ID" "materialize/peeker:$tag"
-    runv docker push "materialize/peeker:$tag"
-done
-
-docker pull "materialize/ci-billing-demo:$MATERIALIZED_IMAGE_ID"
-
-for tag in "${tags[@]}"; do
-    echo "Processing docker tag for billing-demo: $tag"
-    runv docker tag "materialize/ci-billing-demo:$MATERIALIZED_IMAGE_ID" "materialize/billing-demo:$tag"
-    runv docker push "materialize/billing-demo:$tag"
-done

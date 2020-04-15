@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+mzcompose() {
+    bin/ci-builder run stable bin/mzcompose -f "$BUILDKITE_PLUGIN_MZCOMPOSE_CONFIG" "$@"
+}
+
+service=$BUILDKITE_PLUGIN_MZCOMPOSE_RUN
+run_args=("$service")
+if [[ "${BUILDKITE_COMMAND:-}" ]]; then
+    run_args+=("$BUILDKITE_COMMAND")
+fi
+
+# Start dependencies under a different heading so that the main heading is less
+# noisy.
+echo "--- :docker: Starting dependencies"
+mzcompose up -d --scale "$service=0" "$service"
+
+echo "+++ :docker: Running command in mzcompose service: $service" >&2
+mzcompose run "${run_args[@]}"

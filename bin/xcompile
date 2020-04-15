@@ -13,14 +13,16 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+root=$(dirname "$0")/..
 
-. misc/shlib/shlib.bash
+# shellcheck source=SCRIPTDIR/../misc/shlib/shlib.bash
+. "$root/misc/shlib/shlib.bash"
 
 main() {
     case "${1-}" in
-        "") build ;;
-        build) shift && build "$@" ;;
+        "") do_cargo build ;;
+        build) shift && do_cargo build "$@" ;;
+        test) shift && do_cargo test "$@" ;;
         bootstrap) bootstrap ;;
         clean) clean ;;
         *) usage ;;
@@ -31,16 +33,19 @@ usage() {
     die "usage: $0 <bootstrap|clean>
    or: $0 build [<cargo args>...]
 
-Consider also \`bin/ci-image build-and-run\` to automatically package
+Consider also \`bin/mzimage build\` to automatically package
 the cross-compiled binaries into Docker images."
 }
 
-build() {
-    if [[ ! -d target/sysroot ]]; then
+do_cargo() {
+    if [[ ! -d "$root/target/sysroot" ]]; then
         die "xcompile: fatal: run \`bin/xcompile bootstrap\` first"
     fi
 
-    sysroot=$PWD/target/sysroot/x86_64-unknown-linux-gnu
+    subcommand="$1"
+    shift
+
+    sysroot=$root/target/sysroot/x86_64-unknown-linux-gnu
 
     export AR=x86_64-unknown-linux-gnu-ar
     export LD=x86_64-unknown-linux-gnu-ld
@@ -57,7 +62,7 @@ build() {
     export TARGET_CFLAGS=$CFLAGS
     export TARGET_CXXFLAGS=$CXXFLAGS
 
-    cargo build --target=x86_64-unknown-linux-gnu "$@"
+    cargo "$subcommand" --target=x86_64-unknown-linux-gnu "$@"
 }
 
 pkg_url=http://archive.ubuntu.com/ubuntu/ubuntu

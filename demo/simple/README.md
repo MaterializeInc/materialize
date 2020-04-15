@@ -52,7 +52,7 @@ available to Docker Engine.
 1. Bring up the Docker Compose containers in the background:
 
     ```shell session
-    $ docker-compose up -d
+    $ ./mzcompose up -d
     Creating network "demo_default" with the default driver
     Creating demo_inspect_1      ... done
     Creating demo_chbench_1      ... done
@@ -73,7 +73,7 @@ available to Docker Engine.
 1. Launch the Materialize CLI.
 
     ```shell session
-    docker-compose run cli
+    ./mzcompose run cli
     ```
 
 1. Now that you're in the Materialize CLI (denoted by the terminal prefix
@@ -129,14 +129,14 @@ available to Docker Engine.
    streams changes from Materialize to your terminal.
 
     ```shell
-    docker-compose run cli watch-sql "SELECT * FROM purchase_sum_by_region"
+    ./mzcompose run cli watch-sql "SELECT * FROM purchase_sum_by_region"
     ```
 
 1. Once you're sufficiently wowed, close out of the `watch-sql` container
    (<kbd>Ctrl</kbd> + <kbd>D</kbd>), and bring the entire demo down.
 
     ```shell
-    docker-compose down
+    ./mzcompose down
     ```
 
 ### Troubleshooting
@@ -148,7 +148,7 @@ steps.
 1. Launch MySQL instance.
 
     ```shell
-    docker-compose run mysqlcli
+    ./mzcompose run mysqlcli
     ```
 
 1. Run the query that the view is based on directly within MySQL.
@@ -167,7 +167,7 @@ steps.
 
 If you see values here, there is likely an issue with Debezium or Kafka
 streaming the values out of MySQL; check the Kafka connector logs using
-`docker-compose logs -f connector`.
+`./mzcompose logs -f connector`.
 
 If you don't see values here, there is likely an issue with the load generator;
-check its logs using `docker-compose logs loadgen`.
+check its logs using `./mzcompose logs loadgen`.

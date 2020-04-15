@@ -13,7 +13,7 @@ services:
     image: materialize/ci-sqllogictest:$SQLLOGICTEST_IMAGE_ID
     volumes:
     - ../../:/workdir
-    user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
+    propagate-uid-gid: true
     environment:
     - PGUSER=postgres
     - PGHOST=postgres

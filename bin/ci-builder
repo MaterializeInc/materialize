@@ -53,6 +53,7 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
+    cp misc/python/requirements.txt misc/ci-builder/requirements.txt
     docker build --pull \
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
