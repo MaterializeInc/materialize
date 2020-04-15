@@ -95,7 +95,7 @@ def chmod_x(path: Path) -> None:
 
 class PreImage:
     def run(self, root: Path, path: Path) -> None:
-        runv(["git", "clean", "-ffX", path])
+        runv(["git", "clean", "-ffdX", path])
 
     def depends(self, root: Path, path: Path) -> List[bytes]:
         pass
