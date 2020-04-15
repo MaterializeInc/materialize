@@ -35,3 +35,27 @@ If providing a custom region, an `endpoint` option must also be provided
 
 > SELECT * FROM f_view
 "here's a test string"
+
+$ kinesis-add-shards stream=test shards=1
+
+$ kinesis-ingest format=bytes stream=test
+here's a different test string
+and a third!
+
+> SELECT * FROM f_view
+"here's a test string"
+"here's a different test string"
+"and a third!"
+
+$ kinesis-remove-shards stream=test shards=1
+
+$ kinesis-ingest format=bytes stream=test
+two more
+test strings
+
+> SELECT * FROM f_view
+"here's a test string"
+"here's a different test string"
+"and a third!"
+"two more"
+"test strings"

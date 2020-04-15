@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use failure::{bail, ResultExt};
@@ -18,7 +18,7 @@ use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
     GetRecordsError, GetRecordsInput, GetRecordsOutput, GetShardIteratorError,
     GetShardIteratorInput, GetShardIteratorOutput, Kinesis, KinesisClient, ListShardsError,
-    ListShardsInput, ListShardsOutput,
+    ListShardsInput, ListShardsOutput, Shard,
 };
 
 use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
@@ -71,13 +71,19 @@ where
 
         move |cap, output| {
             // todo@jldlaughlin: We need to be able to update our list of shards dynamically. #2607
-            let (client, shard_queue) = match &mut state {
+            let (client, stream_name, shard_set, shard_queue) = match &mut state {
                 Ok(state) => state,
                 Err(e) => {
                     error!("failed to create Kinesis state: {}", e);
                     return SourceStatus::Done;
                 }
             };
+
+            if let Err(e) = update_shard_information(&client, &stream_name, shard_set, shard_queue)
+            {
+                error!("{}", e);
+                return SourceStatus::Done;
+            }
 
             // If reading from Kinesis takes more than 10 milliseconds,
             // pause execution and reactivate later.
@@ -184,35 +190,36 @@ where
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
 fn create_state(
     c: KinesisSourceConnector,
-) -> Result<(KinesisClient, VecDeque<(String, Option<String>)>), failure::Error> {
+) -> Result<
+    (
+        KinesisClient,
+        String,
+        HashSet<String>,
+        VecDeque<(String, Option<String>)>,
+    ),
+    failure::Error,
+> {
     let http_client = HttpClient::new()?;
     let provider = StaticProvider::new(c.access_key, c.secret_access_key, c.token, None);
     let client = KinesisClient::new_with(http_client, provider, c.region);
 
-    let shard_queue = match block_on(get_shards_list(&client, &c.stream_name))
-        .with_context(|e| format!("fetching shard list: {}", e))?
-        .shards
-    {
-        Some(shards) => {
-            let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
-            for shard in shards {
-                shard_queue.push_back((
-                    shard.shard_id.clone(),
-                    block_on(get_shard_iterator(
-                        &client,
-                        &shard.shard_id,
-                        &c.stream_name,
-                        "TRIM_HORIZON",
-                    ))
-                    .with_context(|e| format!("fetching shard iterator: {}", e))?
-                    .shard_iterator,
-                ));
-            }
-            shard_queue
-        }
-        None => bail!("kinesis stream does not contain any shards"),
-    };
-    Ok((client, shard_queue))
+    let mut shard_set: HashSet<String> = HashSet::new();
+    let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
+    for shard in get_shards_list_wrapper(&client, &c.stream_name)? {
+        shard_set.insert(shard.shard_id.clone());
+        shard_queue.push_back((
+            shard.shard_id.clone(),
+            block_on(get_shard_iterator(
+                &client,
+                &shard.shard_id,
+                &c.stream_name,
+                "TRIM_HORIZON",
+            ))
+            .with_context(|e| format!("fetching shard iterator: {}", e))?
+            .shard_iterator,
+        ));
+    }
+    Ok((client, c.stream_name.clone(), shard_set, shard_queue))
 }
 
 fn downgrade_capability(cap: &mut Capability<u64>, name: &str) {
@@ -251,11 +258,12 @@ async fn get_records(
     client: &KinesisClient,
     shard_iterator: &str,
 ) -> Result<GetRecordsOutput, RusotoError<GetRecordsError>> {
-    let get_records_input = GetRecordsInput {
-        limit: None,
-        shard_iterator: String::from(shard_iterator),
-    };
-    client.get_records(get_records_input).await
+    client
+        .get_records(GetRecordsInput {
+            limit: None,
+            shard_iterator: String::from(shard_iterator),
+        })
+        .await
 }
 
 async fn get_shard_iterator(
@@ -264,26 +272,68 @@ async fn get_shard_iterator(
     stream_name: &str,
     iterator_type: &str,
 ) -> Result<GetShardIteratorOutput, RusotoError<GetShardIteratorError>> {
-    let get_shard_iterator = GetShardIteratorInput {
-        shard_id: String::from(shard_id),
-        shard_iterator_type: String::from(iterator_type),
-        starting_sequence_number: None,
-        stream_name: String::from(stream_name),
-        timestamp: None,
-    };
-    client.get_shard_iterator(get_shard_iterator).await
+    client
+        .get_shard_iterator(GetShardIteratorInput {
+            shard_id: String::from(shard_id),
+            shard_iterator_type: String::from(iterator_type),
+            starting_sequence_number: None,
+            stream_name: String::from(stream_name),
+            timestamp: None,
+        })
+        .await
+}
+
+fn update_shard_information(
+    client: &KinesisClient,
+    stream_name: &str,
+    shard_set: &mut HashSet<String>,
+    shard_queue: &mut VecDeque<(String, Option<String>)>,
+) -> Result<(), failure::Error> {
+    let shards = get_shards_list_wrapper(&client, stream_name)?;
+    for shard in shards {
+        if !shard_set.contains(&shard.shard_id) {
+            shard_queue.push_back((
+                shard.shard_id.clone(),
+                block_on(get_shard_iterator(
+                    &client,
+                    &shard.shard_id,
+                    stream_name,
+                    "TRIM_HORIZON",
+                ))
+                .with_context(|e| format!("fetching shard iterator: {}", e))?
+                .shard_iterator,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Gets the list of shards given a Kinesis client and stream name.
+/// Will throw an error if it does not find any shards.
+fn get_shards_list_wrapper(
+    client: &KinesisClient,
+    stream_name: &str,
+) -> Result<Vec<Shard>, failure::Error> {
+    match block_on(get_shards_list(&client, stream_name))
+        .with_context(|e| format!("fetching shard list: {}", e))?
+        .shards
+    {
+        Some(shards) => Ok(shards),
+        None => bail!("kinesis stream {} does not contain any shards", stream_name),
+    }
 }
 
 async fn get_shards_list(
     client: &KinesisClient,
     stream_name: &str,
 ) -> Result<ListShardsOutput, RusotoError<ListShardsError>> {
-    let list_shards_input = ListShardsInput {
-        exclusive_start_shard_id: None,
-        max_results: None,
-        next_token: None,
-        stream_creation_timestamp: None,
-        stream_name: Some(String::from(stream_name)),
-    };
-    client.list_shards(list_shards_input).await
+    client
+        .list_shards(ListShardsInput {
+            exclusive_start_shard_id: None,
+            max_results: None,
+            next_token: None,
+            stream_creation_timestamp: None,
+            stream_name: Some(String::from(stream_name)),
+        })
+        .await
 }
