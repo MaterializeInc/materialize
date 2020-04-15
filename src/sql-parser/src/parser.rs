@@ -2228,10 +2228,9 @@ impl Parser {
         let modifier = self.parse_one_of_keywords(&["SESSION", "LOCAL"]);
         let mut variable = self.parse_identifier()?;
         let mut normal = self.consume_token(&Token::Eq) || self.parse_keyword("TO");
-        if !normal && variable.value.to_uppercase() == "TIME" {
+        if !normal && variable.as_str().to_uppercase() == "TIME" {
             self.expect_keyword("ZONE")?;
-            variable.value = "timezone".into();
-            variable.quote_style = None;
+            variable = Ident::new("timezone");
             normal = true;
         }
         if normal {
@@ -2246,7 +2245,7 @@ impl Parser {
                 variable,
                 value,
             })
-        } else if variable.value.to_uppercase() == "TRANSACTION" && modifier.is_none() {
+        } else if variable.as_str().to_uppercase() == "TRANSACTION" && modifier.is_none() {
             Ok(Statement::SetTransaction {
                 modes: self.parse_transaction_modes()?,
             })
@@ -2842,9 +2841,9 @@ impl Parser {
 
 impl Word {
     pub fn to_ident(&self) -> Ident {
-        Ident {
-            value: self.value.clone(),
-            quote_style: self.quote_style,
+        match self.quote_style {
+            Some(_) => Ident::new(&self.value),
+            None => Ident::new_normalized(&self.value),
         }
     }
 }

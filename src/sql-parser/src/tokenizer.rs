@@ -364,6 +364,7 @@ impl Tokenizer {
                 }
                 // delimited (quoted) identifier
                 quote_start if self.is_delimited_identifier_start(quote_start) => {
+                    // TODO(justin): handle doubled-up quotes: "foo""bar" should be `foo"bar`.
                     chars.next(); // consume the opening quote
                     let quote_end = Word::matching_end_quote(quote_start);
                     let s = peeking_take_while(chars, |ch| ch != quote_end);

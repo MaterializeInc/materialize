@@ -107,10 +107,7 @@ pub fn plan_show_where(
         let predicate = match &f {
             ShowStatementFilter::Like(s) => {
                 owned = Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(Ident::with_quote(
-                        '"',
-                        names[0].clone().unwrap(),
-                    ))),
+                    left: Box::new(Expr::Identifier(Ident::new(names[0].clone().unwrap()))),
                     op: BinaryOperator::Like,
                     right: Box::new(Expr::Value(Value::SingleQuotedString(s.into()))),
                 };

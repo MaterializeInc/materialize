@@ -150,7 +150,7 @@ catalog item 'materialize.public.i1' is an index and so cannot be depended upon
 > SHOW INDEX in v2a;
 Source_or_view           Key_name                             Column_name Expression     Null   Seq_in_index
 ------------------------------------------------------------------------------------------------------------
-materialize.public.v2a   materialize.public.i2                <null>      "\"x\" * 2"    false  1
+materialize.public.v2a   materialize.public.i2                <null>      "x * 2"    false  1
 materialize.public.v2a   materialize.public.v2a_primary_idx   x           <null>         false  1
 
 > SHOW INDEX in v2;
@@ -265,7 +265,7 @@ unknown catalog item 'i4'
 > SHOW INDEX in s3;
 Source_or_view          Key_name                              Column_name Expression     Null  Seq_in_index
 ----------------------------------------------------------------------------------------------------
-materialize.public.s3   materialize.public.j1                 <null>      "ascii(\"y\")" false 1
+materialize.public.s3   materialize.public.j1                 <null>      "ascii(y)" false 1
 materialize.public.s3   materialize.public.s3_primary_idx     x           <null>         false 1
 materialize.public.s3   materialize.public.s3_primary_idx     y           <null>         false 2
 
@@ -293,7 +293,7 @@ unknown catalog item 'j1'
 > SHOW INDEX in s4;
 Source_or_view          Key_name                              Column_name Expression  Null  Seq_in_index
 ----------------------------------------------------------------------------------------------------
-materialize.public.s4   materialize.public.j2                 <null>      "\"x\" + 2" false 1
+materialize.public.s4   materialize.public.j2                 <null>      "x + 2" false 1
 materialize.public.s4   materialize.public.s4_primary_idx     x           <null>      false 1
 materialize.public.s4   materialize.public.s4_primary_idx     y           <null>      false 2
 
