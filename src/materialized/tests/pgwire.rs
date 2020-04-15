@@ -175,7 +175,9 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 
         // Sleep a little bit so the view catches up.
         // TODO(benesch): seriously? It's a view over a static query.
-        thread::sleep(Duration::from_millis(500));
+        // HISTORICAL NOTE(brennan): The above comment was left when this was only 500 millis.
+        // WTF is going on here?
+        thread::sleep(Duration::from_millis(2000));
 
         assert_eq!(
             // `v` here should refer to the `v` in `newdb.public` that we
