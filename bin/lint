@@ -68,7 +68,7 @@ copyright_files=$(grep -vE \
     -e '\.(md|json|asc|png|jpe?g|svg|avro|pb)$' \
     -e '^www/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^www/static/_redirects$' \
-    -e '^misc/docker/ci-builder/ssh_known_hosts$' \
+    -e '^misc/ci-builder/(ssh_known_hosts|stable.stamp|nightly.stamp)$' \
     -e 'demo/chbench/chbench' \
     -e 'src/billing-demo/resources/views/.*\.sql\.in' \
     -e 'gen/.*\.rs' \

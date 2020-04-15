@@ -20,32 +20,14 @@ steps:
 
   - id: lint-fast
     label: ":bath: lint and rustfmt"
-    command: ci/test/lint-fast.sh
+    command: bin/ci-builder run stable ci/test/lint-fast.sh
     timeout_in_minutes: 10
-    plugins:
-      - docker#v3.1.0:
-          image: materialize/ci-builder:1.42.0-20200327-102717
-          propagate-uid-gid: true
-          mount-ssh-agent: true
-          volumes:
-          - "$HOME/.cargo:/cargo"
-          environment:
-          - CARGO_HOME=/cargo
 
   - id: lint-slow
     label: ":paperclip: clippy and doctests"
-    command: ci/test/lint-slow.sh
+    command: bin/ci-builder run stable ci/test/lint-slow.sh
     if: $CHANGED_RUST
     timeout_in_minutes: 30
-    plugins:
-      - docker#v3.1.0:
-          image: materialize/ci-builder:1.42.0-20200327-102717
-          propagate-uid-gid: true
-          mount-ssh-agent: true
-          volumes:
-          - "$HOME/.cargo:/cargo"
-          environment:
-          - CARGO_HOME=/cargo
     agents:
       queue: builder
 
@@ -62,17 +44,8 @@ steps:
 
   - id: miri-test
     label: ":face_with_monocle: miri test"
-    command: ci/test/cargo-test-miri.sh
+    command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
     timeout_in_minutes: 30
-    plugins:
-      - docker#v3.1.0:
-          image: materialize/ci-builder:nightly-20200113-111211
-          propagate-uid-gid: true
-          mount-ssh-agent: true
-          volumes:
-          - "$HOME/.cargo:/cargo"
-          environment:
-          - CARGO_HOME=/cargo
     if: $CHANGED_RUST
     agents:
       queue: builder
