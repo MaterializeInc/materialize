@@ -8,22 +8,16 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - command: ci/deploy/devsite.sh
+  - command: bin/ci-builder run stable ci/deploy/devsite.sh
     branches: master
     timeout_in_minutes: 30
     agents:
       queue: builder
-    plugins:
-      - docker#v3.1.0:
-          image: materialize/ci-builder:nightly-20200113-111211
-          propagate-uid-gid: true
-          mount-ssh-agent: true
-          volumes:
-          - "$HOME/.cargo:/cargo"
-          environment:
-          - CARGO_HOME=/cargo
     concurrency: 1
     concurrency_group: deploy/devsite
+
+  # TODO(benesch): the next two scripts should be unified, and run in
+  # ci-builder.
   - command: ci/deploy/docker.sh
     timeout_in_minutes: 10
     concurrency: 1
@@ -33,6 +27,7 @@ steps:
     timeout_in_minutes: 10
     concurrency: 1
     concurrency_group: deploy/deb
+
   - command: ci/deploy/macos.sh
     agents:
       queue: mac

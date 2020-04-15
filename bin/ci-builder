@@ -38,6 +38,8 @@ case "$channel" in
         ;;
 esac
 
+tag_file=misc/ci-builder/${channel%%-*}.stamp
+
 rust_components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
 if [[ $rust_version = nightly ]]; then
     rust_components+=,miri-preview
@@ -67,9 +69,31 @@ case "$cmd" in
         tag=$rust_version-$(date +%Y%m%d-%H%M%S)
         build --tag materialize/ci-builder:"$tag"
         docker push materialize/ci-builder:"$tag"
+        echo "$tag" > "$tag_file"
         ;;
     run)
-        docker run -itu "$uid:$gid" -v "$(pwd):/workdir" --rm materialize/ci-builder "$@"
+        args=(
+            --rm --interactive --tty
+            --volume "$(pwd):$(pwd)"
+            --workdir "$(pwd)"
+            --env CI
+            --env BUILDKITE
+            --env BUILDKITE_BUILD_NUMBER
+        )
+        if [[ "$(uname -s)" = Linux ]]; then
+            args+=(
+                --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
+                --volume "/var/run/docker.sock:/var/run/docker.sock"
+                --volume "$HOME/.cargo:/cargo"
+                --volume "$HOME/.docker/config.json:/docker/config.json"
+                --env "CARGO_HOME=/cargo"
+                --env "DOCKER_CONFIG=/docker"
+                --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
+            )
+        else
+            args+=(--user "$(id -u):1001")
+        fi
+        docker run "${args[@]}" "materialize/ci-builder:$(<"$tag_file")" "$@"
         ;;
     *)
         printf "unknown command %q\n" "$cmd"

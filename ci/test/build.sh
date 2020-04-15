@@ -15,23 +15,10 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-docker_run() {
-    docker run \
-        --rm --interactive --tty \
-        --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock" \
-        --volume "$HOME/.cargo:/cargo" \
-        --volume "$(pwd):/workdir" \
-        --env BUILDKITE \
-        --env SSH_AUTH_SOCK=/tmp/ssh-agent.sock \
-        --env CARGO_HOME=/cargo \
-        --user "$(id -u):$(id -g)" \
-        materialize/ci-builder:1.42.0-20200327-102717 bash -c "$1"
-}
-
 ci_init
 
 ci_collapsed_heading "Building standalone binaries"
-docker_run "cargo build --locked --release"
+bin/ci-builder run stable cargo build --locked --release
 
 # NOTE(benesch): The two invocations of `cargo test --no-run` here deserve some
 # explanation. The first invocation prints error messages to stdout in a human
@@ -43,14 +30,15 @@ docker_run "cargo build --locked --release"
 # tests will build, since errors may be present in test code but not in release
 # code.
 ci_collapsed_heading "Building test binaries"
-docker_run "cargo test --locked --no-run && cargo test --locked --no-run --message-format=json > test-binaries.json"
+bin/ci-builder run stable cargo test --locked --no-run
+bin/ci-builder run stable cargo test --locked --no-run --message-format=json > test-binaries.json
 
 if [[ "$BUILDKITE_BRANCH" = master ]]; then
     ci_collapsed_heading "Building .deb package"
-    release_version=$(docker_run "cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == \"materialized\") | .version | match(\"[0-9]\\\\.[0-9]\\\\.[0-9]\") | .string'")
+    release_version=$(bin/ci-builder run stable "cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == \"materialized\") | .version | match(\"[0-9]\\\\.[0-9]\\\\.[0-9]\") | .string'")
     commit_index=$(git rev-list HEAD | wc -l)
     commit_hash=$(git rev-parse HEAD)
-    docker_run "cargo-deb --no-strip --deb-version $release_version-$commit_index-$commit_hash -p materialized -o target/debian/materialized.deb"
+    bin/ci-builder run stable cargo-deb --no-strip --deb-version "$release_version-$commit_index-$commit_hash" -p materialized -o target/debian/materialized.deb
 
     # Note - The below will not cause anything to become public;
     # a separate step to "publish" the files will be run in deploy.sh .
@@ -76,7 +64,7 @@ ci_collapsed_heading "Preparing Docker context"
     # since we're packaging these binaries up into Docker images and shipping them
     # around. A bit unfortunate, since it'd be nice to have useful backtraces if
     # something crashes.
-    docker_run "find target -maxdepth 2 -type f -executable | xargs strip"
+    bin/ci-builder run stable find target -maxdepth 2 -type f -executable -exec strip {} +
 
     # Move test binaries into the context for the ci-cargo-test image.
     #
@@ -102,8 +90,8 @@ ci_collapsed_heading "Preparing Docker context"
             "target": { "kind": .target.kind | join("") },
         }
         | {
-            "executable": .executable | sub("^/workdir/"; ""),
-            "cwd": .crate_path | sub("^/workdir/"; ""),
+            "executable": .executable | sub("^.*/materialize/tests/"; ""),
+            "cwd": .crate_path | sub("^.*/materialize/tests/"; ""),
             "slug": (.crate_name
                     + ".\(.target.kind)"
                     + if (.target.kind != "lib") then ".\(.target.name)" else "" end)
