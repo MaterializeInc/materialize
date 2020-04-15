@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
-use futures::executor::block_on;
 use rusoto_kinesis::{DescribeStreamInput, Kinesis, UpdateShardCountInput};
 
 use crate::action::{Action, State};
