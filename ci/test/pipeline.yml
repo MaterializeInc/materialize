@@ -105,7 +105,7 @@ steps:
     timeout_in_minutes: 10
     plugins:
       - ./ci/plugins/mzcompose:
-          config: ci/test/metabase-demo.mzcompose.yml
+          config: test/metabase/mzcompose.yml
           run: healthcheck
     if: $CHANGED_RUST
 
