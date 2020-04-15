@@ -35,7 +35,7 @@ bin/ci-builder run stable cargo test --locked --no-run --message-format=json > t
 
 if [[ "$BUILDKITE_BRANCH" = master ]]; then
     ci_collapsed_heading "Building .deb package"
-    release_version=$(bin/ci-builder run stable "cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == \"materialized\") | .version | match(\"[0-9]\\\\.[0-9]\\\\.[0-9]\") | .string'")
+    release_version=$(bin/ci-builder run stable cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == \"materialized\") | .version | match(\"[0-9]\\\\.[0-9]\\\\.[0-9]\") | .string')
     commit_index=$(git rev-list HEAD | wc -l)
     commit_hash=$(git rev-parse HEAD)
     bin/ci-builder run stable cargo-deb --no-strip --deb-version "$release_version-$commit_index-$commit_hash" -p materialized -o target/debian/materialized.deb
