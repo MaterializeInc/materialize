@@ -9,6 +9,7 @@
 
 use std::iter;
 
+use dataflow_types::LinearOperator;
 use differential_dataflow::Hashable;
 use log::error;
 use timely::dataflow::channels::pact::Exchange;
@@ -24,12 +25,23 @@ pub fn csv<G>(
     header_row: bool,
     n_cols: usize,
     delimiter: u8,
+    operators: &mut Option<LinearOperator>,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     // Delimiters must be single-byte utf8 to safely treat all matched fields as valid utf8.
     assert!(delimiter.is_ascii());
+
+    let operators = operators.take();
+    let demanded = (0..n_cols)
+        .map(move |c| {
+            operators
+                .as_ref()
+                .map(|o| o.projection.contains(&c))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
 
     stream.unary(
         Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
@@ -111,10 +123,14 @@ where
                                                             // valid utf8, and 2. the delimiter is ascii, which should make each
                                                             // delimited region also utf8.
                                                             Datum::String(unsafe {
-                                                                std::str::from_utf8_unchecked(
-                                                                    &buffer
-                                                                        [bounds[i]..bounds[i + 1]],
-                                                                )
+                                                                if demanded[i] {
+                                                                    std::str::from_utf8_unchecked(
+                                                                        &buffer
+                                                                            [bounds[i]..bounds[i + 1]],
+                                                                    )
+                                                                } else {
+                                                                    ""
+                                                                }
                                                             })
                                                         })
                                                         .chain(iter::once(

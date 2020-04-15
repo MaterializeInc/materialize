@@ -127,7 +127,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 unreachable!()
             };
             // Load declared sources into the rendering context.
-            for (source_number, (src_id, src)) in
+            for (source_number, (src_id, mut src)) in
                 dataflow.source_imports.clone().into_iter().enumerate()
             {
                 if let SourceConnector::External {
@@ -295,13 +295,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream =
-                                decode_values(&source, encoding, &dataflow.debug_name, &envelope);
+                            let stream = decode_values(
+                                &source,
+                                encoding,
+                                &dataflow.debug_name,
+                                &envelope,
+                                &mut src.operators,
+                            );
 
                             (stream, capability)
                         };
 
-                        let collection = match envelope {
+                        let mut collection = match envelope {
                             Envelope::None => stream.as_collection(),
                             Envelope::Debezium => {
                                 // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
@@ -313,6 +318,51 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             }
                             Envelope::Upsert(_) => unreachable!(),
                         };
+
+                        // Implement source filtering and projection.
+                        // At the moment this is strictly optional, but we perform it anyhow
+                        // to demonstrate the intended use.
+                        if let Some(operators) = src.operators.clone() {
+                            let source_type = src.desc.typ();
+                            let position_or = (0..source_type.arity())
+                                .map(|col| {
+                                    if operators.projection.contains(&col) {
+                                        Ok(col)
+                                    } else {
+                                        Err({
+                                            let typ = &source_type.column_types[col];
+                                            if typ.nullable {
+                                                Datum::Null
+                                            } else {
+                                                typ.scalar_type.dummy_datum()
+                                            }
+                                        })
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            collection = collection.flat_map(move |input_row| {
+                                let temp_storage = RowArena::new();
+                                let datums = input_row.unpack();
+                                if operators.predicates.iter().all(|predicate| {
+                                    match predicate
+                                        .eval(&datums, &temp_storage)
+                                        .unwrap_or(Datum::Null)
+                                    {
+                                        Datum::True => true,
+                                        Datum::False | Datum::Null => false,
+                                        _ => unreachable!(),
+                                    }
+                                }) {
+                                    Some(Row::pack(position_or.iter().map(|pos_or| match pos_or {
+                                        Result::Ok(index) => datums[*index],
+                                        Result::Err(datum) => *datum,
+                                    })))
+                                } else {
+                                    None
+                                }
+                            });
+                        }
 
                         // Introduce the stream by name, as an unarranged collection.
                         context.collections.insert(
