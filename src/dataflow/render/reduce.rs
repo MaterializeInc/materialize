@@ -145,11 +145,13 @@ where
                             // that the key doesn't exist (the others could be phantoms due to
                             // negative input records); we could just suppress the output in that
                             // case, rather than panic, though we surely want to see what is up.
+                            // XXX: This panic reports user-supplied data!
                             panic!(
-                                "ReduceCollation found unexpected indexes:\n\tExpected:\t{:?}\n\tFound:\t{:?}\n\tFor:\t{:?}",
+                                "ReduceCollation found unexpected indexes:\n\tExpected:\t{:?}\n\tFound:\t{:?}\n\tFor:\t{:?}\n\tKey:{:?}",
                                 (0..aggregates_len).collect::<Vec<_>>(),
                                 input.iter().map(|((p,_),_)| p).collect::<Vec<_>>(),
                                 aggregates_clone,
+                                key,
                             );
                         }
                         let mut result = RowPacker::new();
