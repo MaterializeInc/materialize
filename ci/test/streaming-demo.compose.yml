@@ -23,12 +23,12 @@ services:
     environment:
     - RUST_LOG=billing-demo=debug,info
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
-    depends_on: [kafka, zookeeper, materialized]
+    depends_on: [kafka, zookeeper, materialized, schema-registry]
   materialized:
     image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
     volumes:
       - db-data:/share/billing-demo/data
-    command: --logging-granularity=10ms
+    command: --logging-granularity=10ms -w1
     depends_on: [kafka]
   zookeeper:
     image: zookeeper:3.4.13

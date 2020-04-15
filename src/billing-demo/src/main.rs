@@ -19,6 +19,7 @@
 #![deny(missing_debug_implementations, missing_docs)]
 
 use std::error::Error as _;
+use std::process;
 
 use protobuf::Message;
 use structopt::StructOpt;
@@ -44,6 +45,7 @@ async fn main() {
             println!("    caused by: {}", e);
             err = e.source();
         }
+        process::exit(1);
     }
 }
 
