@@ -625,8 +625,8 @@ impl DataflowDesc {
                 return desc.desc.typ().arity();
             }
         }
-        for (index_id, (_desc, typ)) in self.index_imports.iter() {
-            if index_id == id {
+        for (_index_id, (desc, typ)) in self.index_imports.iter() {
+            if &desc.on_id == id {
                 return typ.arity();
             }
         }
