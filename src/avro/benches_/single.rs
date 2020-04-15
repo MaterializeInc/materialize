@@ -1,11 +1,13 @@
+// Copyright 2018 Flavien Raynaud.
 // Copyright Materialize, Inc. All rights reserved.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
+// This file is derived from the avro-rs project, available at
+// https://github.com/flavray/avro-rs. It was incorporated
+// directly into Materialize on March 3, 2020.
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+// This file is subject to the terms of the MIT license, a copy
+// of which can be found in the LICENSE file at the root of this
+// repository.
 
 #![feature(test)]
 extern crate test;
