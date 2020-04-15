@@ -1137,11 +1137,17 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         },
                         Some(_) => bail!(verbose_stats_err),
                     };
-
                     config_options.push((
                         "statistics.interval.ms".to_string(),
                         verbose_stats_ms.to_string(),
                     ));
+
+                    let kafka_client_id = match with_options.remove("kafka_client_id") {
+                        None => "materialized".to_string(),
+                        Some(Value::SingleQuotedString(s)) => s,
+                        Some(_) => bail!("kafka_client_id must be a string"),
+                    };
+                    config_options.push(("client.id".to_string(), kafka_client_id));
 
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,
