@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# ci-image — builds and releases Docker containers for CI.
+# ci-builder — builds and releases CI builder image.
 
 set -euo pipefail
 
@@ -38,7 +38,7 @@ case "$channel" in
         ;;
 esac
 
-tag_file=misc/ci-builder/${channel%%-*}.stamp
+tag_file=ci/builder/${channel%%-*}.stamp
 
 rust_components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
 if [[ $rust_version = nightly ]]; then
@@ -53,13 +53,13 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
-    cp misc/python/requirements.txt misc/ci-builder/requirements.txt
+    cp misc/python/requirements.txt ci/builder/requirements.txt
     docker build --pull \
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
         --tag materialize/ci-builder \
-        "$@" misc/docker/ci-builder
+        "$@" ci/builder
 }
 
 case "$cmd" in
